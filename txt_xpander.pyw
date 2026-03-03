@@ -117,10 +117,6 @@ class TextExpander:
             },
             "_cpf_numbers": {
                 "fulano": "123.456.789-00",
-            },
-            "_cge_codes": {
-                "fulano": "123456",
-                "ciclano": "456789",
             }
         }
     
@@ -380,7 +376,6 @@ If userInput <> "" Then WScript.Echo userInput'''
         builtin = {
             "_cpf_numbers": "cpf",
             "_cnpj_numbers": "cnpj",
-            "_cge_codes": "cge",
         }
         
         for map_key, prefix in builtin.items():
@@ -390,8 +385,12 @@ If userInput <> "" Then WScript.Echo userInput'''
         # Customizados (terminam com _numbers ou _codes)
         for key in self.snippets.keys():
             if key.startswith("_") and key.endswith(("_numbers", "_codes")) and key not in builtin:
-                # Extrai o prefixo: "_email_codes" -> "email"
-                prefix = key[1:].replace("_numbers", "").replace("_codes", "")
+                mapping = self.snippets[key]
+                # Usa prefixo customizado se armazenado, senão deriva do nome da chave
+                if isinstance(mapping, dict) and "__prefix__" in mapping:
+                    prefix = mapping["__prefix__"]
+                else:
+                    prefix = key[1:].replace("_numbers", "").replace("_codes", "")
                 prefixes[prefix] = key
         
         return prefixes
@@ -407,7 +406,7 @@ If userInput <> "" Then WScript.Echo userInput'''
                 
                 if mapping_key in self.snippets:
                     mapping = self.snippets[mapping_key]
-                    if isinstance(mapping, dict) and nome in mapping:
+                    if isinstance(mapping, dict) and nome in mapping and nome != "__prefix__":
                         return mapping[nome], len(text)
         
         return None, 0
@@ -571,6 +570,14 @@ If userInput <> "" Then WScript.Echo userInput'''
             tab_dynamic = tk.Frame(notebook)
             notebook.add(tab_dynamic, text="Mapeamentos Dinâmicos")
 
+            # ABA 3: Data/Hora & Economia
+            tab_datetime_eco = tk.Frame(notebook)
+            notebook.add(tab_datetime_eco, text="Data/Hora & Economia")
+
+            # ABA 4: Ações (Stocks)
+            tab_stocks = tk.Frame(notebook)
+            notebook.add(tab_stocks, text="Ações (Stocks)")
+
             # ===================================================================
             # ABA 1: SNIPPETS ESTÁTICOS
             # ===================================================================
@@ -580,6 +587,16 @@ If userInput <> "" Then WScript.Echo userInput'''
             # ABA 2: MAPEAMENTOS DINÂMICOS
             # ===================================================================
             self._create_dynamic_mappings_tab(tab_dynamic, root)
+
+            # ===================================================================
+            # ABA 3: DATA/HORA & ECONOMIA
+            # ===================================================================
+            self._create_datetime_eco_tab(tab_datetime_eco)
+
+            # ===================================================================
+            # ABA 4: AÇÕES (STOCKS)
+            # ===================================================================
+            self._create_stocks_tab(tab_stocks)
 
             root.mainloop()
 
@@ -719,14 +736,20 @@ If userInput <> "" Then WScript.Echo userInput'''
             base = {
                 "_cpf_numbers": {"label": "CPF", "prefix": "cpf", "example": "cpffulano → 123.456.789-00", "builtin": True},
                 "_cnpj_numbers": {"label": "CNPJ", "prefix": "cnpj", "example": "cnpjempresa1 → 12.345.678/0001-90", "builtin": True},
-                "_cge_codes": {"label": "CGE", "prefix": "cge", "example": "cgefulano → 123456", "builtin": True},
             }
             
             for key in self.snippets.keys():
                 if key.startswith("_") and key.endswith(("_numbers", "_codes")) and key not in base:
-                    prefix = key[1:].replace("_numbers", "").replace("_codes", "")
+                    mapping = self.snippets[key]
+                    # Usa prefixo customizado se armazenado, senão deriva do nome da chave
+                    if isinstance(mapping, dict) and "__prefix__" in mapping:
+                        prefix = mapping["__prefix__"]
+                    else:
+                        prefix = key[1:].replace("_numbers", "").replace("_codes", "")
+                    # Label: nome legível do tipo (sem _ e _codes/_numbers)
+                    type_label = key[1:].replace("_numbers", "").replace("_codes", "").upper()
                     base[key] = {
-                        "label": prefix.upper(),
+                        "label": type_label,
                         "prefix": prefix,
                         "example": f"{prefix}exemplo → valor",
                         "builtin": False
@@ -811,8 +834,8 @@ If userInput <> "" Then WScript.Echo userInput'''
                     messagebox.showwarning("Aviso", f"Tipo '{type_name}' já existe.", parent=dialog)
                     return
                 
-                # Cria o novo dicionário para o tipo
-                self.snippets[map_key] = {}
+                # Cria o novo dicionário para o tipo, armazenando o prefixo customizado
+                self.snippets[map_key] = {"__prefix__": prefix}
                 self.save_snippets(self.snippets)
                 
                 messagebox.showinfo("Sucesso", f"Tipo '{type_name}' criado com sucesso!", parent=dialog)
@@ -844,14 +867,14 @@ If userInput <> "" Then WScript.Echo userInput'''
             info = mappings_info.get(current_type, {})
             
             if info.get("builtin", False):
-                messagebox.showwarning("Aviso", "Não é possível excluir tipos padrão (CPF, CNPJ, CGE).")
+                messagebox.showwarning("Aviso", "Não é possível excluir tipos padrão (CPF, CNPJ).")
                 return
             
             if current_type not in self.snippets:
                 return
             
             mapping = self.snippets[current_type]
-            items_count = len(mapping) if isinstance(mapping, dict) else 0
+            items_count = len([k for k in mapping if k != "__prefix__"]) if isinstance(mapping, dict) else 0
             
             msg = f"Excluir o tipo '{info['label']}'?"
             if items_count > 0:
@@ -938,6 +961,8 @@ If userInput <> "" Then WScript.Echo userInput'''
             mapping = self.snippets[current_type]
             if isinstance(mapping, dict):
                 for key in sorted(mapping.keys()):
+                    if key == "__prefix__":
+                        continue
                     listbox_map.insert(tk.END, key)
             
             update_example_label()
@@ -1033,7 +1058,106 @@ If userInput <> "" Then WScript.Echo userInput'''
         btn_delete_map.configure(command=on_delete_map)
         
         refresh_mapping_list()
-    
+
+    def _create_datetime_eco_tab(self, parent):
+        """Cria aba de referência para snippets de Data/Hora e Indicadores Econômicos."""
+        main = tk.Frame(parent)
+        main.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        # --- Data e Hora ---
+        lf_dt = tk.LabelFrame(main, text="Data e Hora", font=("Arial", 9, "bold"))
+        lf_dt.pack(fill=tk.X, pady=(0, 10))
+
+        datetime_snippets = [
+            ("xhj",       "Data de hoje (DD/MM/AAAA)"),
+            ("x-hj",      "Data de hoje (AAAA-MM-DD)"),
+            ("xhoje",     "Data por extenso (ex: segunda-feira, 02 de março de 2026)"),
+            ("xnow",      "Hora atual (HH:MM:SS)"),
+            ("xdatahora", "Data e hora (DD/MM/AAAA às HH:MM)"),
+        ]
+
+        for trigger, desc in datetime_snippets:
+            row = tk.Frame(lf_dt)
+            row.pack(fill=tk.X, padx=10, pady=2)
+            tk.Label(row, text=trigger, font=("Consolas", 10, "bold"), fg="#284DB3", width=12, anchor="w").pack(side=tk.LEFT)
+            tk.Label(row, text=desc, font=("Arial", 9), anchor="w").pack(side=tk.LEFT, padx=(10, 0))
+
+        # --- Indicadores Econômicos (BCB) ---
+        lf_eco = tk.LabelFrame(main, text="Indicadores Econômicos (Banco Central)", font=("Arial", 9, "bold"))
+        lf_eco.pack(fill=tk.BOTH, expand=True)
+
+        eco_snippets = [
+            ("xdolar",    "Cotação do dólar (PTAX compra/venda)"),
+            ("xselic",    "Taxa Selic meta (% a.a.)"),
+            ("xipcam",    "IPCA mensal (%)"),
+            ("xipca12",   "IPCA acumulado 12 meses (%)"),
+            ("xcdi",      "Taxa CDI acumulada no mês"),
+            ("xptax",     "PTAX via SGS"),
+            ("xeconomia", "Resumo completo de indicadores"),
+        ]
+
+        for trigger, desc in eco_snippets:
+            row = tk.Frame(lf_eco)
+            row.pack(fill=tk.X, padx=10, pady=2)
+            tk.Label(row, text=trigger, font=("Consolas", 10, "bold"), fg="#284DB3", width=12, anchor="w").pack(side=tk.LEFT)
+            tk.Label(row, text=desc, font=("Arial", 9), anchor="w").pack(side=tk.LEFT, padx=(10, 0))
+
+        tk.Label(main, text="Estes snippets são dinâmicos — basta digitar o trigger em qualquer aplicativo.",
+                 font=("Arial", 8), fg="gray").pack(anchor="w", pady=(10, 0))
+
+    def _create_stocks_tab(self, parent):
+        """Cria aba de referência para snippets de ações (B3 e US)."""
+        main = tk.Frame(parent)
+        main.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        tk.Label(main,
+                 text="Ao digitar um destes triggers, um popup pedirá o ticker (ex: PETR4, AAPL).",
+                 font=("Arial", 9), fg="#555").pack(anchor="w", pady=(0, 10))
+
+        lf = tk.LabelFrame(main, text="Snippets de Ações", font=("Arial", 9, "bold"))
+        lf.pack(fill=tk.BOTH, expand=True)
+
+        # Scrollable frame
+        canvas = tk.Canvas(lf, highlightthickness=0)
+        scrollbar = tk.Scrollbar(lf, orient=tk.VERTICAL, command=canvas.yview)
+        inner = tk.Frame(canvas)
+
+        inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        stock_snippets = [
+            ("xcot",    "Cotação atual"),
+            ("xplucro", "P/L (Preço / Lucro)"),
+            ("xcap",    "Market Cap (Valor de Mercado)"),
+            ("xpvp",    "P/VP (Preço / Valor Patrimonial)"),
+            ("xdy",     "Dividend Yield (%)"),
+            ("xebt",    "EBITDA"),
+            ("xmarg",   "Margem Líquida (%)"),
+            ("xroe",    "ROE (Return on Equity)"),
+            ("xdivt",   "Dívida Total"),
+            ("xdivl",   "Dívida Líquida"),
+            ("xcaixa",  "Caixa (Total Cash)"),
+            ("xvol",    "Volume Médio Diário"),
+            ("xrec",    "Receita Líquida"),
+            ("xbeta",   "Beta (volatilidade vs. mercado)"),
+            ("x52w",    "Máxima e Mínima de 52 semanas"),
+            ("xfund",   "Resumo completo de fundamentos"),
+        ]
+
+        for trigger, desc in stock_snippets:
+            row = tk.Frame(inner)
+            row.pack(fill=tk.X, padx=10, pady=2)
+            tk.Label(row, text=trigger, font=("Consolas", 10, "bold"), fg="#284DB3", width=12, anchor="w").pack(side=tk.LEFT)
+            tk.Label(row, text=desc, font=("Arial", 9), anchor="w").pack(side=tk.LEFT, padx=(10, 0))
+
+        tk.Label(main,
+                 text="Aceita tickers brasileiros (PETR4, VALE3) e americanos (AAPL, MSFT, GOOGL).",
+                 font=("Arial", 8), fg="gray").pack(anchor="w", pady=(10, 0))
+
     # =====================================================================
     # UI / SYSTEM TRAY
     # =====================================================================
