@@ -1,4 +1,5 @@
 @echo off
+chcp 65001 >nul
 REM ============================================================
 REM Text Expander - Atalho de Execução (Versão Atualizada)
 REM ============================================================
