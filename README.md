@@ -7,7 +7,9 @@ Aplicativo em Python para Windows que expande **snippets de texto** em qualquer 
 - Snippets dinâmicos (datas, indicadores BCB, ações B3/US via yfinance)
 - GUI completa em Tkinter para gerenciar:
   - Snippets estáticos
-  - Mapeamentos dinâmicos (CPF, CNPJ, CGE e tipos personalizados)
+  - Mapeamentos dinâmicos (CPF, CNPJ e tipos personalizados com prefixo customizado)
+  - Referência de snippets de Data/Hora & Economia
+  - Referência de snippets de Ações (Stocks)
 - Execução de snippets “lentos” (consultas financeiras) em **threads**, sem travar a digitação
 
 > ⚠ Uso pessoal. O programa **não registra** teclas digitadas; apenas observa os últimos caracteres digitados para expandir os triggers.
@@ -21,10 +23,7 @@ Arquivos principais:
 - `txt_xpander.pyw`  
   Versão principal executável em background, sem console (recomendada para uso diário).
 
-- `txt_xpander.py`  
-  Versão com console, útil para debug/log.
-
-- `run_txt_xpanderw.bat`  
+- `run_txt_xpander.bat`
   Arquivo para iniciar o Text Expander com dupla-clique (detalhes abaixo).
 
 - `bcb_consultor.py`  
@@ -57,21 +56,22 @@ python txt_xpander.py
 
 Clique duas vezes em:
 
-run_txt_xpanderw.bat
+run_txt_xpander.bat
 
-## 3. Arquivo `run_txt_xpanderw.bat`
+## 3. Arquivo `run_txt_xpander.bat`
 
 O projeto inclui um arquivo para facilitar a execução do expansor no modo silencioso (**pythonw**), sem abrir terminal.
 
 ### O que esse arquivo faz:
 
-1. Garante que está rodando na mesma pasta do projeto.
-2. Confirma se o **Python está instalado**.
-3. Verifica se o arquivo `txt_xpander.pyw` existe.
-4. Confere se as dependências básicas estão instaladas.
-5. Caso faltem, instala automaticamente (`pynput`, `pystray`, `Pillow`).
-6. Inicia o expansor usando **pythonw**, sem terminal.
-7. Fecha a janela automaticamente após 2 segundos.
+1. Configura o terminal para UTF-8 (`chcp 65001`).
+2. Garante que está rodando na mesma pasta do projeto.
+3. Confirma se o **Python está instalado**.
+4. Verifica se o arquivo `txt_xpander.pyw` existe.
+5. Confere se as dependências básicas estão instaladas.
+6. Caso faltem, instala automaticamente (`pynput`, `pystray`, `Pillow`, `yfinance`, `requests`).
+7. Inicia o expansor usando **pythonw**, sem terminal.
+8. Fecha a janela automaticamente após 2 segundos.
 
 ### Vantagens
 
@@ -82,7 +82,7 @@ Para iniciar automaticamente no login:
 
 1. Pressione `Win + R`
 2. Digite: shell:startup
-3. Coloque um atalho do arquivo `run_txt_xpanderw.bat` dentro dessa pasta.
+3. Coloque um atalho do arquivo `run_txt_xpander.bat` dentro dessa pasta.
 
 ## 4. Snippets estáticos
 
@@ -117,19 +117,18 @@ Além dos snippets simples, o programa suporta **mapeamentos dinâmicos**, útei
 
 * CPFs
 * CNPJs
-* Códigos internos (CGE)
-* E tipos customizados (e-mails, contas bancárias, etc.)
+* E tipos customizados com prefixo personalizado (e-mails, contas bancárias, comandos, etc.)
 
 ### 5.1. Estrutura em `snippets.json`
 
 ```json
 {
-  "_cpf_numbers": {
-    "fulano": "123.456.789-00",
-    "ciclano": "987.654.321-00"
+  “_cpf_numbers”: {
+    “fulano”: “123.456.789-00”,
+    “ciclano”: “987.654.321-00”
   },
-  "_cnpj_numbers": {
-    "empresa1": "12.345.678/0001-90"
+  “_cnpj_numbers”: {
+    “empresa1”: “12.345.678/0001-90”
   }
 }
 ```
@@ -142,30 +141,33 @@ Com isso:
 O mapeamento é:
 
 * chave interna começando com `_` (ex.: `_cpf_numbers`)
-* prefixo de uso: `cpf`, `cnpj`, `cge`, etc.
+* prefixo de uso: `cpf`, `cnpj`, ou um prefixo customizado
 
 ### 5.2. Criando tipos customizados pela GUI
 
-Na aba **“Mapeamentos Dinâmicos”** da GUI você pode:
+Na aba **”Mapeamentos Dinâmicos”** da GUI você pode:
 
-* Selecionar tipos existentes (`CPF`, `CNPJ`, `CGE`)
-* Criar novos tipos:
+* Selecionar tipos existentes (`CPF`, `CNPJ`)
+* Criar novos tipos com **prefixo personalizado**:
 
-  * Ex.: tipo `email`, prefixo `email`
+  * Ex.: tipo `openclaw`, prefixo `clw`
   * Depois, cadastrar itens como:
 
-    * `trabalho` → `seu.email@empresa.com`
-    * `pessoal` → `seu.email@gmail.com`
-  * Uso: `emailtrabalho`, `emailpessoal`
+    * `gtw` → `openclaw gateway restart`
+    * `dct` → `openclaw doctor --fix`
+  * Uso: `clwgtw` expande para `openclaw gateway restart`
 
-Os tipos customizados são gravados em `snippets.json` como:
+Os tipos customizados são gravados em `snippets.json` com o prefixo armazenado via `__prefix__`:
 
 ```json
-"_email_codes": {
-  "trabalho": "seu.email@empresa.com",
-  "pessoal": "seu.email@gmail.com"
+“_openclaw_codes”: {
+  “__prefix__”: “clw”,
+  “gtw”: “openclaw gateway restart”,
+  “dct”: “openclaw doctor --fix”
 }
 ```
+
+O campo `__prefix__` é interno e não aparece na lista de itens da GUI. Se omitido, o prefixo é derivado do nome do tipo (ex.: `_email_codes` → prefixo `email`).
 
 ## 6. Snippets dinâmicos de data e indicadores (BCB)
 
@@ -201,7 +203,7 @@ Principais:
 * `xcot`      → Cotação
 * `xcap`      → Market Cap
 * `xdy`       → Dividend Yield
-* `xpl`       → P/L
+* `xplucro`   → P/L
 * `xpvp`      → P/VP
 * `xebt`      → EBITDA
 * `xmarg`     → Margem líquida
@@ -271,3 +273,4 @@ pynput>=1.7.0
 pystray>=0.19.0
 Pillow>=10.0.0
 yfinance>=0.2.40
+requests>=2.31.0
