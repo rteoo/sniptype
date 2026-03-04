@@ -928,8 +928,8 @@ If userInput <> "" Then WScript.Echo userInput'''
         entry_name.pack(fill=tk.X, pady=(0, 10))
         
         tk.Label(frame_edit, text="Valor:", font=("Arial", 9)).pack(anchor="w")
-        entry_value = tk.Entry(frame_edit, font=("Arial", 10))
-        entry_value.pack(fill=tk.X, pady=(0, 10))
+        text_value = tk.Text(frame_edit, wrap=tk.WORD, height=6, font=("Arial", 10))
+        text_value.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
         
         tk.Label(frame_edit, text="💡 Dica: O identificador será usado após o prefixo", 
                 font=("Arial", 8), fg="blue", wraplength=300, justify=tk.LEFT).pack(anchor="w", pady=10)
@@ -978,24 +978,24 @@ If userInput <> "" Then WScript.Echo userInput'''
             
             entry_name.delete(0, tk.END)
             entry_name.insert(0, key)
-            entry_value.delete(0, tk.END)
-            entry_value.insert(0, str(mapping.get(key, "")))
+            text_value.delete("1.0", tk.END)
+            text_value.insert(tk.END, str(mapping.get(key, "")))
         
         def on_type_changed(*args):
             refresh_mapping_list()
             entry_name.delete(0, tk.END)
-            entry_value.delete(0, tk.END)
+            text_value.delete("1.0", tk.END)
         
         def on_new_map():
             entry_name.delete(0, tk.END)
-            entry_value.delete(0, tk.END)
+            text_value.delete("1.0", tk.END)
             entry_name.focus_set()
         
         def on_save_map():
             mappings = get_mappings_info()
             current_type = mapping_type.get()
             name = entry_name.get().strip()
-            value = entry_value.get().strip()
+            value = text_value.get("1.0", tk.END).rstrip("\n").strip()
             
             if not name:
                 messagebox.showwarning("Aviso", "Informe um identificador.")
