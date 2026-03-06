@@ -77,4 +77,5 @@ Main source files:
 - Fixed the packaged tray icon and tray-backed notifications.
 - Switched snippet insertion to clipboard-first behavior for better multiline and chat-app reliability.
 - Added rich-text snippet support with formatting controls in the snippet manager.
+- Added `x-hj` as the ISO date snippet.
 - Improved the snippet manager layout, resize behavior, search/filtering, and notification history access.
