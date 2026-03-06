@@ -415,6 +415,73 @@ If userInput <> "" Then WScript.Echo userInput'''
     # EXPANSÃO DE SNIPPETS
     # =====================================================================
 
+    def _paste_via_clipboard(self, text: str):
+        """
+        Paste text using Windows clipboard + Ctrl+V.
+        More reliable than keyboard.type() for text containing newlines,
+        and works correctly in chat apps (WhatsApp, Discord, Teams)
+        where simulating Enter would send the message instead.
+        Saves and restores the previous clipboard content.
+        """
+        CF_UNICODETEXT = 13
+        GMEM_MOVEABLE = 0x0002
+        kernel32 = ctypes.windll.kernel32
+        user32 = ctypes.windll.user32
+
+        # Must set restype explicitly — default c_int truncates 64-bit pointers
+        kernel32.GlobalAlloc.restype = ctypes.c_void_p
+        kernel32.GlobalLock.restype = ctypes.c_void_p
+        kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
+        kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+        user32.GetClipboardData.restype = ctypes.c_void_p
+        user32.SetClipboardData.restype = ctypes.c_void_p
+        user32.SetClipboardData.argtypes = [ctypes.c_uint, ctypes.c_void_p]
+
+        def _set_clip(content):
+            encoded = (content + '\0').encode('utf-16-le')
+            h = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(encoded))
+            ptr = kernel32.GlobalLock(h)
+            ctypes.memmove(ptr, encoded, len(encoded))
+            kernel32.GlobalUnlock(h)
+            user32.OpenClipboard(0)
+            user32.EmptyClipboard()
+            user32.SetClipboardData(CF_UNICODETEXT, h)
+            user32.CloseClipboard()
+
+        def _get_clip():
+            try:
+                user32.OpenClipboard(0)
+                h = user32.GetClipboardData(CF_UNICODETEXT)
+                if not h:
+                    return None
+                ptr = kernel32.GlobalLock(h)
+                result = ctypes.wstring_at(ptr)
+                kernel32.GlobalUnlock(ctypes.c_void_p(ptr))
+                return result
+            except Exception:
+                return None
+            finally:
+                try:
+                    user32.CloseClipboard()
+                except Exception:
+                    pass
+
+        old_content = _get_clip()
+        _set_clip(text)
+        time.sleep(0.05)
+        with self.keyboard_controller.pressed(Key.ctrl):
+            self.keyboard_controller.press('v')
+            self.keyboard_controller.release('v')
+
+        if old_content is not None:
+            def restore():
+                time.sleep(0.5)
+                try:
+                    _set_clip(old_content)
+                except Exception:
+                    pass
+            threading.Thread(target=restore, daemon=True).start()
+
     def expand_snippet(self, trigger: str):
         """
         Expande o snippet correspondente ao trigger (versão original).
@@ -444,8 +511,8 @@ If userInput <> "" Then WScript.Echo userInput'''
                     time.sleep(0.01)
                 
                 time.sleep(0.05)
-                self.keyboard_controller.type(str(snippet))
-                
+                self._paste_via_clipboard(str(snippet))
+
                 self.expansion_failed = False
                 self.last_expansion_time = time.time()
                 return True
@@ -476,7 +543,7 @@ If userInput <> "" Then WScript.Echo userInput'''
             if not result:
                 return
             time.sleep(0.05)
-            self.keyboard_controller.type(str(result))
+            self._paste_via_clipboard(str(result))
         except Exception as e:
             print(f"Erro ao executar snippet lento {trigger}: {e}")
     
