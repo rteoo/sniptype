@@ -10,7 +10,7 @@ Aplicativo em Python para Windows que expande **snippets de texto** em qualquer 
   - Mapeamentos dinâmicos (CPF, CNPJ e tipos personalizados com prefixo customizado)
   - Referência de snippets de Data/Hora & Economia
   - Referência de snippets de Ações (Stocks)
-- Execução de snippets “lentos” (consultas financeiras) em **threads**, sem travar a digitação
+- Execução de snippets "lentos" (consultas financeiras) em **threads**, sem travar a digitação
 
 > ⚠ Uso pessoal. O programa **não registra** teclas digitadas; apenas observa os últimos caracteres digitados para expandir os triggers.
 
@@ -20,19 +20,19 @@ Aplicativo em Python para Windows que expande **snippets de texto** em qualquer 
 
 Arquivos principais:
 
-- `txt_xpander.pyw`  
+- `txt_xpander.pyw`
   Versão principal executável em background, sem console (recomendada para uso diário).
 
 - `run_txt_xpander.bat`
   Arquivo para iniciar o Text Expander com dupla-clique (detalhes abaixo).
 
-- `bcb_consultor.py`  
+- `bcb_consultor.py`
   Consulta indicadores econômicos do BCB (Dólar, Selic, IPCA, CDI etc.).
 
-- `yf_stocks.py`  
+- `yf_stocks.py`
   Implementa `B3FundamentosConsultor` para cotações e fundamentos via `yfinance`.
 
-- `snippets.json`  
+- `snippets.json`
   Armazena snippets estáticos e mapeamentos dinâmicos.
 
 ## 2. Instalação
@@ -62,7 +62,7 @@ run_txt_xpander.bat
 
 O projeto inclui um arquivo para facilitar a execução do expansor no modo silencioso (**pythonw**), sem abrir terminal.
 
-### O que esse arquivo faz:
+### O que esse arquivo faz
 
 1. Configura o terminal para UTF-8 (`chcp 65001`).
 2. Garante que está rodando na mesma pasta do projeto.
@@ -75,8 +75,8 @@ O projeto inclui um arquivo para facilitar a execução do expansor no modo sile
 
 ### Vantagens
 
-* Executa o Text Expander de forma limpa e invisível.
-* Útil para criar um **atalho na área de trabalho** ou colocar no **Startup do Windows**.
+- Executa o Text Expander de forma limpa e invisível.
+- Útil para criar um **atalho na área de trabalho** ou colocar no **Startup do Windows**.
 
 Para iniciar automaticamente no login:
 
@@ -102,71 +102,73 @@ Snippets podem conter **múltiplas linhas** usando `\n` no JSON.
 
 Uso:
 
-* Digite `xname` em qualquer campo de texto
-* O programa apaga `xname` e cola `Seu Nome`
+- Digite `xname` em qualquer campo de texto
+- O programa apaga `xname` e cola `Seu Nome`
 
 Pontos importantes:
 
-* Triggers **não podem** começar com `_` (prefixo reservado para mapeamentos dinâmicos).
-* Na GUI, use a aba **“Snippets Estáticos”** para:
+- Triggers **não podem** começar com `_` (prefixo reservado para mapeamentos dinâmicos).
+- Na GUI, use a aba **"Snippets Estáticos"** para:
 
-  * Criar novos snippets
-  * Editar gatilhos e textos
-  * Excluir snippets
+  - Criar novos snippets
+  - Editar gatilhos e textos (editor multi-linha com suporte a Markdown)
+  - Excluir snippets
+  - Formatar o valor com a barra de ferramentas: **N** (negrito), *I* (itálico), `~~` (tachado), `` ` `` (código)
+  - Pré-visualizar o snippet renderizado com o botão **Preview**
 
 ## 5. Mapeamentos dinâmicos (cpf, cnpj, etc.)
 
 Além dos snippets simples, o programa suporta **mapeamentos dinâmicos**, úteis para grupos de dados do mesmo tipo:
 
-* CPFs
-* CNPJs
-* E tipos customizados com prefixo personalizado (e-mails, contas bancárias, comandos, etc.)
+- CPFs
+- CNPJs
+- E tipos customizados com prefixo personalizado (e-mails, contas bancárias, comandos, etc.)
 
 ### 5.1. Estrutura em `snippets.json`
 
 ```json
 {
-  “_cpf_numbers”: {
-    “fulano”: “123.456.789-00”,
-    “ciclano”: “987.654.321-00”
+  "_cpf_numbers": {
+    "fulano": "123.456.789-00",
+    "ciclano": "987.654.321-00"
   },
-  “_cnpj_numbers”: {
-    “empresa1”: “12.345.678/0001-90”
+  "_cnpj_numbers": {
+    "empresa1": "12.345.678/0001-90"
   }
 }
 ```
 
 Com isso:
 
-* Digitar `cpffulano` expande para `123.456.789-00`
-* Digitar `cnpjempresa1` expande para `12.345.678/0001-90`
+- Digitar `cpffulano` expande para `123.456.789-00`
+- Digitar `cnpjempresa1` expande para `12.345.678/0001-90`
 
 O mapeamento é:
 
-* chave interna começando com `_` (ex.: `_cpf_numbers`)
-* prefixo de uso: `cpf`, `cnpj`, ou um prefixo customizado
+- chave interna começando com `_` (ex.: `_cpf_numbers`)
+- prefixo de uso: `cpf`, `cnpj`, ou um prefixo customizado
 
 ### 5.2. Criando tipos customizados pela GUI
 
-Na aba **”Mapeamentos Dinâmicos”** da GUI você pode:
+Na aba **"Mapeamentos Dinâmicos"** da GUI você pode:
 
-* Selecionar tipos existentes (`CPF`, `CNPJ`)
-* Criar novos tipos com **prefixo personalizado**:
+- Selecionar tipos existentes (`CPF`, `CNPJ`)
+- Criar novos tipos com **prefixo personalizado**:
 
-  * Ex.: tipo `openclaw`, prefixo `clw`
-  * Depois, cadastrar itens como:
+  - Ex.: tipo `openclaw`, prefixo `clw`
+  - Depois, cadastrar itens como:
 
-    * `gtw` → `openclaw gateway restart`
-    * `dct` → `openclaw doctor --fix`
-  * Uso: `clwgtw` expande para `openclaw gateway restart`
+    - `gtw` → `openclaw gateway restart`
+    - `dct` → `openclaw doctor --fix`
+  - Uso: `clwgtw` expande para `openclaw gateway restart`
 
 Os tipos customizados são gravados em `snippets.json` com o prefixo armazenado via `__prefix__`:
 
 ```json
-“_openclaw_codes”: {
-  “__prefix__”: “clw”,
-  “gtw”: “openclaw gateway restart”,
-  “dct”: “openclaw doctor --fix”
+"_openclaw_codes": {
+  "__prefix__": "clw",
+  "gtw": "openclaw gateway restart",
+  "dct": "openclaw doctor --fix"
 }
 ```
 
@@ -176,49 +178,50 @@ O campo `__prefix__` é interno e não aparece na lista de itens da GUI. Se omit
 
 Alguns gatilhos já vêm embutidos no código:
 
-* Datas:
+- Datas:
 
-  * `xhj` → data atual `dd/mm/aaaa`
-  * `xhoje` → data por extenso
-  * `xnow` → hora atual `HH:MM:SS`
-  * `xdatahora` → data e hora
+  - `xhj` → data atual `dd/mm/aaaa`
+  - `x-hj` → data atual `aaaa-mm-dd` (formato ISO 8601)
+  - `xhoje` → data por extenso
+  - `xnow` → hora atual `HH:MM:SS`
+  - `xdatahora` → data e hora
 
-* Indicadores do Banco Central (via `BCBConsultor`):
+- Indicadores do Banco Central (via `BCBConsultor`):
 
-  * `xdolar`
-  * `xselic`
-  * `xipcam`
-  * `xipca12`
-  * `xcdi`
-  * `xptax`
-  * `xeconomia`
+  - `xdolar`
+  - `xselic`
+  - `xipcam`
+  - `xipca12`
+  - `xcdi`
+  - `xptax`
+  - `xeconomia`
 
 Esses snippets são funções Python e **não aparecem** em `snippets.json`.
 
 ---
 
-## 7. Snippets de ações (B3 / US) – “lentos”
+## 7. Snippets de ações (B3 / US) – "lentos"
 
-Snippets que pedem ticker e consultam `yfinance` são tratados como “lentos” e executados em **thread separada** para não bloquear a digitação:
+Snippets que pedem ticker e consultam `yfinance` são tratados como "lentos" e executados em **thread separada** para não bloquear a digitação:
 
 Principais:
 
-* `xcot`      → Cotação
-* `xcap`      → Market Cap
-* `xdy`       → Dividend Yield
-* `xplucro`   → P/L
-* `xpvp`      → P/VP
-* `xebt`      → EBITDA
-* `xmarg`     → Margem líquida
-* `xroe`      → ROE
-* `xdivt`     → Dívida total
-* `xdivl`     → Dívida líquida
-* `xcaixa`    → Caixa
-* `xvol`      → Volume médio
-* `xrec`      → Receita líquida
-* `xbeta`     → Beta
-* `x52w`      → Máx/Mín 52 semanas
-* `xfund`     → Resumo “estilo Bloomberg” com os principais fundamentos
+- `xcot`      → Cotação
+- `xcap`      → Market Cap
+- `xdy`       → Dividend Yield
+- `xplucro`   → P/L
+- `xpvp`      → P/VP
+- `xebt`      → EBITDA
+- `xmarg`     → Margem líquida
+- `xroe`      → ROE
+- `xdivt`     → Dívida total
+- `xdivl`     → Dívida líquida
+- `xcaixa`    → Caixa
+- `xvol`      → Volume médio
+- `xrec`      → Receita líquida
+- `xbeta`     → Beta
+- `x52w`      → Máx/Mín 52 semanas
+- `xfund`     → Resumo "estilo Bloomberg" com os principais fundamentos
 
 Fluxo:
 
@@ -234,36 +237,44 @@ O modo BR/US (vírgula vs ponto, R$ vs $) é tratado dentro da classe `B3Fundame
 
 A expansão de snippets usa a **área de transferência do Windows** (clipboard) + `Ctrl+V` para colar o texto. Isso oferece vantagens importantes:
 
-* **Suporte a múltiplas linhas**: funciona corretamente em qualquer aplicativo, inclusive Notepad.
-* **Compatível com apps de chat** (WhatsApp, Discord, Teams): a simulação de `Enter` pelo teclado acionaria o envio da mensagem; o Ctrl+V não tem esse problema.
-* **Desempenho**: a colagem é instantânea, independente do tamanho do snippet.
-* O conteúdo anterior da área de transferência é salvo e restaurado automaticamente após a expansão.
+- **Suporte a múltiplas linhas**: funciona corretamente em qualquer aplicativo, inclusive Notepad.
+- **Compatível com apps de chat** (WhatsApp, Discord, Teams): a simulação de `Enter` pelo teclado acionaria o envio da mensagem; o Ctrl+V não tem esse problema.
+- **Desempenho**: a colagem é instantânea, independente do tamanho do snippet.
+- O conteúdo anterior da área de transferência é salvo e restaurado automaticamente após a expansão.
+
+### Suporte a Markdown
+
+O expansor detecta automaticamente se o snippet contém formatação Markdown (`**negrito**`, `*itálico*`, `~~tachado~~`, `` `código` ``, headings `#`). Quando detectado:
+
+- O snippet é colocado na área de transferência em **dois formatos simultâneos**:
+  - `CF_HTML` — renderizado como HTML rico, para aplicativos como navegadores, WhatsApp Web, Discord, Slack e apps Electron.
+  - `CF_UNICODETEXT` — texto puro como fallback para editores simples.
+- Aplicativos que entendem HTML (ex.: Discord) receberão o texto formatado; os demais receberão o texto puro.
+- O pacote `markdown` (Python) é necessário para renderização rica. Se não estiver instalado, o fallback é sempre texto puro.
 
 ## 9. Segurança e limitações
 
-* Projetado para uso em **Windows**.
-* Testado com Notepad, navegadores, VS Code, Word, WhatsApp Web, Discord, Teams e outros.
-  Alguns aplicativos com proteção especial de entrada podem exigir execução “como Administrador”.
-* O programa não intercepta combinações de teclas para controle remoto; apenas observa os últimos caracteres digitados para comparar com triggers.
-
+- Projetado para uso em **Windows**.
+- Testado com Notepad, navegadores, VS Code, Word, WhatsApp Web, Discord, Teams e outros.
+  Alguns aplicativos com proteção especial de entrada podem exigir execução "como Administrador".
+- O programa não intercepta combinações de teclas para controle remoto; apenas observa os últimos caracteres digitados para comparar com triggers.
 
 ## 10. Desenvolvimento e customização
 
 Pontos de extensão:
 
-* Adicionar novos snippets dinâmicos em `get_dynamic_snippets()`
-* Criar novos tipos de mapeamentos na aba “Mapeamentos Dinâmicos”
-* Ajustar ou acrescentar novos indicadores/consultas em:
+- Adicionar novos snippets dinâmicos em `get_dynamic_snippets()`
+- Criar novos tipos de mapeamentos na aba "Mapeamentos Dinâmicos"
+- Ajustar ou acrescentar novos indicadores/consultas em:
 
-  * `bcb_consultor.py`
-  * `yf_stocks.py` (classe `B3FundamentosConsultor`)
+  - `bcb_consultor.py`
+  - `yf_stocks.py` (classe `B3FundamentosConsultor`)
 
 Sugestões de melhorias futuras:
 
-* Opção de importar/exportar snippets em outros formatos
-* Suporte a perfis diferentes de snippets
-* Configuração de hotkey global para ativar/desativar o expansor
-
+- Opção de importar/exportar snippets em outros formatos
+- Suporte a perfis diferentes de snippets
+- Configuração de hotkey global para ativar/desativar o expansor
 
 ## 11. Execução em modo debug
 
@@ -271,13 +282,12 @@ Para acompanhar o comportamento em tempo real (gatilhos, snippet acionado, erros
 
 python txt_xpander.py
 
-
 As mensagens de log aparecem no console, incluindo:
 
-* Snippets carregados
-* Tickers digitados
-* Erros ao consultar APIs
-* Avisos sobre permissões de administrador
+- Snippets carregados
+- Tickers digitados
+- Erros ao consultar APIs
+- Avisos sobre permissões de administrador
 
 ## `requirements.txt`
 
