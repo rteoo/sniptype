@@ -41,20 +41,20 @@ REM Verifica dependências principais
 REM ------------------------------------------------------------
 echo Verificando dependências...
 
-python -c "import pynput, pystray, PIL, yfinance, requests" >nul 2>&1
+python -c "import pynput, pystray, PIL, yfinance, requests, markdown" >nul 2>&1
 if %errorlevel% neq 0 (
     echo.
     echo [AVISO] Dependências ausentes. Instalando...
     echo.
 
     python -m pip install --upgrade pip
-    python -m pip install pynput pystray pillow yfinance requests --quiet
+    python -m pip install pynput pystray pillow yfinance requests markdown --quiet
 
     if %errorlevel% neq 0 (
         echo.
         echo [ERRO] Falha ao instalar dependências!
         echo Execute manualmente:
-        echo     pip install pynput pystray pillow yfinance requests
+        echo     pip install pynput pystray pillow yfinance requests markdown
         echo.
         pause
         exit /b 1
