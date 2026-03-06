@@ -2,3 +2,10 @@ _old/
 __pycache__/
 *.pyc
 *.zip
+build/
+source/build/
+dist/
+*.spec
+*.log
+/tests/
+source/tests/tmp/
