@@ -1,276 +1,80 @@
-# Text Expander – Snippets para Windows com System Tray
+# Txt Xpander
 
-Aplicativo em Python para Windows que expande **snippets de texto** em qualquer campo de digitação, similar ao TextExpander/Espanso, com:
+Txt Xpander is a Windows text expander with a system tray app, snippet manager GUI, dynamic snippets, formatted text support, and a packaged standalone build.
 
-- Ícone na bandeja do sistema (System Tray)
-- Snippets estáticos salvos em `snippets.json`
-- Snippets dinâmicos (datas, indicadores BCB, ações B3/US via yfinance)
-- GUI completa em Tkinter para gerenciar:
-  - Snippets estáticos
-  - Mapeamentos dinâmicos (CPF, CNPJ e tipos personalizados com prefixo customizado)
-  - Referência de snippets de Data/Hora & Economia
-  - Referência de snippets de Ações (Stocks)
-- Execução de snippets “lentos” (consultas financeiras) em **threads**, sem travar a digitação
+## Project Layout
 
-> ⚠ Uso pessoal. O programa **não registra** teclas digitadas; apenas observa os últimos caracteres digitados para expandir os triggers.
+- [`dist\Txt Xpander\`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/dist/Txt%20Xpander): packaged app folder to run or ship.
+- [`source\`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/source): editable Python source, assets, launcher, tests, and docs.
+- [`source\docs\refactor-plan.md`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/source/docs/refactor-plan.md): refactor plan kept for future work.
 
----
+## Run The Packaged App
 
-## 1. Estrutura do projeto
+Use the packaged build here:
 
-Arquivos principais:
+- [`dist\Txt Xpander\Txt Xpander.exe`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/dist/Txt%20Xpander/Txt%20Xpander.exe)
 
-- `txt_xpander.pyw`  
-  Versão principal executável em background, sem console (recomendada para uso diário).
+Usage notes:
 
-- `run_txt_xpander.bat`
-  Arquivo para iniciar o Text Expander com dupla-clique (detalhes abaixo).
+1. Launch `Txt Xpander.exe`.
+2. On first launch, the app seeds `snippets.json` beside the executable and uses that file for future edits.
+3. Use the tray icon to open `Gerenciar Snippets`, reload snippets, enable or disable expansion, and quit the app.
+4. Before replacing the packaged folder with a newer build, close any running `Txt Xpander.exe` first.
 
-- `bcb_consultor.py`  
-  Consulta indicadores econômicos do BCB (Dólar, Selic, IPCA, CDI etc.).
+## Work From Source
 
-- `yf_stocks.py`  
-  Implementa `B3FundamentosConsultor` para cotações e fundamentos via `yfinance`.
+All editable code now lives in [`source\`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/source).
 
-- `snippets.json`  
-  Armazena snippets estáticos e mapeamentos dinâmicos.
+Typical source workflow:
 
-## 2. Instalação
-
-### 2.1 Requisitos
-
-- Windows 10 ou superior
-- Python 3.9+ instalado e no PATH
-
-### 2.2 Instalação das dependências
-
-pip install -r requirements.txt
-
-### 2.3 Execução
-
-#### Opção A – Modo padrão (com console)
-
-python txt_xpander.py
-
-#### Opção B – Modo silencioso com `.pyw` (recomendado)
-
-Clique duas vezes em:
-
-run_txt_xpander.bat
-
-## 3. Arquivo `run_txt_xpander.bat`
-
-O projeto inclui um arquivo para facilitar a execução do expansor no modo silencioso (**pythonw**), sem abrir terminal.
-
-### O que esse arquivo faz:
-
-1. Configura o terminal para UTF-8 (`chcp 65001`).
-2. Garante que está rodando na mesma pasta do projeto.
-3. Confirma se o **Python está instalado**.
-4. Verifica se o arquivo `txt_xpander.pyw` existe.
-5. Confere se as dependências básicas estão instaladas.
-6. Caso faltem, instala automaticamente (`pynput`, `pystray`, `Pillow`, `yfinance`, `requests`).
-7. Inicia o expansor usando **pythonw**, sem terminal.
-8. Fecha a janela automaticamente após 2 segundos.
-
-### Vantagens
-
-* Executa o Text Expander de forma limpa e invisível.
-* Útil para criar um **atalho na área de trabalho** ou colocar no **Startup do Windows**.
-
-Para iniciar automaticamente no login:
-
-1. Pressione `Win + R`
-2. Digite: shell:startup
-3. Coloque um atalho do arquivo `run_txt_xpander.bat` dentro dessa pasta.
-
-## 4. Snippets estáticos
-
-Snippets estáticos são pares `trigger → texto` definidos em `snippets.json` ou pela GUI.
-
-Exemplo simples de `snippets.json`:
-
-```json
-{
-  "xname": "Seu Nome",
-  "xemail": "seu.email@exemplo.com"
-}
+```powershell
+cd source
+python -m pip install -r requirements.txt
+python -m unittest discover -s tests -v
 ```
 
-Uso:
+Run from source:
 
-* Digite `xname` em qualquer campo de texto
-* O programa apaga `xname` e digita `Seu Nome`
-
-Pontos importantes:
-
-* Triggers **não podem** começar com `_` (prefixo reservado para mapeamentos dinâmicos).
-* Na GUI, use a aba **“Snippets Estáticos”** para:
-
-  * Criar novos snippets
-  * Editar gatilhos e textos
-  * Excluir snippets
-
-## 5. Mapeamentos dinâmicos (cpf, cnpj, etc.)
-
-Além dos snippets simples, o programa suporta **mapeamentos dinâmicos**, úteis para grupos de dados do mesmo tipo:
-
-* CPFs
-* CNPJs
-* E tipos customizados com prefixo personalizado (e-mails, contas bancárias, comandos, etc.)
-
-### 5.1. Estrutura em `snippets.json`
-
-```json
-{
-  “_cpf_numbers”: {
-    “fulano”: “123.456.789-00”,
-    “ciclano”: “987.654.321-00”
-  },
-  “_cnpj_numbers”: {
-    “empresa1”: “12.345.678/0001-90”
-  }
-}
+```powershell
+cd source
+pythonw txt_xpander.pyw
 ```
 
-Com isso:
+Or use the source-side launcher:
 
-* Digitar `cpffulano` expande para `123.456.789-00`
-* Digitar `cnpjempresa1` expande para `12.345.678/0001-90`
+- [`source\run_txt_xpander.bat`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/source/run_txt_xpander.bat)
 
-O mapeamento é:
+## Build A New Packaged Release
 
-* chave interna começando com `_` (ex.: `_cpf_numbers`)
-* prefixo de uso: `cpf`, `cnpj`, ou um prefixo customizado
+From the repo root, with `PyInstaller` installed:
 
-### 5.2. Criando tipos customizados pela GUI
-
-Na aba **”Mapeamentos Dinâmicos”** da GUI você pode:
-
-* Selecionar tipos existentes (`CPF`, `CNPJ`)
-* Criar novos tipos com **prefixo personalizado**:
-
-  * Ex.: tipo `openclaw`, prefixo `clw`
-  * Depois, cadastrar itens como:
-
-    * `gtw` → `openclaw gateway restart`
-    * `dct` → `openclaw doctor --fix`
-  * Uso: `clwgtw` expande para `openclaw gateway restart`
-
-Os tipos customizados são gravados em `snippets.json` com o prefixo armazenado via `__prefix__`:
-
-```json
-“_openclaw_codes”: {
-  “__prefix__”: “clw”,
-  “gtw”: “openclaw gateway restart”,
-  “dct”: “openclaw doctor --fix”
-}
+```powershell
+python -m PyInstaller --noconfirm --clean --windowed --onedir --name "Txt Xpander" --icon source\txt_xpander.ico --add-data "source\snippets.json;." --add-data "source\txt_xpander.ico;." --hidden-import pystray._win32 source\txt_xpander.pyw
 ```
 
-O campo `__prefix__` é interno e não aparece na lista de itens da GUI. Se omitido, o prefixo é derivado do nome do tipo (ex.: `_email_codes` → prefixo `email`).
+This produces the shipping folder in [`dist\Txt Xpander\`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/dist/Txt%20Xpander).
 
-## 6. Snippets dinâmicos de data e indicadores (BCB)
+## Source Contents
 
-Alguns gatilhos já vêm embutidos no código:
+Main source files:
 
-* Datas:
+- [`source\txt_xpander.pyw`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/source/txt_xpander.pyw): main Windows app, tray, listener, GUI, notifications.
+- [`source\runtime_support.py`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/source/runtime_support.py): clipboard insertion, logging helpers, background task support.
+- [`source\rich_text_support.py`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/source/rich_text_support.py): rich-text editing and clipboard payload generation.
+- [`source\snippet_utils.py`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/source/snippet_utils.py): snippet loading, validation, atomic persistence.
+- [`source\trigger_index.py`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/source/trigger_index.py): compiled trigger matching.
+- [`source\gui_support.py`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/source/gui_support.py): GUI reference/filter helpers.
+- [`source\bcb_consultor.py`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/source/bcb_consultor.py): Banco Central data lookups.
+- [`source\yf_stocks.py`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/source/yf_stocks.py): stock and fundamentals lookups.
+- [`source\tests\`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/source/tests): regression tests.
 
-  * `xhj` → data atual `dd/mm/aaaa`
-  * `xhoje` → data por extenso
-  * `xnow` → hora atual `HH:MM:SS`
-  * `xdatahora` → data e hora
+## Release Notes
 
-* Indicadores do Banco Central (via `BCBConsultor`):
+### 2026-03-06
 
-  * `xdolar`
-  * `xselic`
-  * `xipcam`
-  * `xipca12`
-  * `xcdi`
-  * `xptax`
-  * `xeconomia`
-
-Esses snippets são funções Python e **não aparecem** em `snippets.json`.
-
----
-
-## 7. Snippets de ações (B3 / US) – “lentos”
-
-Snippets que pedem ticker e consultam `yfinance` são tratados como “lentos” e executados em **thread separada** para não bloquear a digitação:
-
-Principais:
-
-* `xcot`      → Cotação
-* `xcap`      → Market Cap
-* `xdy`       → Dividend Yield
-* `xplucro`   → P/L
-* `xpvp`      → P/VP
-* `xebt`      → EBITDA
-* `xmarg`     → Margem líquida
-* `xroe`      → ROE
-* `xdivt`     → Dívida total
-* `xdivl`     → Dívida líquida
-* `xcaixa`    → Caixa
-* `xvol`      → Volume médio
-* `xrec`      → Receita líquida
-* `xbeta`     → Beta
-* `x52w`      → Máx/Mín 52 semanas
-* `xfund`     → Resumo “estilo Bloomberg” com os principais fundamentos
-
-Fluxo:
-
-1. Digite, por exemplo, `xfund`
-2. O expansor apaga `xfund`
-3. Abre uma caixa de input pedindo o ticker (`PETR4`, `ITUB4`, `AAPL`, etc.)
-4. Consulta `yfinance` via `B3FundamentosConsultor`
-5. Digita o resumo formatado na posição atual do cursor
-
-O modo BR/US (vírgula vs ponto, R$ vs $) é tratado dentro da classe `B3FundamentosConsultor`.
-
-## 8. Segurança e limitações
-
-* Projetado para uso em **Windows**.
-* Foi testado com aplicativos comuns (navegadores, VS Code, Word, etc.).
-  Alguns aplicativos com proteção especial de entrada podem exigir execução “como Administrador”.
-* O programa não intercepta combinações de teclas para controle remoto; apenas observa os últimos caracteres digitados para comparar com triggers.
-
-
-## 9. Desenvolvimento e customização
-
-Pontos de extensão:
-
-* Adicionar novos snippets dinâmicos em `get_dynamic_snippets()`
-* Criar novos tipos de mapeamentos na aba “Mapeamentos Dinâmicos”
-* Ajustar ou acrescentar novos indicadores/consultas em:
-
-  * `bcb_consultor.py`
-  * `yf_stocks.py` (classe `B3FundamentosConsultor`)
-
-Sugestões de melhorias futuras:
-
-* Opção de importar/exportar snippets em outros formatos
-* Suporte a perfis diferentes de snippets
-* Configuração de hotkey global para ativar/desativar o expansor
-
-
-## 10. Execução em modo debug
-
-Para acompanhar o comportamento em tempo real (gatilhos, snippet acionado, erros), execute o script pelo terminal/PowerShell:
-
-python txt_xpander.py
-
-
-As mensagens de log aparecem no console, incluindo:
-
-* Snippets carregados
-* Tickers digitados
-* Erros ao consultar APIs
-* Avisos sobre permissões de administrador
-
-## `requirements.txt`
-
-pynput>=1.7.0
-pystray>=0.19.0
-Pillow>=10.0.0
-yfinance>=0.2.40
-requests>=2.31.0
+- Added a working standalone PyInstaller build in `dist\Txt Xpander`.
+- Fixed packaged startup so the app seeds and uses `snippets.json` beside the executable.
+- Fixed the packaged tray icon and tray-backed notifications.
+- Switched snippet insertion to clipboard-first behavior for better multiline and chat-app reliability.
+- Added rich-text snippet support with formatting controls in the snippet manager.
+- Improved the snippet manager layout, resize behavior, search/filtering, and notification history access.
