@@ -93,14 +93,17 @@ Exemplo simples de `snippets.json`:
 ```json
 {
   "xname": "Seu Nome",
-  "xemail": "seu.email@exemplo.com"
+  "xemail": "seu.email@exemplo.com",
+  "xend": "Rua Exemplo, 123\nBairro Centro\nCidade - UF, CEP: 00.000-000"
 }
 ```
+
+Snippets podem conter **múltiplas linhas** usando `\n` no JSON.
 
 Uso:
 
 * Digite `xname` em qualquer campo de texto
-* O programa apaga `xname` e digita `Seu Nome`
+* O programa apaga `xname` e cola `Seu Nome`
 
 Pontos importantes:
 
@@ -227,15 +230,24 @@ Fluxo:
 
 O modo BR/US (vírgula vs ponto, R$ vs $) é tratado dentro da classe `B3FundamentosConsultor`.
 
-## 8. Segurança e limitações
+## 8. Como a expansão funciona
+
+A expansão de snippets usa a **área de transferência do Windows** (clipboard) + `Ctrl+V` para colar o texto. Isso oferece vantagens importantes:
+
+* **Suporte a múltiplas linhas**: funciona corretamente em qualquer aplicativo, inclusive Notepad.
+* **Compatível com apps de chat** (WhatsApp, Discord, Teams): a simulação de `Enter` pelo teclado acionaria o envio da mensagem; o Ctrl+V não tem esse problema.
+* **Desempenho**: a colagem é instantânea, independente do tamanho do snippet.
+* O conteúdo anterior da área de transferência é salvo e restaurado automaticamente após a expansão.
+
+## 9. Segurança e limitações
 
 * Projetado para uso em **Windows**.
-* Foi testado com aplicativos comuns (navegadores, VS Code, Word, etc.).
+* Testado com Notepad, navegadores, VS Code, Word, WhatsApp Web, Discord, Teams e outros.
   Alguns aplicativos com proteção especial de entrada podem exigir execução “como Administrador”.
 * O programa não intercepta combinações de teclas para controle remoto; apenas observa os últimos caracteres digitados para comparar com triggers.
 
 
-## 9. Desenvolvimento e customização
+## 10. Desenvolvimento e customização
 
 Pontos de extensão:
 
@@ -253,7 +265,7 @@ Sugestões de melhorias futuras:
 * Configuração de hotkey global para ativar/desativar o expansor
 
 
-## 10. Execução em modo debug
+## 11. Execução em modo debug
 
 Para acompanhar o comportamento em tempo real (gatilhos, snippet acionado, erros), execute o script pelo terminal/PowerShell:
 
