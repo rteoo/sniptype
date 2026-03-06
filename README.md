@@ -21,6 +21,26 @@ Usage notes:
 3. Use the tray icon to open `Gerenciar Snippets`, reload snippets, enable or disable expansion, and quit the app.
 4. Before replacing the packaged folder with a newer build, close any running `Txt Xpander.exe` first.
 
+### Auto-start with Windows
+
+To have Txt Xpander launch automatically when you sign in:
+
+1. Press **Win + R**
+2. Type `shell:startup` and press **Enter**
+3. Copy `Txt Xpander.exe` or a shortcut to it into that folder
+4. Txt Xpander will now start automatically with Windows
+
+If you use [`build_release.bat`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/build_release.bat), it now offers to create or update the Startup shortcut for the packaged app automatically after the build finishes.
+
+For convenience, the source launcher (`run_txt_xpander.bat`) can install itself into Startup with:
+
+```bat
+run_txt_xpander.bat install
+```
+
+This copies the batch file to your `%appdata%\Microsoft\Windows\Start Menu\Programs\Startup` folder so it runs on logon. You can remove it later by deleting the shortcut from the same location.
+
+
 ## Work From Source
 
 All editable code now lives in [`source\`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/source).
