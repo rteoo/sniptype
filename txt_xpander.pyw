@@ -20,6 +20,7 @@ import os
 import ctypes
 import threading
 import subprocess
+import re
 
 from pynput import keyboard
 from pynput.keyboard import Controller, Key
@@ -32,6 +33,7 @@ from yf_stocks import B3FundamentosConsultor
 # GUI para gerenciar snippets
 import tkinter as tk
 from tkinter import ttk, messagebox
+from tkinter import font as tkfont
 
 
 class TextExpander:
@@ -418,9 +420,9 @@ If userInput <> "" Then WScript.Echo userInput'''
     def _paste_via_clipboard(self, text: str):
         """
         Paste text using Windows clipboard + Ctrl+V.
-        More reliable than keyboard.type() for text containing newlines,
-        and works correctly in chat apps (WhatsApp, Discord, Teams)
-        where simulating Enter would send the message instead.
+        Auto-detects Markdown formatting and uses CF_HTML for rich apps
+        (browsers, WhatsApp Web, Discord, Slack, Electron) alongside
+        CF_UNICODETEXT as fallback. Plain text uses CF_UNICODETEXT only.
         Saves and restores the previous clipboard content.
         """
         CF_UNICODETEXT = 13
@@ -436,16 +438,57 @@ If userInput <> "" Then WScript.Echo userInput'''
         user32.GetClipboardData.restype = ctypes.c_void_p
         user32.SetClipboardData.restype = ctypes.c_void_p
         user32.SetClipboardData.argtypes = [ctypes.c_uint, ctypes.c_void_p]
+        user32.RegisterClipboardFormatW.restype = ctypes.c_uint
 
-        def _set_clip(content):
-            encoded = (content + '\0').encode('utf-16-le')
-            h = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(encoded))
+        def _alloc(data: bytes):
+            h = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(data))
             ptr = kernel32.GlobalLock(h)
-            ctypes.memmove(ptr, encoded, len(encoded))
+            ctypes.memmove(ptr, data, len(data))
             kernel32.GlobalUnlock(h)
+            return h
+
+        def _set_plain(content: str):
+            encoded = (content + '\0').encode('utf-16-le')
+            h = _alloc(encoded)
             user32.OpenClipboard(0)
             user32.EmptyClipboard()
             user32.SetClipboardData(CF_UNICODETEXT, h)
+            user32.CloseClipboard()
+
+        def _build_cf_html(html_body: str) -> bytes:
+            html_doc = (
+                "<html><body>\r\n"
+                "<!--StartFragment-->\r\n"
+                + html_body +
+                "\r\n<!--EndFragment-->\r\n"
+                "</body></html>"
+            )
+            hdr_tpl = (
+                "Version:0.9\r\n"
+                "StartHTML:{sh:09d}\r\nEndHTML:{eh:09d}\r\n"
+                "StartFragment:{sf:09d}\r\nEndFragment:{ef:09d}\r\n"
+            )
+            dummy = hdr_tpl.format(sh=0, eh=0, sf=0, ef=0)
+            h_len = len(dummy.encode('utf-8'))
+            doc_bytes = html_doc.encode('utf-8')
+            sf_mark = b'<!--StartFragment-->\r\n'
+            ef_mark = b'<!--EndFragment-->'
+            header = hdr_tpl.format(
+                sh=h_len,
+                eh=h_len + len(doc_bytes),
+                sf=h_len + doc_bytes.index(sf_mark) + len(sf_mark),
+                ef=h_len + doc_bytes.index(ef_mark),
+            )
+            return (header + html_doc).encode('utf-8') + b'\x00'
+
+        def _set_rich(content: str, html_body: str):
+            CF_HTML = user32.RegisterClipboardFormatW("HTML Format")
+            h_html = _alloc(_build_cf_html(html_body))
+            h_plain = _alloc((content + '\0').encode('utf-16-le'))
+            user32.OpenClipboard(0)
+            user32.EmptyClipboard()
+            user32.SetClipboardData(CF_HTML, h_html)
+            user32.SetClipboardData(CF_UNICODETEXT, h_plain)
             user32.CloseClipboard()
 
         def _get_clip():
@@ -466,8 +509,32 @@ If userInput <> "" Then WScript.Echo userInput'''
                 except Exception:
                     pass
 
+        def _is_markdown(t: str) -> bool:
+            patterns = [
+                r'\*\*[^*\n]+\*\*',
+                r'(?<!\*)\*[^*\n]+\*(?!\*)',
+                r'~~[^~\n]+~~',
+                r'^#{1,6}\s',
+                r'`[^`\n]+`',
+                r'<u>[^<\n]+</u>',
+                r'^\s*[-*]\s+\S',
+                r'^\s*\d+\.\s+\S',
+            ]
+            return any(re.search(p, t, re.MULTILINE) for p in patterns)
+
         old_content = _get_clip()
-        _set_clip(text)
+        if _is_markdown(text):
+            try:
+                import markdown as md_lib
+                # stdlib markdown doesn't support ~~strike~~ — pre-process it
+                preprocessed = re.sub(r'~~([^~\n]+)~~', r'<del>\1</del>', text)
+                html_body = md_lib.markdown(preprocessed, extensions=['nl2br'])
+                _set_rich(text, html_body)
+            except ImportError:
+                _set_plain(text)
+        else:
+            _set_plain(text)
+
         time.sleep(0.05)
         with self.keyboard_controller.pressed(Key.ctrl):
             self.keyboard_controller.press('v')
@@ -477,7 +544,7 @@ If userInput <> "" Then WScript.Echo userInput'''
             def restore():
                 time.sleep(0.5)
                 try:
-                    _set_clip(old_content)
+                    _set_plain(old_content)
                 except Exception:
                     pass
             threading.Thread(target=restore, daemon=True).start()
@@ -670,6 +737,60 @@ If userInput <> "" Then WScript.Echo userInput'''
         except Exception as e:
             print(f"Erro na GUI de gerenciamento: {e}")
 
+    def _render_markdown_to_widget(self, widget, text: str):
+        """Render simple Markdown to a tkinter Text widget using text tags."""
+        widget.tag_configure("bold",        font=("Arial", 11, "bold"))
+        widget.tag_configure("italic",      font=("Arial", 11, "italic"))
+        widget.tag_configure("bold_italic", font=("Arial", 11, "bold italic"))
+        widget.tag_configure("strike",      overstrike=True)
+        widget.tag_configure("underline",   underline=True)
+        widget.tag_configure("code",        font=("Consolas", 10), background="#f0f0f0")
+        widget.tag_configure("h1",          font=("Arial", 18, "bold"))
+        widget.tag_configure("h2",          font=("Arial", 15, "bold"))
+        widget.tag_configure("h3",          font=("Arial", 13, "bold"))
+        widget.tag_configure("h4",          font=("Arial", 11, "bold"))
+
+        inline_re = re.compile(
+            r'(\*\*\*(?P<bi>[^*\n]+)\*\*\*)'
+            r'|(\*\*(?P<b>[^*\n]+)\*\*)'
+            r'|(\*(?P<i>[^*\n]+)\*)'
+            r'|(~~(?P<s>[^~\n]+)~~)'
+            r'|(`(?P<c>[^`\n]+)`)'
+            r'|(<u>(?P<u>[^<\n]+)</u>)'
+        )
+
+        def insert_inline(line: str):
+            pos = 0
+            for m in inline_re.finditer(line):
+                if m.start() > pos:
+                    widget.insert(tk.END, line[pos:m.start()])
+                if m.group('bi'):
+                    widget.insert(tk.END, m.group('bi'), 'bold_italic')
+                elif m.group('b'):
+                    widget.insert(tk.END, m.group('b'), 'bold')
+                elif m.group('i'):
+                    widget.insert(tk.END, m.group('i'), 'italic')
+                elif m.group('s'):
+                    widget.insert(tk.END, m.group('s'), 'strike')
+                elif m.group('c'):
+                    widget.insert(tk.END, m.group('c'), 'code')
+                elif m.group('u'):
+                    widget.insert(tk.END, m.group('u'), 'underline')
+                pos = m.end()
+            if pos < len(line):
+                widget.insert(tk.END, line[pos:])
+
+        lines = text.split('\n')
+        for i, line in enumerate(lines):
+            m_h = re.match(r'^(#{1,4})\s+(.*)', line)
+            if m_h:
+                level = min(len(m_h.group(1)), 4)
+                widget.insert(tk.END, m_h.group(2), f'h{level}')
+            else:
+                insert_inline(line)
+            if i < len(lines) - 1:
+                widget.insert(tk.END, '\n')
+
     def _create_static_snippets_tab(self, parent, root):
         """Cria a interface da aba de snippets estáticos."""
         
@@ -695,20 +816,86 @@ If userInput <> "" Then WScript.Echo userInput'''
         entry_trigger.pack(fill=tk.X, pady=(0, 10))
 
         tk.Label(frame_right, text="Valor do snippet:", font=("Arial", 9)).pack(anchor="w")
-        text_value = tk.Text(frame_right, wrap=tk.WORD, height=12, font=("Arial", 10))
-        text_value.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
 
-        # Botões
+        fmt_bar = tk.Frame(frame_right)
+        fmt_bar.pack(fill=tk.X, pady=(2, 2))
+
+        # Botões — packed first so paned doesn't consume their space
         btn_frame = tk.Frame(frame_right)
-        btn_frame.pack(fill=tk.X)
+        btn_frame.pack(fill=tk.X, pady=(4, 0), side=tk.BOTTOM)
 
-        btn_new = tk.Button(btn_frame, text="Novo", width=12)
-        btn_save = tk.Button(btn_frame, text="Salvar", width=12)
-        btn_delete = tk.Button(btn_frame, text="Excluir", width=12)
+        btn_new    = tk.Button(btn_frame, text="Novo",   width=12)
+        btn_save   = tk.Button(btn_frame, text="Salvar", width=12)
+        btn_delete = tk.Button(btn_frame, text="Excluir",width=12)
 
         btn_new.pack(side=tk.LEFT, padx=3)
         btn_save.pack(side=tk.LEFT, padx=3)
         btn_delete.pack(side=tk.LEFT, padx=3)
+
+        paned = tk.PanedWindow(frame_right, orient=tk.VERTICAL, sashrelief=tk.RAISED, sashwidth=5)
+        paned.pack(fill=tk.BOTH, expand=True, pady=(0, 4))
+
+        text_value = tk.Text(paned, wrap=tk.WORD, height=7, font=("Arial", 10))
+        paned.add(text_value, minsize=60)
+
+        preview_frame = tk.Frame(paned, bg="#f4f4f4")
+        tk.Label(preview_frame, text="Preview", font=("Arial", 8), fg="#999", bg="#f4f4f4").pack(anchor="w", padx=6, pady=(2, 0))
+        preview_widget = tk.Text(preview_frame, wrap=tk.WORD, font=("Arial", 10),
+                                  bg="#fafafa", relief=tk.FLAT, state=tk.DISABLED, padx=8, pady=4)
+        preview_widget.pack(fill=tk.BOTH, expand=True)
+        paned.add(preview_frame, minsize=60)
+
+        def wrap_selection(before, after=None):
+            if after is None:
+                after = before
+            try:
+                sel_start = text_value.index(tk.SEL_FIRST)
+                sel_end = text_value.index(tk.SEL_LAST)
+                selected = text_value.get(sel_start, sel_end)
+                text_value.delete(sel_start, sel_end)
+                text_value.insert(sel_start, before + selected + after)
+            except tk.TclError:
+                pos = text_value.index(tk.INSERT)
+                text_value.insert(pos, before + after)
+                text_value.mark_set(tk.INSERT, f"{pos}+{len(before)}c")
+            text_value.focus_set()
+
+        def update_preview(*_):
+            raw = text_value.get("1.0", tk.END).rstrip()
+            preview_widget.configure(state=tk.NORMAL)
+            preview_widget.delete("1.0", tk.END)
+            if raw:
+                self._render_markdown_to_widget(preview_widget, raw)
+            preview_widget.configure(state=tk.DISABLED)
+
+        text_value.bind("<<Modified>>", lambda _: (text_value.edit_modified(False), update_preview()))
+
+        _strike_font    = tkfont.Font(family="Arial", size=9, overstrike=True)
+        _underline_font = tkfont.Font(family="Arial", size=9, underline=True)
+        _code_font      = tkfont.Font(family="Consolas", size=9)
+
+        def _make_toolbar_btn(parent, **kwargs):
+            cmd = kwargs.pop("command", None)
+            btn = tk.Button(parent, relief=tk.FLAT, bd=1, padx=4,
+                            bg="#e8e8e8", activebackground="#d0d0d0",
+                            cursor="hand2", command=cmd, **kwargs)
+            btn.bind("<Enter>",        lambda _: btn.config(relief=tk.RAISED))
+            btn.bind("<Leave>",        lambda _: btn.config(relief=tk.FLAT))
+            btn.bind("<ButtonPress>",  lambda _: btn.config(relief=tk.SUNKEN))
+            btn.bind("<ButtonRelease>",lambda _: btn.config(relief=tk.FLAT))
+            return btn
+
+        _make_toolbar_btn(fmt_bar, text="B",   font=("Arial", 9, "bold"),
+                          command=lambda: wrap_selection("**")).pack(side=tk.LEFT, padx=1)
+        _make_toolbar_btn(fmt_bar, text="I",   font=("Arial", 9, "italic"),
+                          command=lambda: wrap_selection("*")).pack(side=tk.LEFT, padx=1)
+        _make_toolbar_btn(fmt_bar, text="U",   font=_underline_font,
+                          command=lambda: wrap_selection("<u>", "</u>")).pack(side=tk.LEFT, padx=1)
+        _make_toolbar_btn(fmt_bar, text="ab",  font=_strike_font,
+                          command=lambda: wrap_selection("~~")).pack(side=tk.LEFT, padx=1)
+        _make_toolbar_btn(fmt_bar, text="</>", font=_code_font,
+                          command=lambda: wrap_selection("`")).pack(side=tk.LEFT, padx=1)
+        tk.Label(fmt_bar, text="Markdown", font=("Arial", 7), fg="#999").pack(side=tk.RIGHT, padx=5)
 
         # Funções
         def get_static_visible_snippets():
