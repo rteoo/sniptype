@@ -1,6 +1,13 @@
 import unittest
 
-from gui_support import DATETIME_SNIPPETS, ECONOMY_SNIPPETS, STOCK_SNIPPETS, filter_static_snippets, iter_filtered_mapping_items
+from gui_support import (
+    DATETIME_SNIPPETS,
+    ECONOMY_SNIPPETS,
+    STOCK_SNIPPETS,
+    WHATSAPP_SNIPPETS,
+    filter_static_snippets,
+    iter_filtered_mapping_items,
+)
 
 
 class GuiSupportTests(unittest.TestCase):
@@ -47,6 +54,8 @@ class GuiSupportTests(unittest.TestCase):
         self.assertGreater(len(DATETIME_SNIPPETS), 0)
         self.assertGreater(len(ECONOMY_SNIPPETS), 0)
         self.assertGreater(len(STOCK_SNIPPETS), 0)
+        self.assertGreater(len(WHATSAPP_SNIPPETS), 0)
+        self.assertIn("xwapp", {trigger for trigger, _ in WHATSAPP_SNIPPETS})
 
 
 if __name__ == "__main__":

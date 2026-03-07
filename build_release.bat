@@ -1,20 +1,105 @@
 @echo off
-setlocal
-REM Build a new packaged release using PyInstaller
-REM Run from repository root with PyInstaller installed.
+setlocal EnableExtensions
+REM Build a new packaged release using PyInstaller.
+REM The build always stages into a temporary dist folder first so an existing
+REM packaged app stays intact unless the new build succeeds.
 
-python -m PyInstaller --noconfirm --clean --windowed --onedir --name "Txt Xpander" --icon source\txt_xpander.ico --add-data "source\snippets.json;." --add-data "source\txt_xpander.ico;." --hidden-import pystray._win32 source\txt_xpander.pyw
-if errorlevel 1 (
-    echo.
-    echo Packaging failed.
+set "REPO_DIR=%~dp0"
+if "%REPO_DIR:~-1%"=="\" set "REPO_DIR=%REPO_DIR:~0,-1%"
+set "DIST_ROOT=%REPO_DIR%\dist"
+set "TARGET_DIR=%DIST_ROOT%\Txt Xpander"
+set "TARGET_EXE=%TARGET_DIR%\Txt Xpander.exe"
+set "TARGET_SNIPPETS=%TARGET_DIR%\snippets.json"
+set "STAGING_ROOT=%REPO_DIR%\dist_staging"
+set "STAGING_DIR=%STAGING_ROOT%\Txt Xpander"
+set "PREVIOUS_DIR=%DIST_ROOT%\Txt Xpander.previous"
+set "WORK_ROOT=%TEMP%\txt_xpander_pyinstaller_%RANDOM%%RANDOM%"
+set "WORK_DIR=%WORK_ROOT%\build"
+set "SNIPPETS_BACKUP=%TEMP%\txt_xpander_snippets_backup_%RANDOM%%RANDOM%.json"
+set "HAS_SNIPPETS_BACKUP=0"
+set "STARTUP_DIR=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
+set "SHORTCUT_PATH=%STARTUP_DIR%\Txt Xpander.lnk"
+
+tasklist /FI "IMAGENAME eq Txt Xpander.exe" 2>nul | find /I "Txt Xpander.exe" >nul
+if not errorlevel 1 (
+    echo "Txt Xpander.exe" is currently running.
+    echo Close the packaged app before rebuilding dist so the update can replace the old folder safely.
     pause
     exit /b 1
 )
 
-set "TARGET_DIR=%~dp0dist\Txt Xpander"
-set "TARGET_EXE=%TARGET_DIR%\Txt Xpander.exe"
-set "STARTUP_DIR=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
-set "SHORTCUT_PATH=%STARTUP_DIR%\Txt Xpander.lnk"
+if exist "%TARGET_DIR%" (
+    echo Existing dist detected: "%TARGET_DIR%"
+) else (
+    echo No existing dist found. A fresh packaged release will be created.
+)
+
+if exist "%TARGET_SNIPPETS%" (
+    echo Backing up saved snippets from dist\Txt Xpander\snippets.json...
+    copy /Y "%TARGET_SNIPPETS%" "%SNIPPETS_BACKUP%" >nul
+    if errorlevel 1 (
+        echo Failed to back up the existing snippets.json file.
+        pause
+        exit /b 1
+    )
+    set "HAS_SNIPPETS_BACKUP=1"
+) else (
+    echo No existing dist snippets.json found to preserve.
+)
+
+if exist "%STAGING_ROOT%" (
+    attrib -r "%STAGING_ROOT%\*.*" /s /d >nul 2>&1
+    rmdir /s /q "%STAGING_ROOT%" >nul 2>&1
+)
+
+if exist "%PREVIOUS_DIR%" (
+    attrib -r "%PREVIOUS_DIR%\*.*" /s /d >nul 2>&1
+    rmdir /s /q "%PREVIOUS_DIR%" >nul 2>&1
+)
+
+python -m PyInstaller --noconfirm --clean --windowed --onedir --distpath "%STAGING_ROOT%" --workpath "%WORK_DIR%" --specpath "%REPO_DIR%" --name "Txt Xpander" --icon "%REPO_DIR%\source\txt_xpander.ico" --add-data "%REPO_DIR%\source\snippets.json;." --add-data "%REPO_DIR%\source\txt_xpander.ico;." --hidden-import pystray._win32 "%REPO_DIR%\source\txt_xpander.pyw"
+if errorlevel 1 (
+    echo.
+    echo Packaging failed. The existing dist was left unchanged.
+    goto cleanup_and_fail
+)
+
+if not exist "%STAGING_DIR%" (
+    echo Packaging failed: staged dist was not created.
+    goto cleanup_and_fail
+)
+
+if "%HAS_SNIPPETS_BACKUP%"=="1" (
+    echo Restoring saved snippets.json into the new dist...
+    copy /Y "%SNIPPETS_BACKUP%" "%STAGING_DIR%\snippets.json" >nul
+    if errorlevel 1 (
+        echo Failed to restore snippets.json into the staged dist.
+        goto cleanup_and_fail
+    )
+)
+
+if exist "%TARGET_DIR%" (
+    echo Replacing the previous dist with the new packaged release...
+    move "%TARGET_DIR%" "%PREVIOUS_DIR%" >nul
+    if errorlevel 1 (
+        echo Failed to move the existing dist out of the way.
+        echo Close any running "Txt Xpander.exe" instance and try again.
+        goto cleanup_and_fail
+    )
+)
+
+if not exist "%DIST_ROOT%" mkdir "%DIST_ROOT%"
+move "%STAGING_DIR%" "%TARGET_DIR%" >nul
+if errorlevel 1 (
+    echo Failed to promote the new staged dist into place.
+    if exist "%PREVIOUS_DIR%" move "%PREVIOUS_DIR%" "%TARGET_DIR%" >nul
+    goto cleanup_and_fail
+)
+
+if exist "%PREVIOUS_DIR%" (
+    attrib -r "%PREVIOUS_DIR%\*.*" /s /d >nul 2>&1
+    rmdir /s /q "%PREVIOUS_DIR%" >nul 2>&1
+)
 
 echo.
 set /p "ADD_STARTUP_SHORTCUT=Add a Startup shortcut for Txt Xpander? [Y/N]: "
@@ -37,5 +122,32 @@ if errorlevel 1 (
 
 :finish
 echo Packaging complete. The release folder is in dist\"Txt Xpander"\
+goto cleanup_and_exit
+
+:cleanup_and_fail
+if exist "%STAGING_ROOT%" (
+    attrib -r "%STAGING_ROOT%\*.*" /s /d >nul 2>&1
+    rmdir /s /q "%STAGING_ROOT%" >nul 2>&1
+)
+if exist "%WORK_ROOT%" (
+    attrib -r "%WORK_ROOT%\*.*" /s /d >nul 2>&1
+    rmdir /s /q "%WORK_ROOT%" >nul 2>&1
+)
+if exist "%SNIPPETS_BACKUP%" (
+    echo Preserved snippets backup: "%SNIPPETS_BACKUP%"
+)
+pause
+exit /b 1
+
+:cleanup_and_exit
+if exist "%STAGING_ROOT%" (
+    attrib -r "%STAGING_ROOT%\*.*" /s /d >nul 2>&1
+    rmdir /s /q "%STAGING_ROOT%" >nul 2>&1
+)
+if exist "%WORK_ROOT%" (
+    attrib -r "%WORK_ROOT%\*.*" /s /d >nul 2>&1
+    rmdir /s /q "%WORK_ROOT%" >nul 2>&1
+)
+if exist "%SNIPPETS_BACKUP%" del /q "%SNIPPETS_BACKUP%" >nul 2>&1
 pause
 endlocal

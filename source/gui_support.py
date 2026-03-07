@@ -38,6 +38,10 @@ STOCK_SNIPPETS = [
     ("xfund", "Resumo completo de fundamentos"),
 ]
 
+WHATSAPP_SNIPPETS = [
+    ("xwapp", "Lê o telefone do clipboard, gera o link wa.me e abre no navegador"),
+]
+
 
 def filter_static_snippets(snippets, query):
     lowered = query.strip().lower()
