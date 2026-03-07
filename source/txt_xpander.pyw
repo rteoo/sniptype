@@ -20,6 +20,7 @@ import sys
 import shutil
 import ctypes
 import subprocess
+import webbrowser
 
 os.environ.setdefault("PYSTRAY_BACKEND", "win32")
 
@@ -47,9 +48,11 @@ from runtime_support import (
     AppLogger,
     BackgroundTaskRunner,
     TextInserter,
+    WindowsClipboard,
     build_snippet_failure_notification,
     truncate_notification_text,
 )
+from whatsapp_support import build_whatsapp_url, normalize_phone_number
 from rich_text_support import (
     clear_text_styles,
     configure_rich_text_widget,
@@ -62,6 +65,7 @@ from gui_support import (
     DATETIME_SNIPPETS,
     ECONOMY_SNIPPETS,
     STOCK_SNIPPETS,
+    WHATSAPP_SNIPPETS,
     center_dialog,
     filter_static_snippets,
     iter_filtered_mapping_items,
@@ -130,6 +134,7 @@ class TextExpander:
         self.task_runner = BackgroundTaskRunner()
         self.text_inserter = TextInserter(self.keyboard_controller, logger=self.logger)
         self.notification_timestamps = {}
+        self.notification_history = []
 
         # Dados do usuario ficam ao lado do executavel; recursos empacotados podem viver em _internal.
         self.base_dir = get_runtime_base_dir()
@@ -146,7 +151,7 @@ class TextExpander:
             "xcot", "xplucro", "xcap", "xpvp", "xdy",
             "xebt", "xmarg", "xroe", "xdivl", "xdivt",
             "xcaixa", "xvol", "xrec", "xbeta", "x52w",
-            "xfund"
+            "xfund", "xwapp"
         }
 
         # Carrega snippets antes de qualquer outra coisa
@@ -306,6 +311,128 @@ If userInput <> "" Then WScript.Echo userInput'''
             print(f"⚠ Erro no dialog: {e}")
             return None
 
+    def ask_whatsapp_input(self, initial_phone: str = "", initial_message: str = ""):
+        """Show a small modal dialog for manual WhatsApp phone/message input."""
+        result = {"phone": None, "message": None}
+
+        try:
+            root = tk.Tk()
+            root.title("Abrir WhatsApp")
+            root.resizable(False, False)
+            root.configure(bg="#F4F6FA")
+            root.attributes("-topmost", True)
+            root.grab_set()
+            self._set_window_icon(root)
+
+            container = tk.Frame(root, bg="#F4F6FA", padx=18, pady=18)
+            container.pack(fill=tk.BOTH, expand=True)
+            container.grid_columnconfigure(0, weight=1)
+
+            tk.Label(
+                container,
+                text="Abrir conversa no WhatsApp",
+                font=("Segoe UI", 11, "bold"),
+                bg="#F4F6FA",
+                fg="#1F2937",
+            ).grid(row=0, column=0, sticky="w")
+
+            tk.Label(
+                container,
+                text="Informe o telefone com DDD ou código do país. Se faltar o país, será usado +55.",
+                font=("Segoe UI", 9),
+                bg="#F4F6FA",
+                fg="#5B6472",
+                wraplength=380,
+                justify=tk.LEFT,
+            ).grid(row=1, column=0, sticky="w", pady=(6, 12))
+
+            tk.Label(container, text="Telefone", font=("Segoe UI", 9), bg="#F4F6FA").grid(row=2, column=0, sticky="w")
+            entry_phone = tk.Entry(container, font=("Segoe UI", 10), width=42)
+            entry_phone.grid(row=3, column=0, sticky="ew", pady=(4, 10))
+            if initial_phone:
+                entry_phone.insert(0, initial_phone)
+
+            tk.Label(container, text="Mensagem", font=("Segoe UI", 9), bg="#F4F6FA").grid(row=4, column=0, sticky="w")
+            text_message = tk.Text(container, font=("Segoe UI", 10), width=42, height=5)
+            text_message.grid(row=5, column=0, sticky="ew", pady=(4, 12))
+            if initial_message:
+                text_message.insert("1.0", initial_message)
+
+            buttons = tk.Frame(container, bg="#F4F6FA")
+            buttons.grid(row=6, column=0, sticky="e")
+
+            def close_dialog():
+                root.grab_release()
+                root.destroy()
+
+            def cancel_dialog():
+                close_dialog()
+
+            def submit_dialog(event=None):
+                phone_text = entry_phone.get().strip()
+                message_text = text_message.get("1.0", tk.END).rstrip("\n")
+                normalized_phone = normalize_phone_number(phone_text)
+
+                if not normalized_phone:
+                    messagebox.showwarning(
+                        "Telefone inválido",
+                        "Informe um telefone com DDD ou código do país em um formato válido.",
+                        parent=root,
+                    )
+                    entry_phone.focus_set()
+                    return
+
+                result["phone"] = normalized_phone
+                result["message"] = message_text
+                close_dialog()
+
+            btn_cancel = tk.Button(buttons, text="Cancelar", width=12, command=cancel_dialog)
+            btn_open = tk.Button(buttons, text="Abrir WhatsApp", width=14, command=submit_dialog)
+            btn_cancel.pack(side=tk.LEFT, padx=(0, 6))
+            btn_open.pack(side=tk.LEFT)
+
+            entry_phone.bind("<Return>", submit_dialog)
+            root.bind("<Escape>", lambda event: cancel_dialog())
+            root.protocol("WM_DELETE_WINDOW", cancel_dialog)
+
+            root.update_idletasks()
+            width = root.winfo_reqwidth()
+            height = root.winfo_reqheight()
+            pos_x = (root.winfo_screenwidth() - width) // 2
+            pos_y = (root.winfo_screenheight() - height) // 3
+            root.geometry(f"{width}x{height}+{pos_x}+{pos_y}")
+            entry_phone.focus_set()
+            root.mainloop()
+        except Exception as e:
+            self.logger.error(f"Erro ao abrir diálogo do WhatsApp: {e}")
+            self.notify_error(
+                f"Erro ao abrir diálogo do WhatsApp: {e}",
+                key="whatsapp-dialog-error",
+                cooldown_seconds=5,
+            )
+            return None, None
+
+        return result["phone"], result["message"]
+
+    def open_url_in_browser(self, url: str):
+        """Open a URL with webbrowser and fall back to os.startfile on Windows."""
+        errors = []
+
+        try:
+            if webbrowser.open(url, new=2):
+                return True, None
+            errors.append("webbrowser.open retornou False")
+        except Exception as exc:
+            errors.append(f"webbrowser.open falhou: {exc}")
+
+        try:
+            os.startfile(url)
+            return True, None
+        except Exception as exc:
+            errors.append(f"os.startfile falhou: {exc}")
+
+        return False, "; ".join(errors)
+
     # =====================================================================
     # SNIPPETS DINÂMICOS (datas, BCB, ações)
     # =====================================================================
@@ -348,6 +475,7 @@ If userInput <> "" Then WScript.Echo userInput'''
             "xbeta": self.snippet_beta,
             "x52w": self.snippet_52week,
             "xfund": self.snippet_resumo_fundamentos,
+            "xwapp": self.snippet_whatsapp,
         }
     
     # =====================================================================
@@ -463,6 +591,44 @@ If userInput <> "" Then WScript.Echo userInput'''
             print(f"🔍 Buscando resumo para {ticker}...")
             return self.b3_consultor.get_resumo_fundamentos(ticker)
         return "[Cancelado]"
+
+    def snippet_whatsapp(self):
+        """Generate a WhatsApp wa.me link from clipboard or manual input and open it."""
+        clipboard_text = WindowsClipboard.get_text()
+        normalized_phone = normalize_phone_number(clipboard_text)
+        message_text = ""
+
+        if not normalized_phone:
+            normalized_phone, message_text = self.ask_whatsapp_input()
+            if not normalized_phone:
+                return None
+
+        try:
+            url = build_whatsapp_url(normalized_phone, message_text)
+        except Exception as e:
+            self.notify_error(
+                f"Falha ao gerar link do WhatsApp: {e}",
+                key="whatsapp-build-error",
+                cooldown_seconds=5,
+            )
+            return None
+
+        if not WindowsClipboard.set_content(url):
+            self.notify_error(
+                "Não foi possível copiar o link do WhatsApp para a área de transferência.",
+                key="whatsapp-clipboard-error",
+                cooldown_seconds=5,
+            )
+
+        opened, open_error = self.open_url_in_browser(url)
+        if not opened:
+            self.notify_error(
+                f"Não foi possível abrir o link do WhatsApp: {open_error}",
+                key="whatsapp-open-error",
+                cooldown_seconds=5,
+            )
+
+        return None
 
     # =====================================================================
     # PADRÕES ESPECIAIS (cnpj/cpf/cge)
@@ -741,10 +907,14 @@ If userInput <> "" Then WScript.Echo userInput'''
             tab_stocks = tk.Frame(notebook, bg="#F4F6FA")
             notebook.add(tab_stocks, text="Ações (Stocks)")
 
+            tab_whatsapp = tk.Frame(notebook, bg="#F4F6FA")
+            notebook.add(tab_whatsapp, text="WhatsApp")
+
             self._create_static_snippets_tab(tab_static, root)
             self._create_dynamic_mappings_tab(tab_dynamic, root)
             self._create_datetime_eco_tab(tab_datetime_eco)
             self._create_stocks_tab(tab_stocks)
+            self._create_whatsapp_tab(tab_whatsapp)
 
             root.mainloop()
 
@@ -1464,6 +1634,16 @@ If userInput <> "" Then WScript.Echo userInput'''
             "Ao digitar um destes triggers, um popup pedirá o ticker antes da consulta.",
             [("Ações (B3 e US)", STOCK_SNIPPETS)],
             "Aceita tickers brasileiros (PETR4, VALE3) e americanos (AAPL, MSFT, GOOGL).",
+        )
+
+    def _create_whatsapp_tab(self, parent):
+        """Cria aba de referência para o atalho do WhatsApp."""
+        self._create_reference_tab(
+            parent,
+            "Atalho de WhatsApp",
+            "O trigger lê o telefone do clipboard, normaliza para o padrão internacional e abre o navegador.",
+            [("WhatsApp", WHATSAPP_SNIPPETS)],
+            "Se o clipboard não tiver um número válido, o app abre um popup para telefone e mensagem. O link final fica no clipboard.",
         )
 
     # =====================================================================

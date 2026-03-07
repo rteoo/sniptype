@@ -1,6 +1,6 @@
 # Txt Xpander
 
-Txt Xpander is a Windows text expander with a system tray app, snippet manager GUI, dynamic snippets, formatted text support, and a packaged standalone build.
+Txt Xpander is a Windows text expander with a system tray app, snippet manager GUI, dynamic snippets, formatted text support, WhatsApp quick-link automation, and a packaged standalone build.
 
 ## Project Layout
 
@@ -19,7 +19,10 @@ Usage notes:
 1. Launch `Txt Xpander.exe`.
 2. On first launch, the app seeds `snippets.json` beside the executable and uses that file for future edits.
 3. Use the tray icon to open `Gerenciar Snippets`, reload snippets, enable or disable expansion, and quit the app.
-4. Before replacing the packaged folder with a newer build, close any running `Txt Xpander.exe` first.
+4. The built-in `xwapp` trigger reads a phone number from the clipboard, creates a `wa.me` link, opens it in the browser, and keeps the final link in the clipboard.
+5. If `xwapp` cannot normalize the clipboard content into a valid phone number, it opens a popup for manual phone and optional message entry.
+6. Before replacing the packaged folder with a newer build, close any running `Txt Xpander.exe` first.
+7. `build_release.bat` now preserves the packaged app's existing `snippets.json` automatically when updating `dist\Txt Xpander`.
 
 ### Auto-start with Windows
 
@@ -30,7 +33,7 @@ To have Txt Xpander launch automatically when you sign in:
 3. Copy `Txt Xpander.exe` or a shortcut to it into that folder
 4. Txt Xpander will now start automatically with Windows
 
-If you use [`build_release.bat`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/build_release.bat), it now offers to create or update the Startup shortcut for the packaged app automatically after the build finishes.
+If you use [`build_release.bat`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/build_release.bat), it now stages the build safely, restores the previous packaged `snippets.json` automatically when `dist\Txt Xpander` already exists, and can also create or update the Startup shortcut after the build finishes.
 
 For convenience, the source launcher (`run_txt_xpander.bat`) can install itself into Startup with:
 
@@ -89,6 +92,14 @@ Main source files:
 - [`source\tests\`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/source/tests): regression tests.
 
 ## Release Notes
+
+### 2026-03-07
+
+- Added the new `xwapp` dynamic snippet to create WhatsApp `wa.me` links from clipboard phone numbers.
+- Added a manual WhatsApp popup fallback when the clipboard does not contain a valid number.
+- Kept the generated WhatsApp link in the clipboard instead of restoring the previous clipboard contents for this action.
+- Added a WhatsApp reference tab in the snippet manager.
+- Hardened `build_release.bat` to stage builds safely and preserve the packaged `snippets.json` during dist updates.
 
 ### 2026-03-06
 
