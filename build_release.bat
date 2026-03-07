@@ -101,6 +101,11 @@ if exist "%PREVIOUS_DIR%" (
     rmdir /s /q "%PREVIOUS_DIR%" >nul 2>&1
 )
 
+if exist "%SHORTCUT_PATH%" (
+    echo Startup shortcut already exists. Skipping shortcut prompt.
+    goto finish
+)
+
 echo.
 set /p "ADD_STARTUP_SHORTCUT=Add a Startup shortcut for Txt Xpander? [Y/N]: "
 if /I "%ADD_STARTUP_SHORTCUT%"=="Y" goto install_startup
