@@ -52,7 +52,8 @@ from runtime_support import (
     build_snippet_failure_notification,
     truncate_notification_text,
 )
-from whatsapp_support import build_whatsapp_url, normalize_phone_number
+from whatsapp_support import normalize_phone_number
+from whatsapp_runtime_support import execute_whatsapp_action
 from rich_text_support import (
     clear_text_styles,
     configure_rich_text_widget,
@@ -151,7 +152,7 @@ class TextExpander:
             "xcot", "xplucro", "xcap", "xpvp", "xdy",
             "xebt", "xmarg", "xroe", "xdivl", "xdivt",
             "xcaixa", "xvol", "xrec", "xbeta", "x52w",
-            "xfund", "xwapp"
+            "xfund", "xwapp", "xlwapp", "xpwapp"
         }
 
         # Carrega snippets antes de qualquer outra coisa
@@ -476,6 +477,8 @@ If userInput <> "" Then WScript.Echo userInput'''
             "x52w": self.snippet_52week,
             "xfund": self.snippet_resumo_fundamentos,
             "xwapp": self.snippet_whatsapp,
+            "xlwapp": self.snippet_whatsapp_link,
+            "xpwapp": self.snippet_whatsapp_prompt,
         }
     
     # =====================================================================
@@ -592,43 +595,28 @@ If userInput <> "" Then WScript.Echo userInput'''
             return self.b3_consultor.get_resumo_fundamentos(ticker)
         return "[Cancelado]"
 
+    def run_whatsapp_action(self, trigger: str):
+        """Execute one of the built-in WhatsApp actions."""
+        return execute_whatsapp_action(
+            trigger,
+            get_clipboard_text=WindowsClipboard.get_text,
+            ask_input=self.ask_whatsapp_input,
+            set_clipboard_content=WindowsClipboard.set_content,
+            open_url=self.open_url_in_browser,
+            notify_error=self.notify_error,
+        )
+
     def snippet_whatsapp(self):
         """Generate a WhatsApp wa.me link from clipboard or manual input and open it."""
-        clipboard_text = WindowsClipboard.get_text()
-        normalized_phone = normalize_phone_number(clipboard_text)
-        message_text = ""
+        return self.run_whatsapp_action("xwapp")
 
-        if not normalized_phone:
-            normalized_phone, message_text = self.ask_whatsapp_input()
-            if not normalized_phone:
-                return None
+    def snippet_whatsapp_link(self):
+        """Generate a WhatsApp wa.me link from clipboard or manual input and insert it."""
+        return self.run_whatsapp_action("xlwapp")
 
-        try:
-            url = build_whatsapp_url(normalized_phone, message_text)
-        except Exception as e:
-            self.notify_error(
-                f"Falha ao gerar link do WhatsApp: {e}",
-                key="whatsapp-build-error",
-                cooldown_seconds=5,
-            )
-            return None
-
-        if not WindowsClipboard.set_content(url):
-            self.notify_error(
-                "Não foi possível copiar o link do WhatsApp para a área de transferência.",
-                key="whatsapp-clipboard-error",
-                cooldown_seconds=5,
-            )
-
-        opened, open_error = self.open_url_in_browser(url)
-        if not opened:
-            self.notify_error(
-                f"Não foi possível abrir o link do WhatsApp: {open_error}",
-                key="whatsapp-open-error",
-                cooldown_seconds=5,
-            )
-
-        return None
+    def snippet_whatsapp_prompt(self):
+        """Prompt immediately for WhatsApp phone/message input, then open the link."""
+        return self.run_whatsapp_action("xpwapp")
 
     # =====================================================================
     # PADRÕES ESPECIAIS (cnpj/cpf/cge)
@@ -719,6 +707,8 @@ If userInput <> "" Then WScript.Echo userInput'''
             self.notify_snippet_failure(trigger, result)
             time.sleep(0.05)
             self.text_inserter.insert_text(result)
+            if trigger == "xlwapp":
+                WindowsClipboard.set_content(result)
         except Exception as e:
             self.logger.error(f"Erro ao executar snippet lento {trigger}: {e}")
             self.notify_error(
@@ -1641,9 +1631,9 @@ If userInput <> "" Then WScript.Echo userInput'''
         self._create_reference_tab(
             parent,
             "Atalho de WhatsApp",
-            "O trigger lê o telefone do clipboard, normaliza para o padrão internacional e abre o navegador.",
+            "Os triggers podem ler o telefone do clipboard ou abrir um popup, sempre validando no mesmo padrão internacional.",
             [("WhatsApp", WHATSAPP_SNIPPETS)],
-            "Se o clipboard não tiver um número válido, o app abre um popup para telefone e mensagem. O link final fica no clipboard.",
+            "xwapp e xpwapp abrem o navegador. xlwapp insere o link no campo atual e também o mantém no clipboard.",
         )
 
     # =====================================================================

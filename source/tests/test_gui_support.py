@@ -55,7 +55,11 @@ class GuiSupportTests(unittest.TestCase):
         self.assertGreater(len(ECONOMY_SNIPPETS), 0)
         self.assertGreater(len(STOCK_SNIPPETS), 0)
         self.assertGreater(len(WHATSAPP_SNIPPETS), 0)
-        self.assertIn("xwapp", {trigger for trigger, _ in WHATSAPP_SNIPPETS})
+        whatsapp_triggers = {trigger for trigger, _ in WHATSAPP_SNIPPETS}
+
+        self.assertIn("xwapp", whatsapp_triggers)
+        self.assertIn("xlwapp", whatsapp_triggers)
+        self.assertIn("xpwapp", whatsapp_triggers)
 
 
 if __name__ == "__main__":

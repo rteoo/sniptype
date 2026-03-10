@@ -40,6 +40,8 @@ STOCK_SNIPPETS = [
 
 WHATSAPP_SNIPPETS = [
     ("xwapp", "Lê o telefone do clipboard, gera o link wa.me e abre no navegador"),
+    ("xlwapp", "Lê o telefone do clipboard, gera o link wa.me, insere no campo atual e mantém o link no clipboard"),
+    ("xpwapp", "Abre o popup imediatamente para telefone e mensagem opcional, depois abre no navegador"),
 ]
 
 
