@@ -20,9 +20,11 @@ Usage notes:
 2. On first launch, the app seeds `snippets.json` beside the executable and uses that file for future edits.
 3. Use the tray icon to open `Gerenciar Snippets`, reload snippets, enable or disable expansion, and quit the app.
 4. The built-in `xwapp` trigger reads a phone number from the clipboard, creates a `wa.me` link, opens it in the browser, and keeps the final link in the clipboard.
-5. If `xwapp` cannot normalize the clipboard content into a valid phone number, it opens a popup for manual phone and optional message entry.
-6. Before replacing the packaged folder with a newer build, close any running `Txt Xpander.exe` first.
-7. `build_release.bat` now preserves the packaged app's existing `snippets.json` automatically when updating `dist\Txt Xpander`.
+5. The built-in `xlwapp` trigger follows the same validation flow but inserts the generated `wa.me` link into the current field and also keeps that link in the clipboard.
+6. The built-in `xpwapp` trigger skips clipboard lookup, opens the popup immediately for phone and optional message entry, then opens the browser and keeps the final link in the clipboard.
+7. If `xwapp` or `xlwapp` cannot normalize the clipboard content into a valid phone number, the app opens the same popup for manual phone and optional message entry.
+8. Before replacing the packaged folder with a newer build, close any running `Txt Xpander.exe` first.
+9. `build_release.bat` now preserves the packaged app's existing `snippets.json` automatically when updating `dist\Txt Xpander`.
 
 ### Auto-start with Windows
 
@@ -87,11 +89,18 @@ Main source files:
 - [`source\snippet_utils.py`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/source/snippet_utils.py): snippet loading, validation, atomic persistence.
 - [`source\trigger_index.py`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/source/trigger_index.py): compiled trigger matching.
 - [`source\gui_support.py`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/source/gui_support.py): GUI reference/filter helpers.
+- [`source\whatsapp_runtime_support.py`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/source/whatsapp_runtime_support.py): shared runtime flow for built-in WhatsApp actions.
 - [`source\bcb_consultor.py`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/source/bcb_consultor.py): Banco Central data lookups.
 - [`source\yf_stocks.py`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/source/yf_stocks.py): stock and fundamentals lookups.
 - [`source\tests\`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/source/tests): regression tests.
 
 ## Release Notes
+
+### 2026-03-09
+
+- Added `xlwapp` to generate a WhatsApp `wa.me` link from clipboard or popup input, insert it into the active field, and keep the link in the clipboard.
+- Added `xpwapp` to skip clipboard lookup, prompt immediately for phone and optional message, and open the browser with the generated link.
+- Refactored the built-in WhatsApp runtime flow into a shared helper so all three triggers use the same validation and URL generation rules.
 
 ### 2026-03-07
 
