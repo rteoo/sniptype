@@ -20,6 +20,7 @@ import sys
 import shutil
 import ctypes
 import subprocess
+import threading
 import webbrowser
 
 os.environ.setdefault("PYSTRAY_BACKEND", "win32")
@@ -58,9 +59,18 @@ from rich_text_support import (
     clear_text_styles,
     configure_rich_text_widget,
     extract_plain_text,
+    is_rich_text_payload,
     load_value_into_text_widget,
+    rebuild_rich_text,
     serialize_text_widget_content,
     toggle_text_style,
+)
+from variable_support import (
+    classify_variable,
+    find_variable_names,
+    has_form_variables,
+    resolve_form_variables,
+    resolve_inline,
 )
 from gui_support import (
     DATETIME_SNIPPETS,
@@ -74,7 +84,7 @@ from gui_support import (
 
 # GUI para gerenciar snippets
 import tkinter as tk
-from tkinter import ttk, messagebox, font as tkfont
+from tkinter import ttk, messagebox, simpledialog, font as tkfont
 
 
 APP_MUTEX_NAME = r"Local\TxtXpanderSingleton"
@@ -136,6 +146,8 @@ class TextExpander:
         self.text_inserter = TextInserter(self.keyboard_controller, logger=self.logger)
         self.notification_timestamps = {}
         self.notification_history = []
+        self._manager_lock = threading.Lock()
+        self._manager_open = False
 
         # Dados do usuario ficam ao lado do executavel; recursos empacotados podem viver em _internal.
         self.base_dir = get_runtime_base_dir()
@@ -661,12 +673,21 @@ If userInput <> "" Then WScript.Echo userInput'''
             if is_callable_snippet:
                 self.notify_snippet_failure(trigger, snippet)
 
+            # Resolve inline variables (clipboard + snippet refs) before inserting.
+            plain_text = extract_plain_text(snippet)
+            resolved_text = resolve_inline(plain_text, self.snippets, WindowsClipboard.get_text, _seen={trigger})
+            if resolved_text != plain_text:
+                if is_rich_text_payload(snippet):
+                    snippet = rebuild_rich_text(snippet, resolved_text)
+                else:
+                    snippet = resolved_text
+
             try:
                 for _ in range(len(trigger)):
                     self.keyboard_controller.press(Key.backspace)
                     self.keyboard_controller.release(Key.backspace)
                     time.sleep(0.01)
-                
+
                 time.sleep(0.05)
                 self.text_inserter.insert_text(snippet)
                 
@@ -696,11 +717,31 @@ If userInput <> "" Then WScript.Echo userInput'''
         - abre popup
         - consulta dados
         - digita resultado
+        Também trata snippets estáticos com variáveis de formulário (%%campo%%).
         """
         try:
             func = self.snippets.get(trigger)
             if not callable(func):
+                # Static snippet routed here because it has form-fill variables.
+                raw = func
+                plain = extract_plain_text(raw)
+                plain = resolve_inline(plain, self.snippets, WindowsClipboard.get_text, _seen={trigger})
+                form_names = [
+                    n for n in find_variable_names(plain)
+                    if classify_variable(n, self.snippets) == "form_field"
+                ]
+                form_data = {}
+                if form_names:
+                    form_data = self._show_form_dialog(form_names)
+                    if form_data is None:
+                        return  # user cancelled — nothing inserted
+                result = resolve_form_variables(plain, form_data)
+                if is_rich_text_payload(raw):
+                    result = rebuild_rich_text(raw, result)
+                time.sleep(0.05)
+                self.text_inserter.insert_text(result)
                 return
+
             result = func()
             if not result:
                 return
@@ -717,6 +758,109 @@ If userInput <> "" Then WScript.Echo userInput'''
                 cooldown_seconds=5,
             )
     
+    def _show_form_dialog(self, field_names):
+        """
+        Show a modal dialog for form-fill variables.
+        Called from a background thread — creates its own Tk root.
+        Returns {field_name: value} or None if the user cancels.
+        """
+        result = [None]
+        entries = {}
+
+        dialog_root = tk.Tk()
+        dialog_root.title("Preencher campos")
+        dialog_root.resizable(False, False)
+        dialog_root.configure(bg="#F4F6FA")
+        self._set_window_icon(dialog_root)
+
+        tk.Label(
+            dialog_root,
+            text="Preencha os campos do snippet:",
+            font=("Segoe UI", 9, "bold"),
+            bg="#F4F6FA",
+            fg="#1F2937",
+        ).pack(padx=20, pady=(16, 8), anchor="w")
+
+        frame = tk.Frame(dialog_root, bg="#F4F6FA")
+        frame.pack(fill=tk.BOTH, padx=20, pady=(0, 8))
+        frame.grid_columnconfigure(0, weight=1)
+
+        first_entry = None
+        for i, name in enumerate(field_names):
+            label_text = name.replace("_", " ").title()
+            tk.Label(
+                frame,
+                text=label_text + ":",
+                font=("Segoe UI", 9),
+                bg="#F4F6FA",
+                fg="#374151",
+            ).grid(row=i * 2, column=0, sticky="w", pady=(6, 0))
+            entry = tk.Entry(
+                frame,
+                font=("Segoe UI", 10),
+                width=42,
+                relief=tk.FLAT,
+                highlightthickness=1,
+                highlightbackground="#D7DEE8",
+            )
+            entry.grid(row=i * 2 + 1, column=0, sticky="ew", pady=(2, 0))
+            entries[name] = entry
+            if first_entry is None:
+                first_entry = entry
+
+        btn_frame = tk.Frame(dialog_root, bg="#F4F6FA")
+        btn_frame.pack(fill=tk.X, padx=20, pady=(12, 16))
+
+        def on_ok(_event=None):
+            result[0] = {name: entries[name].get() for name in field_names}
+            dialog_root.destroy()
+
+        def on_cancel(_event=None):
+            dialog_root.destroy()  # result[0] stays None
+
+        tk.Button(
+            btn_frame,
+            text="Cancelar",
+            font=("Segoe UI", 9),
+            width=10,
+            command=on_cancel,
+            relief=tk.FLAT,
+            bg="#E7ECF5",
+            activebackground="#D9E2F2",
+            cursor="hand2",
+        ).pack(side=tk.RIGHT, padx=(4, 0))
+        tk.Button(
+            btn_frame,
+            text="OK",
+            font=("Segoe UI", 9),
+            width=10,
+            command=on_ok,
+            relief=tk.FLAT,
+            bg="#265CFF",
+            fg="white",
+            activebackground="#1a4fd4",
+            activeforeground="white",
+            cursor="hand2",
+        ).pack(side=tk.RIGHT)
+
+        dialog_root.bind("<Return>", on_ok)
+        dialog_root.bind("<Escape>", on_cancel)
+
+        dialog_root.update_idletasks()
+        w = dialog_root.winfo_reqwidth()
+        h = dialog_root.winfo_reqheight()
+        sw = dialog_root.winfo_screenwidth()
+        sh = dialog_root.winfo_screenheight()
+        dialog_root.geometry(f"+{(sw - w) // 2}+{(sh - h) // 2}")
+
+        dialog_root.lift()
+        dialog_root.focus_force()
+        if first_entry:
+            first_entry.focus_set()
+
+        dialog_root.mainloop()
+        return result[0]
+
     def rebuild_trigger_index(self):
         """Rebuild compiled trigger metadata after snippet changes."""
         self.trigger_index = compile_trigger_index(self.snippets, self.slow_snippets)
@@ -800,7 +944,13 @@ If userInput <> "" Then WScript.Echo userInput'''
                 # 1) Snippets diretos
                 trigger = find_direct_trigger(self.typed_text, self.trigger_index)
                 if trigger:
-                    if trigger in self.slow_snippets:
+                    needs_slow = trigger in self.slow_snippets
+                    if not needs_slow:
+                        raw_value = self.snippets.get(trigger)
+                        if not callable(raw_value):
+                            if has_form_variables(extract_plain_text(raw_value), self.snippets):
+                                needs_slow = True
+                    if needs_slow:
                         for _ in range(len(trigger)):
                             self.keyboard_controller.press(Key.backspace)
                             self.keyboard_controller.release(Key.backspace)
@@ -832,6 +982,11 @@ If userInput <> "" Then WScript.Echo userInput'''
 
     def manage_snippets_gui(self, icon, item):
         """Abre GUI completa para gerenciar snippets estáticos e mapeamentos dinâmicos."""
+        hwnd = ctypes.windll.user32.FindWindowW(None, "Txt Xpander - Gerenciador de Snippets")
+        if hwnd:
+            ctypes.windll.user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+            ctypes.windll.user32.SetForegroundWindow(hwnd)
+            return
         self.task_runner.start(self._manage_snippets_gui_thread, name="manage-snippets-gui")
 
     def _manage_snippets_gui_thread(self):
@@ -915,6 +1070,8 @@ If userInput <> "" Then WScript.Echo userInput'''
                 key="gui-open-error",
                 cooldown_seconds=5,
             )
+        finally:
+            self._manager_open = False
 
     def _set_window_icon(self, window):
         icon_path = self.resolve_resource_path("txt_xpander.ico")
@@ -1066,6 +1223,8 @@ If userInput <> "" Then WScript.Echo userInput'''
         icon_fonts["code"].configure(family="Consolas", weight="bold", size=max(9, button_base_font.cget("size") - 1))
         icon_fonts["strike"].configure(overstrike=1)
         icon_fonts["clear"].configure(family="Segoe UI Symbol", size=max(10, button_base_font.cget("size")))
+        icon_fonts["var"] = button_base_font.copy()
+        icon_fonts["var"].configure(family="Consolas", size=max(8, button_base_font.cget("size") - 1))
 
         toolbar_bg = toolbar.cget("bg")
 
@@ -1102,6 +1261,108 @@ If userInput <> "" Then WScript.Echo userInput'''
         add_toolbar_button("S", lambda: apply_style("strike"), 2, 3, "Formato: tachado", "strike")
         add_toolbar_button("<>", lambda: apply_style("code"), 3, 6, "Formato: código monoespaçado", "code")
         add_toolbar_button("⌫", clear_styles_handler, 2, 3, "Formato: limpar estilos", "clear")
+
+        # Separator before variable buttons
+        tk.Frame(toolbar, width=1, bg="#C8CDD6").pack(side=tk.LEFT, padx=(8, 6), fill=tk.Y, pady=2)
+
+        def _insert_variable_text(name):
+            """Insert %%name%% at the cursor (or replace current selection)."""
+            token = f"%%{name}%%"
+            try:
+                sel_start = text_widget.index(tk.SEL_FIRST)
+                sel_end = text_widget.index(tk.SEL_LAST)
+                text_widget.delete(sel_start, sel_end)
+                text_widget.insert(sel_start, token)
+            except tk.TclError:
+                text_widget.insert(tk.INSERT, token)
+            text_widget.focus_set()
+            update_status()
+
+        def _show_snippet_picker(parent_win, choices):
+            """Searchable listbox dialog; calls _insert_variable_text on selection."""
+            picker = tk.Toplevel(parent_win)
+            picker.title("Inserir referência de snippet")
+            picker.geometry("300x380")
+            picker.resizable(False, True)
+            picker.transient(parent_win)
+            picker.grab_set()
+
+            search_var = tk.StringVar()
+            tk.Entry(
+                picker, textvariable=search_var, font=("Segoe UI", 10),
+                relief=tk.FLAT, highlightthickness=1, highlightbackground="#D7DEE8",
+            ).pack(fill=tk.X, padx=8, pady=8)
+
+            lf = tk.Frame(picker)
+            lf.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
+            lf.grid_columnconfigure(0, weight=1)
+            lf.grid_rowconfigure(0, weight=1)
+
+            listbox = tk.Listbox(lf, font=("Segoe UI", 10), selectmode=tk.SINGLE,
+                                 relief=tk.FLAT, borderwidth=0, activestyle="none")
+            scrollbar = tk.Scrollbar(lf, orient=tk.VERTICAL, command=listbox.yview)
+            listbox.config(yscrollcommand=scrollbar.set)
+            listbox.grid(row=0, column=0, sticky="nsew")
+            scrollbar.grid(row=0, column=1, sticky="ns")
+
+            displayed = list(choices)
+
+            def refresh_list(*_):
+                nonlocal displayed
+                query = search_var.get().strip().lower()
+                displayed = [c for c in choices if query in c.lower()] if query else list(choices)
+                listbox.delete(0, tk.END)
+                for c in displayed:
+                    listbox.insert(tk.END, c)
+
+            search_var.trace_add("write", refresh_list)
+            refresh_list()
+            if displayed:
+                listbox.selection_set(0)
+
+            def confirm(*_):
+                sel = listbox.curselection()
+                if not sel:
+                    return
+                chosen = displayed[sel[0]]
+                picker.destroy()
+                _insert_variable_text(chosen)
+
+            listbox.bind("<Double-Button-1>", confirm)
+            listbox.bind("<Return>", confirm)
+            tk.Button(picker, text="Inserir", command=confirm,
+                      font=("Segoe UI", 9), relief=tk.FLAT,
+                      bg="#265CFF", fg="white",
+                      activebackground="#1a4fd4", activeforeground="white",
+                      cursor="hand2").pack(pady=(0, 8))
+
+            center_dialog(picker, parent_win)
+            picker.focus_set()
+
+        def insert_snippet_ref():
+            choices = sorted([
+                k for k, v in self.snippets.items()
+                if not k.startswith("_") and not callable(v)
+            ])
+            if not choices:
+                messagebox.showinfo("Variáveis", "Nenhum snippet estático disponível.",
+                                    parent=text_widget.winfo_toplevel())
+                return
+            _show_snippet_picker(text_widget.winfo_toplevel(), choices)
+
+        def insert_clipboard_var():
+            _insert_variable_text("clipboard-paste")
+
+        def insert_form_field():
+            win = text_widget.winfo_toplevel()
+            name = simpledialog.askstring("Campo de formulário", "Nome do campo:", parent=win)
+            if name and name.strip():
+                _insert_variable_text(name.strip().replace(" ", "_"))
+
+        add_toolbar_button("%%s", insert_snippet_ref, 4, 3, "Variável: referenciar snippet (%%trigger%%)", "var")
+        add_toolbar_button("%%cb", insert_clipboard_var, 4, 3, "Variável: colar clipboard (%%clipboard-paste%%)", "var")
+        add_toolbar_button("%%?", insert_form_field, 4, 3, "Variável: campo de formulário (%%campo%%)", "var")
+
         tk.Label(toolbar, textvariable=status_var, font=("Arial", 8), fg="#555").pack(side=tk.RIGHT)
 
         bind_shortcut("<Control-b>", "bold")
@@ -1759,7 +2020,7 @@ If userInput <> "" Then WScript.Echo userInput'''
                 checked=lambda item: self.enabled
             ),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Gerenciar Snippets", self.manage_snippets_gui),
+            pystray.MenuItem("Gerenciar Snippets", self.manage_snippets_gui, default=True),
             pystray.MenuItem("Recarregar Snippets", self.reload_snippets),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Sair", self.quit_app)

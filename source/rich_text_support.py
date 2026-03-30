@@ -354,6 +354,28 @@ def serialize_text_widget_content(text_widget):
     return build_rich_text_payload(text, spans)
 
 
+def rebuild_rich_text(original, new_text):
+    """
+    Return a new rich-text dict with updated plain text.
+    Spans are clipped to the new text length; HTML and RTF are regenerated.
+    Returns a plain string if no valid spans remain after clipping.
+    """
+    if not is_rich_text_payload(original):
+        return new_text
+
+    clipped_spans = normalize_style_spans(original.get("spans", []), len(new_text))
+    if not clipped_spans:
+        return new_text
+
+    return {
+        "__kind__": RICH_TEXT_KIND,
+        "text": new_text,
+        "spans": clipped_spans,
+        "html": build_html_fragment(new_text, clipped_spans),
+        "rtf": build_rtf_document(new_text, clipped_spans),
+    }
+
+
 def load_value_into_text_widget(text_widget, value):
     text_widget.delete("1.0", tk.END)
     plain_text = extract_plain_text(value)
