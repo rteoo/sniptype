@@ -10,7 +10,7 @@ set "DIST_ROOT=%REPO_DIR%\dist"
 set "TARGET_DIR=%DIST_ROOT%\Txt Xpander"
 set "TARGET_EXE=%TARGET_DIR%\Txt Xpander.exe"
 set "TARGET_SNIPPETS=%TARGET_DIR%\snippets.json"
-set "STAGING_ROOT=%REPO_DIR%\dist_staging"
+set "STAGING_ROOT=%TEMP%\txt_xpander_staging_%RANDOM%%RANDOM%"
 set "STAGING_DIR=%STAGING_ROOT%\Txt Xpander"
 set "PREVIOUS_DIR=%DIST_ROOT%\Txt Xpander.previous"
 set "WORK_ROOT=%TEMP%\txt_xpander_pyinstaller_%RANDOM%%RANDOM%"
@@ -43,6 +43,11 @@ if exist "%TARGET_SNIPPETS%" (
         exit /b 1
     )
     set "HAS_SNIPPETS_BACKUP=1"
+    echo Syncing dist snippets into source\snippets.json so PyInstaller bundles the latest...
+    copy /Y "%TARGET_SNIPPETS%" "%REPO_DIR%\source\snippets.json" >nul
+    if errorlevel 1 (
+        echo WARNING: Could not sync dist snippets.json to source. Build will continue with older source copy.
+    )
 ) else (
     echo No existing dist snippets.json found to preserve.
 )
@@ -89,10 +94,14 @@ if exist "%TARGET_DIR%" (
 )
 
 if not exist "%DIST_ROOT%" mkdir "%DIST_ROOT%"
-move "%STAGING_DIR%" "%TARGET_DIR%" >nul
-if errorlevel 1 (
+robocopy "%STAGING_DIR%" "%TARGET_DIR%" /e /j /nfl /ndl /njh /njs /r:0 /w:0 >nul
+if errorlevel 8 (
     echo Failed to promote the new staged dist into place.
-    if exist "%PREVIOUS_DIR%" move "%PREVIOUS_DIR%" "%TARGET_DIR%" >nul
+    if exist "%PREVIOUS_DIR%" (
+        echo Attempting to restore previous dist...
+        robocopy "%PREVIOUS_DIR%" "%TARGET_DIR%" /e /j /nfl /ndl /njh /njs /r:0 /w:0 >nul
+        rmdir /s /q "%PREVIOUS_DIR%" >nul 2>&1
+    )
     goto cleanup_and_fail
 )
 

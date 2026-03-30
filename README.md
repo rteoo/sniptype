@@ -79,11 +79,47 @@ python -m PyInstaller --noconfirm --clean --windowed --onedir --name "Txt Xpande
 
 This produces the shipping folder in [`dist\Txt Xpander\`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/dist/Txt%20Xpander).
 
+## Custom Variables (`%%var%%`)
+
+Snippets can now include custom variables that are resolved at expansion time:
+
+**Snippet reference** — `%%trigger%%` expands to another snippet's value:
+
+```json
+xadds: Rua Pais Leme, 215
+xaddc: %%xadds%%, São Paulo - SP
+
+Type xaddc → expands to: Rua Pais Leme, 215, São Paulo - SP
+```
+
+**Clipboard paste** — `%%clipboard-paste%%` inserts the current clipboard:
+
+```json
+xcattle: uv run python main.py "%%clipboard-paste%%"
+
+With clipboard "myfile.txt" → uv run python main.py "myfile.txt"
+```
+
+**Form fields** — `%%fieldname%%` prompts the user before insertion:
+
+```json
+aptgyn: Olá, %%nome%%,\nO apartamento está disponível em %%data%%?
+
+Shows a dialog asking for "Nome" and "Data" → substitutes values before inserting
+```
+
+All three variable types can be mixed in a single snippet. The snippet manager has three new toolbar buttons:
+
+- `%%s` — insert a snippet reference (searchable picker)
+- `%%cb` — insert clipboard-paste variable
+- `%%?` — insert a form field variable
+
 ## Source Contents
 
 Main source files:
 
 - [`source\txt_xpander.pyw`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/source/txt_xpander.pyw): main Windows app, tray, listener, GUI, notifications.
+- [`source\variable_support.py`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/source/variable_support.py): `%%var%%` parsing and resolution (snippet refs, clipboard, form fields).
 - [`source\runtime_support.py`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/source/runtime_support.py): clipboard insertion, logging helpers, background task support.
 - [`source\rich_text_support.py`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/source/rich_text_support.py): rich-text editing and clipboard payload generation.
 - [`source\snippet_utils.py`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/source/snippet_utils.py): snippet loading, validation, atomic persistence.
@@ -95,6 +131,19 @@ Main source files:
 - [`source\tests\`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/source/tests): regression tests.
 
 ## Release Notes
+
+### 2026-03-30 (Latest)
+
+- **Added custom variables in snippets** (`%%var%%` syntax):
+  - Snippet references: `%%trigger%%` expands inline to another snippet's plain text
+  - Clipboard paste: `%%clipboard-paste%%` inserts current clipboard content
+  - Form fields: `%%fieldname%%` prompts the user for input before inserting
+  - Three new toolbar buttons in the snippet manager to insert variable tokens
+- **Fixed tray icon double-click** — now correctly opens a single "Gerenciar Snippets" window (prevents duplicates via Windows API lookup)
+- **Fixed snippet loss on rebuild** — `build_release.bat` now syncs `dist\snippets.json` → `source\snippets.json` before PyInstaller runs, ensuring the bundled fallback copy always contains the latest snippets
+- **Form-fill variables** route snippets through the async path to show an input dialog before insertion
+- **Rich text compatibility**: variables inside rich-text snippets are resolved and spans are clipped/regenerated as needed
+- All 85 tests pass, including 32 new variable support tests
 
 ### 2026-03-09
 
