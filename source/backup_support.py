@@ -57,20 +57,22 @@ def find_latest_backup(backups_dir):
     return backups[0] if backups else None
 
 
-def create_backup(snippets_path, backups_dir, timestamp=None):
+def create_backup(snippets_path, backups_dir, timestamp=None, force=False):
     """Copy the current snippets file into backups_dir.
 
     Skips (returns None) when the source is missing or byte-identical to the
-    newest existing backup. Returns the backup path when one is written.
+    newest existing backup. Pass ``force=True`` for an explicit "backup now"
+    action that should always produce a file. Returns the backup path written.
     """
     if not os.path.exists(snippets_path):
         return None
 
     os.makedirs(backups_dir, exist_ok=True)
 
-    latest = find_latest_backup(backups_dir)
-    if latest is not None and _same_content(snippets_path, latest):
-        return None
+    if not force:
+        latest = find_latest_backup(backups_dir)
+        if latest is not None and _same_content(snippets_path, latest):
+            return None
 
     timestamp = timestamp or format_timestamp()
     dest = _dedupe_path(os.path.join(backups_dir, f"{BACKUP_PREFIX}{timestamp}{BACKUP_SUFFIX}"))

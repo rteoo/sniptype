@@ -14,13 +14,25 @@ import txt_xpander as tx
 
 
 def make_expander(base_dir, snippets_content=None):
-    """Construct a TextExpander rooted at base_dir without touching real data."""
+    """Construct a TextExpander rooted at base_dir without touching real data.
+
+    Pins the data dir to base_dir via TXT_XPANDER_HOME so nothing is written to
+    the real ~/.txt_xpander during tests.
+    """
     if snippets_content is not None:
         with open(os.path.join(base_dir, "snippets.json"), "w", encoding="utf-8") as handle:
             handle.write(snippets_content)
-    with mock.patch.object(tx, "get_runtime_base_dir", return_value=base_dir), \
-            mock.patch.object(tx, "get_runtime_resource_dir", return_value=base_dir):
-        return tx.TextExpander()
+    previous_home = os.environ.get("TXT_XPANDER_HOME")
+    os.environ["TXT_XPANDER_HOME"] = base_dir
+    try:
+        with mock.patch.object(tx, "get_runtime_base_dir", return_value=base_dir), \
+                mock.patch.object(tx, "get_runtime_resource_dir", return_value=base_dir):
+            return tx.TextExpander()
+    finally:
+        if previous_home is None:
+            os.environ.pop("TXT_XPANDER_HOME", None)
+        else:
+            os.environ["TXT_XPANDER_HOME"] = previous_home
 
 
 class SaveSnippetsTests(unittest.TestCase):
@@ -51,6 +63,82 @@ class SaveSnippetsTests(unittest.TestCase):
         with open(self.app.snippets_file, encoding="utf-8") as handle:
             data = json.load(handle)
         self.assertNotIn("xnow", data)
+
+
+class BackupRestoreImportTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.app = make_expander(self.tmp, '{"xhi": "hello"}')
+
+    def _static(self):
+        return {k: v for k, v in self.app.snippets.items() if not callable(v)}
+
+    def test_backup_now_forces_backup_even_when_unchanged(self):
+        before = len(bs.list_backups(self.app.backups_dir))
+        created = self.app.backup_now()
+        self.assertIsNotNone(created)
+        self.assertEqual(len(bs.list_backups(self.app.backups_dir)), before + 1)
+
+    def test_restore_backup_replaces_and_reloads(self):
+        # Make a backup of the original, then change the live library.
+        original_backup = self.app.backup_now()
+        self.app.snippets["xhi"] = "changed"
+        self.app.save_snippets(self.app.snippets)
+        self.assertEqual(self.app.snippets["xhi"], "changed")
+
+        ok, error = self.app.restore_backup(original_backup)
+        self.assertTrue(ok, error)
+        self.assertEqual(self.app.snippets["xhi"], "hello")
+
+    def test_restore_rejects_invalid_backup(self):
+        bad = os.path.join(self.app.backups_dir, "snippets-20990101-000000.json")
+        with open(bad, "w", encoding="utf-8") as handle:
+            handle.write("{ not json")
+        ok, error = self.app.restore_backup(bad)
+        self.assertFalse(ok)
+        self.assertIn("inválido", error.lower())
+
+    def test_export_library_writes_copy(self):
+        dest = os.path.join(self.tmp, "exported.json")
+        ok, error = self.app.export_library(dest)
+        self.assertTrue(ok, error)
+        with open(dest, encoding="utf-8") as handle:
+            self.assertEqual(json.load(handle), {"xhi": "hello"})
+
+    def test_import_replace(self):
+        src = os.path.join(self.tmp, "incoming.json")
+        with open(src, "w", encoding="utf-8") as handle:
+            json.dump({"xbye": "goodbye"}, handle)
+        ok, error = self.app.import_library(src, mode="replace")
+        self.assertTrue(ok, error)
+        self.assertIn("xbye", self.app.snippets)
+        self.assertNotIn("xhi", self._static())
+
+    def test_import_merge(self):
+        src = os.path.join(self.tmp, "incoming.json")
+        with open(src, "w", encoding="utf-8") as handle:
+            json.dump({"xbye": "goodbye"}, handle)
+        ok, error = self.app.import_library(src, mode="merge")
+        self.assertTrue(ok, error)
+        self.assertIn("xbye", self.app.snippets)
+        self.assertIn("xhi", self._static())
+
+    def test_import_rejects_non_object_json(self):
+        src = os.path.join(self.tmp, "bad.json")
+        with open(src, "w", encoding="utf-8") as handle:
+            handle.write("[1, 2, 3]")
+        ok, error = self.app.import_library(src)
+        self.assertFalse(ok)
+
+    def test_mirror_copies_on_save(self):
+        mirror = os.path.join(self.tmp, "mirror")
+        self.app.settings = {"mirror_dir": mirror}
+        self.app.snippets["xhi"] = "mirrored"
+        self.assertTrue(self.app.save_snippets(self.app.snippets))
+        mirrored = os.path.join(mirror, "snippets.json")
+        self.assertTrue(os.path.exists(mirrored))
+        with open(mirrored, encoding="utf-8") as handle:
+            self.assertEqual(json.load(handle)["xhi"], "mirrored")
 
 
 class RecoverSnippetsTests(unittest.TestCase):
@@ -130,6 +218,50 @@ class RecoverSnippetsTests(unittest.TestCase):
         merged = self.app.load_snippets()
         # Static "xhi" survived via backup restore; dynamic snippets merged on top.
         self.assertEqual(merged.get("xhi"), "hello")
+
+
+class MigrationTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.base_dir = os.path.join(self.tmp, "app")   # legacy exe-side location
+        self.data_dir = os.path.join(self.tmp, "home")  # ~/.txt_xpander stand-in
+        os.makedirs(self.base_dir)
+        with open(os.path.join(self.base_dir, "snippets.json"), "w", encoding="utf-8") as handle:
+            handle.write('{"xhi": "legacy value"}')
+        self._saved_home = os.environ.get("TXT_XPANDER_HOME")
+        os.environ["TXT_XPANDER_HOME"] = self.data_dir
+
+    def tearDown(self):
+        if self._saved_home is None:
+            os.environ.pop("TXT_XPANDER_HOME", None)
+        else:
+            os.environ["TXT_XPANDER_HOME"] = self._saved_home
+
+    def _construct(self):
+        with mock.patch.object(tx, "get_runtime_base_dir", return_value=self.base_dir), \
+                mock.patch.object(tx, "get_runtime_resource_dir", return_value=self.base_dir):
+            return tx.TextExpander()
+
+    def test_first_launch_migrates_legacy_into_data_dir(self):
+        app = self._construct()
+        self.assertEqual(app.data_dir, os.path.abspath(self.data_dir))
+        with open(app.snippets_file, encoding="utf-8") as handle:
+            self.assertEqual(json.load(handle), {"xhi": "legacy value"})
+        # Legacy file left untouched as an extra safety copy.
+        legacy = os.path.join(self.base_dir, "snippets.json")
+        with open(legacy, encoding="utf-8") as handle:
+            self.assertEqual(json.load(handle), {"xhi": "legacy value"})
+        self.assertTrue(os.path.exists(os.path.join(self.data_dir, "migrated-from.txt")))
+
+    def test_migration_is_idempotent(self):
+        self._construct()
+        # Change the migrated copy; a second launch must not re-copy the legacy.
+        migrated_path = os.path.join(self.data_dir, "snippets.json")
+        with open(migrated_path, "w", encoding="utf-8") as handle:
+            handle.write('{"xhi": "edited after migration"}')
+        self._construct()
+        with open(migrated_path, encoding="utf-8") as handle:
+            self.assertEqual(json.load(handle), {"xhi": "edited after migration"})
 
 
 class LoggingConfigTests(unittest.TestCase):
