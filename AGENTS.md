@@ -51,8 +51,12 @@ Build details: the release is `--onedir` (not `--onefile`); the hidden import `p
 ## Repository Layout
 
 - `source\txt_xpander.pyw` is the main entry point. `TextExpander` owns startup, single-instance handling, snippet loading, keyboard events, tray actions, GUI windows, and snippet expansion.
-- `source\trigger_index.py` compiles trigger lookup data. Preserve the indexed lookup path; do not replace it with full O(n) trigger scans in the keyboard hot path.
+- `source\trigger_index.py` compiles trigger lookup data (longest-first buckets, `form_triggers`). Preserve the indexed lookup path; do not replace it with full O(n) trigger scans in the keyboard hot path.
 - `source\snippet_utils.py` loads, validates, merges, and atomically saves snippets.
+- `source\app_paths.py` resolves the user data directory and handles one-time legacy migration.
+- `source\backup_support.py` creates rotating backups and quarantines corrupt files.
+- `source\settings_support.py` loads/saves the optional `settings.json`.
+- `source\dynamic_registry.py` binds the `dynamic_snippets.json` registry to named providers.
 - `source\variable_support.py` parses and resolves `%%var%%` tokens, including snippet references, clipboard-paste variables, and form fields.
 - `source\rich_text_support.py` builds and normalizes rich-text payloads, including HTML/RTF generation and style-span handling.
 - `source\runtime_support.py` contains clipboard integration, insertion helpers, background task support, logging, and notification formatting.
@@ -60,7 +64,7 @@ Build details: the release is `--onedir` (not `--onefile`); the hidden import `p
 - `source\whatsapp_runtime_support.py` runs the `xwapp`, `xlwapp`, and `xpwapp` action flows.
 - `source\bcb_consultor.py` fetches Brazilian Central Bank API values with caching.
 - `source\yf_stocks.py` wraps yfinance stock/fundamentals lookups. The ticker prompt itself is a VBScript/mshta dialog in `txt_xpander.pyw` (`ask_ticker_input`), not in this module.
-- `source\gui_support.py` contains GUI filtering and dialog helpers, plus the reference lists shown in the manager's Data/Economia/Ações/WhatsApp tabs.
+- `source\gui_support.py` contains GUI filtering and dialog helpers. The manager's Data/Economia/Ações/WhatsApp reference tabs are generated from the dynamic registry, not from hardcoded lists.
 - `source\tests\` contains unit tests.
 - `source\docs\` contains planning notes for refactors and features, plus `audit-report.md` (full code audit) and `improvement-plan.md` (phased roadmap).
 - `source\run_txt_xpander.bat` is the source-side launcher. It checks/install dependencies and starts the app with `pythonw`.
@@ -78,7 +82,9 @@ Expansion flow:
 4. Resolve form variables after collecting user input.
 5. Insert text or rich text through clipboard paste for reliable multiline and chat-app behavior.
 
-Dynamic snippets are registered at startup and merged over static snippets. `source\snippets.json` currently has a small user-editable dataset plus mapping containers; do not assume it is disposable fixture data. Mapping containers with keys prefixed by `_`, such as `_cpf_numbers`, `_cnpj_numbers`, and `_custom_codes`, create pattern-based triggers like `cpfperson1`.
+Dynamic snippets are described in `source\dynamic_snippets.json` (bundled) plus an optional per-user override at `~/.txt_xpander\dynamic_snippets.json`. `source\dynamic_registry.py` binds each entry's `provider` (`datetime`/`bcb`/`stock`/`whatsapp`) to a callable; `slow_snippets` and the manager's reference tabs are derived from this registry, not hardcoded. An unknown provider/method or a disabled entry is logged and skipped, never fatal. The callables (BCB/yfinance fetches, WhatsApp flows) stay in Python — only their metadata is data. Add a new dynamic trigger by adding a registry entry whose provider already exists; add a new provider by registering a factory in `PROVIDERS`.
+
+Static snippets are merged under dynamic ones at load. `source\snippets.json` is an anonymized seed plus mapping containers; do not assume it is disposable fixture data. Mapping containers with keys prefixed by `_`, such as `_cpf_numbers`, `_cnpj_numbers`, and `_custom_codes`, create pattern-based triggers like `cpfalice`.
 
 Rich-text snippets are dictionaries shaped like:
 

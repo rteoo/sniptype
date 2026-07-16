@@ -1,50 +1,6 @@
 from rich_text_support import extract_plain_text
 
 
-DATETIME_SNIPPETS = [
-    ("xhj", "Data de hoje (DD/MM/AAAA)"),
-    ("x-hj", "Data de hoje (AAAA-MM-DD)"),
-    ("xhoje", "Data por extenso (ex: segunda-feira, 02 de março de 2026)"),
-    ("xnow", "Hora atual (HH:MM:SS)"),
-    ("xdatahora", "Data e hora (DD/MM/AAAA às HH:MM)"),
-]
-
-ECONOMY_SNIPPETS = [
-    ("xdolar", "Cotação do dólar (PTAX compra/venda)"),
-    ("xselic", "Taxa Selic meta (% a.a.)"),
-    ("xipcam", "IPCA mensal (%)"),
-    ("xipca12", "IPCA acumulado 12 meses (%)"),
-    ("xcdi", "Taxa CDI acumulada no mês"),
-    ("xptax", "PTAX via SGS"),
-    ("xeconomia", "Resumo completo de indicadores"),
-]
-
-STOCK_SNIPPETS = [
-    ("xcot", "Cotação atual"),
-    ("xplucro", "P/L (Preço / Lucro)"),
-    ("xcap", "Market Cap (Valor de Mercado)"),
-    ("xpvp", "P/VP (Preço / Valor Patrimonial)"),
-    ("xdy", "Dividend Yield (%)"),
-    ("xebt", "EBITDA"),
-    ("xmarg", "Margem Líquida (%)"),
-    ("xroe", "ROE (Return on Equity)"),
-    ("xdivt", "Dívida Total"),
-    ("xdivl", "Dívida Líquida"),
-    ("xcaixa", "Caixa (Total Cash)"),
-    ("xvol", "Volume Médio Diário"),
-    ("xrec", "Receita Líquida"),
-    ("xbeta", "Beta (volatilidade vs. mercado)"),
-    ("x52w", "Máxima e Mínima de 52 semanas"),
-    ("xfund", "Resumo completo de fundamentos"),
-]
-
-WHATSAPP_SNIPPETS = [
-    ("xwapp", "Lê o telefone do clipboard, gera o link wa.me e abre no navegador"),
-    ("xlwapp", "Lê o telefone do clipboard, gera o link wa.me, insere no campo atual e mantém o link no clipboard"),
-    ("xpwapp", "Abre o popup imediatamente para telefone e mensagem opcional, depois abre no navegador"),
-]
-
-
 def filter_static_snippets(snippets, query):
     lowered = query.strip().lower()
     visible = {
