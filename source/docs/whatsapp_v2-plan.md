@@ -1,5 +1,7 @@
 # Add `xlwapp` and `xpwapp` WhatsApp Snippets
 
+Date: 2026-03-09
+
 ## Summary
 - Extend the current WhatsApp snippet set with:
   - `xlwapp`: clipboard-first like `xwapp`, popup fallback on invalid/missing phone, inserts the generated URL into the active field, and keeps that URL in the clipboard, but does not open the browser.

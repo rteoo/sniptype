@@ -1,5 +1,7 @@
 # WhatsApp Shortcut (`xwapp`)
 
+Date: 2026-03-07
+
 ## Summary
 - Add a built-in dynamic snippet `xwapp` that removes the typed trigger, reads a phone number from the clipboard, generates a valid `wa.me` link, copies that link to the clipboard, and opens it in the default browser.
 - If the clipboard does not contain a usable number, open a small modal popup to collect the phone and an optional message, then generate/open the link from that input.

@@ -1,5 +1,7 @@
 # Refactor Plan: Preserve Behavior, Improve Performance and UX
 
+Date: 2026-03-06
+
 ## Summary
 
 This refactor should not change how the app behaves for the user today. All existing triggers, output formats, tray actions, popup flows, and `snippets.json` compatibility must remain intact. The work should focus on internal structure, performance on the keyboard hot path, robustness of persistence and GUI logic, and additive usability improvements that are disabled by default unless they are guaranteed not to alter current behavior.
