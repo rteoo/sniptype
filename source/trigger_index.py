@@ -27,6 +27,8 @@ def compile_trigger_index(snippets, slow_snippets):
 
 def find_direct_trigger(typed_text, trigger_index):
     """Return the first direct trigger that matches current suffix, preserving source order."""
+    # ceiling: first-match-in-source-order; a trigger that is a suffix of another can shadow it.
+    # Switch to longest-match-first when validating trigger conflicts (improvement plan phase 3).
     if not typed_text:
         return None
 

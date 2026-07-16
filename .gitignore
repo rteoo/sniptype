@@ -1,4 +1,5 @@
 _old/
+backups/
 __pycache__/
 *.pyc
 *.zip
