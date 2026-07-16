@@ -17,15 +17,15 @@ Use the packaged build here:
 Usage notes:
 
 1. Launch `Txt Xpander.exe`.
-2. On first launch, the app seeds `snippets.json` beside the executable and uses that file for future edits. That copy is the live user library — back it up before replacing or editing it by hand.
-3. Use the tray icon to open `Gerenciar Snippets`, reload snippets, enable or disable expansion, and quit the app.
-4. Expansion fires immediately on the last character of a matching trigger — there is no terminator (space/punctuation) wait.
+2. User data lives in `%USERPROFILE%\.txt_xpander` (override with the `TXT_XPANDER_HOME` environment variable): `snippets.json`, rotating `backups\`, `logs\`, and optional `settings.json`. On first launch the app migrates any legacy `snippets.json` found beside the executable into this folder (the legacy file is left in place as an extra copy) and, failing that, seeds from the bundled sample. The live library is automatically backed up on every save (newest 30 kept) and a corrupt file is quarantined and restored from the newest valid backup instead of being overwritten.
+3. Use the tray icon to open `Gerenciar Snippets`, reload snippets, `Backup agora`, `Abrir pasta de dados`, enable or disable expansion, and quit the app. The manager's **Backups** tab lists backups and offers restore, export, and import.
+4. By default expansion fires immediately on the last character of a matching trigger. To require a word boundary instead, set `"terminator_mode": true` in `%USERPROFILE%\.txt_xpander\settings.json`: a trigger then expands only when you type a following space or punctuation, which is re-typed after the expansion (Enter is not treated as a terminator).
 5. The built-in `xwapp` trigger reads a phone number from the clipboard, creates a `wa.me` link, opens it in the browser, and keeps the final link in the clipboard.
 6. The built-in `xlwapp` trigger follows the same validation flow but inserts the generated `wa.me` link into the current field and also keeps that link in the clipboard.
 7. The built-in `xpwapp` trigger skips clipboard lookup, opens the popup immediately for phone and optional message entry, then opens the browser and keeps the final link in the clipboard.
 8. If `xwapp` or `xlwapp` cannot normalize the clipboard content into a valid phone number, the app opens the same popup for manual phone and optional message entry.
 9. Before replacing the packaged folder with a newer build, close any running `Txt Xpander.exe` first.
-10. `build_release.bat` preserves the packaged app's existing `snippets.json` automatically when updating `dist\Txt Xpander`.
+10. `build_release.bat` keeps a one-time safety copy of any existing packaged `snippets.json` when updating `dist\Txt Xpander`. User data is no longer stored in `dist` — it lives in `%USERPROFILE%\.txt_xpander`, so a rebuild never touches the live library.
 
 ### Auto-start with Windows
 
@@ -37,6 +37,12 @@ To have Txt Xpander launch automatically when you sign in:
 4. Txt Xpander will now start automatically with Windows
 
 Alternatively, [`build_release.bat`](build_release.bat) offers to create the Startup shortcut after a successful build (skipped automatically if the shortcut already exists).
+
+### Cross-platform status
+
+Txt Xpander is Windows-first. The OS-specific couplings are being factored behind [`source/platform_support.py`](source/platform_support.py): the paste modifier (Ctrl+V on Windows/Linux, Cmd+V on macOS), a PID-lockfile single-instance guard for non-Windows (Windows keeps its named mutex), and per-OS autostart builders (Startup `.lnk`, macOS LaunchAgent plist, Linux `.desktop`). The keyboard listener (pynput), tray (pystray), GUI (Tk) and the JSON data layer are already portable, and the data directory (`~/.txt_xpander`) is identical on all three OSes.
+
+Remaining before the app runs unmodified on macOS/Linux: the clipboard integration in `runtime_support.py` still uses the Win32 API directly (loaded at import), so a macOS pasteboard / Linux `xclip`/`wl-copy` backend is needed. On macOS, pynput also requires granting Accessibility permission; Wayland restricts global keyboard hooks. These are tracked as the next cross-platform step.
 
 ## Work From Source
 
@@ -72,10 +78,35 @@ build_release.bat
 The equivalent raw PyInstaller command (note: this does **not** preserve the packaged `snippets.json` — use the script for routine rebuilds):
 
 ```powershell
-python -m PyInstaller --noconfirm --clean --windowed --onedir --name "Txt Xpander" --icon source\txt_xpander.ico --add-data "source\snippets.json;." --add-data "source\txt_xpander.ico;." --hidden-import pystray._win32 source\txt_xpander.pyw
+python -m PyInstaller --noconfirm --clean --windowed --onedir --name "Txt Xpander" --icon source\txt_xpander.ico --add-data "source\snippets.json;." --add-data "source\dynamic_snippets.json;." --add-data "source\txt_xpander.ico;." --hidden-import pystray._win32 source\txt_xpander.pyw
 ```
 
 This produces the shipping folder in [`dist\Txt Xpander\`](dist/Txt%20Xpander).
+
+## Build The Installer (Setup.exe)
+
+For a real install experience — installs to a proper per-user location, adds Start Menu / optional Desktop shortcuts, an optional "start with Windows" checkbox, and a proper entry in **Apps & features** with an uninstaller — build a Windows installer with [Inno Setup](https://jrsoftware.org/isdl.php).
+
+One-time prerequisite: install **Inno Setup 6** (free).
+
+```powershell
+build_release.bat      REM 1) package the app into dist\Txt Xpander
+build_installer.bat    REM 2) compile installer\Output\TxtXpanderSetup-<version>.exe
+```
+
+`build_installer.bat` finds the Inno Setup compiler (`ISCC.exe`) automatically and compiles [`installer\txt_xpander.iss`](installer/txt_xpander.iss).
+
+Running the resulting **Setup.exe**:
+
+- Installs per-user to `%LOCALAPPDATA%\Programs\Txt Xpander` — **no administrator prompt**.
+- Creates Start Menu (and optional Desktop) shortcuts and, if you tick the box, a Startup shortcut so it launches at login.
+- Registers a real uninstaller (Windows **Apps & features**), which removes the program files but **keeps your data** in `%USERPROFILE%\.txt_xpander`.
+- Detects a running instance and asks you to close it before installing/upgrading.
+
+Notes:
+- The installer is **unsigned**, so Windows SmartScreen shows a "More info → Run anyway" prompt the first time — expected for a self-built app.
+- Upgrading over a previous install replaces the program files in place (same install ID) and never touches your `~/.txt_xpander` data.
+- After moving to the installer, you can delete any old `dist\Txt Xpander` copy and its old Startup shortcut; the installer's own shortcut points at the new location.
 
 ## Custom Variables (`%%var%%`)
 

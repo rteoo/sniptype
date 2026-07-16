@@ -1,0 +1,36 @@
+{
+  "x-hj":      {"provider": "datetime", "category": "datetime", "format": "%Y-%m-%d", "description": "Data de hoje (AAAA-MM-DD)"},
+  "xhj":       {"provider": "datetime", "category": "datetime", "format": "%d/%m/%Y", "description": "Data de hoje (DD/MM/AAAA)"},
+  "xhoje":     {"provider": "datetime", "category": "datetime", "method": "extenso", "description": "Data por extenso (ex: segunda-feira, 02 de março de 2026)"},
+  "xnow":      {"provider": "datetime", "category": "datetime", "format": "%H:%M:%S", "description": "Hora atual (HH:MM:SS)"},
+  "xdatahora": {"provider": "datetime", "category": "datetime", "format": "%d/%m/%Y às %H:%M", "description": "Data e hora (DD/MM/AAAA às HH:MM)"},
+
+  "xdolar":    {"provider": "bcb", "category": "economy", "method": "dolar",    "slow": true, "description": "Cotação do dólar (PTAX compra/venda)"},
+  "xselic":    {"provider": "bcb", "category": "economy", "method": "selic",    "slow": true, "description": "Taxa Selic meta (% a.a.)"},
+  "xipcam":    {"provider": "bcb", "category": "economy", "method": "ipcam",    "slow": true, "description": "IPCA mensal (%)"},
+  "xipca12":   {"provider": "bcb", "category": "economy", "method": "ipca12",   "slow": true, "description": "IPCA acumulado 12 meses (%)"},
+  "xcdi":      {"provider": "bcb", "category": "economy", "method": "cdi",      "slow": true, "description": "Taxa CDI acumulada no mês"},
+  "xptax":     {"provider": "bcb", "category": "economy", "method": "ptax",     "slow": true, "description": "PTAX via SGS"},
+  "xeconomia": {"provider": "bcb", "category": "economy", "method": "economia", "slow": true, "description": "Resumo completo de indicadores"},
+
+  "xcot":    {"provider": "stock", "category": "stock", "method": "cotacao",     "dialog": "Cotação",                "slow": true, "description": "Cotação atual"},
+  "xplucro": {"provider": "stock", "category": "stock", "method": "preco_lucro", "dialog": "P/L",                    "slow": true, "description": "P/L (Preço / Lucro)"},
+  "xcap":    {"provider": "stock", "category": "stock", "method": "market_cap",  "dialog": "Market Cap",             "slow": true, "description": "Market Cap (Valor de Mercado)"},
+  "xpvp":    {"provider": "stock", "category": "stock", "method": "preco_vp",    "dialog": "P/VP",                   "slow": true, "description": "P/VP (Preço / Valor Patrimonial)"},
+  "xdy":     {"provider": "stock", "category": "stock", "method": "dividend_yield", "dialog": "Dividend Yield",      "slow": true, "description": "Dividend Yield (%)"},
+  "xebt":    {"provider": "stock", "category": "stock", "method": "ebitda",      "dialog": "EBITDA",                 "slow": true, "description": "EBITDA"},
+  "xmarg":   {"provider": "stock", "category": "stock", "method": "margem_liquida", "dialog": "Margem Líquida",      "slow": true, "description": "Margem Líquida (%)"},
+  "xroe":    {"provider": "stock", "category": "stock", "method": "roe",         "dialog": "ROE",                    "slow": true, "description": "ROE (Return on Equity)"},
+  "xdivt":   {"provider": "stock", "category": "stock", "method": "divida_total", "dialog": "Dívida Total",          "slow": true, "description": "Dívida Total"},
+  "xdivl":   {"provider": "stock", "category": "stock", "method": "divida_liquida", "dialog": "Dívida Líquida",      "slow": true, "description": "Dívida Líquida"},
+  "xcaixa":  {"provider": "stock", "category": "stock", "method": "caixa",       "dialog": "Caixa",                  "slow": true, "description": "Caixa (Total Cash)"},
+  "xvol":    {"provider": "stock", "category": "stock", "method": "volume_medio", "dialog": "Volume Médio",          "slow": true, "description": "Volume Médio Diário"},
+  "xrec":    {"provider": "stock", "category": "stock", "method": "receita_liquida", "dialog": "Receita Líquida",    "slow": true, "description": "Receita Líquida"},
+  "xbeta":   {"provider": "stock", "category": "stock", "method": "beta",        "dialog": "Beta",                   "slow": true, "description": "Beta (volatilidade vs. mercado)"},
+  "x52w":    {"provider": "stock", "category": "stock", "method": "high_low_52w", "dialog": "52 Semanas High/Low",   "slow": true, "description": "Máxima e Mínima de 52 semanas"},
+  "xfund":   {"provider": "stock", "category": "stock", "method": "resumo_fundamentos", "dialog": "Resumo de Fundamentos", "slow": true, "description": "Resumo completo de fundamentos"},
+
+  "xwapp":  {"provider": "whatsapp", "category": "whatsapp", "mode": "open",   "slow": true, "description": "Lê o telefone do clipboard, gera o link wa.me e abre no navegador"},
+  "xlwapp": {"provider": "whatsapp", "category": "whatsapp", "mode": "insert", "slow": true, "description": "Lê o telefone do clipboard, gera o link wa.me, insere no campo atual e mantém o link no clipboard"},
+  "xpwapp": {"provider": "whatsapp", "category": "whatsapp", "mode": "prompt", "slow": true, "description": "Abre o popup imediatamente para telefone e mensagem opcional, depois abre no navegador"}
+}

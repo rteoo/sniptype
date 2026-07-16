@@ -1,5 +1,7 @@
 # Txt Xpander — Improvement Plan
 
+> **Status (2026-07-16):** Phases 0–4 fully implemented; Phases 5–6 implemented except two items that need a running app / non-Windows host to verify. Full unittest suite green (173 tests). Remaining, tracked follow-ups: Phase 5 single-Tk-root refactor (audit 3.3) and Treeview list/preview (4.2); Phase 6 non-Windows clipboard backend (the last hard Win32 coupling) and wiring the autostart/ticker adapters end-to-end.
+
 Companion to [audit-report.md](audit-report.md). Seven phases (0–6), ordered so that guideline compliance and data safety land before anything else and each phase ships independently. Constraint honored throughout: **JSON files only — no database.**
 
 Rule of thumb for sequencing: Phase 0 brings the codebase in line with the owner's global agent guidelines; Phases 1 and 2 protect the data; 3 fixes real bugs; 4–6 make the app better. Do not start Phase 4+ before 1–2 are done.
