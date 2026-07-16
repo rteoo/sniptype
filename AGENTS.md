@@ -1,6 +1,6 @@
 # AGENTS.md
 
-This file provides guidance to Codex and other coding agents when working in this repository.
+This file is the canonical agent contract for this repository — it guides Claude Code, Codex, and any other coding agent. `CLAUDE.md` is a thin pointer here; make all edits to project guidance in this file.
 
 ## Project Overview
 
@@ -46,6 +46,8 @@ build_release.bat
 
 The build script backs up and restores the packaged `snippets.json`, stages the PyInstaller output, swaps `dist\Txt Xpander`, and can update the Windows Startup shortcut.
 
+Build details: the release is `--onedir` (not `--onefile`); the hidden import `pystray._win32` is required; `snippets.json` and the icon are bundled as data files, but the user-editable copy in `dist\Txt Xpander\` is separate from the bundled fallback in `_internal\`.
+
 ## Repository Layout
 
 - `source\txt_xpander.pyw` is the main entry point. `TextExpander` owns startup, single-instance handling, snippet loading, keyboard events, tray actions, GUI windows, and snippet expansion.
@@ -57,8 +59,8 @@ The build script backs up and restores the packaged `snippets.json`, stages the 
 - `source\whatsapp_support.py` normalizes phone numbers and builds WhatsApp URLs.
 - `source\whatsapp_runtime_support.py` runs the `xwapp`, `xlwapp`, and `xpwapp` action flows.
 - `source\bcb_consultor.py` fetches Brazilian Central Bank API values with caching.
-- `source\yf_stocks.py` wraps yfinance stock/fundamentals lookups.
-- `source\gui_support.py` contains GUI filtering and dialog helpers.
+- `source\yf_stocks.py` wraps yfinance stock/fundamentals lookups. The ticker prompt itself is a VBScript/mshta dialog in `txt_xpander.pyw` (`ask_ticker_input`), not in this module.
+- `source\gui_support.py` contains GUI filtering and dialog helpers, plus the reference lists shown in the manager's Data/Economia/Ações/WhatsApp tabs.
 - `source\tests\` contains unit tests.
 - `source\docs\` contains planning notes for refactors and features, plus `audit-report.md` (full code audit) and `improvement-plan.md` (phased roadmap).
 - `source\run_txt_xpander.bat` is the source-side launcher. It checks/install dependencies and starts the app with `pythonw`.
@@ -66,7 +68,7 @@ The build script backs up and restores the packaged `snippets.json`, stages the 
 
 ## Architecture Notes
 
-The keyboard hot path is `TextExpander.on_press()`. It appends keystrokes to a buffer and checks the compiled trigger index for a suffix match on every keystroke — expansion fires as soon as the buffer ends with a trigger. Slow work such as network calls, dialogs, and form fill prompts must run outside the hot path (stock/WhatsApp triggers and form-variable snippets already do; BCB economy triggers currently do not — see `source/docs/audit-report.md` §2.1 before touching this area).
+The keyboard hot path is `TextExpander.on_press()`. It appends keystrokes to a buffer and checks the compiled trigger index for a suffix match on every keystroke — expansion fires as soon as the buffer ends with a trigger. The index is pre-compiled at load time into buckets keyed by the trigger's last character (`direct_by_last_char`), so each keystroke only scans that bucket. Slow work such as network calls, dialogs, and form fill prompts must run outside the hot path (stock/WhatsApp triggers and form-variable snippets already do; BCB economy triggers currently do not — see `source/docs/audit-report.md` §2.1 before touching this area).
 
 Expansion flow:
 
@@ -96,9 +98,9 @@ Network-backed helpers use short caches: BCB lookups cache for about 300 seconds
 
 ## Snippets File Safety
 
-`snippets.json` is user data. In development it lives under `source\`. In the packaged app it lives beside `Txt Xpander.exe`, separate from the bundled fallback copy in `_internal`.
+`snippets.json` is user data. In development it lives under `source\`. In the packaged app it lives beside `Txt Xpander.exe`, separate from the bundled fallback copy in `_internal`; on first run the app seeds it from that bundled copy.
 
-Never overwrite a user-editable `snippets.json` without backing it up first. Preserve the build script behavior that syncs/restores snippets during release builds.
+Never overwrite a user-editable `snippets.json` without backing it up first. Ad-hoc safety copies go in `backups\` at the repo root (gitignored). Preserve the build script behavior that syncs/restores snippets during release builds.
 
 ## Testing Guidance
 
