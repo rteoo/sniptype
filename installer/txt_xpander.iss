@@ -7,7 +7,7 @@
 ; on uninstall — the installer only manages the program files under {app}.
 
 #define MyAppName "Txt Xpander"
-#define MyAppVersion "2.7"
+#define MyAppVersion "3.0.0"
 #define MyAppPublisher "Project Contributors"
 #define MyAppExeName "Txt Xpander.exe"
 #define MyAppIcon "..\source\txt_xpander.ico"

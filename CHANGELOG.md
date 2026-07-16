@@ -4,6 +4,51 @@ All notable changes to Txt Xpander are documented here. The format is based on [
 
 ## [Unreleased]
 
+## [3.0.0] — 2026-07-16
+
+Major release: user data now lives in a stable per-user directory, and Txt Xpander
+ships as a proper per-user Windows installer. The library is migrated automatically
+on first launch, but because the on-disk data location changes, this is a breaking
+behavioral change and warrants a major version bump.
+
+### Added
+
+- **Per-user Windows installer** (Inno Setup, `installer/txt_xpander.iss`):
+  - Installs to `%LOCALAPPDATA%\Programs\Txt Xpander` with **no administrator/UAC prompt** (`PrivilegesRequired=lowest`)
+  - Stable `AppId` so future versions upgrade in place; detects a running instance via the app mutex
+  - Optional desktop icon and "start with Windows" startup shortcut
+  - **Uninstall never touches `~/.txt_xpander`** — user data survives uninstall by design
+  - `build_installer.bat` compiles the packaged `dist` folder into `installer/Output/`
+- **Stable per-user data directory** (`app_paths.py`): snippets, settings, backups, and logs now live under `~/.txt_xpander` instead of beside the executable (which, in the packaged build, sat inside OneDrive and was hostile to atomic writes)
+  - `TXT_XPANDER_HOME` environment variable overrides the location
+  - **Automatic one-time migration** copies a legacy exe-side `snippets.json` into the data dir on first launch, leaving the original untouched as a safety copy and dropping a breadcrumb
+- **Rotating backups and corrupt-file recovery** (`backup_support.py`):
+  - Backup before every save plus a once-daily startup backup, keeping the newest 30
+  - Corrupt `snippets.json` is quarantined aside (never overwritten) and restored from the newest valid backup, falling back to sample defaults only as a last resort
+  - Backups tab in the manager: restore, export, and import the library
+- **File logging** to `~/.txt_xpander/logs`
+- **JSON-driven dynamic snippet registry** (`dynamic_registry.py` + `dynamic_snippets.json`): dynamic triggers are configured from JSON with named providers instead of being hardcoded
+- **Snippet manager improvements**: save-time validation, rename and duplicate actions, `Ctrl+S` to save, DPI awareness, and a notification-history viewer
+- **Cross-platform seam** (`platform_support.py`) isolating OS-specific behavior behind a Windows backend
+- **New test suites**: `test_app_paths`, `test_backup_support`, `test_data_safety`, `test_dynamic_registry`, `test_hotpath`, `test_platform_support`, `test_settings_support`, `test_validation_support`, and a manager-GUI construction smoke test
+
+### Changed
+
+- **User data location moved** out of the packaged app directory to `~/.txt_xpander` — migrated automatically, but a breaking change to where data is stored
+- **Hot path** (`trigger_index.py`, `runtime_support.py`): expansion now runs off the keyboard-listener thread with deterministic matching, reducing input latency and race risk
+- **`build_release.bat`** no longer syncs `dist` → `source`; the bundled `snippets.json` is an anonymized seed only, since real data lives in the per-user directory
+- Comments and docstrings translated to English; `AGENTS.md` established as the canonical agent contract
+
+### Fixed
+
+- **Corrupt-backup poisoning**: recovery is hardened so a corrupt file copied into a fresh startup backup can no longer rank newest-by-mtime and defeat restoration; only valid files are ever backed up
+
+### Technical
+
+- All 175 tests pass
+- New modules: `app_paths.py`, `backup_support.py`, `settings_support.py`, `dynamic_registry.py`, `validation_support.py`, `platform_support.py`
+- Snippet file format is unchanged; existing libraries load as-is after migration
+
 ## [2.7] — 2026-03-30
 
 ### Added
