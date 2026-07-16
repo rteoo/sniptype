@@ -1,6 +1,5 @@
 """
-Text Expander - Módulo de consulta à API do Banco Central do Brasil
-Adicione este código ao arquivo text_expander.pyw existente
+Txt Xpander - Brazilian Central Bank API lookup module
 """
 
 import json
@@ -9,34 +8,34 @@ from urllib.error import URLError
 from datetime import datetime, timedelta
 
 class BCBConsultor:
-    """Classe para consultar dados da API do Banco Central do Brasil"""
+    """Class for querying the Brazilian Central Bank API."""
     
     BASE_URL_SGS = "https://api.bcb.gov.br/dados/serie/bcdata.sgs.{}/dados/ultimos/1?formato=json"
     BASE_URL_PTAX = "https://olinda.bcb.gov.br/olinda/servico/PTAX/versao/v1/odata/CotacaoDolarDia(dataCotacao=@dataCotacao)?@dataCotacao='{}'&$format=json"
     
-    # Códigos das séries do SGS (Sistema Gerenciador de Séries Temporais)
+    # SGS series codes (Sistema Gerenciador de Séries Temporais)
     SERIES = {
-        'selic_meta': 432,     # Meta Selic definida pelo COPOM
-        'ipcam': 433,          # IPCA (% mensal)
-        'ipca12': 13522,       # IPCA Variação acumulada em 12 meses (%)
-        'cdi': 12,             # Taxa CDI (% Acumulado no mês)
-        'ptax': 1,             # Taxa PTAX Compra (R$)
+        'selic_meta': 432,     # Selic target set by COPOM
+        'ipcam': 433,          # IPCA (% monthly)
+        'ipca12': 13522,       # IPCA accumulated 12-month variation (%)
+        'cdi': 12,             # CDI rate (% accumulated in the month)
+        'ptax': 1,             # PTAX buy rate (R$)
     }
     
     def __init__(self, timeout=5, cache_seconds=300):
         """
-        Inicializa o consultor
+        Initialize the consultor
         
         Args:
-            timeout: Tempo máximo de espera pela resposta (segundos)
-            cache_seconds: Tempo de cache dos dados (segundos)
+            timeout: Maximum time to wait for the response (seconds)
+            cache_seconds: Data cache duration (seconds)
         """
         self.timeout = timeout
         self.cache_seconds = cache_seconds
         self._cache = {}
     
     def _get_cached_or_fetch(self, key, fetch_func):
-        """Retorna dados do cache ou busca novos se expirado"""
+        """Return cached data, or fetch fresh data if expired."""
         now = datetime.now()
         
         if key in self._cache:
@@ -49,13 +48,13 @@ class BCBConsultor:
             self._cache[key] = (data, now)
             return data
         except Exception as e:
-            # Se falhar, tenta usar cache antigo
+            # On failure, fall back to the stale cache
             if key in self._cache:
                 return self._cache[key][0]
             return f"[Erro: {str(e)}]"
     
     def _fetch_sgs(self, codigo_serie):
-        """Busca dados de uma série do SGS"""
+        """Fetch data for an SGS series."""
         url = self.BASE_URL_SGS.format(codigo_serie)
         with urlopen(url, timeout=self.timeout) as response:
             data = json.loads(response.read().decode())
@@ -67,8 +66,8 @@ class BCBConsultor:
         return None
     
     def _fetch_dolar(self):
-        """Busca cotação do dólar PTAX"""
-        # Tenta hoje, se não tiver, tenta dias anteriores
+        """Fetch the PTAX dollar quote."""
+        # Try today; if unavailable, try previous days
         for days_ago in range(5):
             data = (datetime.now() - timedelta(days=days_ago)).strftime('%m-%d-%Y')
             url = self.BASE_URL_PTAX.format(data)
@@ -89,7 +88,7 @@ class BCBConsultor:
         return None
     
     def get_dolar(self):
-        """Retorna cotação do dólar formatada"""
+        """Return the formatted dollar quote."""
         def fetch():
             data = self._fetch_dolar()
             if data:
@@ -99,7 +98,7 @@ class BCBConsultor:
         return self._get_cached_or_fetch('dolar', fetch)
     
     def get_selic_meta(self):
-        """Retorna meta Selic formatada"""
+        """Return the formatted Selic target."""
         def fetch():
             data = self._fetch_sgs(self.SERIES['selic_meta'])
             if data:
@@ -109,11 +108,11 @@ class BCBConsultor:
         return self._get_cached_or_fetch('selic_meta', fetch)
     
     def get_ipca_mensal(self):
-        """Retorna IPCA mensal formatado"""
+        """Return the formatted monthly IPCA."""
         def fetch():
             data = self._fetch_sgs(self.SERIES['ipcam'])
             if data:
-                # Converte data de dd/mm/yyyy para mm/yyyy
+                # Convert date from dd/mm/yyyy to mm/yyyy
                 data_partes = data['data'].split('/')
                 mes_ano = f"{data_partes[1]}/{data_partes[2]}"
                 return f"IPCA Mensal: {data['valor']:.2f}% ref. {mes_ano}"
@@ -122,11 +121,11 @@ class BCBConsultor:
         return self._get_cached_or_fetch('ipcam', fetch)
     
     def get_ipca_12m(self):
-        """Retorna IPCA 12 meses formatado"""
+        """Return the formatted 12-month IPCA."""
         def fetch():
             data = self._fetch_sgs(self.SERIES['ipca12'])
             if data:
-                # Converte data de dd/mm/yyyy para mm/yyyy
+                # Convert date from dd/mm/yyyy to mm/yyyy
                 data_partes = data['data'].split('/')
                 mes_ano = f"{data_partes[1]}/{data_partes[2]}"
                 return f"IPCA 12 Meses: {data['valor']:.2f}% ref. {mes_ano}"
@@ -135,7 +134,7 @@ class BCBConsultor:
         return self._get_cached_or_fetch('ipca12', fetch)
     
     def get_cdi(self):
-        """Retorna taxa CDI acumulada no mês formatada"""
+        """Return the formatted month-to-date CDI rate."""
         def fetch():
             data = self._fetch_sgs(self.SERIES['cdi'])
             if data:
@@ -145,7 +144,7 @@ class BCBConsultor:
         return self._get_cached_or_fetch('cdi', fetch)
     
     def get_ptax_sgs(self):
-        """Retorna PTAX via SGS formatada"""
+        """Return the formatted PTAX from SGS."""
         def fetch():
             data = self._fetch_sgs(self.SERIES['ptax'])
             if data:
@@ -155,7 +154,7 @@ class BCBConsultor:
         return self._get_cached_or_fetch('ptax_sgs', fetch)
     
     def get_resumo_economico(self):
-        """Retorna resumo com vários indicadores"""
+        """Return a summary with several indicators."""
         def fetch():
             try:
                 dolar = self._fetch_dolar()
