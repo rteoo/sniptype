@@ -17,15 +17,15 @@ Use the packaged build here:
 Usage notes:
 
 1. Launch `Txt Xpander.exe`.
-2. On first launch, the app seeds `snippets.json` beside the executable and uses that file for future edits. That copy is the live user library — back it up before replacing or editing it by hand.
-3. Use the tray icon to open `Gerenciar Snippets`, reload snippets, enable or disable expansion, and quit the app.
+2. User data lives in `%USERPROFILE%\.txt_xpander` (override with the `TXT_XPANDER_HOME` environment variable): `snippets.json`, rotating `backups\`, `logs\`, and optional `settings.json`. On first launch the app migrates any legacy `snippets.json` found beside the executable into this folder (the legacy file is left in place as an extra copy) and, failing that, seeds from the bundled sample. The live library is automatically backed up on every save (newest 30 kept) and a corrupt file is quarantined and restored from the newest valid backup instead of being overwritten.
+3. Use the tray icon to open `Gerenciar Snippets`, reload snippets, `Backup agora`, `Abrir pasta de dados`, enable or disable expansion, and quit the app. The manager's **Backups** tab lists backups and offers restore, export, and import.
 4. Expansion fires immediately on the last character of a matching trigger — there is no terminator (space/punctuation) wait.
 5. The built-in `xwapp` trigger reads a phone number from the clipboard, creates a `wa.me` link, opens it in the browser, and keeps the final link in the clipboard.
 6. The built-in `xlwapp` trigger follows the same validation flow but inserts the generated `wa.me` link into the current field and also keeps that link in the clipboard.
 7. The built-in `xpwapp` trigger skips clipboard lookup, opens the popup immediately for phone and optional message entry, then opens the browser and keeps the final link in the clipboard.
 8. If `xwapp` or `xlwapp` cannot normalize the clipboard content into a valid phone number, the app opens the same popup for manual phone and optional message entry.
 9. Before replacing the packaged folder with a newer build, close any running `Txt Xpander.exe` first.
-10. `build_release.bat` preserves the packaged app's existing `snippets.json` automatically when updating `dist\Txt Xpander`.
+10. `build_release.bat` keeps a one-time safety copy of any existing packaged `snippets.json` when updating `dist\Txt Xpander`. User data is no longer stored in `dist` — it lives in `%USERPROFILE%\.txt_xpander`, so a rebuild never touches the live library.
 
 ### Auto-start with Windows
 

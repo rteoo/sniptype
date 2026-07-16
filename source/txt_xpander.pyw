@@ -59,6 +59,16 @@ from backup_support import (
     quarantine_corrupt_file,
     should_backup_on_startup,
 )
+from app_paths import (
+    ensure_data_dir,
+    get_backups_dir,
+    get_logs_dir,
+    get_settings_path,
+    get_snippets_path,
+    migrate_snippets,
+    needs_migration,
+)
+from settings_support import load_settings
 from whatsapp_support import normalize_phone_number
 from whatsapp_runtime_support import execute_whatsapp_action
 from rich_text_support import (
@@ -90,7 +100,7 @@ from gui_support import (
 
 # GUI for managing snippets
 import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog, font as tkfont
+from tkinter import ttk, messagebox, simpledialog, filedialog, font as tkfont
 
 
 APP_MUTEX_NAME = r"Local\TxtXpanderSingleton"
@@ -154,14 +164,21 @@ class TextExpander:
         self.notification_history = []
         self.pending_notifications = []
 
-        # User data lives beside the executable; bundled resources may live in _internal.
+        # User data lives in a stable per-user dir (~/.txt_xpander), never inside
+        # OneDrive; bundled resources may live in _internal for the frozen build.
         self.base_dir = get_runtime_base_dir()
         self.resource_dir = get_runtime_resource_dir()
-        self.snippets_file = os.path.join(self.base_dir, snippets_file)
-        self.backups_dir = os.path.join(self.base_dir, "backups")
-        self.logs_dir = os.path.join(self.base_dir, "logs")
+        self.data_dir = ensure_data_dir()
+        self.legacy_snippets_file = os.path.join(self.base_dir, snippets_file)
+        self.snippets_file = get_snippets_path(self.data_dir)
+        self.backups_dir = get_backups_dir(self.data_dir)
+        self.logs_dir = get_logs_dir(self.data_dir)
+        self.settings_file = get_settings_path(self.data_dir)
+        self.settings = load_settings(self.settings_file)
         configure_logging(self.logs_dir)
+        self.migrate_legacy_data()
         self.ensure_seed_snippets_file(snippets_file)
+        self.logger.info(f"➡ Diretório de dados: {self.data_dir}")
         self.logger.info(f"➡ Arquivo de snippets configurado para: {self.snippets_file}")
         self.backup_on_startup()
 
@@ -191,6 +208,32 @@ class TextExpander:
         except Exception:
             return False
     
+    def migrate_legacy_data(self):
+        """One-time move of a legacy exe-side snippets file into the data dir.
+
+        The legacy file is copied (never moved) so it remains as an extra safety
+        copy; a backup and a tray notice follow. Idempotent: a second launch
+        finds the data-dir file already present and does nothing.
+        """
+        if not needs_migration(self.legacy_snippets_file, self.data_dir):
+            return
+        try:
+            migrated = migrate_snippets(self.legacy_snippets_file, self.data_dir)
+        except OSError as e:
+            self.logger.error(f"⚠ Falha ao migrar dados para {self.data_dir}: {e}")
+            return
+
+        self.logger.info(f"✓ Dados migrados de {self.legacy_snippets_file} para {migrated}")
+        try:
+            if create_backup(self.snippets_file, self.backups_dir):
+                prune_backups(self.backups_dir)
+        except OSError as e:
+            self.logger.warning(f"Falha ao criar backup pós-migração: {e}")
+        self.notify_deferred_status(
+            f"Dados movidos para {self.data_dir}. O arquivo antigo foi mantido como cópia.",
+            key="data-migrated",
+        )
+
     def ensure_seed_snippets_file(self, snippets_file: str):
         """Seed the user-writable snippets file from bundled defaults on first run."""
         if os.path.exists(self.snippets_file):
@@ -333,10 +376,131 @@ class TextExpander:
         try:
             write_json_atomic(self.snippets_file, saveable)
             self.logger.info("✓ snippets.json salvo com sucesso.")
-            return True
         except Exception as e:
             self.logger.error(f"Erro ao salvar snippets: {e}")
             return False
+
+        # Mirroring is best-effort redundancy: it must never turn a persisted
+        # save into a reported failure, so it runs after the write succeeded.
+        self.mirror_snippets_file()
+        return True
+
+    def mirror_snippets_file(self):
+        """Copy the saved file to an optional write-only mirror (e.g. a cloud dir).
+
+        Never read back from the mirror; it is redundancy only, so a failure is
+        logged but does not fail the save.
+        """
+        mirror_dir = self.settings.get("mirror_dir")
+        if not mirror_dir:
+            return
+        try:
+            os.makedirs(mirror_dir, exist_ok=True)
+            shutil.copyfile(self.snippets_file, os.path.join(mirror_dir, "snippets.json"))
+        except Exception as e:
+            # Broad guard: a bad mirror_dir value (e.g. hand-edited to a non-path)
+            # must not disturb the already-successful save.
+            self.logger.warning(f"Falha ao espelhar snippets para {mirror_dir}: {e}")
+
+    # =====================================================================
+    # BACKUP / RESTORE / EXPORT / IMPORT
+    # =====================================================================
+
+    def reload_snippets_from_disk(self):
+        """Reload the static library from disk and rebuild runtime indexes."""
+        self.snippets = self.load_snippets()
+        self.refresh_runtime_indexes(include_dynamic_items=True)
+
+    def _backup_current_library(self):
+        """Force a backup of the current file before a destructive operation."""
+        try:
+            if self.snippets_file_is_valid() and create_backup(
+                self.snippets_file, self.backups_dir, force=True
+            ):
+                prune_backups(self.backups_dir)
+        except OSError as e:
+            self.logger.warning(f"Falha ao criar backup de segurança: {e}")
+
+    def backup_now(self):
+        """Create an explicit backup on demand. Returns the path, or None."""
+        try:
+            created = create_backup(self.snippets_file, self.backups_dir, force=True)
+            if created:
+                prune_backups(self.backups_dir)
+                self.logger.info(f"✓ Backup manual criado: {os.path.basename(created)}")
+            return created
+        except OSError as e:
+            self.logger.error(f"Falha ao criar backup manual: {e}")
+            return None
+
+    def restore_backup(self, backup_path):
+        """Replace the live library with a backup (current file backed up first).
+
+        Returns (ok, error_message).
+        """
+        try:
+            data = validate_static_snippets(load_json_file(backup_path))
+        except Exception as e:
+            return False, f"Backup inválido: {e}"
+        if data is None:
+            return False, "Backup inválido: formato inesperado."
+
+        self._backup_current_library()
+        try:
+            shutil.copyfile(backup_path, self.snippets_file)
+        except OSError as e:
+            return False, f"Falha ao restaurar: {e}"
+
+        self.mirror_snippets_file()
+        self.reload_snippets_from_disk()
+        return True, None
+
+    def export_library(self, dest_path):
+        """Copy the current library to dest_path. Returns (ok, error_message)."""
+        try:
+            shutil.copyfile(self.snippets_file, dest_path)
+            return True, None
+        except OSError as e:
+            return False, str(e)
+
+    def import_library(self, src_path, mode="replace"):
+        """Import a library file (mode 'replace' or 'merge').
+
+        Validates the source is a JSON object, backs up the current library,
+        applies the change, mirrors and reloads. Returns (ok, error_message).
+        """
+        try:
+            data = validate_static_snippets(load_json_file(src_path))
+        except Exception as e:
+            return False, f"Arquivo inválido: {e}"
+        if data is None:
+            return False, "Arquivo inválido: o JSON precisa ser um objeto."
+
+        self._backup_current_library()
+        if mode == "merge":
+            merged = {**build_saveable_snippets(self.snippets), **data}
+        else:
+            merged = data
+
+        try:
+            write_json_atomic(self.snippets_file, merged)
+        except Exception as e:
+            return False, f"Falha ao importar: {e}"
+
+        self.mirror_snippets_file()
+        self.reload_snippets_from_disk()
+        return True, None
+
+    def open_data_folder(self):
+        """Open the user data directory in the OS file manager."""
+        try:
+            os.makedirs(self.data_dir, exist_ok=True)
+            # ceiling: Windows-only shell open; a platform adapter replaces this in
+            # the cross-platform phase (audit §6). Broad guard so a click never
+            # raises out of the GUI/tray callback on other OSes.
+            os.startfile(self.data_dir)  # noqa: WPS421
+        except Exception as e:
+            self.logger.error(f"Falha ao abrir a pasta de dados: {e}")
 
     # =====================================================================
     # DATE / TEXT / INPUT UTILITIES
@@ -999,12 +1163,19 @@ If userInput <> "" Then WScript.Echo userInput'''
     def notify_status(self, message: str, key: str = None):
         return self.notify(message, key=key, cooldown_seconds=2, kind="status")
 
-    def notify_error(self, message: str, key: str = None, cooldown_seconds: float = 8):
-        """Notify of an error now, or queue it for tray startup if the icon is not up yet."""
+    def _notify_or_queue(self, message: str, key: str, kind: str, cooldown_seconds: float):
+        """Notify now, or queue for tray startup when the icon is not up yet."""
         if not self.icon:
-            self.pending_notifications.append((message, key))
+            self.pending_notifications.append((message, key, kind, cooldown_seconds))
             return False
-        return self.notify(message, key=key, cooldown_seconds=cooldown_seconds, kind="error")
+        return self.notify(message, key=key, cooldown_seconds=cooldown_seconds, kind=kind)
+
+    def notify_error(self, message: str, key: str = None, cooldown_seconds: float = 8):
+        return self._notify_or_queue(message, key, "error", cooldown_seconds)
+
+    def notify_deferred_status(self, message: str, key: str = None, cooldown_seconds: float = 8):
+        """Queue an informational tray message that must survive an early startup."""
+        return self._notify_or_queue(message, key, "status", cooldown_seconds)
 
     def notify_snippet_failure(self, trigger: str, result):
         message = build_snippet_failure_notification(trigger, result)
@@ -1023,8 +1194,8 @@ If userInput <> "" Then WScript.Echo userInput'''
         time.sleep(0.75)
         self.notify_status("Text Expander iniciado com sucesso.", key="startup")
         pending, self.pending_notifications = self.pending_notifications, []
-        for message, key in pending:
-            self.notify(message, key=key, cooldown_seconds=8, kind="error")
+        for message, key, kind, cooldown in pending:
+            self.notify(message, key=key, cooldown_seconds=cooldown, kind=kind)
 
     # =====================================================================
     # KEYBOARD LISTENER
@@ -1154,11 +1325,15 @@ If userInput <> "" Then WScript.Echo userInput'''
             tab_whatsapp = tk.Frame(notebook, bg="#F4F6FA")
             notebook.add(tab_whatsapp, text="WhatsApp")
 
+            tab_backups = tk.Frame(notebook, bg="#F4F6FA")
+            notebook.add(tab_backups, text="Backups")
+
             self._create_static_snippets_tab(tab_static, root)
             self._create_dynamic_mappings_tab(tab_dynamic, root)
             self._create_datetime_eco_tab(tab_datetime_eco)
             self._create_stocks_tab(tab_stocks)
             self._create_whatsapp_tab(tab_whatsapp)
+            self._create_backups_tab(tab_backups, root)
 
             root.mainloop()
 
@@ -1169,6 +1344,157 @@ If userInput <> "" Then WScript.Echo userInput'''
                 key="gui-open-error",
                 cooldown_seconds=5,
             )
+
+    def _create_backups_tab(self, parent, root):
+        """Backups tab: list backups and expose restore/export/import actions."""
+        main = tk.Frame(parent, bg="#F4F6FA", padx=14, pady=14)
+        main.pack(fill=tk.BOTH, expand=True)
+        main.grid_columnconfigure(0, weight=1)
+        main.grid_rowconfigure(2, weight=1)
+
+        tk.Label(
+            main,
+            text="Backups da biblioteca",
+            font=("Segoe UI", 11, "bold"),
+            bg="#F4F6FA",
+            fg="#1F2937",
+        ).grid(row=0, column=0, sticky="w")
+        path_label = tk.Label(
+            main,
+            text=f"Pasta de dados: {self.data_dir}",
+            font=("Segoe UI", 8),
+            bg="#F4F6FA",
+            fg="#5B6472",
+        )
+        path_label.grid(row=1, column=0, sticky="w", pady=(2, 10))
+
+        columns = ("backup", "size", "count")
+        tree = ttk.Treeview(main, columns=columns, show="headings", height=12)
+        tree.heading("backup", text="Backup")
+        tree.heading("size", text="Tamanho")
+        tree.heading("count", text="Snippets")
+        tree.column("backup", width=260, anchor="w")
+        tree.column("size", width=90, anchor="e")
+        tree.column("count", width=90, anchor="e")
+        tree.grid(row=2, column=0, sticky="nsew")
+
+        scrollbar = ttk.Scrollbar(main, orient=tk.VERTICAL, command=tree.yview)
+        tree.configure(yscrollcommand=scrollbar.set)
+        scrollbar.grid(row=2, column=1, sticky="ns")
+
+        # Maps tree row id -> backup path.
+        row_paths = {}
+
+        def human_size(num_bytes):
+            size = float(num_bytes)
+            for unit in ("B", "KB", "MB"):
+                if size < 1024 or unit == "MB":
+                    return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+                size /= 1024
+            return f"{size:.1f} MB"
+
+        def refresh_backups():
+            tree.delete(*tree.get_children())
+            row_paths.clear()
+            for path in list_backups(self.backups_dir):
+                try:
+                    size_bytes = os.path.getsize(path)
+                except OSError:
+                    size_bytes = 0
+                try:
+                    data = load_json_file(path)
+                    count = len(data) if isinstance(data, dict) else "?"
+                except Exception:
+                    count = "inválido"
+                row = tree.insert(
+                    "",
+                    tk.END,
+                    values=(os.path.basename(path), human_size(size_bytes), count),
+                )
+                row_paths[row] = path
+
+        def selected_backup():
+            selection = tree.selection()
+            if not selection:
+                messagebox.showinfo("Backups", "Selecione um backup na lista.", parent=root)
+                return None
+            return row_paths.get(selection[0])
+
+        def on_restore():
+            path = selected_backup()
+            if not path:
+                return
+            name = os.path.basename(path)
+            if not messagebox.askyesno(
+                "Restaurar backup",
+                f"Restaurar '{name}'? A biblioteca atual será salva como backup antes.",
+                parent=root,
+            ):
+                return
+            ok, error = self.restore_backup(path)
+            if ok:
+                self.notify_status(f"Backup restaurado: {name}", key="restore-backup")
+                messagebox.showinfo("Backups", f"Backup '{name}' restaurado.", parent=root)
+                refresh_backups()
+            else:
+                messagebox.showerror("Backups", f"Falha ao restaurar: {error}", parent=root)
+
+        def on_export():
+            dest = filedialog.asksaveasfilename(
+                parent=root,
+                title="Exportar biblioteca",
+                defaultextension=".json",
+                initialfile="snippets-export.json",
+                filetypes=[("JSON", "*.json"), ("Todos", "*.*")],
+            )
+            if not dest:
+                return
+            ok, error = self.export_library(dest)
+            if ok:
+                messagebox.showinfo("Backups", "Biblioteca exportada com sucesso.", parent=root)
+            else:
+                messagebox.showerror("Backups", f"Falha ao exportar: {error}", parent=root)
+
+        def on_import():
+            src = filedialog.askopenfilename(
+                parent=root,
+                title="Importar biblioteca",
+                filetypes=[("JSON", "*.json"), ("Todos", "*.*")],
+            )
+            if not src:
+                return
+            merge = messagebox.askyesno(
+                "Importar biblioteca",
+                "Mesclar com a biblioteca atual?\n\nSim = mesclar (entradas importadas têm prioridade)\n"
+                "Não = substituir tudo.\n\nA biblioteca atual será salva como backup antes.",
+                parent=root,
+            )
+            ok, error = self.import_library(src, mode="merge" if merge else "replace")
+            if ok:
+                self.notify_status("Biblioteca importada.", key="import-library")
+                messagebox.showinfo("Backups", "Biblioteca importada com sucesso.", parent=root)
+                refresh_backups()
+            else:
+                messagebox.showerror("Backups", f"Falha ao importar: {error}", parent=root)
+
+        def on_backup_now():
+            created = self.backup_now()
+            if created:
+                messagebox.showinfo("Backups", f"Backup criado: {os.path.basename(created)}", parent=root)
+                refresh_backups()
+            else:
+                messagebox.showerror("Backups", "Falha ao criar backup. Verifique os logs.", parent=root)
+
+        buttons = tk.Frame(main, bg="#F4F6FA")
+        buttons.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        tk.Button(buttons, text="Backup agora", width=14, command=on_backup_now).pack(side=tk.LEFT, padx=(0, 6))
+        tk.Button(buttons, text="Restaurar", width=12, command=on_restore).pack(side=tk.LEFT, padx=6)
+        tk.Button(buttons, text="Exportar…", width=12, command=on_export).pack(side=tk.LEFT, padx=6)
+        tk.Button(buttons, text="Importar…", width=12, command=on_import).pack(side=tk.LEFT, padx=6)
+        tk.Button(buttons, text="Abrir pasta", width=12, command=self.open_data_folder).pack(side=tk.LEFT, padx=6)
+        tk.Button(buttons, text="Atualizar", width=10, command=refresh_backups).pack(side=tk.RIGHT)
+
+        refresh_backups()
 
     def _set_window_icon(self, window):
         icon_path = self.resolve_resource_path("txt_xpander.ico")
@@ -2102,6 +2428,18 @@ If userInput <> "" Then WScript.Echo userInput'''
                 key="reload-snippets-error",
                 cooldown_seconds=5,
             )
+    def tray_backup_now(self, icon, item):
+        """Tray action: create an immediate backup of the library."""
+        created = self.backup_now()
+        if created:
+            self.notify_status(f"Backup criado: {os.path.basename(created)}", key="manual-backup")
+        else:
+            self.notify_error("Falha ao criar backup. Verifique os logs.", key="manual-backup")
+
+    def tray_open_data_folder(self, icon, item):
+        """Tray action: open the user data folder."""
+        self.open_data_folder()
+
     def quit_app(self, icon, item):
         """Quit the application."""
         self.enabled = False
@@ -2159,6 +2497,9 @@ If userInput <> "" Then WScript.Echo userInput'''
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Gerenciar Snippets", self.manage_snippets_gui, default=True),
             pystray.MenuItem("Recarregar Snippets", self.reload_snippets),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("Backup agora", self.tray_backup_now),
+            pystray.MenuItem("Abrir pasta de dados", self.tray_open_data_folder),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Sair", self.quit_app)
         )
