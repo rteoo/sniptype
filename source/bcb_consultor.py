@@ -83,7 +83,7 @@ class BCBConsultor:
                             'venda': float(cotacao['cotacaoVenda']),
                             'data': cotacao['dataHoraCotacao'][:10]
                         }
-            except:
+            except Exception:
                 continue
         
         return None
@@ -191,39 +191,7 @@ class BCBConsultor:
         return self._get_cached_or_fetch('resumo', fetch)
 
 
-# ============================================================
-# INTEGRAÇÃO COM O TEXT EXPANDER
-# ============================================================
-# 
-# Adicione estas linhas ao método get_dynamic_snippets() do TextExpander:
-#
-# def get_dynamic_snippets(self):
-#     """Retorna snippets dinâmicos (data/hora) que não vão para o JSON"""
-#     
-#     # Cria instância do consultor BCB
-#     bcb = BCBConsultor(timeout=3, cache_seconds=300)
-#     
-#     return {
-#         # Snippets de data/hora originais
-#         "xhj": lambda: time.strftime("%d/%m/%Y"),
-#         "xhoje": self.data_extenso,
-#         "xnow": lambda: time.strftime("%H:%M:%S"),
-#         "xdatahora": lambda: time.strftime("%d/%m/%Y às %H:%M"),
-#         
-#         # Novos snippets com dados do Banco Central
-#         "xdolar": bcb.get_dolar,
-#         "xselic": bcb.get_selic_meta,
-#         "xipcam": bcb.get_ipca_mensal,
-#         "xipca12": bcb.get_ipca_12m,
-#         "xcdi": bcb.get_cdi,
-#         "xptax": bcb.get_ptax_sgs,
-#         "xeconomia": bcb.get_resumo_economico,
-#     }
-#
-# ============================================================
-
-
-# Exemplo de uso standalone (para testes)
+# Standalone usage example (for manual testing)
 if __name__ == "__main__":
     print("=" * 60)
     print("TESTANDO CONSULTAS À API DO BANCO CENTRAL")

@@ -118,7 +118,7 @@ class B3FundamentosConsultor:
 
             # default -> BRL
             return formatted.replace('.', ',')
-        except:
+        except Exception:
             return "N/A"
 
     
@@ -129,7 +129,7 @@ class B3FundamentosConsultor:
             if value is None or (isinstance(value, float) and value != value):  # NaN check
                 return default
             return value
-        except:
+        except Exception:
             return default
     
     def get_cotacao_atual(self, ticker):
@@ -163,7 +163,7 @@ class B3FundamentosConsultor:
                 if mcap:
                     return f"Market Cap {ticker}: {self._format_currency(mcap, info)}"
                 return "Market Cap: N/A"
-            except:
+            except Exception:
                 return "Market Cap: N/A"
         
         ticker_fmt = self._format_ticker(ticker)
@@ -181,7 +181,7 @@ class B3FundamentosConsultor:
                 if pl:
                     return f"P/L {ticker}: {self._format_number(pl, 2)}"
                 return "P/L: N/A"
-            except:
+            except Exception:
                 return "P/L: N/A"
         
         ticker_fmt = self._format_ticker(ticker)
@@ -199,7 +199,7 @@ class B3FundamentosConsultor:
                 if pvp:
                     return f"P/VP {ticker}: {self._format_number(pvp, 2)}"
                 return "P/VP: N/A"
-            except:
+            except Exception:
                 return "P/VP: N/A"
         
         ticker_fmt = self._format_ticker(ticker)
@@ -217,7 +217,7 @@ class B3FundamentosConsultor:
                 if dy and dy > 0:
                     return f"DY {ticker}: {self._format_number(dy, 2)}%"
                 return "DY: N/A"
-            except:
+            except Exception:
                 return "DY: N/A"
         
         ticker_fmt = self._format_ticker(ticker)
@@ -235,7 +235,7 @@ class B3FundamentosConsultor:
                 if ebitda:
                     return f"EBITDA {ticker}: {self._format_currency(ebitda, info)}"
                 return "EBITDA: N/A"
-            except:
+            except Exception:
                 return "EBITDA: N/A"
         
         ticker_fmt = self._format_ticker(ticker)
@@ -253,7 +253,7 @@ class B3FundamentosConsultor:
                 if margem:
                     return f"Margem Líq. {ticker}: {self._format_number(margem * 100, 2)}%"
                 return "Margem Líq.: N/A"
-            except:
+            except Exception:
                 return "Margem Líq.: N/A"
         
         ticker_fmt = self._format_ticker(ticker)
@@ -271,7 +271,7 @@ class B3FundamentosConsultor:
                 if roe:
                     return f"ROE {ticker}: {self._format_number(roe * 100, 2)}%"
                 return "ROE: N/A"
-            except:
+            except Exception:
                 return "ROE: N/A"
         
         ticker_fmt = self._format_ticker(ticker)
@@ -348,7 +348,7 @@ class B3FundamentosConsultor:
                 if receita:
                     return f"Receita Líq. {ticker}: {self._format_currency(receita, info)}"
                 return "Receita Líq.: N/A"
-            except:
+            except Exception:
                 return "Receita Líq.: N/A"
         
         ticker_fmt = self._format_ticker(ticker)
@@ -374,7 +374,7 @@ class B3FundamentosConsultor:
                     
                     return f"Beta {ticker}: {self._format_number(beta, 2)} {interpretacao}"
                 return "Beta: N/A"
-            except:
+            except Exception:
                 return "Beta: N/A"
         
         ticker_fmt = self._format_ticker(ticker)
@@ -410,7 +410,7 @@ class B3FundamentosConsultor:
                     
                     return resultado
                 return "52 Semanas: N/A"
-            except:
+            except Exception:
                 return "52 Semanas: N/A"
         
         ticker_fmt = self._format_ticker(ticker)
@@ -431,7 +431,7 @@ class B3FundamentosConsultor:
                     else:
                         return f"Vol. Médio {ticker}: {volume:,.0f}".replace(',', '.')
                 return "Vol. Médio: N/A"
-            except:
+            except Exception:
                 return "Vol. Médio: N/A"
         
         ticker_fmt = self._format_ticker(ticker)
