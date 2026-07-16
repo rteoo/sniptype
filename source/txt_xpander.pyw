@@ -32,7 +32,6 @@ from bcb_consultor import BCBConsultor
 from yf_stocks import B3FundamentosConsultor
 from snippet_utils import (
     build_saveable_snippets,
-    calculate_max_trigger_length,
     calculate_max_trigger_length_with_mappings,
     get_default_snippets as get_static_default_snippets,
     get_dynamic_prefixes,
@@ -84,7 +83,6 @@ from rich_text_support import (
 from variable_support import (
     classify_variable,
     find_variable_names,
-    has_form_variables,
     resolve_form_variables,
     resolve_inline,
 )
@@ -107,6 +105,13 @@ APP_MUTEX_NAME = r"Local\TxtXpanderSingleton"
 APP_MUTEX_HANDLE = None
 ERROR_ALREADY_EXISTS = 183
 MB_ICONINFORMATION = 0x40
+
+# Extra headroom on the typed-text buffer beyond the longest known trigger, so a
+# newly added long mapping item is never truncated out before its index rebuild.
+TRIGGER_BUFFER_MARGIN = 8
+
+# Characters that end a word for opt-in terminator-gated expansion.
+TERMINATOR_CHARS = frozenset(" \t\n\r.,;:!?)]}\"'")
 
 
 def get_runtime_base_dir():
@@ -175,6 +180,9 @@ class TextExpander:
         self.logs_dir = get_logs_dir(self.data_dir)
         self.settings_file = get_settings_path(self.data_dir)
         self.settings = load_settings(self.settings_file)
+        # Opt-in: expand only after a terminator (space/punctuation). Default off
+        # to preserve the existing expand-on-last-character muscle memory.
+        self.terminator_mode = bool(self.settings.get("terminator_mode", False))
         configure_logging(self.logs_dir)
         self.migrate_legacy_data()
         self.ensure_seed_snippets_file(snippets_file)
@@ -409,7 +417,7 @@ class TextExpander:
     def reload_snippets_from_disk(self):
         """Reload the static library from disk and rebuild runtime indexes."""
         self.snippets = self.load_snippets()
-        self.refresh_runtime_indexes(include_dynamic_items=True)
+        self.refresh_runtime_indexes()
 
     def _backup_current_library(self):
         """Force a backup of the current file before a destructive operation."""
@@ -903,14 +911,15 @@ If userInput <> "" Then WScript.Echo userInput'''
     # =====================================================================
 
     def expand_snippet(self, trigger: str):
-        """
-        Expand the snippet matching the trigger.
-        Used for "normal" (non-slow) snippets.
+        """Produce and insert a non-slow snippet (callable, plain, or dynamic).
+
+        Runs on a worker thread; the typed trigger has already been erased by the
+        listener, so this method does not touch the keyboard buffer itself.
         """
         if not self.enabled:
             return False
-        
-        # Slow snippets are not run here (they go through the thread path)
+
+        # Slow snippets are not run here (they go through the dialog/fetch path)
         if trigger in self.slow_snippets:
             return False
             
@@ -939,18 +948,13 @@ If userInput <> "" Then WScript.Echo userInput'''
                     snippet = resolved_text
 
             try:
-                for _ in range(len(trigger)):
-                    self.keyboard_controller.press(Key.backspace)
-                    self.keyboard_controller.release(Key.backspace)
-                    time.sleep(0.01)
-
                 time.sleep(0.05)
                 self.text_inserter.insert_text(snippet)
-                
+
                 self.expansion_failed = False
                 self.last_expansion_time = time.time()
                 return True
-                
+
             except Exception as e:
                 current_time = time.time()
                 if not self.expansion_failed or (current_time - self.last_expansion_time) > 5:
@@ -990,22 +994,23 @@ If userInput <> "" Then WScript.Echo userInput'''
                 if form_names:
                     form_data = self._show_form_dialog(form_names)
                     if form_data is None:
-                        return  # user cancelled — nothing inserted
+                        return False  # user cancelled — nothing inserted
                 result = resolve_form_variables(plain, form_data)
                 if is_rich_text_payload(raw):
                     result = rebuild_rich_text(raw, result)
                 time.sleep(0.05)
                 self.text_inserter.insert_text(result)
-                return
+                return True
 
             result = func()
             if not result:
-                return
+                return False
             self.notify_snippet_failure(trigger, result)
             time.sleep(0.05)
             self.text_inserter.insert_text(result)
             if trigger == "xlwapp":
                 WindowsClipboard.set_content(result)
+            return True
         except Exception as e:
             self.logger.error(f"Erro ao executar snippet lento {trigger}: {e}")
             self.notify_error(
@@ -1013,6 +1018,7 @@ If userInput <> "" Then WScript.Echo userInput'''
                 key=f"slow-snippet-error:{trigger}",
                 cooldown_seconds=5,
             )
+            return False
     
     def _show_form_dialog(self, field_names):
         """
@@ -1121,12 +1127,14 @@ If userInput <> "" Then WScript.Echo userInput'''
         """Rebuild compiled trigger metadata after snippet changes."""
         self.trigger_index = compile_trigger_index(self.snippets, self.slow_snippets)
 
-    def refresh_runtime_indexes(self, include_dynamic_items: bool = False):
-        """Refresh max trigger length and compiled trigger metadata."""
-        if include_dynamic_items:
-            self.max_trigger_length = calculate_max_trigger_length_with_mappings(self.snippets)
-        else:
-            self.max_trigger_length = calculate_max_trigger_length(self.snippets)
+    def refresh_runtime_indexes(self):
+        """Refresh max trigger length and compiled trigger metadata.
+
+        The buffer is always sized to include composed dynamic mapping triggers
+        (prefix + item name) plus a small safety margin, so a long mapping item
+        can never be truncated out of the typed-text buffer and fail to match.
+        """
+        self.max_trigger_length = calculate_max_trigger_length_with_mappings(self.snippets) + TRIGGER_BUFFER_MARGIN
         self.rebuild_trigger_index()
 
     def notify(self, message: str, title: str = "Text Expander", key: str = None, cooldown_seconds: float = 0, kind: str = "info"):
@@ -1201,50 +1209,107 @@ If userInput <> "" Then WScript.Echo userInput'''
     # KEYBOARD LISTENER
     # =====================================================================
     def on_press(self, key):
-        """Callback invoked when a key is pressed."""
+        """Detect a trigger on the listener thread; expand on a worker thread.
+
+        The listener must stay fast and unkillable: it only appends the keystroke,
+        matches a trigger, erases the typed trigger, and hands all real work
+        (callables, network, dialogs, clipboard, paste) to a background thread.
+        """
         try:
             if hasattr(key, 'char') and key.char:
-                self.typed_text += key.char
-                
-                if len(self.typed_text) > self.max_trigger_length:
-                    self.typed_text = self.typed_text[-self.max_trigger_length:]
-                
-                expanded = False
-
-                # 1) Direct snippets
-                trigger = find_direct_trigger(self.typed_text, self.trigger_index)
-                if trigger:
-                    needs_slow = trigger in self.slow_snippets
-                    if not needs_slow:
-                        raw_value = self.snippets.get(trigger)
-                        if not callable(raw_value):
-                            if has_form_variables(extract_plain_text(raw_value), self.snippets):
-                                needs_slow = True
-                    if needs_slow:
-                        for _ in range(len(trigger)):
-                            self.keyboard_controller.press(Key.backspace)
-                            self.keyboard_controller.release(Key.backspace)
-                            time.sleep(0.01)
-                        self.typed_text = ""
-                        self.task_runner.start(self.run_slow_snippet, trigger, name="slow-snippet")
-                        expanded = True
-                    else:
-                        self.expand_snippet(trigger)
-                        self.typed_text = ""
-                        expanded = True
-                
-                # 2) Dynamic patterns (including custom prefixes)
-                if not expanded:
-                    potential_trigger, result = find_dynamic_trigger(self.snippets, self.typed_text, self.trigger_index)
-                    if result is not None:
-                        self.expand_snippet(potential_trigger)
-                        self.typed_text = ""
-                                
+                self._handle_char(key.char)
         except AttributeError:
             if key == Key.enter:
+                # ceiling: terminator mode does not gate on Enter (re-typing it could
+                # double-submit); Enter always just resets the buffer. Extend to Enter
+                # if a safe re-emit strategy is needed.
                 self.typed_text = ""
             elif key == Key.backspace and self.typed_text:
                 self.typed_text = self.typed_text[:-1]
+        except Exception as e:
+            # A detection error must never stop the global keyboard listener.
+            self.typed_text = ""
+            self.logger.error(f"Erro no listener de teclado: {e}")
+            self.notify_error(
+                f"Erro ao detectar snippet: {e}",
+                key="listener-error",
+                cooldown_seconds=10,
+            )
+
+    def _handle_char(self, char):
+        """Append a typed character and run trigger detection."""
+        self.typed_text += char
+        if len(self.typed_text) > self.max_trigger_length:
+            self.typed_text = self.typed_text[-self.max_trigger_length:]
+
+        if self.terminator_mode:
+            if char in TERMINATOR_CHARS:
+                self._detect_terminated(char)
+            return
+
+        self._detect_immediate()
+
+    def _detect_immediate(self):
+        """Immediate mode: expand as soon as a trigger suffix matches."""
+        trigger = find_direct_trigger(self.typed_text, self.trigger_index)
+        if trigger:
+            self._dispatch_expansion(trigger, len(trigger))
+            return
+        potential_trigger, result = find_dynamic_trigger(self.snippets, self.typed_text, self.trigger_index)
+        if result is not None:
+            self._dispatch_expansion(potential_trigger, len(potential_trigger))
+
+    def _detect_terminated(self, terminator_char):
+        """Terminator mode: expand only when a word-ending char follows a trigger."""
+        body = self.typed_text[:-1]  # drop the terminator just typed
+        trigger = find_direct_trigger(body, self.trigger_index)
+        if trigger:
+            self._dispatch_expansion(trigger, len(trigger) + 1, append_text=terminator_char)
+            return
+        potential_trigger, result = find_dynamic_trigger(self.snippets, body, self.trigger_index)
+        if result is not None:
+            self._dispatch_expansion(potential_trigger, len(potential_trigger) + 1, append_text=terminator_char)
+
+    def _dispatch_expansion(self, trigger, erase_length, append_text=""):
+        """Erase the typed trigger and run the expansion on a worker thread."""
+        self._erase_chars(erase_length)
+        self.typed_text = ""
+        self.task_runner.start(self._run_expansion, trigger, append_text, name="expand")
+
+    def _erase_chars(self, count):
+        """Backspace over ``count`` characters on the listener thread."""
+        # ceiling: 10 ms sleep per char keeps the erase reliable across apps; with
+        # expansion now off-thread this only adds latency proportional to trigger
+        # length, not to network work (audit 2.6).
+        for _ in range(count):
+            self.keyboard_controller.press(Key.backspace)
+            self.keyboard_controller.release(Key.backspace)
+            time.sleep(0.01)
+
+    def _run_expansion(self, trigger, append_text=""):
+        """Worker entry point: produce and insert the expansion for a trigger.
+
+        The trigger text is already erased. This is wrapped so no expansion error
+        (including a raising callable) can ever propagate to the listener thread.
+        """
+        if not self.enabled:
+            return
+        try:
+            if trigger in self.slow_snippets or trigger in self.trigger_index["form_triggers"]:
+                inserted = self.run_slow_snippet(trigger)
+            else:
+                inserted = self.expand_snippet(trigger)
+            # Only re-emit the terminator when text was actually inserted, so a
+            # cancelled form dialog or a failed paste does not leave a stray char.
+            if append_text and inserted:
+                self.keyboard_controller.type(append_text)
+        except Exception as e:
+            self.logger.error(f"Erro na expansão de {trigger}: {e}")
+            self.notify_error(
+                f"Falha ao expandir {trigger}: {e}",
+                key=f"expand-error:{trigger}",
+                cooldown_seconds=5,
+            )
 
     # =====================================================================
     # SNIPPET MANAGEMENT GUI
@@ -2141,7 +2206,7 @@ If userInput <> "" Then WScript.Echo userInput'''
                         parent=dialog,
                     )
                     return
-                self.refresh_runtime_indexes(include_dynamic_items=True)
+                self.refresh_runtime_indexes()
                 refresh_type_radiobuttons()
                 mapping_type.set(map_key)
                 on_type_changed()
@@ -2172,7 +2237,7 @@ If userInput <> "" Then WScript.Echo userInput'''
                     "Não foi possível gravar snippets.json. Verifique os logs; o tipo não foi excluído.",
                 )
                 return
-            self.refresh_runtime_indexes(include_dynamic_items=True)
+            self.refresh_runtime_indexes()
 
             refresh_type_radiobuttons()
             available_keys = list(mappings_info.keys())
@@ -2247,7 +2312,7 @@ If userInput <> "" Then WScript.Echo userInput'''
                     "Não foi possível gravar snippets.json. Verifique os logs; o item não foi salvo.",
                 )
                 return
-            self.refresh_runtime_indexes(include_dynamic_items=True)
+            self.refresh_runtime_indexes()
             self.notify_status(f"Item '{name}' salvo em {mappings.get(current_type, {}).get('label', current_type)}.", key=f"save-map:{current_type}:{name}")
             refresh_mapping_list()
             update_format_status()
@@ -2270,7 +2335,7 @@ If userInput <> "" Then WScript.Echo userInput'''
                         "Não foi possível gravar snippets.json. Verifique os logs; a exclusão não foi salva.",
                     )
                     return
-                self.refresh_runtime_indexes(include_dynamic_items=True)
+                self.refresh_runtime_indexes()
                 entry_name.delete(0, tk.END)
                 load_value_into_text_widget(text_value, "")
                 update_format_status()
