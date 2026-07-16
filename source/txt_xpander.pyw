@@ -1,14 +1,13 @@
-""" 
-Text Expander - Expansor de Snippets para Windows com System Tray
-Versão: 2.6 (snippets de ações em thread + JSON na mesma pasta + GUI de snippets)
-Autor: Desenvolvido para uso pessoal legítimo
+"""
+Txt Xpander - Windows system tray snippet expander.
+Version: 2.7
 
-IMPORTANTE: Este programa captura entrada de teclado apenas para expandir
-snippets de texto (atalhos), similar ao TextExpander. Não armazena, transmite
-ou registra teclas digitadas. Todo o processamento é local.
+IMPORTANT: This program captures keyboard input only to expand text
+snippets (shortcuts), similar to TextExpander. It does not store,
+transmit, or log keystrokes. All processing is local.
 
-Bibliotecas usadas: 
-- pynput (open source, LGPL, mantida desde 2015)
+Libraries used:
+- pynput (open source, LGPL)
 - pystray (open source, LGPL)
 - pillow (open source, PIL License)
 - yfinance (open source, Apache 2.0)
@@ -20,7 +19,6 @@ import sys
 import shutil
 import ctypes
 import subprocess
-import threading
 import webbrowser
 
 os.environ.setdefault("PYSTRAY_BACKEND", "win32")
@@ -82,7 +80,7 @@ from gui_support import (
     iter_filtered_mapping_items,
 )
 
-# GUI para gerenciar snippets
+# GUI for managing snippets
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog, font as tkfont
 
@@ -146,20 +144,18 @@ class TextExpander:
         self.text_inserter = TextInserter(self.keyboard_controller, logger=self.logger)
         self.notification_timestamps = {}
         self.notification_history = []
-        self._manager_lock = threading.Lock()
-        self._manager_open = False
 
-        # Dados do usuario ficam ao lado do executavel; recursos empacotados podem viver em _internal.
+        # User data lives beside the executable; bundled resources may live in _internal.
         self.base_dir = get_runtime_base_dir()
         self.resource_dir = get_runtime_resource_dir()
         self.snippets_file = os.path.join(self.base_dir, snippets_file)
         self.ensure_seed_snippets_file(snippets_file)
         self.logger.info(f"➡ Arquivo de snippets configurado para: {self.snippets_file}")
 
-        # Inicializa o consultor de ações B3/US
+        # Initialize the B3/US stock data consultor
         self.b3_consultor = B3FundamentosConsultor(cache_seconds=600)
         
-        # Snippets de ações (lentos: pedem ticker + consulta)
+        # Stock snippets (slow: they prompt for a ticker and fetch data)
         self.slow_snippets = {
             "xcot", "xplucro", "xcap", "xpvp", "xdy",
             "xebt", "xmarg", "xroe", "xdivl", "xdivt",
@@ -167,16 +163,16 @@ class TextExpander:
             "xfund", "xwapp", "xlwapp", "xpwapp"
         }
 
-        # Carrega snippets antes de qualquer outra coisa
+        # Load snippets before anything else
         self.snippets = self.load_snippets()
         self.refresh_runtime_indexes()
     
     # =====================================================================
-    # CARREGAMENTO E SALVAMENTO DE SNIPPETS
+    # SNIPPET LOADING AND SAVING
     # =====================================================================
 
     def is_admin(self):
-        """Verifica se o programa está rodando como administrador"""
+        """Check whether the program is running as administrator."""
         try:
             return ctypes.windll.shell32.IsUserAnAdmin()
         except Exception:
@@ -206,7 +202,7 @@ class TextExpander:
         return None
     
     def load_snippets(self):
-        """Carrega snippets do arquivo JSON e adiciona os dinâmicos"""
+        """Load snippets from the JSON file and add the dynamic ones."""
         self.logger.info(f"➡ Usando arquivo de snippets: {os.path.abspath(self.snippets_file)}")
 
         if os.path.exists(self.snippets_file):
@@ -225,10 +221,10 @@ class TextExpander:
             static_snippets = self.get_default_snippets()
             self.save_snippets(static_snippets)
         
-        # Adiciona snippets dinâmicos
+        # Add dynamic snippets
         dynamic_snippets = self.get_dynamic_snippets()
         
-        # Mescla: snippets do JSON + dinâmicos (dinâmicos têm prioridade)
+        # Merge: JSON snippets + dynamic ones (dynamic take priority)
         all_snippets = merge_snippets(static_snippets, dynamic_snippets)
         
         self.logger.info(f"✓ Total de snippets: {len(all_snippets)} ({len(static_snippets)} estáticos + {len(dynamic_snippets)} dinâmicos)")
@@ -236,11 +232,11 @@ class TextExpander:
         return all_snippets
     
     def get_default_snippets(self):
-        """Retorna snippets padrão de exemplo (apenas estáticos para o JSON)"""
+        """Return default example snippets (static only, for the JSON file)."""
         return get_static_default_snippets()
     
     def save_snippets(self, snippets: dict):
-        """Salva apenas snippets estáticos no arquivo JSON"""
+        """Save only static snippets to the JSON file."""
         saveable = build_saveable_snippets(snippets)
         try:
             write_json_atomic(self.snippets_file, saveable)
@@ -249,11 +245,11 @@ class TextExpander:
             self.logger.error(f"Erro ao salvar snippets: {e}")
 
     # =====================================================================
-    # UTILITÁRIOS DE DATA / TEXTO / INPUT
+    # DATE / TEXT / INPUT UTILITIES
     # =====================================================================
 
     def data_extenso(self):
-        """Retorna a data por extenso em português"""
+        """Return the date written out in Portuguese."""
         dias = ['segunda-feira', 'terça-feira', 'quarta-feira', 
                 'quinta-feira', 'sexta-feira', 'sábado', 'domingo']
         meses = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho',
@@ -269,17 +265,17 @@ class TextExpander:
     
     def ask_ticker_input(self, prompt_title: str):
         """
-        Pede o ticker usando VBScript (nativo do Windows).
-        Roda bem em thread separada.
+        Ask for the ticker using VBScript (native to Windows).
+        Runs fine in a separate thread.
         """
         print(f"📊 Abrindo input para {prompt_title}...")
         
         try:
-            # Script VBS
+            # VBS script
             vbs_script = f'''userInput = InputBox("Digite o ticker:" & vbCrLf & "Ex: PETR4, AAPL, MSFT", "{prompt_title}", "")
 If userInput <> "" Then WScript.Echo userInput'''
 
-            # Tenta via mshta
+            # Try via mshta
             result = subprocess.run(
                 ['mshta', 'vbscript:Execute("' + vbs_script.replace('"', '""') + '(Close)")'],
                 capture_output=True,
@@ -289,7 +285,7 @@ If userInput <> "" Then WScript.Echo userInput'''
             )
             
             if not result.stdout.strip():
-                # Fallback via arquivo VBS + cscript
+                # Fallback via VBS file + cscript
                 vbs_file = os.path.join(os.environ.get('TEMP', '.'), 'txtexp_input.vbs')
                 with open(vbs_file, 'w', encoding='utf-8') as f:
                     f.write(vbs_script)
@@ -447,22 +443,24 @@ If userInput <> "" Then WScript.Echo userInput'''
         return False, "; ".join(errors)
 
     # =====================================================================
-    # SNIPPETS DINÂMICOS (datas, BCB, ações)
+    # DYNAMIC SNIPPETS (dates, BCB, stocks)
     # =====================================================================
 
     def get_dynamic_snippets(self):
-        """Retorna snippets dinâmicos (data/hora/BCB/ações) que não vão para o JSON"""
+        """Return dynamic snippets (date/time/BCB/stocks) that are not persisted to JSON."""
         bcb = BCBConsultor(timeout=3, cache_seconds=300)
         
         return {
-            # Data e hora - expandem instantaneamente
+            # Date and time - expand instantly
             "x-hj": lambda: time.strftime("%Y-%m-%d"),
             "xhj": lambda: time.strftime("%d/%m/%Y"),
             "xhoje": self.data_extenso,
             "xnow": lambda: time.strftime("%H:%M:%S"),
             "xdatahora": lambda: time.strftime("%d/%m/%Y às %H:%M"),
             
-            # Indicadores econômicos (Banco Central)
+            # ceiling: BCB callables are not in slow_snippets, so they run on the keyboard
+            # listener thread and block typing for up to ~15s on a cache miss; route them
+            # through the background path (plan phase 3, audit 2.1).
             "xdolar": bcb.get_dolar,
             "xselic": bcb.get_selic_meta,
             "xipcam": bcb.get_ipca_mensal,
@@ -471,7 +469,7 @@ If userInput <> "" Then WScript.Echo userInput'''
             "xptax": bcb.get_ptax_sgs,
             "xeconomia": bcb.get_resumo_economico,
             
-            # Snippets de ações (tratados como lentos no listener)
+            # Stock snippets (treated as slow in the listener)
             "xcot": self.snippet_cotacao,
             "xplucro": self.snippet_preco_lucro,
             "xcap": self.snippet_market_cap,
@@ -494,7 +492,7 @@ If userInput <> "" Then WScript.Echo userInput'''
         }
     
     # =====================================================================
-    # SNIPPETS DE AÇÕES (usados pelos lentos)
+    # STOCK SNIPPETS (used by the slow path)
     # =====================================================================
 
     def snippet_cotacao(self):
@@ -631,30 +629,30 @@ If userInput <> "" Then WScript.Echo userInput'''
         return self.run_whatsapp_action("xpwapp")
 
     # =====================================================================
-    # PADRÕES ESPECIAIS (cnpj/cpf/cge)
+    # SPECIAL PATTERNS (cnpj/cpf/cge)
     # =====================================================================
 
     def get_all_dynamic_prefixes(self):
-        """Retorna todos os prefixos de mapeamentos dinâmicos (padrão + customizados)"""
+        """Return all dynamic mapping prefixes (built-in + custom)."""
         return get_dynamic_prefixes(self.snippets)
 
     def check_dynamic_pattern(self, text: str):
-        """Verifica se o texto corresponde a um padrão dinâmico (cnpj/cpf/cge/customizados)"""
+        """Check whether the text matches a dynamic pattern (cnpj/cpf/cge/custom)."""
         return resolve_dynamic_pattern(self.snippets, text)
 
     # =====================================================================
-    # EXPANSÃO DE SNIPPETS
+    # SNIPPET EXPANSION
     # =====================================================================
 
     def expand_snippet(self, trigger: str):
         """
-        Expande o snippet correspondente ao trigger (versão original).
-        Usado para snippets "normais" (não lentos).
+        Expand the snippet matching the trigger.
+        Used for "normal" (non-slow) snippets.
         """
         if not self.enabled:
             return False
         
-        # Não roda snippet lento aqui (eles vão pela thread)
+        # Slow snippets are not run here (they go through the thread path)
         if trigger in self.slow_snippets:
             return False
             
@@ -713,11 +711,11 @@ If userInput <> "" Then WScript.Echo userInput'''
 
     def run_slow_snippet(self, trigger: str):
         """
-        Executa snippets 'pesados' (ações) em thread separada:
-        - abre popup
-        - consulta dados
-        - digita resultado
-        Também trata snippets estáticos com variáveis de formulário (%%campo%%).
+        Run 'heavy' snippets (stocks) in a separate thread:
+        - open a popup
+        - fetch the data
+        - type the result
+        Also handles static snippets with form-fill variables (%%campo%%).
         """
         try:
             func = self.snippets.get(trigger)
@@ -928,10 +926,10 @@ If userInput <> "" Then WScript.Echo userInput'''
         self.notify_status("Text Expander iniciado com sucesso.", key="startup")
 
     # =====================================================================
-    # LISTENER DE TECLADO
+    # KEYBOARD LISTENER
     # =====================================================================
     def on_press(self, key):
-        """Callback chamado quando uma tecla é pressionada - VERSÃO ATUALIZADA"""
+        """Callback invoked when a key is pressed."""
         try:
             if hasattr(key, 'char') and key.char:
                 self.typed_text += key.char
@@ -941,7 +939,7 @@ If userInput <> "" Then WScript.Echo userInput'''
                 
                 expanded = False
 
-                # 1) Snippets diretos
+                # 1) Direct snippets
                 trigger = find_direct_trigger(self.typed_text, self.trigger_index)
                 if trigger:
                     needs_slow = trigger in self.slow_snippets
@@ -963,7 +961,7 @@ If userInput <> "" Then WScript.Echo userInput'''
                         self.typed_text = ""
                         expanded = True
                 
-                # 2) Padrões dinâmicos (ATUALIZADO para pegar prefixes customizados)
+                # 2) Dynamic patterns (including custom prefixes)
                 if not expanded:
                     potential_trigger, result = find_dynamic_trigger(self.snippets, self.typed_text, self.trigger_index)
                     if result is not None:
@@ -977,11 +975,11 @@ If userInput <> "" Then WScript.Echo userInput'''
                 self.typed_text = self.typed_text[:-1]
 
     # =====================================================================
-    # GUI PARA GERENCIAR SNIPPETS
+    # SNIPPET MANAGEMENT GUI
     # =====================================================================
 
     def manage_snippets_gui(self, icon, item):
-        """Abre GUI completa para gerenciar snippets estáticos e mapeamentos dinâmicos."""
+        """Open the full GUI for managing static snippets and dynamic mappings."""
         hwnd = ctypes.windll.user32.FindWindowW(None, "Txt Xpander - Gerenciador de Snippets")
         if hwnd:
             ctypes.windll.user32.ShowWindow(hwnd, 9)  # SW_RESTORE
@@ -990,7 +988,7 @@ If userInput <> "" Then WScript.Echo userInput'''
         self.task_runner.start(self._manage_snippets_gui_thread, name="manage-snippets-gui")
 
     def _manage_snippets_gui_thread(self):
-        """Thread que roda a janela tkinter de gerenciamento completo."""
+        """Thread that runs the full management tkinter window."""
         try:
             root = tk.Tk()
             root.title("Txt Xpander - Gerenciador de Snippets")
@@ -1070,8 +1068,6 @@ If userInput <> "" Then WScript.Echo userInput'''
                 key="gui-open-error",
                 cooldown_seconds=5,
             )
-        finally:
-            self._manager_open = False
 
     def _set_window_icon(self, window):
         icon_path = self.resolve_resource_path("txt_xpander.ico")
@@ -1375,7 +1371,7 @@ If userInput <> "" Then WScript.Echo userInput'''
         update_status()
         return update_status
     def _create_static_snippets_tab(self, parent, root):
-        """Cria a interface da aba de snippets estáticos."""
+        """Build the static snippets tab UI."""
 
         main = tk.Frame(parent, bg="#F4F6FA", padx=14, pady=14)
         main.pack(fill=tk.BOTH, expand=True)
@@ -1517,7 +1513,7 @@ If userInput <> "" Then WScript.Echo userInput'''
         search_entry.focus_set()
 
     def _create_dynamic_mappings_tab(self, parent, root):
-        """Cria interface de mapeamentos dinâmicos com tipos customizáveis."""
+        """Build the dynamic mappings UI with customizable types."""
 
         main = tk.Frame(parent, bg="#F4F6FA", padx=14, pady=14)
         main.pack(fill=tk.BOTH, expand=True)
@@ -1865,7 +1861,7 @@ If userInput <> "" Then WScript.Echo userInput'''
         self._bind_mousewheel_descendants(inner, canvas)
 
     def _create_datetime_eco_tab(self, parent):
-        """Cria aba de referência para snippets de Data/Hora e Indicadores Econômicos."""
+        """Build the reference tab for Date/Time and Economic Indicator snippets."""
         self._create_reference_tab(
             parent,
             "Snippets dinâmicos de data e economia",
@@ -1878,7 +1874,7 @@ If userInput <> "" Then WScript.Echo userInput'''
         )
 
     def _create_stocks_tab(self, parent):
-        """Cria aba de referência para snippets de ações (B3 e US)."""
+        """Build the reference tab for stock snippets (B3 and US)."""
         self._create_reference_tab(
             parent,
             "Snippets de ações e fundamentos",
@@ -1888,7 +1884,7 @@ If userInput <> "" Then WScript.Echo userInput'''
         )
 
     def _create_whatsapp_tab(self, parent):
-        """Cria aba de referência para o atalho do WhatsApp."""
+        """Build the reference tab for the WhatsApp shortcut."""
         self._create_reference_tab(
             parent,
             "Atalho de WhatsApp",
@@ -1902,7 +1898,7 @@ If userInput <> "" Then WScript.Echo userInput'''
     # =====================================================================
 
     def create_icon_image(self):
-        """Cria um ícone moderno para o system tray."""
+        """Create a modern icon for the system tray."""
         size = 64
 
         if self.enabled:
@@ -1946,7 +1942,7 @@ If userInput <> "" Then WScript.Echo userInput'''
         return self.create_icon_image()
 
     def toggle_enabled(self, icon, item):
-        """Ativa/desativa a expansão de snippets"""
+        """Enable/disable snippet expansion."""
         self.enabled = not self.enabled
         icon.icon = self.load_tray_icon()
         status = "ativada" if self.enabled else "desativada"
@@ -1954,7 +1950,7 @@ If userInput <> "" Then WScript.Echo userInput'''
     
     
     def reload_snippets(self, icon, item):
-        """Recarrega os snippets do arquivo"""
+        """Reload snippets from the file."""
         try:
             self.snippets = self.load_snippets()
             self.refresh_runtime_indexes()
@@ -1966,20 +1962,20 @@ If userInput <> "" Then WScript.Echo userInput'''
                 cooldown_seconds=5,
             )
     def quit_app(self, icon, item):
-        """Encerra o aplicativo"""
+        """Quit the application."""
         self.enabled = False
         if self.listener:
             self.listener.stop()
         icon.stop()
     
     def run_keyboard_listener(self):
-        """Executa o listener do teclado em thread separada"""
+        """Run the keyboard listener in a separate thread."""
         self.listener = keyboard.Listener(on_press=self.on_press)
         self.listener.start()
         self.listener.join()
     
     def run(self):
-        """Inicia o programa com system tray"""
+        """Start the program with the system tray."""
         print("=" * 60)
         print("          TEXT EXPANDER - EXPANSOR DE SNIPPETS")
         print("=" * 60)
@@ -2038,7 +2034,7 @@ If userInput <> "" Then WScript.Echo userInput'''
 
 
 def main():
-    """Função principal"""
+    """Main entry point."""
     if not acquire_single_instance_mutex():
         show_already_running_message()
         return
@@ -2049,45 +2045,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

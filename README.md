@@ -4,27 +4,28 @@ Txt Xpander is a Windows text expander with a system tray app, snippet manager G
 
 ## Project Layout
 
-- [`dist\Txt Xpander\`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/dist/Txt%20Xpander): packaged app folder to run or ship.
-- [`source\`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/source): editable Python source, assets, launcher, tests, and docs.
-- [`source\docs\refactor-plan.md`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/source/docs/refactor-plan.md): refactor plan kept for future work.
+- [`dist\Txt Xpander\`](dist/Txt%20Xpander): packaged app folder to run or ship.
+- [`source\`](source): editable Python source, assets, launcher, tests, and docs.
+- [`source\docs\`](source/docs): planning notes, plus [`audit-report.md`](source/docs/audit-report.md) (full code audit) and [`improvement-plan.md`](source/docs/improvement-plan.md) (phased roadmap).
 
 ## Run The Packaged App
 
 Use the packaged build here:
 
-- [`dist\Txt Xpander\Txt Xpander.exe`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/dist/Txt%20Xpander/Txt%20Xpander.exe)
+- [`dist\Txt Xpander\Txt Xpander.exe`](dist/Txt%20Xpander/Txt%20Xpander.exe)
 
 Usage notes:
 
 1. Launch `Txt Xpander.exe`.
-2. On first launch, the app seeds `snippets.json` beside the executable and uses that file for future edits.
+2. On first launch, the app seeds `snippets.json` beside the executable and uses that file for future edits. That copy is the live user library — back it up before replacing or editing it by hand.
 3. Use the tray icon to open `Gerenciar Snippets`, reload snippets, enable or disable expansion, and quit the app.
-4. The built-in `xwapp` trigger reads a phone number from the clipboard, creates a `wa.me` link, opens it in the browser, and keeps the final link in the clipboard.
-5. The built-in `xlwapp` trigger follows the same validation flow but inserts the generated `wa.me` link into the current field and also keeps that link in the clipboard.
-6. The built-in `xpwapp` trigger skips clipboard lookup, opens the popup immediately for phone and optional message entry, then opens the browser and keeps the final link in the clipboard.
-7. If `xwapp` or `xlwapp` cannot normalize the clipboard content into a valid phone number, the app opens the same popup for manual phone and optional message entry.
-8. Before replacing the packaged folder with a newer build, close any running `Txt Xpander.exe` first.
-9. `build_release.bat` now preserves the packaged app's existing `snippets.json` automatically when updating `dist\Txt Xpander`.
+4. Expansion fires immediately on the last character of a matching trigger — there is no terminator (space/punctuation) wait.
+5. The built-in `xwapp` trigger reads a phone number from the clipboard, creates a `wa.me` link, opens it in the browser, and keeps the final link in the clipboard.
+6. The built-in `xlwapp` trigger follows the same validation flow but inserts the generated `wa.me` link into the current field and also keeps that link in the clipboard.
+7. The built-in `xpwapp` trigger skips clipboard lookup, opens the popup immediately for phone and optional message entry, then opens the browser and keeps the final link in the clipboard.
+8. If `xwapp` or `xlwapp` cannot normalize the clipboard content into a valid phone number, the app opens the same popup for manual phone and optional message entry.
+9. Before replacing the packaged folder with a newer build, close any running `Txt Xpander.exe` first.
+10. `build_release.bat` preserves the packaged app's existing `snippets.json` automatically when updating `dist\Txt Xpander`.
 
 ### Auto-start with Windows
 
@@ -32,23 +33,14 @@ To have Txt Xpander launch automatically when you sign in:
 
 1. Press **Win + R**
 2. Type `shell:startup` and press **Enter**
-3. Copy `Txt Xpander.exe` or a shortcut to it into that folder
+3. Copy a shortcut to `Txt Xpander.exe` into that folder
 4. Txt Xpander will now start automatically with Windows
 
-If you use [`build_release.bat`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/build_release.bat), it now stages the build safely, restores the previous packaged `snippets.json` automatically when `dist\Txt Xpander` already exists, and can also create or update the Startup shortcut after the build finishes.
-
-For convenience, the source launcher (`run_txt_xpander.bat`) can install itself into Startup with:
-
-```bat
-run_txt_xpander.bat install
-```
-
-This copies the batch file to your `%appdata%\Microsoft\Windows\Start Menu\Programs\Startup` folder so it runs on logon. You can remove it later by deleting the shortcut from the same location.
-
+Alternatively, [`build_release.bat`](build_release.bat) offers to create the Startup shortcut after a successful build (skipped automatically if the shortcut already exists).
 
 ## Work From Source
 
-All editable code now lives in [`source\`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/source).
+All editable code lives in [`source\`](source).
 
 Typical source workflow:
 
@@ -65,23 +57,29 @@ cd source
 pythonw txt_xpander.pyw
 ```
 
-Or use the source-side launcher:
+Or use the source-side launcher, which checks dependencies and starts the app with `pythonw`:
 
-- [`source\run_txt_xpander.bat`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/source/run_txt_xpander.bat)
+- [`source\run_txt_xpander.bat`](source/run_txt_xpander.bat)
 
 ## Build A New Packaged Release
 
-From the repo root, with `PyInstaller` installed:
+Prefer the automated script — it backs up the packaged `snippets.json`, stages the PyInstaller output, and swaps `dist\Txt Xpander` only on success:
+
+```powershell
+build_release.bat
+```
+
+The equivalent raw PyInstaller command (note: this does **not** preserve the packaged `snippets.json` — use the script for routine rebuilds):
 
 ```powershell
 python -m PyInstaller --noconfirm --clean --windowed --onedir --name "Txt Xpander" --icon source\txt_xpander.ico --add-data "source\snippets.json;." --add-data "source\txt_xpander.ico;." --hidden-import pystray._win32 source\txt_xpander.pyw
 ```
 
-This produces the shipping folder in [`dist\Txt Xpander\`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/dist/Txt%20Xpander).
+This produces the shipping folder in [`dist\Txt Xpander\`](dist/Txt%20Xpander).
 
 ## Custom Variables (`%%var%%`)
 
-Snippets can now include custom variables that are resolved at expansion time:
+Snippets can include custom variables that are resolved at expansion time:
 
 **Snippet reference** — `%%trigger%%` expands to another snippet's value:
 
@@ -108,7 +106,7 @@ aptgyn: Olá, %%nome%%,\nO apartamento está disponível em %%data%%?
 Shows a dialog asking for "Nome" and "Data" → substitutes values before inserting
 ```
 
-All three variable types can be mixed in a single snippet. The snippet manager has three new toolbar buttons:
+All three variable types can be mixed in a single snippet. The snippet manager has three toolbar buttons for them:
 
 - `%%s` — insert a snippet reference (searchable picker)
 - `%%cb` — insert clipboard-paste variable
@@ -118,17 +116,18 @@ All three variable types can be mixed in a single snippet. The snippet manager h
 
 Main source files:
 
-- [`source\txt_xpander.pyw`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/source/txt_xpander.pyw): main Windows app, tray, listener, GUI, notifications.
-- [`source\variable_support.py`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/source/variable_support.py): `%%var%%` parsing and resolution (snippet refs, clipboard, form fields).
-- [`source\runtime_support.py`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/source/runtime_support.py): clipboard insertion, logging helpers, background task support.
-- [`source\rich_text_support.py`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/source/rich_text_support.py): rich-text editing and clipboard payload generation.
-- [`source\snippet_utils.py`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/source/snippet_utils.py): snippet loading, validation, atomic persistence.
-- [`source\trigger_index.py`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/source/trigger_index.py): compiled trigger matching.
-- [`source\gui_support.py`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/source/gui_support.py): GUI reference/filter helpers.
-- [`source\whatsapp_runtime_support.py`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/source/whatsapp_runtime_support.py): shared runtime flow for built-in WhatsApp actions.
-- [`source\bcb_consultor.py`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/source/bcb_consultor.py): Banco Central data lookups.
-- [`source\yf_stocks.py`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/source/yf_stocks.py): stock and fundamentals lookups.
-- [`source\tests\`](/C:/Users/example/.codex/worktrees/5aec/txt_xpander/source/tests): regression tests.
+- [`source\txt_xpander.pyw`](source/txt_xpander.pyw): main Windows app, tray, listener, GUI, notifications.
+- [`source\variable_support.py`](source/variable_support.py): `%%var%%` parsing and resolution (snippet refs, clipboard, form fields).
+- [`source\runtime_support.py`](source/runtime_support.py): clipboard insertion, logging helpers, background task support.
+- [`source\rich_text_support.py`](source/rich_text_support.py): rich-text editing and clipboard payload generation.
+- [`source\snippet_utils.py`](source/snippet_utils.py): snippet loading, validation, atomic persistence.
+- [`source\trigger_index.py`](source/trigger_index.py): compiled trigger matching.
+- [`source\gui_support.py`](source/gui_support.py): GUI reference/filter helpers.
+- [`source\whatsapp_support.py`](source/whatsapp_support.py): phone number normalization and `wa.me` URL building.
+- [`source\whatsapp_runtime_support.py`](source/whatsapp_runtime_support.py): shared runtime flow for built-in WhatsApp actions.
+- [`source\bcb_consultor.py`](source/bcb_consultor.py): Banco Central data lookups.
+- [`source\yf_stocks.py`](source/yf_stocks.py): stock and fundamentals lookups.
+- [`source\tests\`](source/tests): regression tests.
 
 ## Release Notes
 
@@ -165,6 +164,5 @@ Main source files:
 - Fixed packaged startup so the app seeds and uses `snippets.json` beside the executable.
 - Fixed the packaged tray icon and tray-backed notifications.
 - Switched snippet insertion to clipboard-first behavior for better multiline and chat-app reliability.
-- Added rich-text snippet support with formatting controls in the snippet manager.
 - Added `x-hj` as the ISO date snippet.
 - Improved the snippet manager layout, resize behavior, search/filtering, and notification history access.

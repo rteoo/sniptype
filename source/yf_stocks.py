@@ -1,49 +1,49 @@
 """
-Text Expander - Módulo de consulta de dados fundamentalistas de ações B3
-Usa a biblioteca yfinance (https://github.com/ranaroussi/yfinance)
-Biblioteca consolidada e amplamente usada pela comunidade
+Text Expander - B3 stock fundamentals lookup module
+Uses the yfinance library (https://github.com/ranaroussi/yfinance)
+A mature library widely used by the community
 
-Instalação: pip install yfinance
+Installation: pip install yfinance
 """
 
 import yfinance as yf
 from datetime import datetime
 
 class B3FundamentosConsultor:
-    """Classe para consultar dados fundamentalistas de ações B3 e US via yfinance"""
+    """Class for querying B3 and US stock fundamentals via yfinance."""
     
     
     def __init__(self, cache_seconds=600):
         """
-        Inicializa o consultor
+        Initialize the consultor
         
         Args:
-            cache_seconds: Tempo de cache dos dados (segundos) - padrão 10 minutos
+            cache_seconds: Data cache duration (seconds) - default 10 minutes
         """
         self.cache_seconds = cache_seconds
         self._cache = {}
     
     def _format_ticker(self, ticker):
         """
-        Formata o ticker para o padrão correto
-        - Ações brasileiras: adiciona .SA se tiver números (ex: PETR4 -> PETR4.SA)
-        - Ações americanas: usa direto (ex: AAPL, MSFT, GOOGL)
+        Format the ticker to the correct standard
+        - Brazilian stocks: append .SA when it contains digits (e.g. PETR4 -> PETR4.SA)
+        - US stocks: use as-is (e.g. AAPL, MSFT, GOOGL)
         """
         ticker = ticker.upper().strip()
         
-        # Remove .SA se já existir
+        # Already suffixed with .SA: use as-is
         if ticker.endswith('.SA'):
             return ticker
         
-        # Se contém números, é ação brasileira (adiciona .SA)
+        # If it contains digits, it's a Brazilian stock (append .SA)
         if any(char.isdigit() for char in ticker):
             return ticker + '.SA'
         
-        # Senão, é ação americana (usa direto)
+        # Otherwise it's a US stock (use as-is)
         return ticker
     
     def _get_cached_or_fetch(self, key, fetch_func):
-        """Retorna dados do cache ou busca novos se expirado"""
+        """Return cached data, or fetch fresh data if expired."""
         now = datetime.now()
         
         if key in self._cache:
@@ -56,13 +56,13 @@ class B3FundamentosConsultor:
             self._cache[key] = (data, now)
             return data
         except Exception as e:
-            # Se falhar, tenta usar cache antigo
+            # On failure, fall back to the stale cache
             if key in self._cache:
                 return self._cache[key][0]
             return f"[Erro: {str(e)}]"
     
     def _get_ticker_object(self, ticker):
-        """Retorna objeto Ticker do yfinance com cache"""
+        """Return a cached yfinance Ticker object."""
         ticker_fmt = self._format_ticker(ticker)
         cache_key = f"{ticker_fmt}_obj"
         
@@ -72,11 +72,11 @@ class B3FundamentosConsultor:
         return self._get_cached_or_fetch(cache_key, fetch)
     
     def _format_currency(self, value, ticker_info=None):
-        """Formata valor em moeda abreviada (R$ para BR, $ para US) com locale correto."""
+        """Format a value as abbreviated currency (R$ for BR, $ for US) with the correct locale."""
         if value is None or value == 'N/A':
             return "N/A"
         try:
-            # Detecta moeda
+            # Detect currency
             currency = "R$"
             if ticker_info and self._safe_get(ticker_info, 'currency') == 'USD':
                 currency = "$"
@@ -84,7 +84,7 @@ class B3FundamentosConsultor:
             num = float(value)
             suffix = ""
 
-            # Define escala (B / M / normal)
+            # Set the scale (B / M / plain)
             if abs(num) >= 1_000_000_000:
                 num = num / 1_000_000_000
                 suffix = " B"
@@ -93,12 +93,12 @@ class B3FundamentosConsultor:
                 suffix = " M"
 
             if currency == "R$":
-                # Formato brasileiro: vírgula decimal, ponto de milhar
-                formatted = f"{num:,.1f}"  # 1 casa decimal, ex: 421,5
+                # Brazilian format: decimal comma, thousands dot
+                formatted = f"{num:,.1f}"  # 1 decimal place, e.g. 421,5
                 formatted = formatted.replace(',', '_').replace('.', ',').replace('_', '.')
                 return f"{currency} {formatted}{suffix}"
             else:
-                # Formato US: ponto decimal, vírgula de milhar
+                # US format: decimal point, thousands comma
                 formatted = f"{num:,.1f}"
                 return f"{currency} {formatted}{suffix}"
 
@@ -107,33 +107,33 @@ class B3FundamentosConsultor:
 
     
     def _format_number(self, value, decimals=2, currency="BRL"):
-        """Formata número genérico com separador adequado (vírgula BR, ponto EUA)."""
+        """Format a generic number with the proper separator (comma for BR, point for US)."""
         if value is None or value == 'N/A':
             return "N/A"
         try:
             formatted = f"{value:.{decimals}f}"
 
             if currency == "USD":
-                return formatted  # mantém 278.78
+                return formatted  # keeps 278.78
 
             # default -> BRL
             return formatted.replace('.', ',')
-        except:
+        except Exception:
             return "N/A"
 
     
     def _safe_get(self, data, key, default=None):
-        """Obtém valor de forma segura do dicionário"""
+        """Safely get a value from the dictionary."""
         try:
             value = data.get(key, default)
             if value is None or (isinstance(value, float) and value != value):  # NaN check
                 return default
             return value
-        except:
+        except Exception:
             return default
     
     def get_cotacao_atual(self, ticker):
-        """Retorna cotação atual da ação"""
+        """Return the stock's current quote."""
         def fetch():
             try:
                 ticker_obj = self._get_ticker_object(ticker)
@@ -153,7 +153,7 @@ class B3FundamentosConsultor:
         return self._get_cached_or_fetch(cache_key, fetch)
     
     def get_market_cap(self, ticker):
-        """Retorna Market Cap (Valor de Mercado)"""
+        """Return Market Cap (market value)."""
         def fetch():
             try:
                 ticker_obj = self._get_ticker_object(ticker)
@@ -163,7 +163,7 @@ class B3FundamentosConsultor:
                 if mcap:
                     return f"Market Cap {ticker}: {self._format_currency(mcap, info)}"
                 return "Market Cap: N/A"
-            except:
+            except Exception:
                 return "Market Cap: N/A"
         
         ticker_fmt = self._format_ticker(ticker)
@@ -171,7 +171,7 @@ class B3FundamentosConsultor:
         return self._get_cached_or_fetch(cache_key, fetch)
     
     def get_preco_lucro(self, ticker):
-        """Retorna P/L (Preço/Lucro)"""
+        """Return P/L (price-to-earnings)."""
         def fetch():
             try:
                 ticker_obj = self._get_ticker_object(ticker)
@@ -181,7 +181,7 @@ class B3FundamentosConsultor:
                 if pl:
                     return f"P/L {ticker}: {self._format_number(pl, 2)}"
                 return "P/L: N/A"
-            except:
+            except Exception:
                 return "P/L: N/A"
         
         ticker_fmt = self._format_ticker(ticker)
@@ -189,7 +189,7 @@ class B3FundamentosConsultor:
         return self._get_cached_or_fetch(cache_key, fetch)
     
     def get_preco_vp(self, ticker):
-        """Retorna P/VP (Preço sobre Valor Patrimonial)"""
+        """Return P/VP (price-to-book)."""
         def fetch():
             try:
                 ticker_obj = self._get_ticker_object(ticker)
@@ -199,7 +199,7 @@ class B3FundamentosConsultor:
                 if pvp:
                     return f"P/VP {ticker}: {self._format_number(pvp, 2)}"
                 return "P/VP: N/A"
-            except:
+            except Exception:
                 return "P/VP: N/A"
         
         ticker_fmt = self._format_ticker(ticker)
@@ -207,7 +207,7 @@ class B3FundamentosConsultor:
         return self._get_cached_or_fetch(cache_key, fetch)
     
     def get_dividend_yield(self, ticker):
-        """Retorna Dividend Yield (%)"""
+        """Return Dividend Yield (%)."""
         def fetch():
             try:
                 ticker_obj = self._get_ticker_object(ticker)
@@ -217,7 +217,7 @@ class B3FundamentosConsultor:
                 if dy and dy > 0:
                     return f"DY {ticker}: {self._format_number(dy, 2)}%"
                 return "DY: N/A"
-            except:
+            except Exception:
                 return "DY: N/A"
         
         ticker_fmt = self._format_ticker(ticker)
@@ -225,7 +225,7 @@ class B3FundamentosConsultor:
         return self._get_cached_or_fetch(cache_key, fetch)
     
     def get_ebitda(self, ticker):
-        """Retorna EBITDA"""
+        """Return EBITDA."""
         def fetch():
             try:
                 ticker_obj = self._get_ticker_object(ticker)
@@ -235,7 +235,7 @@ class B3FundamentosConsultor:
                 if ebitda:
                     return f"EBITDA {ticker}: {self._format_currency(ebitda, info)}"
                 return "EBITDA: N/A"
-            except:
+            except Exception:
                 return "EBITDA: N/A"
         
         ticker_fmt = self._format_ticker(ticker)
@@ -243,7 +243,7 @@ class B3FundamentosConsultor:
         return self._get_cached_or_fetch(cache_key, fetch)
     
     def get_margem_liquida(self, ticker):
-        """Retorna Margem Líquida"""
+        """Return net margin."""
         def fetch():
             try:
                 ticker_obj = self._get_ticker_object(ticker)
@@ -253,7 +253,7 @@ class B3FundamentosConsultor:
                 if margem:
                     return f"Margem Líq. {ticker}: {self._format_number(margem * 100, 2)}%"
                 return "Margem Líq.: N/A"
-            except:
+            except Exception:
                 return "Margem Líq.: N/A"
         
         ticker_fmt = self._format_ticker(ticker)
@@ -261,7 +261,7 @@ class B3FundamentosConsultor:
         return self._get_cached_or_fetch(cache_key, fetch)
     
     def get_roe(self, ticker):
-        """Retorna ROE (Return on Equity)"""
+        """Return ROE (Return on Equity)."""
         def fetch():
             try:
                 ticker_obj = self._get_ticker_object(ticker)
@@ -271,7 +271,7 @@ class B3FundamentosConsultor:
                 if roe:
                     return f"ROE {ticker}: {self._format_number(roe * 100, 2)}%"
                 return "ROE: N/A"
-            except:
+            except Exception:
                 return "ROE: N/A"
         
         ticker_fmt = self._format_ticker(ticker)
@@ -279,7 +279,7 @@ class B3FundamentosConsultor:
         return self._get_cached_or_fetch(cache_key, fetch)
     
     def get_divida_total(self, ticker):
-        """Retorna Dívida Total"""
+        """Return total debt."""
         def fetch():
             try:
                 ticker_obj = self._get_ticker_object(ticker)
@@ -297,7 +297,7 @@ class B3FundamentosConsultor:
         return self._get_cached_or_fetch(cache_key, fetch)
 
     def get_caixa(self, ticker):
-        """Retorna Caixa (Total Cash)"""
+        """Return cash (Total Cash)."""
         def fetch():
             try:
                 ticker_obj = self._get_ticker_object(ticker)
@@ -315,7 +315,7 @@ class B3FundamentosConsultor:
         return self._get_cached_or_fetch(cache_key, fetch)
 
     def get_divida_liquida(self, ticker):
-        """Retorna Dívida Líquida (Dívida Total - Caixa)"""
+        """Return net debt (total debt - cash)."""
         def fetch():
             try:
                 ticker_obj = self._get_ticker_object(ticker)
@@ -326,7 +326,7 @@ class B3FundamentosConsultor:
                 if divida_total is not None and caixa is not None:
                     div_liquida = divida_total - caixa
                     return f"Dív. Líq. {ticker}: {self._format_currency(div_liquida, info)}"
-                # Se só tiver dívida, ainda podemos retornar algo útil
+                # If we only have the debt, we can still return something useful
                 if divida_total is not None:
                     return f"Dív. Líq. {ticker}: {self._format_currency(divida_total, info)} (sem caixa)"
                 return "Dív. Líq.: N/A"
@@ -338,7 +338,7 @@ class B3FundamentosConsultor:
         return self._get_cached_or_fetch(cache_key, fetch)
     
     def get_receita_liquida(self, ticker):
-        """Retorna Receita Líquida (Revenue)"""
+        """Return net revenue."""
         def fetch():
             try:
                 ticker_obj = self._get_ticker_object(ticker)
@@ -348,7 +348,7 @@ class B3FundamentosConsultor:
                 if receita:
                     return f"Receita Líq. {ticker}: {self._format_currency(receita, info)}"
                 return "Receita Líq.: N/A"
-            except:
+            except Exception:
                 return "Receita Líq.: N/A"
         
         ticker_fmt = self._format_ticker(ticker)
@@ -356,7 +356,7 @@ class B3FundamentosConsultor:
         return self._get_cached_or_fetch(cache_key, fetch)
     
     def get_beta(self, ticker):
-        """Retorna Beta (Volatilidade em relação ao mercado)"""
+        """Return Beta (volatility relative to the market)."""
         def fetch():
             try:
                 ticker_obj = self._get_ticker_object(ticker)
@@ -364,7 +364,7 @@ class B3FundamentosConsultor:
                 beta = self._safe_get(info, 'beta')
                 
                 if beta:
-                    # Interpretação do Beta
+                    # Beta interpretation
                     if beta < 1:
                         interpretacao = "(menos volátil que o mercado)"
                     elif beta == 1:
@@ -374,7 +374,7 @@ class B3FundamentosConsultor:
                     
                     return f"Beta {ticker}: {self._format_number(beta, 2)} {interpretacao}"
                 return "Beta: N/A"
-            except:
+            except Exception:
                 return "Beta: N/A"
         
         ticker_fmt = self._format_ticker(ticker)
@@ -382,7 +382,7 @@ class B3FundamentosConsultor:
         return self._get_cached_or_fetch(cache_key, fetch)
     
     def get_52week_high_low(self, ticker):
-        """Retorna Máxima e Mínima de 52 semanas"""
+        """Return the 52-week high and low."""
         def fetch():
             try:
                 ticker_obj = self._get_ticker_object(ticker)
@@ -398,7 +398,7 @@ class B3FundamentosConsultor:
                     resultado += f"Mín {symbol} {self._format_number(low_52, 2, currency)} | "
                     resultado += f"Máx {symbol} {self._format_number(high_52, 2, currency)}"
                     
-                    # Calcula distância da máxima/mínima se tiver preço atual
+                    # Compute distance from the high/low when the current price is available
                     if preco_atual:
                         variacao_max = ((preco_atual - high_52) / high_52) * 100
                         variacao_min = ((preco_atual - low_52) / low_52) * 100
@@ -410,7 +410,7 @@ class B3FundamentosConsultor:
                     
                     return resultado
                 return "52 Semanas: N/A"
-            except:
+            except Exception:
                 return "52 Semanas: N/A"
         
         ticker_fmt = self._format_ticker(ticker)
@@ -418,7 +418,7 @@ class B3FundamentosConsultor:
         return self._get_cached_or_fetch(cache_key, fetch)
     
     def get_volume_medio(self, ticker):
-        """Retorna Volume Médio Diário"""
+        """Return the average daily volume."""
         def fetch():
             try:
                 ticker_obj = self._get_ticker_object(ticker)
@@ -431,7 +431,7 @@ class B3FundamentosConsultor:
                     else:
                         return f"Vol. Médio {ticker}: {volume:,.0f}".replace(',', '.')
                 return "Vol. Médio: N/A"
-            except:
+            except Exception:
                 return "Vol. Médio: N/A"
         
         ticker_fmt = self._format_ticker(ticker)
@@ -439,7 +439,7 @@ class B3FundamentosConsultor:
         return self._get_cached_or_fetch(cache_key, fetch)
     
     def get_resumo_fundamentos(self, ticker):
-        """Resumo completo dos fundamentos com emojis"""
+        """Full fundamentals summary with emojis."""
         def fetch():
             try:
                 ticker_obj = self._get_ticker_object(ticker)
@@ -449,7 +449,7 @@ class B3FundamentosConsultor:
                 currency = self._safe_get(info, 'currency', 'BRL')
                 symbol = "R$" if currency == 'BRL' else "$"
 
-                # Cotação
+                # Quote
                 preco = (self._safe_get(info, 'currentPrice')
                             or self._safe_get(info, 'regularMarketPrice'))
                 preco_str = f"{symbol} {self._format_number(preco, 2, currency)}" if preco else "N/A"
@@ -472,7 +472,7 @@ class B3FundamentosConsultor:
                 mcap = self._safe_get(info, 'marketCap')
                 mcap_str = self._format_currency(mcap, info) if mcap else "N/A"
 
-                # Receita Líquida
+                # Net revenue
                 receita = self._safe_get(info, 'totalRevenue')
                 receita_str = self._format_currency(receita, info) if receita else "N/A"
 
@@ -480,12 +480,12 @@ class B3FundamentosConsultor:
                 ebitda = self._safe_get(info, 'ebitda')
                 ebitda_str = self._format_currency(ebitda, info) if ebitda else "N/A"
 
-                # Lucro Líquido
+                # Net income
                 lucro = (self._safe_get(info, 'netIncomeToCommon')
                             or self._safe_get(info, 'netIncome'))
                 lucro_str = self._format_currency(lucro, info) if lucro else "N/A"
 
-                # Margem Líquida
+                # Net margin
                 margem = self._safe_get(info, 'profitMargins')
                 margem_str = f"{self._format_number(margem * 100, 2, currency)}%" if margem else "N/A"
 
@@ -506,7 +506,7 @@ class B3FundamentosConsultor:
                 roe = self._safe_get(info, 'returnOnEquity')
                 roe_str = f"{self._format_number(roe * 100, 2, currency)}%" if roe else "N/A"
 
-                # Dívida total, líquida e caixa
+                # Total debt, net debt and cash
                 div_total = self._safe_get(info, 'totalDebt')
                 div_total_str = self._format_currency(div_total, info) if div_total else "N/A"
                 
@@ -547,7 +547,7 @@ class B3FundamentosConsultor:
         return self._get_cached_or_fetch(cache_key, fetch)
 
 
-# Exemplo de uso standalone (para testes)
+# Standalone usage example (for testing)
 if __name__ == "__main__":
     print("=" * 60)
     print("TESTANDO NOVOS INDICADORES")
