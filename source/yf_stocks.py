@@ -6,8 +6,11 @@ A mature library widely used by the community
 Installation: pip install yfinance
 """
 
-import yfinance as yf
 from datetime import datetime
+
+# yfinance drags in pandas/numpy (seconds of import time, tens of MB in the build).
+# It is imported lazily inside the fetch path so app startup stays fast; these
+# snippets are occasional and already run on a background thread (audit 2.4).
 
 class B3FundamentosConsultor:
     """Class for querying B3 and US stock fundamentals via yfinance."""
@@ -67,6 +70,7 @@ class B3FundamentosConsultor:
         cache_key = f"{ticker_fmt}_obj"
         
         def fetch():
+            import yfinance as yf
             return yf.Ticker(ticker_fmt)
         
         return self._get_cached_or_fetch(cache_key, fetch)
