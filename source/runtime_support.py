@@ -48,6 +48,8 @@ CF_RTF = USER32.RegisterClipboardFormatW("Rich Text Format")
 
 class AppLogger:
     """Tiny logging wrapper so runtime output stays centralized."""
+    # ceiling: print-only, so output is lost in windowed/packaged builds; replace with
+    # file-based logging when diagnosing packaged-app failures matters (plan phase 1).
 
     def info(self, message):
         print(message)
@@ -230,6 +232,9 @@ class TextInserter:
         return True
 
     def _paste_value(self, value):
+        # ceiling: only plain text survives the save/restore round-trip; images, file lists
+        # and rich formats on the clipboard are lost on every expansion. Preserve original
+        # format handles if that loss starts to hurt (audit 2.7).
         previous_text = WindowsClipboard.get_text()
         plain_text = extract_plain_text(value)
         if not WindowsClipboard.set_content(value):
