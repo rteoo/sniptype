@@ -32,7 +32,6 @@ from bcb_consultor import BCBConsultor
 from yf_stocks import B3FundamentosConsultor
 from snippet_utils import (
     build_saveable_snippets,
-    calculate_max_trigger_length,
     calculate_max_trigger_length_with_mappings,
     get_default_snippets as get_static_default_snippets,
     get_dynamic_prefixes,
@@ -49,7 +48,35 @@ from runtime_support import (
     TextInserter,
     WindowsClipboard,
     build_snippet_failure_notification,
+    configure_logging,
+    load_notification_history,
+    save_notification_history,
     truncate_notification_text,
+    NOTIFICATION_HISTORY_LIMIT,
+)
+from backup_support import (
+    create_backup,
+    list_backups,
+    prune_backups,
+    quarantine_corrupt_file,
+    should_backup_on_startup,
+)
+from app_paths import (
+    ensure_data_dir,
+    get_backups_dir,
+    get_logs_dir,
+    get_settings_path,
+    get_snippets_path,
+    migrate_snippets,
+    needs_migration,
+)
+from settings_support import load_settings
+from validation_support import validate_trigger
+from platform_support import IS_WINDOWS, acquire_lockfile, release_lockfile
+from dynamic_registry import (
+    build_dynamic_snippets,
+    load_registry,
+    reference_entries_by_category,
 )
 from whatsapp_support import normalize_phone_number
 from whatsapp_runtime_support import execute_whatsapp_action
@@ -66,15 +93,10 @@ from rich_text_support import (
 from variable_support import (
     classify_variable,
     find_variable_names,
-    has_form_variables,
     resolve_form_variables,
     resolve_inline,
 )
 from gui_support import (
-    DATETIME_SNIPPETS,
-    ECONOMY_SNIPPETS,
-    STOCK_SNIPPETS,
-    WHATSAPP_SNIPPETS,
     center_dialog,
     filter_static_snippets,
     iter_filtered_mapping_items,
@@ -82,13 +104,20 @@ from gui_support import (
 
 # GUI for managing snippets
 import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog, font as tkfont
+from tkinter import ttk, messagebox, simpledialog, filedialog, font as tkfont
 
 
 APP_MUTEX_NAME = r"Local\TxtXpanderSingleton"
 APP_MUTEX_HANDLE = None
 ERROR_ALREADY_EXISTS = 183
 MB_ICONINFORMATION = 0x40
+
+# Extra headroom on the typed-text buffer beyond the longest known trigger, so a
+# newly added long mapping item is never truncated out before its index rebuild.
+TRIGGER_BUFFER_MARGIN = 8
+
+# Characters that end a word for opt-in terminator-gated expansion.
+TERMINATOR_CHARS = frozenset(" \t\n\r.,;:!?)]}\"'")
 
 
 def get_runtime_base_dir():
@@ -122,12 +151,11 @@ def acquire_single_instance_mutex():
 
 
 def show_already_running_message():
-    ctypes.windll.user32.MessageBoxW(
-        0,
-        "Txt Xpander já está em execução.",
-        "Txt Xpander",
-        MB_ICONINFORMATION,
-    )
+    message = "Txt Xpander já está em execução."
+    if IS_WINDOWS:
+        ctypes.windll.user32.MessageBoxW(0, message, "Txt Xpander", MB_ICONINFORMATION)
+    else:
+        print(message)
 
 
 class TextExpander:
@@ -144,24 +172,50 @@ class TextExpander:
         self.text_inserter = TextInserter(self.keyboard_controller, logger=self.logger)
         self.notification_timestamps = {}
         self.notification_history = []
+        self.pending_notifications = []
 
-        # User data lives beside the executable; bundled resources may live in _internal.
+        # User data lives in a stable per-user dir (~/.txt_xpander), never inside
+        # OneDrive; bundled resources may live in _internal for the frozen build.
         self.base_dir = get_runtime_base_dir()
         self.resource_dir = get_runtime_resource_dir()
-        self.snippets_file = os.path.join(self.base_dir, snippets_file)
+        self.data_dir = ensure_data_dir()
+        self.legacy_snippets_file = os.path.join(self.base_dir, snippets_file)
+        self.snippets_file = get_snippets_path(self.data_dir)
+        self.backups_dir = get_backups_dir(self.data_dir)
+        self.logs_dir = get_logs_dir(self.data_dir)
+        self.settings_file = get_settings_path(self.data_dir)
+        self.notification_history_file = os.path.join(self.data_dir, "notifications.json")
+        self.notification_history = load_notification_history(self.notification_history_file)
+        self.settings = load_settings(self.settings_file)
+        # Opt-in: expand only after a terminator (space/punctuation). Default off
+        # to preserve the existing expand-on-last-character muscle memory.
+        self.terminator_mode = bool(self.settings.get("terminator_mode", False))
+        configure_logging(self.logs_dir)
+        self.migrate_legacy_data()
         self.ensure_seed_snippets_file(snippets_file)
+        self.logger.info(f"➡ Diretório de dados: {self.data_dir}")
         self.logger.info(f"➡ Arquivo de snippets configurado para: {self.snippets_file}")
+        self.backup_on_startup()
 
-        # Initialize the B3/US stock data consultor
-        self.b3_consultor = B3FundamentosConsultor(cache_seconds=600)
-        
-        # Stock snippets (slow: they prompt for a ticker and fetch data)
-        self.slow_snippets = {
-            "xcot", "xplucro", "xcap", "xpvp", "xdy",
-            "xebt", "xmarg", "xroe", "xdivl", "xdivt",
-            "xcaixa", "xvol", "xrec", "xbeta", "x52w",
-            "xfund", "xwapp", "xlwapp", "xpwapp"
-        }
+        # Providers for the JSON dynamic-snippet registry. Timeouts/TTLs are
+        # configurable via settings.json.
+        self.b3_consultor = B3FundamentosConsultor(
+            cache_seconds=self.settings.get("stock_cache_seconds", 600)
+        )
+        self.bcb = BCBConsultor(
+            timeout=self.settings.get("bcb_timeout", 3),
+            cache_seconds=self.settings.get("bcb_cache_seconds", 300),
+        )
+        # Dynamic snippets are described in dynamic_snippets.json (bundled), with an
+        # optional per-user override in the data dir. slow_snippets is derived from
+        # the registry rather than hardcoded.
+        self.dynamic_registry_file = os.path.join(self.data_dir, "dynamic_snippets.json")
+        self.dynamic_registry = load_registry(
+            self.resolve_resource_path("dynamic_snippets.json"),
+            self.dynamic_registry_file,
+            logger=self.logger,
+        )
+        self.slow_snippets = set()
 
         # Load snippets before anything else
         self.snippets = self.load_snippets()
@@ -178,6 +232,32 @@ class TextExpander:
         except Exception:
             return False
     
+    def migrate_legacy_data(self):
+        """One-time move of a legacy exe-side snippets file into the data dir.
+
+        The legacy file is copied (never moved) so it remains as an extra safety
+        copy; a backup and a tray notice follow. Idempotent: a second launch
+        finds the data-dir file already present and does nothing.
+        """
+        if not needs_migration(self.legacy_snippets_file, self.data_dir):
+            return
+        try:
+            migrated = migrate_snippets(self.legacy_snippets_file, self.data_dir)
+        except OSError as e:
+            self.logger.error(f"⚠ Falha ao migrar dados para {self.data_dir}: {e}")
+            return
+
+        self.logger.info(f"✓ Dados migrados de {self.legacy_snippets_file} para {migrated}")
+        try:
+            if create_backup(self.snippets_file, self.backups_dir):
+                prune_backups(self.backups_dir)
+        except OSError as e:
+            self.logger.warning(f"Falha ao criar backup pós-migração: {e}")
+        self.notify_deferred_status(
+            f"Dados movidos para {self.data_dir}. O arquivo antigo foi mantido como cópia.",
+            key="data-migrated",
+        )
+
     def ensure_seed_snippets_file(self, snippets_file: str):
         """Seed the user-writable snippets file from bundled defaults on first run."""
         if os.path.exists(self.snippets_file):
@@ -209,40 +289,242 @@ class TextExpander:
             try:
                 static_snippets = validate_static_snippets(load_json_file(self.snippets_file))
                 if static_snippets is None:
-                    self.logger.warning("⚠ Formato inesperado em snippets.json, usando defaults.")
-                    static_snippets = self.get_default_snippets()
-                self.logger.info(f"✓ Snippets carregados do arquivo: {len(static_snippets)} snippets")
+                    self.logger.warning("⚠ Formato inesperado em snippets.json; tentando restaurar.")
+                    static_snippets = self.recover_snippets_file("formato inválido")
+                else:
+                    self.logger.info(f"✓ Snippets carregados do arquivo: {len(static_snippets)} snippets")
             except Exception as e:
                 self.logger.error(f"⚠ Erro ao carregar snippets: {e}")
-                static_snippets = self.get_default_snippets()
-                self.save_snippets(static_snippets)
+                static_snippets = self.recover_snippets_file(str(e))
         else:
             self.logger.info("ℹ Primeira execução: criando arquivo de snippets padrão")
             static_snippets = self.get_default_snippets()
             self.save_snippets(static_snippets)
-        
+
         # Add dynamic snippets
         dynamic_snippets = self.get_dynamic_snippets()
-        
+
         # Merge: JSON snippets + dynamic ones (dynamic take priority)
         all_snippets = merge_snippets(static_snippets, dynamic_snippets)
-        
+
         self.logger.info(f"✓ Total de snippets: {len(all_snippets)} ({len(static_snippets)} estáticos + {len(dynamic_snippets)} dinâmicos)")
-        
+
         return all_snippets
-    
+
+    def recover_snippets_file(self, reason: str):
+        """Quarantine a corrupt snippets file and restore from the newest backup.
+
+        Never overwrites the bad file with defaults: the corrupt copy is renamed
+        aside for forensics, the newest backup is restored when one exists, and
+        only a truly unrecoverable state falls back to sample defaults.
+        """
+        try:
+            quarantined = quarantine_corrupt_file(self.snippets_file)
+            self.logger.error(f"⚠ snippets.json corrompido ({reason}); movido para {quarantined}")
+        except OSError as e:
+            self.logger.error(f"⚠ Não foi possível isolar snippets.json corrompido: {e}")
+
+        # Try each backup newest-first; a single unreadable backup must not skip
+        # the older valid ones (a corrupt file can be copied into a fresh backup
+        # at startup and rank newest by mtime).
+        for backup in list_backups(self.backups_dir):
+            try:
+                data = validate_static_snippets(load_json_file(backup))
+            except Exception as e:
+                self.logger.error(f"⚠ Backup inválido, tentando o próximo ({backup}): {e}")
+                continue
+            if data is not None:
+                shutil.copyfile(backup, self.snippets_file)
+                backup_name = os.path.basename(backup)
+                self.logger.info(f"✓ snippets.json restaurado do backup {backup_name}")
+                self.notify_error(
+                    f"snippets.json estava corrompido; restaurado do backup {backup_name}.",
+                    key="snippets-restored",
+                )
+                return data
+
+        self.logger.warning("⚠ Sem backup válido; usando snippets de exemplo.")
+        self.notify_error(
+            "snippets.json estava corrompido e não havia backup; usando snippets de exemplo.",
+            key="snippets-restored",
+        )
+        defaults = self.get_default_snippets()
+        self.save_snippets(defaults)
+        return defaults
+
     def get_default_snippets(self):
         """Return default example snippets (static only, for the JSON file)."""
         return get_static_default_snippets()
-    
-    def save_snippets(self, snippets: dict):
-        """Save only static snippets to the JSON file."""
+
+    def snippets_file_is_valid(self):
+        """True when the on-disk snippets file parses to a valid static dict.
+
+        Used to avoid poisoning the backup set with a corrupt file, which could
+        otherwise rank newest by mtime and defeat recovery.
+        """
+        if not os.path.exists(self.snippets_file):
+            return False
+        try:
+            return validate_static_snippets(load_json_file(self.snippets_file)) is not None
+        except Exception:
+            return False
+
+    def backup_on_startup(self):
+        """Take one backup at launch when the newest is missing or older than 24 h."""
+        try:
+            if should_backup_on_startup(self.backups_dir) and self.snippets_file_is_valid():
+                created = create_backup(self.snippets_file, self.backups_dir)
+                if created:
+                    self.logger.info(f"✓ Backup de inicialização criado: {os.path.basename(created)}")
+                    prune_backups(self.backups_dir)
+        except OSError as e:
+            self.logger.warning(f"Falha ao criar backup de inicialização: {e}")
+
+    def save_snippets(self, snippets: dict) -> bool:
+        """Save static snippets to disk, backing up the previous copy first.
+
+        Returns True on success, False on failure. A rotating backup of the
+        pre-write file is taken before the atomic replace so no save can lose an
+        earlier state.
+        """
         saveable = build_saveable_snippets(snippets)
+        try:
+            # Only back up a valid prior file, so a corrupt on-disk copy can never
+            # become the newest backup and defeat recovery.
+            if self.snippets_file_is_valid():
+                create_backup(self.snippets_file, self.backups_dir)
+                prune_backups(self.backups_dir)
+        except OSError as e:
+            self.logger.warning(f"Falha ao criar backup antes de salvar: {e}")
+
         try:
             write_json_atomic(self.snippets_file, saveable)
             self.logger.info("✓ snippets.json salvo com sucesso.")
         except Exception as e:
             self.logger.error(f"Erro ao salvar snippets: {e}")
+            return False
+
+        # Mirroring is best-effort redundancy: it must never turn a persisted
+        # save into a reported failure, so it runs after the write succeeded.
+        self.mirror_snippets_file()
+        return True
+
+    def mirror_snippets_file(self):
+        """Copy the saved file to an optional write-only mirror (e.g. a cloud dir).
+
+        Never read back from the mirror; it is redundancy only, so a failure is
+        logged but does not fail the save.
+        """
+        mirror_dir = self.settings.get("mirror_dir")
+        if not mirror_dir:
+            return
+        try:
+            os.makedirs(mirror_dir, exist_ok=True)
+            shutil.copyfile(self.snippets_file, os.path.join(mirror_dir, "snippets.json"))
+        except Exception as e:
+            # Broad guard: a bad mirror_dir value (e.g. hand-edited to a non-path)
+            # must not disturb the already-successful save.
+            self.logger.warning(f"Falha ao espelhar snippets para {mirror_dir}: {e}")
+
+    # =====================================================================
+    # BACKUP / RESTORE / EXPORT / IMPORT
+    # =====================================================================
+
+    def reload_snippets_from_disk(self):
+        """Reload the static library from disk and rebuild runtime indexes."""
+        self.snippets = self.load_snippets()
+        self.refresh_runtime_indexes()
+
+    def _backup_current_library(self):
+        """Force a backup of the current file before a destructive operation."""
+        try:
+            if self.snippets_file_is_valid() and create_backup(
+                self.snippets_file, self.backups_dir, force=True
+            ):
+                prune_backups(self.backups_dir)
+        except OSError as e:
+            self.logger.warning(f"Falha ao criar backup de segurança: {e}")
+
+    def backup_now(self):
+        """Create an explicit backup on demand. Returns the path, or None."""
+        try:
+            created = create_backup(self.snippets_file, self.backups_dir, force=True)
+            if created:
+                prune_backups(self.backups_dir)
+                self.logger.info(f"✓ Backup manual criado: {os.path.basename(created)}")
+            return created
+        except OSError as e:
+            self.logger.error(f"Falha ao criar backup manual: {e}")
+            return None
+
+    def restore_backup(self, backup_path):
+        """Replace the live library with a backup (current file backed up first).
+
+        Returns (ok, error_message).
+        """
+        try:
+            data = validate_static_snippets(load_json_file(backup_path))
+        except Exception as e:
+            return False, f"Backup inválido: {e}"
+        if data is None:
+            return False, "Backup inválido: formato inesperado."
+
+        self._backup_current_library()
+        try:
+            shutil.copyfile(backup_path, self.snippets_file)
+        except OSError as e:
+            return False, f"Falha ao restaurar: {e}"
+
+        self.mirror_snippets_file()
+        self.reload_snippets_from_disk()
+        return True, None
+
+    def export_library(self, dest_path):
+        """Copy the current library to dest_path. Returns (ok, error_message)."""
+        try:
+            shutil.copyfile(self.snippets_file, dest_path)
+            return True, None
+        except OSError as e:
+            return False, str(e)
+
+    def import_library(self, src_path, mode="replace"):
+        """Import a library file (mode 'replace' or 'merge').
+
+        Validates the source is a JSON object, backs up the current library,
+        applies the change, mirrors and reloads. Returns (ok, error_message).
+        """
+        try:
+            data = validate_static_snippets(load_json_file(src_path))
+        except Exception as e:
+            return False, f"Arquivo inválido: {e}"
+        if data is None:
+            return False, "Arquivo inválido: o JSON precisa ser um objeto."
+
+        self._backup_current_library()
+        if mode == "merge":
+            merged = {**build_saveable_snippets(self.snippets), **data}
+        else:
+            merged = data
+
+        try:
+            write_json_atomic(self.snippets_file, merged)
+        except Exception as e:
+            return False, f"Falha ao importar: {e}"
+
+        self.mirror_snippets_file()
+        self.reload_snippets_from_disk()
+        return True, None
+
+    def open_data_folder(self):
+        """Open the user data directory in the OS file manager."""
+        try:
+            os.makedirs(self.data_dir, exist_ok=True)
+            # ceiling: Windows-only shell open; a platform adapter replaces this in
+            # the cross-platform phase (audit §6). Broad guard so a click never
+            # raises out of the GUI/tray callback on other OSes.
+            os.startfile(self.data_dir)  # noqa: WPS421
+        except Exception as e:
+            self.logger.error(f"Falha ao abrir a pasta de dados: {e}")
 
     # =====================================================================
     # DATE / TEXT / INPUT UTILITIES
@@ -447,163 +729,20 @@ If userInput <> "" Then WScript.Echo userInput'''
     # =====================================================================
 
     def get_dynamic_snippets(self):
-        """Return dynamic snippets (date/time/BCB/stocks) that are not persisted to JSON."""
-        bcb = BCBConsultor(timeout=3, cache_seconds=300)
-        
-        return {
-            # Date and time - expand instantly
-            "x-hj": lambda: time.strftime("%Y-%m-%d"),
-            "xhj": lambda: time.strftime("%d/%m/%Y"),
-            "xhoje": self.data_extenso,
-            "xnow": lambda: time.strftime("%H:%M:%S"),
-            "xdatahora": lambda: time.strftime("%d/%m/%Y às %H:%M"),
-            
-            # ceiling: BCB callables are not in slow_snippets, so they run on the keyboard
-            # listener thread and block typing for up to ~15s on a cache miss; route them
-            # through the background path (plan phase 3, audit 2.1).
-            "xdolar": bcb.get_dolar,
-            "xselic": bcb.get_selic_meta,
-            "xipcam": bcb.get_ipca_mensal,
-            "xipca12": bcb.get_ipca_12m,
-            "xcdi": bcb.get_cdi,
-            "xptax": bcb.get_ptax_sgs,
-            "xeconomia": bcb.get_resumo_economico,
-            
-            # Stock snippets (treated as slow in the listener)
-            "xcot": self.snippet_cotacao,
-            "xplucro": self.snippet_preco_lucro,
-            "xcap": self.snippet_market_cap,
-            "xpvp": self.snippet_preco_vp,
-            "xdy": self.snippet_dividend_yield,
-            "xebt": self.snippet_ebitda,
-            "xmarg": self.snippet_margem_liquida,
-            "xroe": self.snippet_roe,
-            "xdivl": self.snippet_divida_liquida,
-            "xdivt": self.snippet_divida_total,
-            "xcaixa": self.snippet_caixa,
-            "xvol": self.snippet_volume_medio,
-            "xrec": self.snippet_receita_liquida,
-            "xbeta": self.snippet_beta,
-            "x52w": self.snippet_52week,
-            "xfund": self.snippet_resumo_fundamentos,
-            "xwapp": self.snippet_whatsapp,
-            "xlwapp": self.snippet_whatsapp_link,
-            "xpwapp": self.snippet_whatsapp_prompt,
-        }
-    
+        """Bind the JSON dynamic-snippet registry to provider callables.
+
+        The set of slow triggers is derived from the registry (never hardcoded),
+        so adding or disabling a trigger is a data change, not a code change.
+        """
+        snippets, slow_triggers = build_dynamic_snippets(
+            self.dynamic_registry, self, logger=self.logger
+        )
+        self.slow_snippets = slow_triggers
+        return snippets
+
     # =====================================================================
-    # STOCK SNIPPETS (used by the slow path)
+    # WHATSAPP ACTION (bound by the 'whatsapp' provider)
     # =====================================================================
-
-    def snippet_cotacao(self):
-        print("📊 Snippet xcot acionado - abrindo dialog...")
-        ticker = self.ask_ticker_input("Cotação")
-        if ticker:
-            print(f"🔍 Buscando cotação para {ticker}...")
-            result = self.b3_consultor.get_cotacao_atual(ticker)
-            print(f"✓ Resultado: {result}")
-            return result
-        return "[Cancelado]"
-    
-    def snippet_preco_lucro(self):
-        print("📊 Snippet xplucro acionado - abrindo dialog...")
-        ticker = self.ask_ticker_input("P/L")
-        if ticker:
-            return self.b3_consultor.get_preco_lucro(ticker)
-        return "[Cancelado]"
-    
-    def snippet_market_cap(self):
-        print("📊 Snippet xcap acionado - abrindo dialog...")
-        ticker = self.ask_ticker_input("Market Cap")
-        if ticker:
-            return self.b3_consultor.get_market_cap(ticker)
-        return "[Cancelado]"
-    
-    def snippet_preco_vp(self):
-        print("📊 Snippet xpvp acionado - abrindo dialog...")
-        ticker = self.ask_ticker_input("P/VP")
-        if ticker:
-            return self.b3_consultor.get_preco_vp(ticker)
-        return "[Cancelado]"
-    
-    def snippet_dividend_yield(self):
-        print("📊 Snippet xdy acionado - abrindo dialog...")
-        ticker = self.ask_ticker_input("Dividend Yield")
-        if ticker:
-            return self.b3_consultor.get_dividend_yield(ticker)
-        return "[Cancelado]"
-    
-    def snippet_ebitda(self):
-        print("📊 Snippet xebt acionado - abrindo dialog...")
-        ticker = self.ask_ticker_input("EBITDA")
-        if ticker:
-            return self.b3_consultor.get_ebitda(ticker)
-        return "[Cancelado]"
-    
-    def snippet_margem_liquida(self):
-        print("📊 Snippet xmarg acionado - abrindo dialog...")
-        ticker = self.ask_ticker_input("Margem Líquida")
-        if ticker:
-            return self.b3_consultor.get_margem_liquida(ticker)
-        return "[Cancelado]"
-    
-    def snippet_roe(self):
-        print("📊 Snippet xroe acionado - abrindo dialog...")
-        ticker = self.ask_ticker_input("ROE")
-        if ticker:
-            return self.b3_consultor.get_roe(ticker)
-        return "[Cancelado]"
-    
-    def snippet_divida_liquida(self):
-        print("📊 Snippet xdiv acionado - abrindo dialog...")
-        ticker = self.ask_ticker_input("Dívida Líquida")
-        if ticker:
-            result = self.b3_consultor.get_divida_liquida(ticker)
-            return result
-        return "[Cancelado]"
-
-    def snippet_divida_total(self):
-        print("📊 Snippet xdivt acionado - abrindo dialog...")
-        ticker = self.ask_ticker_input("Dívida Total")
-        if ticker:
-            result = self.b3_consultor.get_divida_total(ticker)
-            return result
-        return "[Cancelado]"
-
-    def snippet_caixa(self):
-        print("📊 Snippet xcaixa acionado - abrindo dialog...")
-        ticker = self.ask_ticker_input("Caixa")
-        if ticker:
-            result = self.b3_consultor.get_caixa(ticker)
-            return result
-        return "[Cancelado]"
-    
-    def snippet_volume_medio(self):
-        print("📊 Snippet xvol acionado - abrindo dialog...")
-        ticker = self.ask_ticker_input("Volume Médio")
-        if ticker:
-            return self.b3_consultor.get_volume_medio(ticker)
-        return "[Cancelado]"
-    
-    def snippet_receita_liquida(self):
-        ticker = self.ask_ticker_input("Receita Líquida")
-        return self.b3_consultor.get_receita_liquida(ticker) if ticker else "[Cancelado]"
-
-    def snippet_beta(self):
-        ticker = self.ask_ticker_input("Beta")
-        return self.b3_consultor.get_beta(ticker) if ticker else "[Cancelado]"
-
-    def snippet_52week(self):
-        ticker = self.ask_ticker_input("52 Semanas High/Low")
-        return self.b3_consultor.get_52week_high_low(ticker) if ticker else "[Cancelado]"
-    
-    def snippet_resumo_fundamentos(self):
-        print("📊 Snippet xfund acionado - abrindo dialog...")
-        ticker = self.ask_ticker_input("Resumo de Fundamentos")
-        if ticker:
-            print(f"🔍 Buscando resumo para {ticker}...")
-            return self.b3_consultor.get_resumo_fundamentos(ticker)
-        return "[Cancelado]"
 
     def run_whatsapp_action(self, trigger: str):
         """Execute one of the built-in WhatsApp actions."""
@@ -615,18 +754,6 @@ If userInput <> "" Then WScript.Echo userInput'''
             open_url=self.open_url_in_browser,
             notify_error=self.notify_error,
         )
-
-    def snippet_whatsapp(self):
-        """Generate a WhatsApp wa.me link from clipboard or manual input and open it."""
-        return self.run_whatsapp_action("xwapp")
-
-    def snippet_whatsapp_link(self):
-        """Generate a WhatsApp wa.me link from clipboard or manual input and insert it."""
-        return self.run_whatsapp_action("xlwapp")
-
-    def snippet_whatsapp_prompt(self):
-        """Prompt immediately for WhatsApp phone/message input, then open the link."""
-        return self.run_whatsapp_action("xpwapp")
 
     # =====================================================================
     # SPECIAL PATTERNS (cnpj/cpf/cge)
@@ -645,14 +772,15 @@ If userInput <> "" Then WScript.Echo userInput'''
     # =====================================================================
 
     def expand_snippet(self, trigger: str):
-        """
-        Expand the snippet matching the trigger.
-        Used for "normal" (non-slow) snippets.
+        """Produce and insert a non-slow snippet (callable, plain, or dynamic).
+
+        Runs on a worker thread; the typed trigger has already been erased by the
+        listener, so this method does not touch the keyboard buffer itself.
         """
         if not self.enabled:
             return False
-        
-        # Slow snippets are not run here (they go through the thread path)
+
+        # Slow snippets are not run here (they go through the dialog/fetch path)
         if trigger in self.slow_snippets:
             return False
             
@@ -681,18 +809,13 @@ If userInput <> "" Then WScript.Echo userInput'''
                     snippet = resolved_text
 
             try:
-                for _ in range(len(trigger)):
-                    self.keyboard_controller.press(Key.backspace)
-                    self.keyboard_controller.release(Key.backspace)
-                    time.sleep(0.01)
-
                 time.sleep(0.05)
                 self.text_inserter.insert_text(snippet)
-                
+
                 self.expansion_failed = False
                 self.last_expansion_time = time.time()
                 return True
-                
+
             except Exception as e:
                 current_time = time.time()
                 if not self.expansion_failed or (current_time - self.last_expansion_time) > 5:
@@ -732,22 +855,23 @@ If userInput <> "" Then WScript.Echo userInput'''
                 if form_names:
                     form_data = self._show_form_dialog(form_names)
                     if form_data is None:
-                        return  # user cancelled — nothing inserted
+                        return False  # user cancelled — nothing inserted
                 result = resolve_form_variables(plain, form_data)
                 if is_rich_text_payload(raw):
                     result = rebuild_rich_text(raw, result)
                 time.sleep(0.05)
                 self.text_inserter.insert_text(result)
-                return
+                return True
 
             result = func()
             if not result:
-                return
+                return False
             self.notify_snippet_failure(trigger, result)
             time.sleep(0.05)
             self.text_inserter.insert_text(result)
             if trigger == "xlwapp":
                 WindowsClipboard.set_content(result)
+            return True
         except Exception as e:
             self.logger.error(f"Erro ao executar snippet lento {trigger}: {e}")
             self.notify_error(
@@ -755,6 +879,7 @@ If userInput <> "" Then WScript.Echo userInput'''
                 key=f"slow-snippet-error:{trigger}",
                 cooldown_seconds=5,
             )
+            return False
     
     def _show_form_dialog(self, field_names):
         """
@@ -863,12 +988,31 @@ If userInput <> "" Then WScript.Echo userInput'''
         """Rebuild compiled trigger metadata after snippet changes."""
         self.trigger_index = compile_trigger_index(self.snippets, self.slow_snippets)
 
-    def refresh_runtime_indexes(self, include_dynamic_items: bool = False):
-        """Refresh max trigger length and compiled trigger metadata."""
-        if include_dynamic_items:
-            self.max_trigger_length = calculate_max_trigger_length_with_mappings(self.snippets)
-        else:
-            self.max_trigger_length = calculate_max_trigger_length(self.snippets)
+    def _validate_trigger_warnings(self, trigger):
+        """Return save-time warnings for a proposed static trigger."""
+        static_triggers = {
+            key for key, value in self.snippets.items()
+            if not key.startswith("_") and not callable(value)
+        }
+        dynamic_names = {key for key, value in self.snippets.items() if callable(value)}
+        prefixes = get_dynamic_prefixes(self.snippets)
+        for prefix, mapping_key in prefixes.items():
+            mapping = self.snippets.get(mapping_key, {})
+            if isinstance(mapping, dict):
+                for name in mapping:
+                    if name != "__prefix__":
+                        static_triggers.add(prefix + name)
+        existing = static_triggers - {trigger}
+        return validate_trigger(trigger, existing, dynamic_names)
+
+    def refresh_runtime_indexes(self):
+        """Refresh max trigger length and compiled trigger metadata.
+
+        The buffer is always sized to include composed dynamic mapping triggers
+        (prefix + item name) plus a small safety margin, so a long mapping item
+        can never be truncated out of the typed-text buffer and fail to match.
+        """
+        self.max_trigger_length = calculate_max_trigger_length_with_mappings(self.snippets) + TRIGGER_BUFFER_MARGIN
         self.rebuild_trigger_index()
 
     def notify(self, message: str, title: str = "Text Expander", key: str = None, cooldown_seconds: float = 0, kind: str = "info"):
@@ -892,8 +1036,9 @@ If userInput <> "" Then WScript.Echo userInput'''
                 "kind": kind,
             }
         )
-        if len(self.notification_history) > 120:
-            self.notification_history = self.notification_history[-120:]
+        if len(self.notification_history) > NOTIFICATION_HISTORY_LIMIT:
+            self.notification_history = self.notification_history[-NOTIFICATION_HISTORY_LIMIT:]
+        save_notification_history(self.notification_history_file, self.notification_history)
 
         try:
             self.icon.notify(text, title)
@@ -905,8 +1050,19 @@ If userInput <> "" Then WScript.Echo userInput'''
     def notify_status(self, message: str, key: str = None):
         return self.notify(message, key=key, cooldown_seconds=2, kind="status")
 
+    def _notify_or_queue(self, message: str, key: str, kind: str, cooldown_seconds: float):
+        """Notify now, or queue for tray startup when the icon is not up yet."""
+        if not self.icon:
+            self.pending_notifications.append((message, key, kind, cooldown_seconds))
+            return False
+        return self.notify(message, key=key, cooldown_seconds=cooldown_seconds, kind=kind)
+
     def notify_error(self, message: str, key: str = None, cooldown_seconds: float = 8):
-        return self.notify(message, key=key, cooldown_seconds=cooldown_seconds, kind="error")
+        return self._notify_or_queue(message, key, "error", cooldown_seconds)
+
+    def notify_deferred_status(self, message: str, key: str = None, cooldown_seconds: float = 8):
+        """Queue an informational tray message that must survive an early startup."""
+        return self._notify_or_queue(message, key, "status", cooldown_seconds)
 
     def notify_snippet_failure(self, trigger: str, result):
         message = build_snippet_failure_notification(trigger, result)
@@ -924,55 +1080,115 @@ If userInput <> "" Then WScript.Echo userInput'''
             self.icon = icon
         time.sleep(0.75)
         self.notify_status("Text Expander iniciado com sucesso.", key="startup")
+        pending, self.pending_notifications = self.pending_notifications, []
+        for message, key, kind, cooldown in pending:
+            self.notify(message, key=key, cooldown_seconds=cooldown, kind=kind)
 
     # =====================================================================
     # KEYBOARD LISTENER
     # =====================================================================
     def on_press(self, key):
-        """Callback invoked when a key is pressed."""
+        """Detect a trigger on the listener thread; expand on a worker thread.
+
+        The listener must stay fast and unkillable: it only appends the keystroke,
+        matches a trigger, erases the typed trigger, and hands all real work
+        (callables, network, dialogs, clipboard, paste) to a background thread.
+        """
         try:
             if hasattr(key, 'char') and key.char:
-                self.typed_text += key.char
-                
-                if len(self.typed_text) > self.max_trigger_length:
-                    self.typed_text = self.typed_text[-self.max_trigger_length:]
-                
-                expanded = False
-
-                # 1) Direct snippets
-                trigger = find_direct_trigger(self.typed_text, self.trigger_index)
-                if trigger:
-                    needs_slow = trigger in self.slow_snippets
-                    if not needs_slow:
-                        raw_value = self.snippets.get(trigger)
-                        if not callable(raw_value):
-                            if has_form_variables(extract_plain_text(raw_value), self.snippets):
-                                needs_slow = True
-                    if needs_slow:
-                        for _ in range(len(trigger)):
-                            self.keyboard_controller.press(Key.backspace)
-                            self.keyboard_controller.release(Key.backspace)
-                            time.sleep(0.01)
-                        self.typed_text = ""
-                        self.task_runner.start(self.run_slow_snippet, trigger, name="slow-snippet")
-                        expanded = True
-                    else:
-                        self.expand_snippet(trigger)
-                        self.typed_text = ""
-                        expanded = True
-                
-                # 2) Dynamic patterns (including custom prefixes)
-                if not expanded:
-                    potential_trigger, result = find_dynamic_trigger(self.snippets, self.typed_text, self.trigger_index)
-                    if result is not None:
-                        self.expand_snippet(potential_trigger)
-                        self.typed_text = ""
-                                
+                self._handle_char(key.char)
         except AttributeError:
             if key == Key.enter:
+                # ceiling: terminator mode does not gate on Enter (re-typing it could
+                # double-submit); Enter always just resets the buffer. Extend to Enter
+                # if a safe re-emit strategy is needed.
                 self.typed_text = ""
             elif key == Key.backspace and self.typed_text:
                 self.typed_text = self.typed_text[:-1]
+        except Exception as e:
+            # A detection error must never stop the global keyboard listener.
+            self.typed_text = ""
+            self.logger.error(f"Erro no listener de teclado: {e}")
+            self.notify_error(
+                f"Erro ao detectar snippet: {e}",
+                key="listener-error",
+                cooldown_seconds=10,
+            )
+
+    def _handle_char(self, char):
+        """Append a typed character and run trigger detection."""
+        self.typed_text += char
+        if len(self.typed_text) > self.max_trigger_length:
+            self.typed_text = self.typed_text[-self.max_trigger_length:]
+
+        if self.terminator_mode:
+            if char in TERMINATOR_CHARS:
+                self._detect_terminated(char)
+            return
+
+        self._detect_immediate()
+
+    def _detect_immediate(self):
+        """Immediate mode: expand as soon as a trigger suffix matches."""
+        trigger = find_direct_trigger(self.typed_text, self.trigger_index)
+        if trigger:
+            self._dispatch_expansion(trigger, len(trigger))
+            return
+        potential_trigger, result = find_dynamic_trigger(self.snippets, self.typed_text, self.trigger_index)
+        if result is not None:
+            self._dispatch_expansion(potential_trigger, len(potential_trigger))
+
+    def _detect_terminated(self, terminator_char):
+        """Terminator mode: expand only when a word-ending char follows a trigger."""
+        body = self.typed_text[:-1]  # drop the terminator just typed
+        trigger = find_direct_trigger(body, self.trigger_index)
+        if trigger:
+            self._dispatch_expansion(trigger, len(trigger) + 1, append_text=terminator_char)
+            return
+        potential_trigger, result = find_dynamic_trigger(self.snippets, body, self.trigger_index)
+        if result is not None:
+            self._dispatch_expansion(potential_trigger, len(potential_trigger) + 1, append_text=terminator_char)
+
+    def _dispatch_expansion(self, trigger, erase_length, append_text=""):
+        """Erase the typed trigger and run the expansion on a worker thread."""
+        self._erase_chars(erase_length)
+        self.typed_text = ""
+        self.task_runner.start(self._run_expansion, trigger, append_text, name="expand")
+
+    def _erase_chars(self, count):
+        """Backspace over ``count`` characters on the listener thread."""
+        # ceiling: 10 ms sleep per char keeps the erase reliable across apps; with
+        # expansion now off-thread this only adds latency proportional to trigger
+        # length, not to network work (audit 2.6).
+        for _ in range(count):
+            self.keyboard_controller.press(Key.backspace)
+            self.keyboard_controller.release(Key.backspace)
+            time.sleep(0.01)
+
+    def _run_expansion(self, trigger, append_text=""):
+        """Worker entry point: produce and insert the expansion for a trigger.
+
+        The trigger text is already erased. This is wrapped so no expansion error
+        (including a raising callable) can ever propagate to the listener thread.
+        """
+        if not self.enabled:
+            return
+        try:
+            if trigger in self.slow_snippets or trigger in self.trigger_index["form_triggers"]:
+                inserted = self.run_slow_snippet(trigger)
+            else:
+                inserted = self.expand_snippet(trigger)
+            # Only re-emit the terminator when text was actually inserted, so a
+            # cancelled form dialog or a failed paste does not leave a stray char.
+            if append_text and inserted:
+                self.keyboard_controller.type(append_text)
+        except Exception as e:
+            self.logger.error(f"Erro na expansão de {trigger}: {e}")
+            self.notify_error(
+                f"Falha ao expandir {trigger}: {e}",
+                key=f"expand-error:{trigger}",
+                cooldown_seconds=5,
+            )
 
     # =====================================================================
     # SNIPPET MANAGEMENT GUI
@@ -1053,11 +1269,15 @@ If userInput <> "" Then WScript.Echo userInput'''
             tab_whatsapp = tk.Frame(notebook, bg="#F4F6FA")
             notebook.add(tab_whatsapp, text="WhatsApp")
 
+            tab_backups = tk.Frame(notebook, bg="#F4F6FA")
+            notebook.add(tab_backups, text="Backups")
+
             self._create_static_snippets_tab(tab_static, root)
             self._create_dynamic_mappings_tab(tab_dynamic, root)
             self._create_datetime_eco_tab(tab_datetime_eco)
             self._create_stocks_tab(tab_stocks)
             self._create_whatsapp_tab(tab_whatsapp)
+            self._create_backups_tab(tab_backups, root)
 
             root.mainloop()
 
@@ -1068,6 +1288,157 @@ If userInput <> "" Then WScript.Echo userInput'''
                 key="gui-open-error",
                 cooldown_seconds=5,
             )
+
+    def _create_backups_tab(self, parent, root):
+        """Backups tab: list backups and expose restore/export/import actions."""
+        main = tk.Frame(parent, bg="#F4F6FA", padx=14, pady=14)
+        main.pack(fill=tk.BOTH, expand=True)
+        main.grid_columnconfigure(0, weight=1)
+        main.grid_rowconfigure(2, weight=1)
+
+        tk.Label(
+            main,
+            text="Backups da biblioteca",
+            font=("Segoe UI", 11, "bold"),
+            bg="#F4F6FA",
+            fg="#1F2937",
+        ).grid(row=0, column=0, sticky="w")
+        path_label = tk.Label(
+            main,
+            text=f"Pasta de dados: {self.data_dir}",
+            font=("Segoe UI", 8),
+            bg="#F4F6FA",
+            fg="#5B6472",
+        )
+        path_label.grid(row=1, column=0, sticky="w", pady=(2, 10))
+
+        columns = ("backup", "size", "count")
+        tree = ttk.Treeview(main, columns=columns, show="headings", height=12)
+        tree.heading("backup", text="Backup")
+        tree.heading("size", text="Tamanho")
+        tree.heading("count", text="Snippets")
+        tree.column("backup", width=260, anchor="w")
+        tree.column("size", width=90, anchor="e")
+        tree.column("count", width=90, anchor="e")
+        tree.grid(row=2, column=0, sticky="nsew")
+
+        scrollbar = ttk.Scrollbar(main, orient=tk.VERTICAL, command=tree.yview)
+        tree.configure(yscrollcommand=scrollbar.set)
+        scrollbar.grid(row=2, column=1, sticky="ns")
+
+        # Maps tree row id -> backup path.
+        row_paths = {}
+
+        def human_size(num_bytes):
+            size = float(num_bytes)
+            for unit in ("B", "KB", "MB"):
+                if size < 1024 or unit == "MB":
+                    return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+                size /= 1024
+            return f"{size:.1f} MB"
+
+        def refresh_backups():
+            tree.delete(*tree.get_children())
+            row_paths.clear()
+            for path in list_backups(self.backups_dir):
+                try:
+                    size_bytes = os.path.getsize(path)
+                except OSError:
+                    size_bytes = 0
+                try:
+                    data = load_json_file(path)
+                    count = len(data) if isinstance(data, dict) else "?"
+                except Exception:
+                    count = "inválido"
+                row = tree.insert(
+                    "",
+                    tk.END,
+                    values=(os.path.basename(path), human_size(size_bytes), count),
+                )
+                row_paths[row] = path
+
+        def selected_backup():
+            selection = tree.selection()
+            if not selection:
+                messagebox.showinfo("Backups", "Selecione um backup na lista.", parent=root)
+                return None
+            return row_paths.get(selection[0])
+
+        def on_restore():
+            path = selected_backup()
+            if not path:
+                return
+            name = os.path.basename(path)
+            if not messagebox.askyesno(
+                "Restaurar backup",
+                f"Restaurar '{name}'? A biblioteca atual será salva como backup antes.",
+                parent=root,
+            ):
+                return
+            ok, error = self.restore_backup(path)
+            if ok:
+                self.notify_status(f"Backup restaurado: {name}", key="restore-backup")
+                messagebox.showinfo("Backups", f"Backup '{name}' restaurado.", parent=root)
+                refresh_backups()
+            else:
+                messagebox.showerror("Backups", f"Falha ao restaurar: {error}", parent=root)
+
+        def on_export():
+            dest = filedialog.asksaveasfilename(
+                parent=root,
+                title="Exportar biblioteca",
+                defaultextension=".json",
+                initialfile="snippets-export.json",
+                filetypes=[("JSON", "*.json"), ("Todos", "*.*")],
+            )
+            if not dest:
+                return
+            ok, error = self.export_library(dest)
+            if ok:
+                messagebox.showinfo("Backups", "Biblioteca exportada com sucesso.", parent=root)
+            else:
+                messagebox.showerror("Backups", f"Falha ao exportar: {error}", parent=root)
+
+        def on_import():
+            src = filedialog.askopenfilename(
+                parent=root,
+                title="Importar biblioteca",
+                filetypes=[("JSON", "*.json"), ("Todos", "*.*")],
+            )
+            if not src:
+                return
+            merge = messagebox.askyesno(
+                "Importar biblioteca",
+                "Mesclar com a biblioteca atual?\n\nSim = mesclar (entradas importadas têm prioridade)\n"
+                "Não = substituir tudo.\n\nA biblioteca atual será salva como backup antes.",
+                parent=root,
+            )
+            ok, error = self.import_library(src, mode="merge" if merge else "replace")
+            if ok:
+                self.notify_status("Biblioteca importada.", key="import-library")
+                messagebox.showinfo("Backups", "Biblioteca importada com sucesso.", parent=root)
+                refresh_backups()
+            else:
+                messagebox.showerror("Backups", f"Falha ao importar: {error}", parent=root)
+
+        def on_backup_now():
+            created = self.backup_now()
+            if created:
+                messagebox.showinfo("Backups", f"Backup criado: {os.path.basename(created)}", parent=root)
+                refresh_backups()
+            else:
+                messagebox.showerror("Backups", "Falha ao criar backup. Verifique os logs.", parent=root)
+
+        buttons = tk.Frame(main, bg="#F4F6FA")
+        buttons.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        tk.Button(buttons, text="Backup agora", width=14, command=on_backup_now).pack(side=tk.LEFT, padx=(0, 6))
+        tk.Button(buttons, text="Restaurar", width=12, command=on_restore).pack(side=tk.LEFT, padx=6)
+        tk.Button(buttons, text="Exportar…", width=12, command=on_export).pack(side=tk.LEFT, padx=6)
+        tk.Button(buttons, text="Importar…", width=12, command=on_import).pack(side=tk.LEFT, padx=6)
+        tk.Button(buttons, text="Abrir pasta", width=12, command=self.open_data_folder).pack(side=tk.LEFT, padx=6)
+        tk.Button(buttons, text="Atualizar", width=10, command=refresh_backups).pack(side=tk.RIGHT)
+
+        refresh_backups()
 
     def _set_window_icon(self, window):
         icon_path = self.resolve_resource_path("txt_xpander.ico")
@@ -1427,11 +1798,15 @@ If userInput <> "" Then WScript.Echo userInput'''
 
         btn_frame = tk.Frame(frame_right, bg="#FFFFFF")
         btn_frame.grid(row=5, column=0, sticky="e")
-        btn_new = tk.Button(btn_frame, text="Novo", width=12)
-        btn_save = tk.Button(btn_frame, text="Salvar", width=12)
-        btn_delete = tk.Button(btn_frame, text="Excluir", width=12)
+        btn_new = tk.Button(btn_frame, text="Novo", width=10)
+        btn_save = tk.Button(btn_frame, text="Salvar", width=10)
+        btn_duplicate = tk.Button(btn_frame, text="Duplicar", width=10)
+        btn_rename = tk.Button(btn_frame, text="Renomear", width=10)
+        btn_delete = tk.Button(btn_frame, text="Excluir", width=10)
         btn_new.pack(side=tk.LEFT, padx=(0, 6))
         btn_save.pack(side=tk.LEFT, padx=6)
+        btn_duplicate.pack(side=tk.LEFT, padx=6)
+        btn_rename.pack(side=tk.LEFT, padx=6)
         btn_delete.pack(side=tk.LEFT, padx=(6, 0))
 
         self._bind_mousewheel(listbox, listbox)
@@ -1479,8 +1854,21 @@ If userInput <> "" Then WScript.Echo userInput'''
                 messagebox.showwarning("Aviso", "Informe um valor para o snippet.")
                 return
 
+            if trigger not in self.snippets:
+                warnings = self._validate_trigger_warnings(trigger)
+                if warnings and not messagebox.askyesno(
+                    "Confirmar trigger",
+                    "Avisos sobre este trigger:\n\n• " + "\n• ".join(warnings) + "\n\nSalvar mesmo assim?",
+                ):
+                    return
+
             self.snippets[trigger] = value
-            self.save_snippets(self.snippets)
+            if not self.save_snippets(self.snippets):
+                messagebox.showerror(
+                    "Erro ao salvar",
+                    "Não foi possível gravar snippets.json. Verifique os logs; suas edições podem não ter sido salvas.",
+                )
+                return
             self.refresh_runtime_indexes()
             self.notify_status(f"Snippet '{trigger}' salvo.", key=f"save-static:{trigger}")
 
@@ -1495,7 +1883,12 @@ If userInput <> "" Then WScript.Echo userInput'''
 
             if trigger in self.snippets and messagebox.askyesno("Confirmar", f"Excluir '{trigger}'?"):
                 del self.snippets[trigger]
-                self.save_snippets(self.snippets)
+                if not self.save_snippets(self.snippets):
+                    messagebox.showerror(
+                        "Erro ao salvar",
+                        "Não foi possível gravar snippets.json. Verifique os logs; a exclusão pode não ter sido salva.",
+                    )
+                    return
                 self.refresh_runtime_indexes()
                 entry_trigger.delete(0, tk.END)
                 load_value_into_text_widget(text_value, "")
@@ -1503,11 +1896,65 @@ If userInput <> "" Then WScript.Echo userInput'''
                 refresh_listbox()
                 self.notify_status(f"Snippet '{trigger}' excluído.", key=f"delete-static:{trigger}")
 
+        def on_duplicate():
+            value = serialize_text_widget_content(text_value)
+            if not extract_plain_text(value).strip():
+                messagebox.showwarning("Aviso", "Nada para duplicar.")
+                return
+            # Keep the value, clear the trigger so the user names the copy.
+            entry_trigger.delete(0, tk.END)
+            update_format_status()
+            entry_trigger.focus_set()
+            messagebox.showinfo("Duplicar", "Informe um novo trigger e clique em Salvar para criar a cópia.")
+
+        def on_rename():
+            old_trigger = entry_trigger.get().strip()
+            if old_trigger not in self.snippets:
+                messagebox.showwarning("Aviso", "Selecione um snippet salvo para renomear.")
+                return
+            new_trigger = simpledialog.askstring("Renomear", "Novo trigger:", initialvalue=old_trigger, parent=root)
+            if not new_trigger:
+                return
+            new_trigger = new_trigger.strip()
+            if new_trigger == old_trigger:
+                return
+            if new_trigger.startswith("_"):
+                messagebox.showwarning("Aviso", "Triggers com '_' são reservados.")
+                return
+            if new_trigger in self.snippets:
+                messagebox.showwarning("Aviso", f"O trigger '{new_trigger}' já existe.")
+                return
+            warnings = self._validate_trigger_warnings(new_trigger)
+            if warnings and not messagebox.askyesno(
+                "Confirmar trigger",
+                "Avisos sobre este trigger:\n\n• " + "\n• ".join(warnings) + "\n\nRenomear mesmo assim?",
+            ):
+                return
+            value = self.snippets[old_trigger]
+            self.snippets[new_trigger] = value
+            del self.snippets[old_trigger]
+            if not self.save_snippets(self.snippets):
+                # Roll back the in-memory rename on failure.
+                self.snippets[old_trigger] = value
+                self.snippets.pop(new_trigger, None)
+                messagebox.showerror("Erro ao salvar", "Não foi possível gravar snippets.json.")
+                return
+            self.refresh_runtime_indexes()
+            entry_trigger.delete(0, tk.END)
+            entry_trigger.insert(0, new_trigger)
+            refresh_listbox()
+            self.notify_status(f"Snippet renomeado para '{new_trigger}'.", key=f"rename-static:{new_trigger}")
+
         listbox.bind("<<ListboxSelect>>", load_selected)
         btn_new.configure(command=on_new)
         btn_save.configure(command=on_save)
+        btn_duplicate.configure(command=on_duplicate)
+        btn_rename.configure(command=on_rename)
         btn_delete.configure(command=on_delete)
         search_var.trace_add("write", lambda *_: refresh_listbox())
+        # Ctrl+S saves the current static snippet from anywhere in the editor.
+        for widget in (entry_trigger, text_value, listbox):
+            widget.bind("<Control-s>", lambda _event: (on_save(), "break")[1])
 
         refresh_listbox()
         search_entry.focus_set()
@@ -1696,8 +2143,15 @@ If userInput <> "" Then WScript.Echo userInput'''
                     return
 
                 self.snippets[map_key] = {"__prefix__": prefix}
-                self.save_snippets(self.snippets)
-                self.refresh_runtime_indexes(include_dynamic_items=True)
+                if not self.save_snippets(self.snippets):
+                    del self.snippets[map_key]
+                    messagebox.showerror(
+                        "Erro ao salvar",
+                        "Não foi possível gravar snippets.json. Verifique os logs; o tipo não foi criado.",
+                        parent=dialog,
+                    )
+                    return
+                self.refresh_runtime_indexes()
                 refresh_type_radiobuttons()
                 mapping_type.set(map_key)
                 on_type_changed()
@@ -1720,9 +2174,15 @@ If userInput <> "" Then WScript.Echo userInput'''
             if not messagebox.askyesno("Confirmar", f"Excluir o tipo '{info.get('label', current_type)}' e todos os itens?"):
                 return
 
-            del self.snippets[current_type]
-            self.save_snippets(self.snippets)
-            self.refresh_runtime_indexes(include_dynamic_items=True)
+            removed_mapping = self.snippets.pop(current_type)
+            if not self.save_snippets(self.snippets):
+                self.snippets[current_type] = removed_mapping
+                messagebox.showerror(
+                    "Erro ao salvar",
+                    "Não foi possível gravar snippets.json. Verifique os logs; o tipo não foi excluído.",
+                )
+                return
+            self.refresh_runtime_indexes()
 
             refresh_type_radiobuttons()
             available_keys = list(mappings_info.keys())
@@ -1781,12 +2241,23 @@ If userInput <> "" Then WScript.Echo userInput'''
 
             mapping = ensure_mapping_dict(current_type)
             prefix_key = mapping.get("__prefix__")
+            existed = name in mapping
+            previous_value = mapping.get(name)
             mapping[name] = value
             if prefix_key:
                 mapping["__prefix__"] = prefix_key
 
-            self.save_snippets(self.snippets)
-            self.refresh_runtime_indexes(include_dynamic_items=True)
+            if not self.save_snippets(self.snippets):
+                if existed:
+                    mapping[name] = previous_value
+                else:
+                    mapping.pop(name, None)
+                messagebox.showerror(
+                    "Erro ao salvar",
+                    "Não foi possível gravar snippets.json. Verifique os logs; o item não foi salvo.",
+                )
+                return
+            self.refresh_runtime_indexes()
             self.notify_status(f"Item '{name}' salvo em {mappings.get(current_type, {}).get('label', current_type)}.", key=f"save-map:{current_type}:{name}")
             refresh_mapping_list()
             update_format_status()
@@ -1801,9 +2272,15 @@ If userInput <> "" Then WScript.Echo userInput'''
 
             mapping = self.snippets.get(current_type, {})
             if isinstance(mapping, dict) and name in mapping and messagebox.askyesno("Confirmar", f"Excluir '{name}'?"):
-                del mapping[name]
-                self.save_snippets(self.snippets)
-                self.refresh_runtime_indexes(include_dynamic_items=True)
+                removed_value = mapping.pop(name)
+                if not self.save_snippets(self.snippets):
+                    mapping[name] = removed_value
+                    messagebox.showerror(
+                        "Erro ao salvar",
+                        "Não foi possível gravar snippets.json. Verifique os logs; a exclusão não foi salva.",
+                    )
+                    return
+                self.refresh_runtime_indexes()
                 entry_name.delete(0, tk.END)
                 load_value_into_text_widget(text_value, "")
                 update_format_status()
@@ -1846,12 +2323,22 @@ If userInput <> "" Then WScript.Echo userInput'''
         scrollbar.grid(row=0, column=1, sticky="ns")
         canvas.bind("<Configure>", lambda event: canvas.itemconfigure(canvas_window, width=event.width))
 
-        for title, items in sections:
+        grouped = reference_entries_by_category(self.dynamic_registry)
+        for title, category_key in sections:
+            entries = grouped.get(category_key, [])
             section = tk.LabelFrame(inner, text=title, font=("Segoe UI", 9, "bold"), bg="#FFFFFF", padx=12, pady=12)
             section.pack(fill=tk.X, expand=True, pady=(0, 12))
-            for trigger, desc in items:
+            for trigger, desc, enabled in entries:
                 row = tk.Frame(section, bg="#FFFFFF")
                 row.pack(fill=tk.X, pady=2)
+                var = tk.BooleanVar(value=enabled)
+                tk.Checkbutton(
+                    row,
+                    variable=var,
+                    bg="#FFFFFF",
+                    activebackground="#FFFFFF",
+                    command=lambda t=trigger, v=var: self._toggle_registry_entry(t, v.get()),
+                ).pack(side=tk.LEFT)
                 tk.Label(row, text=trigger, font=("Consolas", 10, "bold"), fg="#2D5BD1", bg="#FFFFFF", width=12, anchor="w").pack(side=tk.LEFT)
                 tk.Label(row, text=desc, font=("Segoe UI", 9), bg="#FFFFFF", anchor="w").pack(side=tk.LEFT, padx=(10, 0), fill=tk.X, expand=True)
 
@@ -1860,6 +2347,36 @@ If userInput <> "" Then WScript.Echo userInput'''
         self._bind_mousewheel(canvas, canvas)
         self._bind_mousewheel_descendants(inner, canvas)
 
+    def _toggle_registry_entry(self, trigger, enabled):
+        """Enable/disable a dynamic trigger, persisting to the user override file."""
+        try:
+            if os.path.exists(self.dynamic_registry_file):
+                user_override = load_json_file(self.dynamic_registry_file)
+                if not isinstance(user_override, dict):
+                    user_override = {}
+            else:
+                user_override = {}
+            # Store a minimal per-field override so future bundled changes to other
+            # fields of this trigger still reach the user.
+            existing = user_override.get(trigger)
+            entry = dict(existing) if isinstance(existing, dict) else {}
+            entry["enabled"] = enabled
+            user_override[trigger] = entry
+            write_json_atomic(self.dynamic_registry_file, user_override)
+        except Exception as e:
+            self.logger.error(f"Falha ao salvar registro dinâmico: {e}")
+            self.notify_error("Falha ao salvar alteração do snippet dinâmico.", key="registry-save")
+            return
+
+        self.dynamic_registry = load_registry(
+            self.resolve_resource_path("dynamic_snippets.json"),
+            self.dynamic_registry_file,
+            logger=self.logger,
+        )
+        self.reload_snippets_from_disk()
+        state = "ativado" if enabled else "desativado"
+        self.notify_status(f"Snippet dinâmico '{trigger}' {state}.", key=f"registry-toggle:{trigger}")
+
     def _create_datetime_eco_tab(self, parent):
         """Build the reference tab for Date/Time and Economic Indicator snippets."""
         self._create_reference_tab(
@@ -1867,10 +2384,10 @@ If userInput <> "" Then WScript.Echo userInput'''
             "Snippets dinâmicos de data e economia",
             "Esses triggers consultam data/hora local e dados econômicos do Banco Central.",
             [
-                ("Data e Hora", DATETIME_SNIPPETS),
-                ("Indicadores Econômicos (Banco Central)", ECONOMY_SNIPPETS),
+                ("Data e Hora", "datetime"),
+                ("Indicadores Econômicos (Banco Central)", "economy"),
             ],
-            "Basta digitar o trigger em qualquer aplicativo suportado.",
+            "Use a caixa de seleção para ativar/desativar cada trigger. Para renomear, edite dynamic_snippets.json na pasta de dados.",
         )
 
     def _create_stocks_tab(self, parent):
@@ -1879,7 +2396,7 @@ If userInput <> "" Then WScript.Echo userInput'''
             parent,
             "Snippets de ações e fundamentos",
             "Ao digitar um destes triggers, um popup pedirá o ticker antes da consulta.",
-            [("Ações (B3 e US)", STOCK_SNIPPETS)],
+            [("Ações (B3 e US)", "stock")],
             "Aceita tickers brasileiros (PETR4, VALE3) e americanos (AAPL, MSFT, GOOGL).",
         )
 
@@ -1889,7 +2406,7 @@ If userInput <> "" Then WScript.Echo userInput'''
             parent,
             "Atalho de WhatsApp",
             "Os triggers podem ler o telefone do clipboard ou abrir um popup, sempre validando no mesmo padrão internacional.",
-            [("WhatsApp", WHATSAPP_SNIPPETS)],
+            [("WhatsApp", "whatsapp")],
             "xwapp e xpwapp abrem o navegador. xlwapp insere o link no campo atual e também o mantém no clipboard.",
         )
 
@@ -1961,6 +2478,18 @@ If userInput <> "" Then WScript.Echo userInput'''
                 key="reload-snippets-error",
                 cooldown_seconds=5,
             )
+    def tray_backup_now(self, icon, item):
+        """Tray action: create an immediate backup of the library."""
+        created = self.backup_now()
+        if created:
+            self.notify_status(f"Backup criado: {os.path.basename(created)}", key="manual-backup")
+        else:
+            self.notify_error("Falha ao criar backup. Verifique os logs.", key="manual-backup")
+
+    def tray_open_data_folder(self, icon, item):
+        """Tray action: open the user data folder."""
+        self.open_data_folder()
+
     def quit_app(self, icon, item):
         """Quit the application."""
         self.enabled = False
@@ -2019,6 +2548,9 @@ If userInput <> "" Then WScript.Echo userInput'''
             pystray.MenuItem("Gerenciar Snippets", self.manage_snippets_gui, default=True),
             pystray.MenuItem("Recarregar Snippets", self.reload_snippets),
             pystray.Menu.SEPARATOR,
+            pystray.MenuItem("Backup agora", self.tray_backup_now),
+            pystray.MenuItem("Abrir pasta de dados", self.tray_open_data_folder),
+            pystray.Menu.SEPARATOR,
             pystray.MenuItem("Sair", self.quit_app)
         )
 
@@ -2033,14 +2565,43 @@ If userInput <> "" Then WScript.Echo userInput'''
         self.icon.run(setup=self.on_tray_ready)
 
 
+def set_dpi_awareness():
+    """Make Tk render crisply on high-DPI displays (per-monitor v2, best effort)."""
+    try:
+        # -4 = DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+        ctypes.windll.user32.SetProcessDpiAwarenessContext(-4)
+        return
+    except Exception:
+        pass
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
+
 def main():
     """Main entry point."""
-    if not acquire_single_instance_mutex():
+    # Windows keeps its named mutex; other platforms use a PID lockfile.
+    lock_path = None
+    if IS_WINDOWS:
+        acquired = acquire_single_instance_mutex()
+    else:
+        lock_path = os.path.join(ensure_data_dir(), "txt_xpander.lock")
+        acquired = acquire_lockfile(lock_path)
+    if not acquired:
         show_already_running_message()
         return
 
-    expander = TextExpander()
-    expander.run()
+    set_dpi_awareness()
+    try:
+        expander = TextExpander()
+        expander.run()
+    finally:
+        if lock_path is not None:
+            release_lockfile(lock_path)
 
 
 if __name__ == "__main__":

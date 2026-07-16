@@ -34,8 +34,13 @@ if exist "%TARGET_DIR%" (
     echo No existing dist found. A fresh packaged release will be created.
 )
 
+REM User data now lives in %USERPROFILE%\.txt_xpander (migrated on first launch of
+REM the new build), not in dist. The bundled snippets.json is only an anonymized
+REM seed, so this script no longer syncs dist->source or restores data into dist.
+REM A one-time safety copy of any pre-existing dist snippets is still kept, in case
+REM this is the transition build and the app has not yet migrated its data.
 if exist "%TARGET_SNIPPETS%" (
-    echo Backing up saved snippets from dist\Txt Xpander\snippets.json...
+    echo Keeping a safety copy of the existing dist snippets.json...
     copy /Y "%TARGET_SNIPPETS%" "%SNIPPETS_BACKUP%" >nul
     if errorlevel 1 (
         echo Failed to back up the existing snippets.json file.
@@ -43,13 +48,8 @@ if exist "%TARGET_SNIPPETS%" (
         exit /b 1
     )
     set "HAS_SNIPPETS_BACKUP=1"
-    echo Syncing dist snippets into source\snippets.json so PyInstaller bundles the latest...
-    copy /Y "%TARGET_SNIPPETS%" "%REPO_DIR%\source\snippets.json" >nul
-    if errorlevel 1 (
-        echo WARNING: Could not sync dist snippets.json to source. Build will continue with older source copy.
-    )
 ) else (
-    echo No existing dist snippets.json found to preserve.
+    echo No existing dist snippets.json found.
 )
 
 if exist "%STAGING_ROOT%" (
@@ -62,7 +62,7 @@ if exist "%PREVIOUS_DIR%" (
     rmdir /s /q "%PREVIOUS_DIR%" >nul 2>&1
 )
 
-python -m PyInstaller --noconfirm --clean --windowed --onedir --distpath "%STAGING_ROOT%" --workpath "%WORK_DIR%" --specpath "%REPO_DIR%" --name "Txt Xpander" --icon "%REPO_DIR%\source\txt_xpander.ico" --add-data "%REPO_DIR%\source\snippets.json;." --add-data "%REPO_DIR%\source\txt_xpander.ico;." --hidden-import pystray._win32 "%REPO_DIR%\source\txt_xpander.pyw"
+python -m PyInstaller --noconfirm --clean --windowed --onedir --distpath "%STAGING_ROOT%" --workpath "%WORK_DIR%" --specpath "%REPO_DIR%" --name "Txt Xpander" --icon "%REPO_DIR%\source\txt_xpander.ico" --add-data "%REPO_DIR%\source\snippets.json;." --add-data "%REPO_DIR%\source\dynamic_snippets.json;." --add-data "%REPO_DIR%\source\txt_xpander.ico;." --hidden-import pystray._win32 "%REPO_DIR%\source\txt_xpander.pyw"
 if errorlevel 1 (
     echo.
     echo Packaging failed. The existing dist was left unchanged.
@@ -74,14 +74,8 @@ if not exist "%STAGING_DIR%" (
     goto cleanup_and_fail
 )
 
-if "%HAS_SNIPPETS_BACKUP%"=="1" (
-    echo Restoring saved snippets.json into the new dist...
-    copy /Y "%SNIPPETS_BACKUP%" "%STAGING_DIR%\snippets.json" >nul
-    if errorlevel 1 (
-        echo Failed to restore snippets.json into the staged dist.
-        goto cleanup_and_fail
-    )
-)
+REM No snippets are restored into the new dist: the app reads and writes user data
+REM in %USERPROFILE%\.txt_xpander, and the bundled seed stays as-is.
 
 if exist "%TARGET_DIR%" (
     echo Replacing the previous dist with the new packaged release...
@@ -136,6 +130,8 @@ if errorlevel 1 (
 
 :finish
 echo Packaging complete. The release folder is in dist\"Txt Xpander"\
+echo User data lives in "%USERPROFILE%\.txt_xpander" and is migrated on first launch.
+if "%HAS_SNIPPETS_BACKUP%"=="1" echo Safety copy of the old dist snippets: "%SNIPPETS_BACKUP%"
 goto cleanup_and_exit
 
 :cleanup_and_fail
@@ -162,6 +158,6 @@ if exist "%WORK_ROOT%" (
     attrib -r "%WORK_ROOT%\*.*" /s /d >nul 2>&1
     rmdir /s /q "%WORK_ROOT%" >nul 2>&1
 )
-if exist "%SNIPPETS_BACKUP%" del /q "%SNIPPETS_BACKUP%" >nul 2>&1
+REM The snippets safety copy is intentionally left in place as an extra backup.
 pause
 endlocal
