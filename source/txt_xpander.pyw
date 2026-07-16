@@ -72,6 +72,7 @@ from app_paths import (
 )
 from settings_support import load_settings
 from validation_support import validate_trigger
+from platform_support import IS_WINDOWS, acquire_lockfile, release_lockfile
 from dynamic_registry import (
     build_dynamic_snippets,
     load_registry,
@@ -150,12 +151,11 @@ def acquire_single_instance_mutex():
 
 
 def show_already_running_message():
-    ctypes.windll.user32.MessageBoxW(
-        0,
-        "Txt Xpander já está em execução.",
-        "Txt Xpander",
-        MB_ICONINFORMATION,
-    )
+    message = "Txt Xpander já está em execução."
+    if IS_WINDOWS:
+        ctypes.windll.user32.MessageBoxW(0, message, "Txt Xpander", MB_ICONINFORMATION)
+    else:
+        print(message)
 
 
 class TextExpander:
@@ -2584,13 +2584,24 @@ def set_dpi_awareness():
 
 def main():
     """Main entry point."""
-    if not acquire_single_instance_mutex():
+    # Windows keeps its named mutex; other platforms use a PID lockfile.
+    lock_path = None
+    if IS_WINDOWS:
+        acquired = acquire_single_instance_mutex()
+    else:
+        lock_path = os.path.join(ensure_data_dir(), "txt_xpander.lock")
+        acquired = acquire_lockfile(lock_path)
+    if not acquired:
         show_already_running_message()
         return
 
     set_dpi_awareness()
-    expander = TextExpander()
-    expander.run()
+    try:
+        expander = TextExpander()
+        expander.run()
+    finally:
+        if lock_path is not None:
+            release_lockfile(lock_path)
 
 
 if __name__ == "__main__":

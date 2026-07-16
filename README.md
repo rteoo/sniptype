@@ -38,6 +38,12 @@ To have Txt Xpander launch automatically when you sign in:
 
 Alternatively, [`build_release.bat`](build_release.bat) offers to create the Startup shortcut after a successful build (skipped automatically if the shortcut already exists).
 
+### Cross-platform status
+
+Txt Xpander is Windows-first. The OS-specific couplings are being factored behind [`source/platform_support.py`](source/platform_support.py): the paste modifier (Ctrl+V on Windows/Linux, Cmd+V on macOS), a PID-lockfile single-instance guard for non-Windows (Windows keeps its named mutex), and per-OS autostart builders (Startup `.lnk`, macOS LaunchAgent plist, Linux `.desktop`). The keyboard listener (pynput), tray (pystray), GUI (Tk) and the JSON data layer are already portable, and the data directory (`~/.txt_xpander`) is identical on all three OSes.
+
+Remaining before the app runs unmodified on macOS/Linux: the clipboard integration in `runtime_support.py` still uses the Win32 API directly (loaded at import), so a macOS pasteboard / Linux `xclip`/`wl-copy` backend is needed. On macOS, pynput also requires granting Accessibility permission; Wayland restricts global keyboard hooks. These are tracked as the next cross-platform step.
+
 ## Work From Source
 
 All editable code lives in [`source\`](source).
