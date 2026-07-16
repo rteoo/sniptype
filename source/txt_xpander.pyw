@@ -49,7 +49,10 @@ from runtime_support import (
     WindowsClipboard,
     build_snippet_failure_notification,
     configure_logging,
+    load_notification_history,
+    save_notification_history,
     truncate_notification_text,
+    NOTIFICATION_HISTORY_LIMIT,
 )
 from backup_support import (
     create_backup,
@@ -68,6 +71,7 @@ from app_paths import (
     needs_migration,
 )
 from settings_support import load_settings
+from validation_support import validate_trigger
 from dynamic_registry import (
     build_dynamic_snippets,
     load_registry,
@@ -180,6 +184,8 @@ class TextExpander:
         self.backups_dir = get_backups_dir(self.data_dir)
         self.logs_dir = get_logs_dir(self.data_dir)
         self.settings_file = get_settings_path(self.data_dir)
+        self.notification_history_file = os.path.join(self.data_dir, "notifications.json")
+        self.notification_history = load_notification_history(self.notification_history_file)
         self.settings = load_settings(self.settings_file)
         # Opt-in: expand only after a terminator (space/punctuation). Default off
         # to preserve the existing expand-on-last-character muscle memory.
@@ -982,6 +988,23 @@ If userInput <> "" Then WScript.Echo userInput'''
         """Rebuild compiled trigger metadata after snippet changes."""
         self.trigger_index = compile_trigger_index(self.snippets, self.slow_snippets)
 
+    def _validate_trigger_warnings(self, trigger):
+        """Return save-time warnings for a proposed static trigger."""
+        static_triggers = {
+            key for key, value in self.snippets.items()
+            if not key.startswith("_") and not callable(value)
+        }
+        dynamic_names = {key for key, value in self.snippets.items() if callable(value)}
+        prefixes = get_dynamic_prefixes(self.snippets)
+        for prefix, mapping_key in prefixes.items():
+            mapping = self.snippets.get(mapping_key, {})
+            if isinstance(mapping, dict):
+                for name in mapping:
+                    if name != "__prefix__":
+                        static_triggers.add(prefix + name)
+        existing = static_triggers - {trigger}
+        return validate_trigger(trigger, existing, dynamic_names)
+
     def refresh_runtime_indexes(self):
         """Refresh max trigger length and compiled trigger metadata.
 
@@ -1013,8 +1036,9 @@ If userInput <> "" Then WScript.Echo userInput'''
                 "kind": kind,
             }
         )
-        if len(self.notification_history) > 120:
-            self.notification_history = self.notification_history[-120:]
+        if len(self.notification_history) > NOTIFICATION_HISTORY_LIMIT:
+            self.notification_history = self.notification_history[-NOTIFICATION_HISTORY_LIMIT:]
+        save_notification_history(self.notification_history_file, self.notification_history)
 
         try:
             self.icon.notify(text, title)
@@ -1774,11 +1798,15 @@ If userInput <> "" Then WScript.Echo userInput'''
 
         btn_frame = tk.Frame(frame_right, bg="#FFFFFF")
         btn_frame.grid(row=5, column=0, sticky="e")
-        btn_new = tk.Button(btn_frame, text="Novo", width=12)
-        btn_save = tk.Button(btn_frame, text="Salvar", width=12)
-        btn_delete = tk.Button(btn_frame, text="Excluir", width=12)
+        btn_new = tk.Button(btn_frame, text="Novo", width=10)
+        btn_save = tk.Button(btn_frame, text="Salvar", width=10)
+        btn_duplicate = tk.Button(btn_frame, text="Duplicar", width=10)
+        btn_rename = tk.Button(btn_frame, text="Renomear", width=10)
+        btn_delete = tk.Button(btn_frame, text="Excluir", width=10)
         btn_new.pack(side=tk.LEFT, padx=(0, 6))
         btn_save.pack(side=tk.LEFT, padx=6)
+        btn_duplicate.pack(side=tk.LEFT, padx=6)
+        btn_rename.pack(side=tk.LEFT, padx=6)
         btn_delete.pack(side=tk.LEFT, padx=(6, 0))
 
         self._bind_mousewheel(listbox, listbox)
@@ -1826,6 +1854,14 @@ If userInput <> "" Then WScript.Echo userInput'''
                 messagebox.showwarning("Aviso", "Informe um valor para o snippet.")
                 return
 
+            if trigger not in self.snippets:
+                warnings = self._validate_trigger_warnings(trigger)
+                if warnings and not messagebox.askyesno(
+                    "Confirmar trigger",
+                    "Avisos sobre este trigger:\n\n• " + "\n• ".join(warnings) + "\n\nSalvar mesmo assim?",
+                ):
+                    return
+
             self.snippets[trigger] = value
             if not self.save_snippets(self.snippets):
                 messagebox.showerror(
@@ -1860,11 +1896,65 @@ If userInput <> "" Then WScript.Echo userInput'''
                 refresh_listbox()
                 self.notify_status(f"Snippet '{trigger}' excluído.", key=f"delete-static:{trigger}")
 
+        def on_duplicate():
+            value = serialize_text_widget_content(text_value)
+            if not extract_plain_text(value).strip():
+                messagebox.showwarning("Aviso", "Nada para duplicar.")
+                return
+            # Keep the value, clear the trigger so the user names the copy.
+            entry_trigger.delete(0, tk.END)
+            update_format_status()
+            entry_trigger.focus_set()
+            messagebox.showinfo("Duplicar", "Informe um novo trigger e clique em Salvar para criar a cópia.")
+
+        def on_rename():
+            old_trigger = entry_trigger.get().strip()
+            if old_trigger not in self.snippets:
+                messagebox.showwarning("Aviso", "Selecione um snippet salvo para renomear.")
+                return
+            new_trigger = simpledialog.askstring("Renomear", "Novo trigger:", initialvalue=old_trigger, parent=root)
+            if not new_trigger:
+                return
+            new_trigger = new_trigger.strip()
+            if new_trigger == old_trigger:
+                return
+            if new_trigger.startswith("_"):
+                messagebox.showwarning("Aviso", "Triggers com '_' são reservados.")
+                return
+            if new_trigger in self.snippets:
+                messagebox.showwarning("Aviso", f"O trigger '{new_trigger}' já existe.")
+                return
+            warnings = self._validate_trigger_warnings(new_trigger)
+            if warnings and not messagebox.askyesno(
+                "Confirmar trigger",
+                "Avisos sobre este trigger:\n\n• " + "\n• ".join(warnings) + "\n\nRenomear mesmo assim?",
+            ):
+                return
+            value = self.snippets[old_trigger]
+            self.snippets[new_trigger] = value
+            del self.snippets[old_trigger]
+            if not self.save_snippets(self.snippets):
+                # Roll back the in-memory rename on failure.
+                self.snippets[old_trigger] = value
+                self.snippets.pop(new_trigger, None)
+                messagebox.showerror("Erro ao salvar", "Não foi possível gravar snippets.json.")
+                return
+            self.refresh_runtime_indexes()
+            entry_trigger.delete(0, tk.END)
+            entry_trigger.insert(0, new_trigger)
+            refresh_listbox()
+            self.notify_status(f"Snippet renomeado para '{new_trigger}'.", key=f"rename-static:{new_trigger}")
+
         listbox.bind("<<ListboxSelect>>", load_selected)
         btn_new.configure(command=on_new)
         btn_save.configure(command=on_save)
+        btn_duplicate.configure(command=on_duplicate)
+        btn_rename.configure(command=on_rename)
         btn_delete.configure(command=on_delete)
         search_var.trace_add("write", lambda *_: refresh_listbox())
+        # Ctrl+S saves the current static snippet from anywhere in the editor.
+        for widget in (entry_trigger, text_value, listbox):
+            widget.bind("<Control-s>", lambda _event: (on_save(), "break")[1])
 
         refresh_listbox()
         search_entry.focus_set()
@@ -2475,12 +2565,30 @@ If userInput <> "" Then WScript.Echo userInput'''
         self.icon.run(setup=self.on_tray_ready)
 
 
+def set_dpi_awareness():
+    """Make Tk render crisply on high-DPI displays (per-monitor v2, best effort)."""
+    try:
+        # -4 = DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+        ctypes.windll.user32.SetProcessDpiAwarenessContext(-4)
+        return
+    except Exception:
+        pass
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
+
 def main():
     """Main entry point."""
     if not acquire_single_instance_mutex():
         show_already_running_message()
         return
 
+    set_dpi_awareness()
     expander = TextExpander()
     expander.run()
 
