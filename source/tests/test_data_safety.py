@@ -80,6 +80,34 @@ class RecoverSnippetsTests(unittest.TestCase):
         with open(self.app.snippets_file, encoding="utf-8") as handle:
             self.assertEqual(json.load(handle), good)
 
+    def test_recovery_skips_corrupt_newest_backup_for_older_valid_one(self):
+        # Simulate a corrupt backup ranked newest by mtime, with an older valid one.
+        good = {"xhi": "hello"}
+        for path in bs.list_backups(self.app.backups_dir):
+            os.remove(path)
+        old_valid = os.path.join(self.app.backups_dir, "snippets-20260101-000000.json")
+        new_corrupt = os.path.join(self.app.backups_dir, "snippets-20260102-000000.json")
+        with open(old_valid, "w", encoding="utf-8") as handle:
+            json.dump(good, handle)
+        with open(new_corrupt, "w", encoding="utf-8") as handle:
+            handle.write("{ truncated")
+        os.utime(old_valid, (1000, 1000))
+        os.utime(new_corrupt, (2000, 2000))  # newest by mtime, but invalid
+        with open(self.app.snippets_file, "w", encoding="utf-8") as handle:
+            handle.write("{ also corrupt")
+
+        recovered = self.app.recover_snippets_file("test corruption")
+        self.assertEqual(recovered, good)
+
+    def test_startup_backup_skipped_for_invalid_file(self):
+        # A corrupt live file must not be copied into a fresh (newest) backup.
+        for path in bs.list_backups(self.app.backups_dir):
+            os.remove(path)
+        with open(self.app.snippets_file, "w", encoding="utf-8") as handle:
+            handle.write("{ corrupt")
+        self.app.backup_on_startup()
+        self.assertEqual(bs.list_backups(self.app.backups_dir), [])
+
     def test_corrupt_load_without_backup_falls_back_to_defaults(self):
         # Remove all backups so recovery must use defaults.
         for path in bs.list_backups(self.app.backups_dir):
