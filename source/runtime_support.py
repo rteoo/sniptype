@@ -7,10 +7,37 @@ import time
 from ctypes import wintypes
 from logging.handlers import RotatingFileHandler
 
+import json
+
 from rich_text_support import extract_plain_text, get_clipboard_payload
+from snippet_utils import write_json_atomic
 
 
 LOGGER_NAME = "txt_xpander"
+NOTIFICATION_HISTORY_LIMIT = 120
+
+
+def load_notification_history(path, limit=NOTIFICATION_HISTORY_LIMIT):
+    """Load the persisted notification ring, or [] when missing/invalid."""
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except Exception:
+        return []
+    if not isinstance(data, list):
+        return []
+    # Keep only well-formed entries so the history window (which reads dict keys)
+    # can't crash on an externally corrupted file.
+    return [item for item in data if isinstance(item, dict)][-limit:]
+
+
+def save_notification_history(path, history, limit=NOTIFICATION_HISTORY_LIMIT):
+    """Persist the newest ``limit`` notifications atomically. Best effort."""
+    try:
+        write_json_atomic(path, history[-limit:])
+        return True
+    except Exception:
+        return False
 LOG_FILE_NAME = "txt_xpander.log"
 _LOG_FORMAT = "%(asctime)s %(levelname)s %(message)s"
 _LOG_MAX_BYTES = 1_000_000
