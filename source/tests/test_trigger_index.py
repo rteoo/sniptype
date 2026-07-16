@@ -53,5 +53,39 @@ class TriggerIndexTests(unittest.TestCase):
         self.assertIsNone(value)
 
 
+class SuffixOrderingTests(unittest.TestCase):
+    def test_longer_trigger_wins_over_suffix_regardless_of_source_order(self):
+        # "ecban" is a suffix of "iecban"; the shorter one is listed first, which
+        # under source-order matching would shadow the longer one.
+        snippets = {"ecban": "short", "iecban": "long"}
+        index = compile_trigger_index(snippets, set())
+        self.assertEqual("iecban", find_direct_trigger("xiecban", index))
+        self.assertEqual("ecban", find_direct_trigger("xecban", index))
+
+    def test_bucket_is_ordered_longest_first(self):
+        snippets = {"ab": "1", "xxab": "2", "zab": "3"}
+        index = compile_trigger_index(snippets, set())
+        self.assertEqual(("xxab", "zab", "ab"), index["direct_by_last_char"]["b"])
+
+
+class FormTriggerMetadataTests(unittest.TestCase):
+    def test_form_variable_snippet_is_flagged(self):
+        snippets = {
+            "xform": "Hello %%name%%",
+            "xplain": "just text",
+            "xclip": "paste %%clipboard-paste%%",
+        }
+        index = compile_trigger_index(snippets, set())
+        self.assertIn("xform", index["form_triggers"])
+        self.assertNotIn("xplain", index["form_triggers"])
+        # clipboard-paste is an inline variable, not a form field.
+        self.assertNotIn("xclip", index["form_triggers"])
+
+    def test_callable_and_mapping_are_never_form_triggers(self):
+        snippets = {"xcall": lambda: "x", "_codes": {"__prefix__": "c"}}
+        index = compile_trigger_index(snippets, set())
+        self.assertEqual(frozenset(), index["form_triggers"])
+
+
 if __name__ == "__main__":
     unittest.main()

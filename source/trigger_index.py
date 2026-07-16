@@ -1,8 +1,31 @@
+from rich_text_support import extract_plain_text
 from snippet_utils import check_dynamic_pattern, get_dynamic_prefixes
+from variable_support import has_form_variables
+
+
+def _compute_form_triggers(snippets):
+    """Return the set of direct triggers whose value needs a form-fill dialog.
+
+    Computed once at compile time so the keyboard hot path never runs the
+    form-variable regex per keystroke.
+    """
+    form_triggers = set()
+    for trigger, value in snippets.items():
+        if trigger.startswith("_") or callable(value):
+            continue
+        if has_form_variables(extract_plain_text(value), snippets):
+            form_triggers.add(trigger)
+    return form_triggers
 
 
 def compile_trigger_index(snippets, slow_snippets):
-    """Precompute trigger lookup structures while preserving current trigger order."""
+    """Precompute trigger lookup structures for the keyboard hot path.
+
+    Within each last-character bucket, triggers are ordered longest-first so a
+    trigger that is a suffix of another can never shadow the longer one
+    (deterministic match; fixes the insertion-order hazard). Ties keep source
+    order for stability.
+    """
     direct_triggers = []
     direct_by_last_char = {}
 
@@ -14,6 +37,9 @@ def compile_trigger_index(snippets, slow_snippets):
         last_char = trigger[-1]
         direct_by_last_char.setdefault(last_char, []).append(trigger)
 
+    for last_char, bucket in direct_by_last_char.items():
+        bucket.sort(key=len, reverse=True)  # stable: equal lengths keep source order
+
     dynamic_prefixes = get_dynamic_prefixes(snippets)
 
     return {
@@ -22,13 +48,12 @@ def compile_trigger_index(snippets, slow_snippets):
         "dynamic_prefixes": dynamic_prefixes,
         "ordered_prefixes": tuple(dynamic_prefixes.keys()),
         "slow_triggers": frozenset(slow_snippets),
+        "form_triggers": frozenset(_compute_form_triggers(snippets)),
     }
 
 
 def find_direct_trigger(typed_text, trigger_index):
-    """Return the first direct trigger that matches current suffix, preserving source order."""
-    # ceiling: first-match-in-source-order; a trigger that is a suffix of another can shadow it.
-    # Switch to longest-match-first when validating trigger conflicts (improvement plan phase 3).
+    """Return the longest direct trigger that matches the current suffix."""
     if not typed_text:
         return None
 
