@@ -4,7 +4,7 @@ This file is the canonical agent contract for this repository — it guides Clau
 
 ## Project Overview
 
-Txt Xpander is a Windows system tray text expander. Typing a trigger word replaces the typed text with an expanded value, usually by placing the payload on the clipboard and sending Ctrl+V. Expansion fires immediately on the last character of a matching trigger; there is no terminator (space/punctuation) gating.
+Txt Xpander is a Windows system tray text expander. Typing a trigger word replaces the typed text with an expanded value, usually by placing the payload on the clipboard and sending Ctrl+V. By default expansion fires immediately on the last character of a matching trigger. An opt-in terminator mode (`settings.json` key `terminator_mode: true`, default off) instead expands only after a word-ending character (space/punctuation) and re-emits that character; Enter is not a terminator.
 
 The app includes:
 
@@ -68,7 +68,7 @@ Build details: the release is `--onedir` (not `--onefile`); the hidden import `p
 
 ## Architecture Notes
 
-The keyboard hot path is `TextExpander.on_press()`. It appends keystrokes to a buffer and checks the compiled trigger index for a suffix match on every keystroke — expansion fires as soon as the buffer ends with a trigger. The index is pre-compiled at load time into buckets keyed by the trigger's last character (`direct_by_last_char`), so each keystroke only scans that bucket. Slow work such as network calls, dialogs, and form fill prompts must run outside the hot path (stock/WhatsApp triggers and form-variable snippets already do; BCB economy triggers currently do not — see `source/docs/audit-report.md` §2.1 before touching this area).
+The keyboard hot path is `TextExpander.on_press()`. It appends keystrokes to a buffer and checks the compiled trigger index for a suffix match on every keystroke. The index is pre-compiled at load time into buckets keyed by the trigger's last character (`direct_by_last_char`), ordered longest-first so a trigger that is a suffix of another cannot shadow it; it also precomputes `form_triggers` so the form-variable regex never runs per keystroke. The listener only detects and erases the trigger; all expansion work (callable execution including BCB fetches, variable resolution, dialogs, clipboard, paste) runs on a worker thread via `_run_expansion`, so no keystroke is ever blocked and a raising callable can never kill the listener. The buffer length always includes composed dynamic mapping triggers plus a margin (`TRIGGER_BUFFER_MARGIN`).
 
 Expansion flow:
 

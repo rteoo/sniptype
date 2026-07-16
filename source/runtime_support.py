@@ -56,6 +56,12 @@ KERNEL32.GlobalFree.restype = HANDLE
 CF_HTML = USER32.RegisterClipboardFormatW("HTML Format")
 CF_RTF = USER32.RegisterClipboardFormatW("Rich Text Format")
 
+# The clipboard is a single OS-global resource and paste is a
+# snapshot -> set -> paste -> restore sequence. Serialize it so concurrent
+# expansion workers cannot interleave and clobber each other's payload or lose
+# the user's original clipboard contents.
+_CLIPBOARD_PASTE_LOCK = threading.Lock()
+
 
 def configure_logging(log_dir=None, level=logging.INFO):
     """Attach file and (dev-only) console handlers to the shared app logger.
@@ -303,20 +309,22 @@ class TextInserter:
         # ceiling: only plain text survives the save/restore round-trip; images, file lists
         # and rich formats on the clipboard are lost on every expansion. Preserve original
         # format handles if that loss starts to hurt (audit 2.7).
-        previous_text = WindowsClipboard.get_text()
-        plain_text = extract_plain_text(value)
-        if not WindowsClipboard.set_content(value):
-            return False
+        # The lock keeps the snapshot/set/paste/restore atomic across expansion workers.
+        with _CLIPBOARD_PASTE_LOCK:
+            previous_text = WindowsClipboard.get_text()
+            plain_text = extract_plain_text(value)
+            if not WindowsClipboard.set_content(value):
+                return False
 
-        time.sleep(0.05)
-        self._send_paste_shortcut()
-        time.sleep(self.restore_delay)
+            time.sleep(0.05)
+            self._send_paste_shortcut()
+            time.sleep(self.restore_delay)
 
-        if previous_text is not None:
-            current_text = WindowsClipboard.get_text()
-            if current_text is not None and extract_plain_text(current_text) == plain_text:
-                WindowsClipboard.set_content(previous_text)
-        return True
+            if previous_text is not None:
+                current_text = WindowsClipboard.get_text()
+                if current_text is not None and extract_plain_text(current_text) == plain_text:
+                    WindowsClipboard.set_content(previous_text)
+            return True
 
     def _send_paste_shortcut(self):
         from pynput.keyboard import Key
