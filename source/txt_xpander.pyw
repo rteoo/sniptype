@@ -49,7 +49,15 @@ from runtime_support import (
     TextInserter,
     WindowsClipboard,
     build_snippet_failure_notification,
+    configure_logging,
     truncate_notification_text,
+)
+from backup_support import (
+    create_backup,
+    find_latest_backup,
+    prune_backups,
+    quarantine_corrupt_file,
+    should_backup_on_startup,
 )
 from whatsapp_support import normalize_phone_number
 from whatsapp_runtime_support import execute_whatsapp_action
@@ -144,13 +152,18 @@ class TextExpander:
         self.text_inserter = TextInserter(self.keyboard_controller, logger=self.logger)
         self.notification_timestamps = {}
         self.notification_history = []
+        self.pending_notifications = []
 
         # User data lives beside the executable; bundled resources may live in _internal.
         self.base_dir = get_runtime_base_dir()
         self.resource_dir = get_runtime_resource_dir()
         self.snippets_file = os.path.join(self.base_dir, snippets_file)
+        self.backups_dir = os.path.join(self.base_dir, "backups")
+        self.logs_dir = os.path.join(self.base_dir, "logs")
+        configure_logging(self.logs_dir)
         self.ensure_seed_snippets_file(snippets_file)
         self.logger.info(f"➡ Arquivo de snippets configurado para: {self.snippets_file}")
+        self.backup_on_startup()
 
         # Initialize the B3/US stock data consultor
         self.b3_consultor = B3FundamentosConsultor(cache_seconds=600)
@@ -209,40 +222,103 @@ class TextExpander:
             try:
                 static_snippets = validate_static_snippets(load_json_file(self.snippets_file))
                 if static_snippets is None:
-                    self.logger.warning("⚠ Formato inesperado em snippets.json, usando defaults.")
-                    static_snippets = self.get_default_snippets()
-                self.logger.info(f"✓ Snippets carregados do arquivo: {len(static_snippets)} snippets")
+                    self.logger.warning("⚠ Formato inesperado em snippets.json; tentando restaurar.")
+                    static_snippets = self.recover_snippets_file("formato inválido")
+                else:
+                    self.logger.info(f"✓ Snippets carregados do arquivo: {len(static_snippets)} snippets")
             except Exception as e:
                 self.logger.error(f"⚠ Erro ao carregar snippets: {e}")
-                static_snippets = self.get_default_snippets()
-                self.save_snippets(static_snippets)
+                static_snippets = self.recover_snippets_file(str(e))
         else:
             self.logger.info("ℹ Primeira execução: criando arquivo de snippets padrão")
             static_snippets = self.get_default_snippets()
             self.save_snippets(static_snippets)
-        
+
         # Add dynamic snippets
         dynamic_snippets = self.get_dynamic_snippets()
-        
+
         # Merge: JSON snippets + dynamic ones (dynamic take priority)
         all_snippets = merge_snippets(static_snippets, dynamic_snippets)
-        
+
         self.logger.info(f"✓ Total de snippets: {len(all_snippets)} ({len(static_snippets)} estáticos + {len(dynamic_snippets)} dinâmicos)")
-        
+
         return all_snippets
-    
+
+    def recover_snippets_file(self, reason: str):
+        """Quarantine a corrupt snippets file and restore from the newest backup.
+
+        Never overwrites the bad file with defaults: the corrupt copy is renamed
+        aside for forensics, the newest backup is restored when one exists, and
+        only a truly unrecoverable state falls back to sample defaults.
+        """
+        try:
+            quarantined = quarantine_corrupt_file(self.snippets_file)
+            self.logger.error(f"⚠ snippets.json corrompido ({reason}); movido para {quarantined}")
+        except OSError as e:
+            self.logger.error(f"⚠ Não foi possível isolar snippets.json corrompido: {e}")
+
+        latest_backup = find_latest_backup(self.backups_dir)
+        if latest_backup:
+            try:
+                data = validate_static_snippets(load_json_file(latest_backup))
+            except Exception as e:
+                self.logger.error(f"⚠ Backup mais recente também inválido ({latest_backup}): {e}")
+                data = None
+            if data is not None:
+                shutil.copyfile(latest_backup, self.snippets_file)
+                backup_name = os.path.basename(latest_backup)
+                self.logger.info(f"✓ snippets.json restaurado do backup {backup_name}")
+                self.notify_error(
+                    f"snippets.json estava corrompido; restaurado do backup {backup_name}.",
+                    key="snippets-restored",
+                )
+                return data
+
+        self.logger.warning("⚠ Sem backup válido; usando snippets de exemplo.")
+        self.notify_error(
+            "snippets.json estava corrompido e não havia backup; usando snippets de exemplo.",
+            key="snippets-restored",
+        )
+        defaults = self.get_default_snippets()
+        self.save_snippets(defaults)
+        return defaults
+
     def get_default_snippets(self):
         """Return default example snippets (static only, for the JSON file)."""
         return get_static_default_snippets()
-    
-    def save_snippets(self, snippets: dict):
-        """Save only static snippets to the JSON file."""
+
+    def backup_on_startup(self):
+        """Take one backup at launch when the newest is missing or older than 24 h."""
+        try:
+            if should_backup_on_startup(self.backups_dir):
+                created = create_backup(self.snippets_file, self.backups_dir)
+                if created:
+                    self.logger.info(f"✓ Backup de inicialização criado: {os.path.basename(created)}")
+                    prune_backups(self.backups_dir)
+        except OSError as e:
+            self.logger.warning(f"Falha ao criar backup de inicialização: {e}")
+
+    def save_snippets(self, snippets: dict) -> bool:
+        """Save static snippets to disk, backing up the previous copy first.
+
+        Returns True on success, False on failure. A rotating backup of the
+        pre-write file is taken before the atomic replace so no save can lose an
+        earlier state.
+        """
         saveable = build_saveable_snippets(snippets)
+        try:
+            create_backup(self.snippets_file, self.backups_dir)
+            prune_backups(self.backups_dir)
+        except OSError as e:
+            self.logger.warning(f"Falha ao criar backup antes de salvar: {e}")
+
         try:
             write_json_atomic(self.snippets_file, saveable)
             self.logger.info("✓ snippets.json salvo com sucesso.")
+            return True
         except Exception as e:
             self.logger.error(f"Erro ao salvar snippets: {e}")
+            return False
 
     # =====================================================================
     # DATE / TEXT / INPUT UTILITIES
@@ -906,6 +982,10 @@ If userInput <> "" Then WScript.Echo userInput'''
         return self.notify(message, key=key, cooldown_seconds=2, kind="status")
 
     def notify_error(self, message: str, key: str = None, cooldown_seconds: float = 8):
+        """Notify of an error now, or queue it for tray startup if the icon is not up yet."""
+        if not self.icon:
+            self.pending_notifications.append((message, key))
+            return False
         return self.notify(message, key=key, cooldown_seconds=cooldown_seconds, kind="error")
 
     def notify_snippet_failure(self, trigger: str, result):
@@ -924,6 +1004,9 @@ If userInput <> "" Then WScript.Echo userInput'''
             self.icon = icon
         time.sleep(0.75)
         self.notify_status("Text Expander iniciado com sucesso.", key="startup")
+        pending, self.pending_notifications = self.pending_notifications, []
+        for message, key in pending:
+            self.notify(message, key=key, cooldown_seconds=8, kind="error")
 
     # =====================================================================
     # KEYBOARD LISTENER
@@ -1480,7 +1563,12 @@ If userInput <> "" Then WScript.Echo userInput'''
                 return
 
             self.snippets[trigger] = value
-            self.save_snippets(self.snippets)
+            if not self.save_snippets(self.snippets):
+                messagebox.showerror(
+                    "Erro ao salvar",
+                    "Não foi possível gravar snippets.json. Verifique os logs; suas edições podem não ter sido salvas.",
+                )
+                return
             self.refresh_runtime_indexes()
             self.notify_status(f"Snippet '{trigger}' salvo.", key=f"save-static:{trigger}")
 
@@ -1495,7 +1583,12 @@ If userInput <> "" Then WScript.Echo userInput'''
 
             if trigger in self.snippets and messagebox.askyesno("Confirmar", f"Excluir '{trigger}'?"):
                 del self.snippets[trigger]
-                self.save_snippets(self.snippets)
+                if not self.save_snippets(self.snippets):
+                    messagebox.showerror(
+                        "Erro ao salvar",
+                        "Não foi possível gravar snippets.json. Verifique os logs; a exclusão pode não ter sido salva.",
+                    )
+                    return
                 self.refresh_runtime_indexes()
                 entry_trigger.delete(0, tk.END)
                 load_value_into_text_widget(text_value, "")
@@ -1696,7 +1789,14 @@ If userInput <> "" Then WScript.Echo userInput'''
                     return
 
                 self.snippets[map_key] = {"__prefix__": prefix}
-                self.save_snippets(self.snippets)
+                if not self.save_snippets(self.snippets):
+                    del self.snippets[map_key]
+                    messagebox.showerror(
+                        "Erro ao salvar",
+                        "Não foi possível gravar snippets.json. Verifique os logs; o tipo não foi criado.",
+                        parent=dialog,
+                    )
+                    return
                 self.refresh_runtime_indexes(include_dynamic_items=True)
                 refresh_type_radiobuttons()
                 mapping_type.set(map_key)
@@ -1720,8 +1820,14 @@ If userInput <> "" Then WScript.Echo userInput'''
             if not messagebox.askyesno("Confirmar", f"Excluir o tipo '{info.get('label', current_type)}' e todos os itens?"):
                 return
 
-            del self.snippets[current_type]
-            self.save_snippets(self.snippets)
+            removed_mapping = self.snippets.pop(current_type)
+            if not self.save_snippets(self.snippets):
+                self.snippets[current_type] = removed_mapping
+                messagebox.showerror(
+                    "Erro ao salvar",
+                    "Não foi possível gravar snippets.json. Verifique os logs; o tipo não foi excluído.",
+                )
+                return
             self.refresh_runtime_indexes(include_dynamic_items=True)
 
             refresh_type_radiobuttons()
@@ -1781,11 +1887,22 @@ If userInput <> "" Then WScript.Echo userInput'''
 
             mapping = ensure_mapping_dict(current_type)
             prefix_key = mapping.get("__prefix__")
+            existed = name in mapping
+            previous_value = mapping.get(name)
             mapping[name] = value
             if prefix_key:
                 mapping["__prefix__"] = prefix_key
 
-            self.save_snippets(self.snippets)
+            if not self.save_snippets(self.snippets):
+                if existed:
+                    mapping[name] = previous_value
+                else:
+                    mapping.pop(name, None)
+                messagebox.showerror(
+                    "Erro ao salvar",
+                    "Não foi possível gravar snippets.json. Verifique os logs; o item não foi salvo.",
+                )
+                return
             self.refresh_runtime_indexes(include_dynamic_items=True)
             self.notify_status(f"Item '{name}' salvo em {mappings.get(current_type, {}).get('label', current_type)}.", key=f"save-map:{current_type}:{name}")
             refresh_mapping_list()
@@ -1801,8 +1918,14 @@ If userInput <> "" Then WScript.Echo userInput'''
 
             mapping = self.snippets.get(current_type, {})
             if isinstance(mapping, dict) and name in mapping and messagebox.askyesno("Confirmar", f"Excluir '{name}'?"):
-                del mapping[name]
-                self.save_snippets(self.snippets)
+                removed_value = mapping.pop(name)
+                if not self.save_snippets(self.snippets):
+                    mapping[name] = removed_value
+                    messagebox.showerror(
+                        "Erro ao salvar",
+                        "Não foi possível gravar snippets.json. Verifique os logs; a exclusão não foi salva.",
+                    )
+                    return
                 self.refresh_runtime_indexes(include_dynamic_items=True)
                 entry_name.delete(0, tk.END)
                 load_value_into_text_widget(text_value, "")
