@@ -1,9 +1,20 @@
 import ctypes
+import logging
+import os
+import sys
 import threading
 import time
 from ctypes import wintypes
+from logging.handlers import RotatingFileHandler
 
 from rich_text_support import extract_plain_text, get_clipboard_payload
+
+
+LOGGER_NAME = "txt_xpander"
+LOG_FILE_NAME = "txt_xpander.log"
+_LOG_FORMAT = "%(asctime)s %(levelname)s %(message)s"
+_LOG_MAX_BYTES = 1_000_000
+_LOG_BACKUP_COUNT = 3
 
 
 CF_UNICODETEXT = 13
@@ -46,19 +57,71 @@ CF_HTML = USER32.RegisterClipboardFormatW("HTML Format")
 CF_RTF = USER32.RegisterClipboardFormatW("Rich Text Format")
 
 
+def configure_logging(log_dir=None, level=logging.INFO):
+    """Attach file and (dev-only) console handlers to the shared app logger.
+
+    Idempotent: repeated calls do not duplicate handlers. A rotating file
+    handler (1 MB x 3) is added when ``log_dir`` is given, so errors survive in
+    the windowed/packaged build where stdout is discarded. A console handler is
+    added only when a real stdout exists (running from a terminal in dev).
+    """
+    logger = logging.getLogger(LOGGER_NAME)
+    logger.setLevel(level)
+    logger.propagate = False
+    formatter = logging.Formatter(_LOG_FORMAT)
+
+    if log_dir:
+        log_path = os.path.abspath(os.path.join(log_dir, LOG_FILE_NAME))
+        has_file_handler = any(
+            isinstance(handler, RotatingFileHandler)
+            and os.path.abspath(getattr(handler, "baseFilename", "")) == log_path
+            for handler in logger.handlers
+        )
+        if not has_file_handler:
+            os.makedirs(log_dir, exist_ok=True)
+            file_handler = RotatingFileHandler(
+                log_path,
+                maxBytes=_LOG_MAX_BYTES,
+                backupCount=_LOG_BACKUP_COUNT,
+                encoding="utf-8",
+            )
+            file_handler.setFormatter(formatter)
+            logger.addHandler(file_handler)
+
+    stream = getattr(sys, "stdout", None)
+    if stream is not None:
+        has_stream_handler = any(
+            isinstance(handler, logging.StreamHandler)
+            and not isinstance(handler, RotatingFileHandler)
+            for handler in logger.handlers
+        )
+        if not has_stream_handler:
+            stream_handler = logging.StreamHandler(stream)
+            stream_handler.setFormatter(formatter)
+            logger.addHandler(stream_handler)
+
+    return logger
+
+
 class AppLogger:
-    """Tiny logging wrapper so runtime output stays centralized."""
-    # ceiling: print-only, so output is lost in windowed/packaged builds; replace with
-    # file-based logging when diagnosing packaged-app failures matters (plan phase 1).
+    """Thin wrapper over the shared stdlib logger.
+
+    Output goes to the rotating log file (and the console in dev) once
+    ``configure_logging`` has run. Before configuration, records fall through
+    to logging's last-resort stderr handler, so nothing is silently dropped.
+    """
+
+    def __init__(self, name=LOGGER_NAME):
+        self._logger = logging.getLogger(name)
 
     def info(self, message):
-        print(message)
+        self._logger.info(message)
 
     def warning(self, message):
-        print(message)
+        self._logger.warning(message)
 
     def error(self, message):
-        print(message)
+        self._logger.error(message)
 
 
 class BackgroundTaskRunner:
