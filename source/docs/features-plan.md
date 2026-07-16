@@ -1,5 +1,7 @@
 # Features Plan: Tray Double-Click & Custom Variables
 
+Date: 2026-03-30
+
 ## Overview
 
 Four additions to the existing architecture:
