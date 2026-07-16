@@ -54,7 +54,7 @@ from runtime_support import (
 )
 from backup_support import (
     create_backup,
-    find_latest_backup,
+    list_backups,
     prune_backups,
     quarantine_corrupt_file,
     should_backup_on_startup,
@@ -257,16 +257,18 @@ class TextExpander:
         except OSError as e:
             self.logger.error(f"⚠ Não foi possível isolar snippets.json corrompido: {e}")
 
-        latest_backup = find_latest_backup(self.backups_dir)
-        if latest_backup:
+        # Try each backup newest-first; a single unreadable backup must not skip
+        # the older valid ones (a corrupt file can be copied into a fresh backup
+        # at startup and rank newest by mtime).
+        for backup in list_backups(self.backups_dir):
             try:
-                data = validate_static_snippets(load_json_file(latest_backup))
+                data = validate_static_snippets(load_json_file(backup))
             except Exception as e:
-                self.logger.error(f"⚠ Backup mais recente também inválido ({latest_backup}): {e}")
-                data = None
+                self.logger.error(f"⚠ Backup inválido, tentando o próximo ({backup}): {e}")
+                continue
             if data is not None:
-                shutil.copyfile(latest_backup, self.snippets_file)
-                backup_name = os.path.basename(latest_backup)
+                shutil.copyfile(backup, self.snippets_file)
+                backup_name = os.path.basename(backup)
                 self.logger.info(f"✓ snippets.json restaurado do backup {backup_name}")
                 self.notify_error(
                     f"snippets.json estava corrompido; restaurado do backup {backup_name}.",
@@ -287,10 +289,23 @@ class TextExpander:
         """Return default example snippets (static only, for the JSON file)."""
         return get_static_default_snippets()
 
+    def snippets_file_is_valid(self):
+        """True when the on-disk snippets file parses to a valid static dict.
+
+        Used to avoid poisoning the backup set with a corrupt file, which could
+        otherwise rank newest by mtime and defeat recovery.
+        """
+        if not os.path.exists(self.snippets_file):
+            return False
+        try:
+            return validate_static_snippets(load_json_file(self.snippets_file)) is not None
+        except Exception:
+            return False
+
     def backup_on_startup(self):
         """Take one backup at launch when the newest is missing or older than 24 h."""
         try:
-            if should_backup_on_startup(self.backups_dir):
+            if should_backup_on_startup(self.backups_dir) and self.snippets_file_is_valid():
                 created = create_backup(self.snippets_file, self.backups_dir)
                 if created:
                     self.logger.info(f"✓ Backup de inicialização criado: {os.path.basename(created)}")
@@ -307,8 +322,11 @@ class TextExpander:
         """
         saveable = build_saveable_snippets(snippets)
         try:
-            create_backup(self.snippets_file, self.backups_dir)
-            prune_backups(self.backups_dir)
+            # Only back up a valid prior file, so a corrupt on-disk copy can never
+            # become the newest backup and defeat recovery.
+            if self.snippets_file_is_valid():
+                create_backup(self.snippets_file, self.backups_dir)
+                prune_backups(self.backups_dir)
         except OSError as e:
             self.logger.warning(f"Falha ao criar backup antes de salvar: {e}")
 
