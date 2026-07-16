@@ -78,15 +78,20 @@ def configure_logging(log_dir=None, level=logging.INFO):
             for handler in logger.handlers
         )
         if not has_file_handler:
-            os.makedirs(log_dir, exist_ok=True)
-            file_handler = RotatingFileHandler(
-                log_path,
-                maxBytes=_LOG_MAX_BYTES,
-                backupCount=_LOG_BACKUP_COUNT,
-                encoding="utf-8",
-            )
-            file_handler.setFormatter(formatter)
-            logger.addHandler(file_handler)
+            # A read-only install dir (e.g. Program Files) must not crash startup:
+            # fall through to the console/last-resort handler instead.
+            try:
+                os.makedirs(log_dir, exist_ok=True)
+                file_handler = RotatingFileHandler(
+                    log_path,
+                    maxBytes=_LOG_MAX_BYTES,
+                    backupCount=_LOG_BACKUP_COUNT,
+                    encoding="utf-8",
+                )
+                file_handler.setFormatter(formatter)
+                logger.addHandler(file_handler)
+            except OSError as error:
+                logger.warning(f"Não foi possível criar o log em {log_dir}: {error}")
 
     stream = getattr(sys, "stdout", None)
     if stream is not None:
