@@ -44,6 +44,15 @@ python -m unittest tests.test_snippet_utils -v
 build_release.bat
 ```
 
+**Build the Windows installer (Setup.exe):**
+
+```powershell
+build_release.bat      # produce dist\Txt Xpander first
+build_installer.bat    # compile installer\Output\TxtXpanderSetup-<version>.exe
+```
+
+`build_installer.bat` requires the Inno Setup 6 compiler (`ISCC.exe`) and compiles `installer\txt_xpander.iss`: a per-user install to `%LOCALAPPDATA%\Programs\Txt Xpander` (no admin), Start Menu/Desktop/Startup shortcuts, and a proper uninstaller that leaves `~/.txt_xpander` user data intact. Bump `MyAppVersion` in the `.iss` alongside the app version.
+
 The build script backs up and restores the packaged `snippets.json`, stages the PyInstaller output, swaps `dist\Txt Xpander`, and can update the Windows Startup shortcut.
 
 Build details: the release is `--onedir` (not `--onefile`); the hidden import `pystray._win32` is required; `snippets.json` and the icon are bundled as data files, but the user-editable copy in `dist\Txt Xpander\` is separate from the bundled fallback in `_internal\`.
@@ -68,6 +77,7 @@ Build details: the release is `--onedir` (not `--onefile`); the hidden import `p
 - `source\tests\` contains unit tests.
 - `source\docs\` contains planning notes for refactors and features, plus `audit-report.md` (full code audit) and `improvement-plan.md` (phased roadmap).
 - `source\run_txt_xpander.bat` is the source-side launcher. It checks/install dependencies and starts the app with `pythonw`.
+- `installer\txt_xpander.iss` is the Inno Setup script; `build_installer.bat` compiles it into `installer\Output\` (gitignored). The per-user install location is independent of where user data lives (`~/.txt_xpander`), which is what makes a Program-Files-style install safe.
 - `dist\Txt Xpander\` is the packaged application folder. Treat `build\`, `dist\`, and `dist_staging\` as generated output unless the task is explicitly about packaging.
 
 ## Architecture Notes
