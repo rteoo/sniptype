@@ -264,6 +264,39 @@ class MigrationTests(unittest.TestCase):
             self.assertEqual(json.load(handle), {"xhi": "edited after migration"})
 
 
+class NotificationHistoryTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.path = os.path.join(self.tmp, "notifications.json")
+
+    def test_load_missing_returns_empty(self):
+        self.assertEqual(runtime_support.load_notification_history(self.path), [])
+
+    def test_roundtrip_and_limit(self):
+        history = [{"time": "00:00:00", "title": "t", "message": str(i), "kind": "status"} for i in range(200)]
+        runtime_support.save_notification_history(self.path, history, limit=120)
+        loaded = runtime_support.load_notification_history(self.path, limit=120)
+        self.assertEqual(len(loaded), 120)
+        self.assertEqual(loaded[-1]["message"], "199")
+
+    def test_invalid_file_returns_empty(self):
+        with open(self.path, "w", encoding="utf-8") as handle:
+            handle.write("{ not a list")
+        self.assertEqual(runtime_support.load_notification_history(self.path), [])
+
+    def test_history_persists_across_construction(self):
+        base = os.path.join(self.tmp, "app")
+        os.makedirs(base)
+        app = make_expander(base, '{"xhi": "hello"}')
+        app.notification_history_file = os.path.join(base, "notifications.json")
+        runtime_support.save_notification_history(
+            app.notification_history_file,
+            [{"time": "00:00:00", "title": "t", "message": "persisted", "kind": "status"}],
+        )
+        reloaded = runtime_support.load_notification_history(app.notification_history_file)
+        self.assertEqual(reloaded[0]["message"], "persisted")
+
+
 class LoggingConfigTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
