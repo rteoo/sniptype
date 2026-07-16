@@ -96,9 +96,9 @@ Style spans are range based. When text changes, keep spans normalized and clippe
 
 ## Runtime Notes
 
-This is a Windows-only app using `pynput` for keyboard hooks, `pystray` for the tray icon, `tkinter` for GUI, `ctypes` for Win32 clipboard and mutex calls, and clipboard paste as the primary insertion path.
+This is a Windows-first app using `pynput` for keyboard hooks, `pystray` for the tray icon, `tkinter` for GUI, `ctypes` for Win32 clipboard and mutex calls, and clipboard paste as the primary insertion path. OS-specific decisions are centralized in `source\platform_support.py` (paste modifier, single-instance strategy, autostart builders); adding a macOS/Linux backend should extend that module rather than scatter `sys.platform` checks. The remaining hard Windows coupling is the Win32 clipboard in `runtime_support.py` (loaded at import) — a non-Windows clipboard backend is the next cross-platform step.
 
-Single-instance enforcement uses the Win32 mutex `Local\TxtXpanderSingleton`.
+Single-instance enforcement uses the Win32 mutex `Local\TxtXpanderSingleton` on Windows; other platforms use a PID lockfile in the data dir.
 
 Network-backed helpers use short caches: BCB lookups cache for about 300 seconds and yfinance stock fundamentals cache for about 600 seconds.
 

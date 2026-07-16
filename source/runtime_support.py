@@ -355,10 +355,12 @@ class TextInserter:
 
     def _send_paste_shortcut(self):
         from pynput.keyboard import Key
+        from platform_support import paste_modifier_is_cmd
 
-        self.keyboard_controller.press(Key.ctrl)
+        modifier = Key.cmd if paste_modifier_is_cmd() else Key.ctrl
+        self.keyboard_controller.press(modifier)
         self.keyboard_controller.press('v')
         self.keyboard_controller.release('v')
-        self.keyboard_controller.release(Key.ctrl)
+        self.keyboard_controller.release(modifier)
 
 
