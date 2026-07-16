@@ -1,14 +1,13 @@
-""" 
-Text Expander - Expansor de Snippets para Windows com System Tray
-Versão: 2.6 (snippets de ações em thread + JSON na mesma pasta + GUI de snippets)
-Autor: Desenvolvido para uso pessoal legítimo
+"""
+Txt Xpander - Windows system tray snippet expander.
+Version: 2.7
 
-IMPORTANTE: Este programa captura entrada de teclado apenas para expandir
-snippets de texto (atalhos), similar ao TextExpander. Não armazena, transmite
-ou registra teclas digitadas. Todo o processamento é local.
+IMPORTANT: This program captures keyboard input only to expand text
+snippets (shortcuts), similar to TextExpander. It does not store,
+transmit, or log keystrokes. All processing is local.
 
-Bibliotecas usadas: 
-- pynput (open source, LGPL, mantida desde 2015)
+Libraries used:
+- pynput (open source, LGPL)
 - pystray (open source, LGPL)
 - pillow (open source, PIL License)
 - yfinance (open source, Apache 2.0)
@@ -20,7 +19,6 @@ import sys
 import shutil
 import ctypes
 import subprocess
-import threading
 import webbrowser
 
 os.environ.setdefault("PYSTRAY_BACKEND", "win32")
@@ -146,8 +144,6 @@ class TextExpander:
         self.text_inserter = TextInserter(self.keyboard_controller, logger=self.logger)
         self.notification_timestamps = {}
         self.notification_history = []
-        self._manager_lock = threading.Lock()
-        self._manager_open = False
 
         # Dados do usuario ficam ao lado do executavel; recursos empacotados podem viver em _internal.
         self.base_dir = get_runtime_base_dir()
@@ -462,7 +458,9 @@ If userInput <> "" Then WScript.Echo userInput'''
             "xnow": lambda: time.strftime("%H:%M:%S"),
             "xdatahora": lambda: time.strftime("%d/%m/%Y às %H:%M"),
             
-            # Indicadores econômicos (Banco Central)
+            # ceiling: BCB callables are not in slow_snippets, so they run on the keyboard
+            # listener thread and block typing for up to ~15s on a cache miss; route them
+            # through the background path (plan phase 3, audit 2.1).
             "xdolar": bcb.get_dolar,
             "xselic": bcb.get_selic_meta,
             "xipcam": bcb.get_ipca_mensal,
@@ -1070,8 +1068,6 @@ If userInput <> "" Then WScript.Echo userInput'''
                 key="gui-open-error",
                 cooldown_seconds=5,
             )
-        finally:
-            self._manager_open = False
 
     def _set_window_icon(self, window):
         icon_path = self.resolve_resource_path("txt_xpander.ico")
@@ -2049,45 +2045,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
