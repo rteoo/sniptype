@@ -83,6 +83,31 @@ python -m PyInstaller --noconfirm --clean --windowed --onedir --name "Txt Xpande
 
 This produces the shipping folder in [`dist\Txt Xpander\`](dist/Txt%20Xpander).
 
+## Build The Installer (Setup.exe)
+
+For a real install experience — installs to a proper per-user location, adds Start Menu / optional Desktop shortcuts, an optional "start with Windows" checkbox, and a proper entry in **Apps & features** with an uninstaller — build a Windows installer with [Inno Setup](https://jrsoftware.org/isdl.php).
+
+One-time prerequisite: install **Inno Setup 6** (free).
+
+```powershell
+build_release.bat      REM 1) package the app into dist\Txt Xpander
+build_installer.bat    REM 2) compile installer\Output\TxtXpanderSetup-<version>.exe
+```
+
+`build_installer.bat` finds the Inno Setup compiler (`ISCC.exe`) automatically and compiles [`installer\txt_xpander.iss`](installer/txt_xpander.iss).
+
+Running the resulting **Setup.exe**:
+
+- Installs per-user to `%LOCALAPPDATA%\Programs\Txt Xpander` — **no administrator prompt**.
+- Creates Start Menu (and optional Desktop) shortcuts and, if you tick the box, a Startup shortcut so it launches at login.
+- Registers a real uninstaller (Windows **Apps & features**), which removes the program files but **keeps your data** in `%USERPROFILE%\.txt_xpander`.
+- Detects a running instance and asks you to close it before installing/upgrading.
+
+Notes:
+- The installer is **unsigned**, so Windows SmartScreen shows a "More info → Run anyway" prompt the first time — expected for a self-built app.
+- Upgrading over a previous install replaces the program files in place (same install ID) and never touches your `~/.txt_xpander` data.
+- After moving to the installer, you can delete any old `dist\Txt Xpander` copy and its old Startup shortcut; the installer's own shortcut points at the new location.
+
 ## Custom Variables (`%%var%%`)
 
 Snippets can include custom variables that are resolved at expansion time:
