@@ -68,6 +68,11 @@ from app_paths import (
     needs_migration,
 )
 from settings_support import load_settings
+from dynamic_registry import (
+    build_dynamic_snippets,
+    load_registry,
+    reference_entries_by_category,
+)
 from whatsapp_support import normalize_phone_number
 from whatsapp_runtime_support import execute_whatsapp_action
 from rich_text_support import (
@@ -87,10 +92,6 @@ from variable_support import (
     resolve_inline,
 )
 from gui_support import (
-    DATETIME_SNIPPETS,
-    ECONOMY_SNIPPETS,
-    STOCK_SNIPPETS,
-    WHATSAPP_SNIPPETS,
     center_dialog,
     filter_static_snippets,
     iter_filtered_mapping_items,
@@ -190,16 +191,25 @@ class TextExpander:
         self.logger.info(f"➡ Arquivo de snippets configurado para: {self.snippets_file}")
         self.backup_on_startup()
 
-        # Initialize the B3/US stock data consultor
-        self.b3_consultor = B3FundamentosConsultor(cache_seconds=600)
-        
-        # Stock snippets (slow: they prompt for a ticker and fetch data)
-        self.slow_snippets = {
-            "xcot", "xplucro", "xcap", "xpvp", "xdy",
-            "xebt", "xmarg", "xroe", "xdivl", "xdivt",
-            "xcaixa", "xvol", "xrec", "xbeta", "x52w",
-            "xfund", "xwapp", "xlwapp", "xpwapp"
-        }
+        # Providers for the JSON dynamic-snippet registry. Timeouts/TTLs are
+        # configurable via settings.json.
+        self.b3_consultor = B3FundamentosConsultor(
+            cache_seconds=self.settings.get("stock_cache_seconds", 600)
+        )
+        self.bcb = BCBConsultor(
+            timeout=self.settings.get("bcb_timeout", 3),
+            cache_seconds=self.settings.get("bcb_cache_seconds", 300),
+        )
+        # Dynamic snippets are described in dynamic_snippets.json (bundled), with an
+        # optional per-user override in the data dir. slow_snippets is derived from
+        # the registry rather than hardcoded.
+        self.dynamic_registry_file = os.path.join(self.data_dir, "dynamic_snippets.json")
+        self.dynamic_registry = load_registry(
+            self.resolve_resource_path("dynamic_snippets.json"),
+            self.dynamic_registry_file,
+            logger=self.logger,
+        )
+        self.slow_snippets = set()
 
         # Load snippets before anything else
         self.snippets = self.load_snippets()
@@ -713,163 +723,20 @@ If userInput <> "" Then WScript.Echo userInput'''
     # =====================================================================
 
     def get_dynamic_snippets(self):
-        """Return dynamic snippets (date/time/BCB/stocks) that are not persisted to JSON."""
-        bcb = BCBConsultor(timeout=3, cache_seconds=300)
-        
-        return {
-            # Date and time - expand instantly
-            "x-hj": lambda: time.strftime("%Y-%m-%d"),
-            "xhj": lambda: time.strftime("%d/%m/%Y"),
-            "xhoje": self.data_extenso,
-            "xnow": lambda: time.strftime("%H:%M:%S"),
-            "xdatahora": lambda: time.strftime("%d/%m/%Y às %H:%M"),
-            
-            # ceiling: BCB callables are not in slow_snippets, so they run on the keyboard
-            # listener thread and block typing for up to ~15s on a cache miss; route them
-            # through the background path (plan phase 3, audit 2.1).
-            "xdolar": bcb.get_dolar,
-            "xselic": bcb.get_selic_meta,
-            "xipcam": bcb.get_ipca_mensal,
-            "xipca12": bcb.get_ipca_12m,
-            "xcdi": bcb.get_cdi,
-            "xptax": bcb.get_ptax_sgs,
-            "xeconomia": bcb.get_resumo_economico,
-            
-            # Stock snippets (treated as slow in the listener)
-            "xcot": self.snippet_cotacao,
-            "xplucro": self.snippet_preco_lucro,
-            "xcap": self.snippet_market_cap,
-            "xpvp": self.snippet_preco_vp,
-            "xdy": self.snippet_dividend_yield,
-            "xebt": self.snippet_ebitda,
-            "xmarg": self.snippet_margem_liquida,
-            "xroe": self.snippet_roe,
-            "xdivl": self.snippet_divida_liquida,
-            "xdivt": self.snippet_divida_total,
-            "xcaixa": self.snippet_caixa,
-            "xvol": self.snippet_volume_medio,
-            "xrec": self.snippet_receita_liquida,
-            "xbeta": self.snippet_beta,
-            "x52w": self.snippet_52week,
-            "xfund": self.snippet_resumo_fundamentos,
-            "xwapp": self.snippet_whatsapp,
-            "xlwapp": self.snippet_whatsapp_link,
-            "xpwapp": self.snippet_whatsapp_prompt,
-        }
-    
+        """Bind the JSON dynamic-snippet registry to provider callables.
+
+        The set of slow triggers is derived from the registry (never hardcoded),
+        so adding or disabling a trigger is a data change, not a code change.
+        """
+        snippets, slow_triggers = build_dynamic_snippets(
+            self.dynamic_registry, self, logger=self.logger
+        )
+        self.slow_snippets = slow_triggers
+        return snippets
+
     # =====================================================================
-    # STOCK SNIPPETS (used by the slow path)
+    # WHATSAPP ACTION (bound by the 'whatsapp' provider)
     # =====================================================================
-
-    def snippet_cotacao(self):
-        print("📊 Snippet xcot acionado - abrindo dialog...")
-        ticker = self.ask_ticker_input("Cotação")
-        if ticker:
-            print(f"🔍 Buscando cotação para {ticker}...")
-            result = self.b3_consultor.get_cotacao_atual(ticker)
-            print(f"✓ Resultado: {result}")
-            return result
-        return "[Cancelado]"
-    
-    def snippet_preco_lucro(self):
-        print("📊 Snippet xplucro acionado - abrindo dialog...")
-        ticker = self.ask_ticker_input("P/L")
-        if ticker:
-            return self.b3_consultor.get_preco_lucro(ticker)
-        return "[Cancelado]"
-    
-    def snippet_market_cap(self):
-        print("📊 Snippet xcap acionado - abrindo dialog...")
-        ticker = self.ask_ticker_input("Market Cap")
-        if ticker:
-            return self.b3_consultor.get_market_cap(ticker)
-        return "[Cancelado]"
-    
-    def snippet_preco_vp(self):
-        print("📊 Snippet xpvp acionado - abrindo dialog...")
-        ticker = self.ask_ticker_input("P/VP")
-        if ticker:
-            return self.b3_consultor.get_preco_vp(ticker)
-        return "[Cancelado]"
-    
-    def snippet_dividend_yield(self):
-        print("📊 Snippet xdy acionado - abrindo dialog...")
-        ticker = self.ask_ticker_input("Dividend Yield")
-        if ticker:
-            return self.b3_consultor.get_dividend_yield(ticker)
-        return "[Cancelado]"
-    
-    def snippet_ebitda(self):
-        print("📊 Snippet xebt acionado - abrindo dialog...")
-        ticker = self.ask_ticker_input("EBITDA")
-        if ticker:
-            return self.b3_consultor.get_ebitda(ticker)
-        return "[Cancelado]"
-    
-    def snippet_margem_liquida(self):
-        print("📊 Snippet xmarg acionado - abrindo dialog...")
-        ticker = self.ask_ticker_input("Margem Líquida")
-        if ticker:
-            return self.b3_consultor.get_margem_liquida(ticker)
-        return "[Cancelado]"
-    
-    def snippet_roe(self):
-        print("📊 Snippet xroe acionado - abrindo dialog...")
-        ticker = self.ask_ticker_input("ROE")
-        if ticker:
-            return self.b3_consultor.get_roe(ticker)
-        return "[Cancelado]"
-    
-    def snippet_divida_liquida(self):
-        print("📊 Snippet xdiv acionado - abrindo dialog...")
-        ticker = self.ask_ticker_input("Dívida Líquida")
-        if ticker:
-            result = self.b3_consultor.get_divida_liquida(ticker)
-            return result
-        return "[Cancelado]"
-
-    def snippet_divida_total(self):
-        print("📊 Snippet xdivt acionado - abrindo dialog...")
-        ticker = self.ask_ticker_input("Dívida Total")
-        if ticker:
-            result = self.b3_consultor.get_divida_total(ticker)
-            return result
-        return "[Cancelado]"
-
-    def snippet_caixa(self):
-        print("📊 Snippet xcaixa acionado - abrindo dialog...")
-        ticker = self.ask_ticker_input("Caixa")
-        if ticker:
-            result = self.b3_consultor.get_caixa(ticker)
-            return result
-        return "[Cancelado]"
-    
-    def snippet_volume_medio(self):
-        print("📊 Snippet xvol acionado - abrindo dialog...")
-        ticker = self.ask_ticker_input("Volume Médio")
-        if ticker:
-            return self.b3_consultor.get_volume_medio(ticker)
-        return "[Cancelado]"
-    
-    def snippet_receita_liquida(self):
-        ticker = self.ask_ticker_input("Receita Líquida")
-        return self.b3_consultor.get_receita_liquida(ticker) if ticker else "[Cancelado]"
-
-    def snippet_beta(self):
-        ticker = self.ask_ticker_input("Beta")
-        return self.b3_consultor.get_beta(ticker) if ticker else "[Cancelado]"
-
-    def snippet_52week(self):
-        ticker = self.ask_ticker_input("52 Semanas High/Low")
-        return self.b3_consultor.get_52week_high_low(ticker) if ticker else "[Cancelado]"
-    
-    def snippet_resumo_fundamentos(self):
-        print("📊 Snippet xfund acionado - abrindo dialog...")
-        ticker = self.ask_ticker_input("Resumo de Fundamentos")
-        if ticker:
-            print(f"🔍 Buscando resumo para {ticker}...")
-            return self.b3_consultor.get_resumo_fundamentos(ticker)
-        return "[Cancelado]"
 
     def run_whatsapp_action(self, trigger: str):
         """Execute one of the built-in WhatsApp actions."""
@@ -881,18 +748,6 @@ If userInput <> "" Then WScript.Echo userInput'''
             open_url=self.open_url_in_browser,
             notify_error=self.notify_error,
         )
-
-    def snippet_whatsapp(self):
-        """Generate a WhatsApp wa.me link from clipboard or manual input and open it."""
-        return self.run_whatsapp_action("xwapp")
-
-    def snippet_whatsapp_link(self):
-        """Generate a WhatsApp wa.me link from clipboard or manual input and insert it."""
-        return self.run_whatsapp_action("xlwapp")
-
-    def snippet_whatsapp_prompt(self):
-        """Prompt immediately for WhatsApp phone/message input, then open the link."""
-        return self.run_whatsapp_action("xpwapp")
 
     # =====================================================================
     # SPECIAL PATTERNS (cnpj/cpf/cge)
@@ -2378,12 +2233,22 @@ If userInput <> "" Then WScript.Echo userInput'''
         scrollbar.grid(row=0, column=1, sticky="ns")
         canvas.bind("<Configure>", lambda event: canvas.itemconfigure(canvas_window, width=event.width))
 
-        for title, items in sections:
+        grouped = reference_entries_by_category(self.dynamic_registry)
+        for title, category_key in sections:
+            entries = grouped.get(category_key, [])
             section = tk.LabelFrame(inner, text=title, font=("Segoe UI", 9, "bold"), bg="#FFFFFF", padx=12, pady=12)
             section.pack(fill=tk.X, expand=True, pady=(0, 12))
-            for trigger, desc in items:
+            for trigger, desc, enabled in entries:
                 row = tk.Frame(section, bg="#FFFFFF")
                 row.pack(fill=tk.X, pady=2)
+                var = tk.BooleanVar(value=enabled)
+                tk.Checkbutton(
+                    row,
+                    variable=var,
+                    bg="#FFFFFF",
+                    activebackground="#FFFFFF",
+                    command=lambda t=trigger, v=var: self._toggle_registry_entry(t, v.get()),
+                ).pack(side=tk.LEFT)
                 tk.Label(row, text=trigger, font=("Consolas", 10, "bold"), fg="#2D5BD1", bg="#FFFFFF", width=12, anchor="w").pack(side=tk.LEFT)
                 tk.Label(row, text=desc, font=("Segoe UI", 9), bg="#FFFFFF", anchor="w").pack(side=tk.LEFT, padx=(10, 0), fill=tk.X, expand=True)
 
@@ -2392,6 +2257,36 @@ If userInput <> "" Then WScript.Echo userInput'''
         self._bind_mousewheel(canvas, canvas)
         self._bind_mousewheel_descendants(inner, canvas)
 
+    def _toggle_registry_entry(self, trigger, enabled):
+        """Enable/disable a dynamic trigger, persisting to the user override file."""
+        try:
+            if os.path.exists(self.dynamic_registry_file):
+                user_override = load_json_file(self.dynamic_registry_file)
+                if not isinstance(user_override, dict):
+                    user_override = {}
+            else:
+                user_override = {}
+            # Store a minimal per-field override so future bundled changes to other
+            # fields of this trigger still reach the user.
+            existing = user_override.get(trigger)
+            entry = dict(existing) if isinstance(existing, dict) else {}
+            entry["enabled"] = enabled
+            user_override[trigger] = entry
+            write_json_atomic(self.dynamic_registry_file, user_override)
+        except Exception as e:
+            self.logger.error(f"Falha ao salvar registro dinâmico: {e}")
+            self.notify_error("Falha ao salvar alteração do snippet dinâmico.", key="registry-save")
+            return
+
+        self.dynamic_registry = load_registry(
+            self.resolve_resource_path("dynamic_snippets.json"),
+            self.dynamic_registry_file,
+            logger=self.logger,
+        )
+        self.reload_snippets_from_disk()
+        state = "ativado" if enabled else "desativado"
+        self.notify_status(f"Snippet dinâmico '{trigger}' {state}.", key=f"registry-toggle:{trigger}")
+
     def _create_datetime_eco_tab(self, parent):
         """Build the reference tab for Date/Time and Economic Indicator snippets."""
         self._create_reference_tab(
@@ -2399,10 +2294,10 @@ If userInput <> "" Then WScript.Echo userInput'''
             "Snippets dinâmicos de data e economia",
             "Esses triggers consultam data/hora local e dados econômicos do Banco Central.",
             [
-                ("Data e Hora", DATETIME_SNIPPETS),
-                ("Indicadores Econômicos (Banco Central)", ECONOMY_SNIPPETS),
+                ("Data e Hora", "datetime"),
+                ("Indicadores Econômicos (Banco Central)", "economy"),
             ],
-            "Basta digitar o trigger em qualquer aplicativo suportado.",
+            "Use a caixa de seleção para ativar/desativar cada trigger. Para renomear, edite dynamic_snippets.json na pasta de dados.",
         )
 
     def _create_stocks_tab(self, parent):
@@ -2411,7 +2306,7 @@ If userInput <> "" Then WScript.Echo userInput'''
             parent,
             "Snippets de ações e fundamentos",
             "Ao digitar um destes triggers, um popup pedirá o ticker antes da consulta.",
-            [("Ações (B3 e US)", STOCK_SNIPPETS)],
+            [("Ações (B3 e US)", "stock")],
             "Aceita tickers brasileiros (PETR4, VALE3) e americanos (AAPL, MSFT, GOOGL).",
         )
 
@@ -2421,7 +2316,7 @@ If userInput <> "" Then WScript.Echo userInput'''
             parent,
             "Atalho de WhatsApp",
             "Os triggers podem ler o telefone do clipboard ou abrir um popup, sempre validando no mesmo padrão internacional.",
-            [("WhatsApp", WHATSAPP_SNIPPETS)],
+            [("WhatsApp", "whatsapp")],
             "xwapp e xpwapp abrem o navegador. xlwapp insere o link no campo atual e também o mantém no clipboard.",
         )
 
