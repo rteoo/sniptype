@@ -155,9 +155,8 @@ Runtime dependencies are listed in `source\requirements.txt`:
 - `pystray`
 - `Pillow`
 - `yfinance`
-- `markdown` (listed in requirements.txt but not imported anywhere — candidate for removal)
 
-PyInstaller is needed to build releases.
+`source\requirements.txt` holds exactly these four runtime dependencies. PyInstaller is needed to build releases and is installed separately (`pip install pyinstaller`); it is not in `requirements.txt`.
 
 ## Agent Workflow
 
