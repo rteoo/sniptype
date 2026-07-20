@@ -10,6 +10,7 @@ import os
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from unittest import mock
 
@@ -120,6 +121,92 @@ class ManagerGuiSmokeTests(unittest.TestCase):
             first.destroy()
 
         self.app.gui.call(close, timeout=30)
+
+
+def _form_windows(root):
+    return [c for c in root.winfo_children()
+            if isinstance(c, tk.Toplevel) and c.title() == "Preencher campos"]
+
+
+def _find_form(root, label_text):
+    for window in _form_windows(root):
+        for widget in _descendants(window):
+            if isinstance(widget, tk.Label) and label_text in str(widget.cget("text")):
+                return window
+    return None
+
+
+@unittest.skipUnless(TK_AVAILABLE, "Tk display not available")
+class ModalDialogSerializationTests(unittest.TestCase):
+    """A second expansion dialog must be refused, never stacked.
+
+    Stacked dialogs block their workers in nested event loops that unwind
+    strictly LIFO: answering the older one first stranded its caller and lost
+    its result. See TextExpander._run_modal_dialog.
+    """
+
+    def setUp(self):
+        self.app = _make_app(tempfile.mkdtemp())
+        self.app.gui.ensure_started()
+        self.results = {}
+
+    def tearDown(self):
+        self.app.gui.stop()
+
+    def _open_form(self, field):
+        def worker():
+            self.results[field] = self.app._show_form_dialog([field])
+
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+        return thread
+
+    def _wait_for_form(self, label, timeout=15):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if self.app.gui.call(lambda root: _find_form(root, label) is not None, timeout=10):
+                return
+            time.sleep(0.05)
+        self.fail(f"form dialog {label!r} never appeared")
+
+    def _answer_form(self, label, value):
+        def act(root):
+            window = _find_form(root, label)
+            if window is None:
+                return False
+            entry = [w for w in _descendants(window) if isinstance(w, tk.Entry)][0]
+            entry.insert(0, value)
+            window.event_generate("<Return>")
+            return True
+
+        self.assertTrue(self.app.gui.call(act, timeout=10), f"could not answer {label!r}")
+
+    def test_second_dialog_is_refused_while_one_is_open(self):
+        first = self._open_form("first")
+        self._wait_for_form("First")
+
+        second = self._open_form("second")
+        second.join(10)
+        self.assertFalse(second.is_alive(), "second dialog call should return immediately")
+        self.assertIsNone(self.results["second"], "a refused dialog reports like a cancel")
+        self.assertEqual(self.app.gui.call(lambda root: len(_form_windows(root)), timeout=10), 1)
+
+        # The first dialog stays fully usable.
+        self._answer_form("First", "one")
+        first.join(10)
+        self.assertEqual(self.results["first"], {"first": "one"})
+
+    def test_dialog_lock_is_released_for_the_next_expansion(self):
+        first = self._open_form("first")
+        self._wait_for_form("First")
+        self._answer_form("First", "one")
+        first.join(10)
+
+        later = self._open_form("later")
+        self._wait_for_form("Later")
+        self._answer_form("Later", "two")
+        later.join(10)
+        self.assertEqual(self.results["later"], {"later": "two"})
 
 
 @unittest.skipUnless(TK_AVAILABLE, "Tk display not available")
