@@ -4,6 +4,8 @@ All notable changes to Txt Xpander are documented here. The format is based on [
 
 ## [Unreleased]
 
+## [3.1.0] — 2026-07-20
+
 ### Added
 
 - **Rename built-in dynamic snippets from the manager**: each trigger in the dynamic snippets tab has a ✎ button (or double-click the trigger) to rename it. The rename is stored as a `trigger` field in the per-user `dynamic_snippets.json` override, keyed by the entry's stable id, so enabling/disabling and renaming stay independent and future bundled changes still reach the user. Collisions with another dynamic trigger, a static snippet, a mapping prefix, or a composed mapping trigger are blocked; shadowing risks warn first.
@@ -17,6 +19,12 @@ All notable changes to Txt Xpander are documented here. The format is based on [
 - **Behavior change**: a `%%name%%` token matching a dynamic trigger or a dynamic mapping trigger is no longer treated as a form field, so it substitutes instead of prompting. A form field deliberately named after one of those must be renamed.
 - A failing dynamic reference (network down) substitutes an empty string and notifies rather than aborting the containing expansion.
 - Inline `%%xlwapp%%`/`%%xwapp%%` run their flow during resolution; the wa.me URL they place on the clipboard is overwritten by the containing snippet's own paste.
+
+### Technical
+
+- **Continuous integration**: the full test suite now runs on GitHub Actions (`windows-latest`, Python 3.12 and 3.14) for every pull request and push to `main`
+- All 210 tests pass (35 added for renaming, universal references, and slow-path routing)
+- Snippet file format is unchanged; the `dynamic_snippets.json` override gains an optional `trigger` field that older versions ignore
 
 ## [3.0.0] — 2026-07-16
 
