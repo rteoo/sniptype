@@ -151,5 +151,33 @@ class ClipboardSerializationTests(unittest.TestCase):
             self.assertEqual(events[i][1], events[i + 1][1])
 
 
+class SlowRefRoutingTests(unittest.TestCase):
+    """A snippet referencing a slow dynamic trigger must take the async path."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        with open(os.path.join(self.tmp, "dynamic_snippets.json"), "w", encoding="utf-8") as handle:
+            json.dump({"xdolar": {"provider": "bcb", "method": "dolar",
+                                  "category": "economy", "slow": True}}, handle)
+        self.app = make_app(self.tmp, {
+            "xreport": "Dólar: %%xdolar%%",
+            "xplain": "texto simples",
+        })
+
+    def test_snippet_referencing_slow_trigger_uses_slow_path(self):
+        with mock.patch.object(self.app, "run_slow_snippet", return_value=True) as slow, \
+                mock.patch.object(self.app, "expand_snippet", return_value=True) as fast:
+            self.app._run_expansion("xreport")
+        slow.assert_called_once_with("xreport")
+        fast.assert_not_called()
+
+    def test_plain_snippet_still_uses_fast_path(self):
+        with mock.patch.object(self.app, "run_slow_snippet", return_value=True) as slow, \
+                mock.patch.object(self.app, "expand_snippet", return_value=True) as fast:
+            self.app._run_expansion("xplain")
+        fast.assert_called_once_with("xplain")
+        slow.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
