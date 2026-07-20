@@ -18,7 +18,6 @@ import os
 import sys
 import shutil
 import ctypes
-import subprocess
 import webbrowser
 
 os.environ.setdefault("PYSTRAY_BACKEND", "win32")
@@ -101,9 +100,11 @@ from variable_support import (
 )
 from gui_support import (
     center_dialog,
+    center_on_screen,
     filter_static_snippets,
     iter_filtered_mapping_items,
 )
+from gui_thread import GuiThread
 
 # GUI for managing snippets
 import tkinter as tk
@@ -172,6 +173,10 @@ class TextExpander:
         self.listener = None
         self.logger = AppLogger()
         self.task_runner = BackgroundTaskRunner()
+        # One hidden Tk root for the whole process; every window is a Toplevel
+        # of it, marshaled onto its thread. Started in run().
+        self.gui = GuiThread(logger=self.logger)
+        self.manager_window = None
         self.text_inserter = TextInserter(self.keyboard_controller, logger=self.logger)
         self.notification_timestamps = {}
         self.notification_history = []
@@ -549,76 +554,105 @@ class TextExpander:
         return f"{dia_semana}, {dia:02d} de {mes} de {ano}"
     
     def ask_ticker_input(self, prompt_title: str):
-        """
-        Ask for the ticker using VBScript (native to Windows).
-        Runs fine in a separate thread.
+        """Ask for a ticker symbol in a modal dialog. Worker-thread only.
+
+        Returns the upper-cased ticker, or None when the user cancels or
+        submits an empty value.
         """
         print(f"📊 Abrindo input para {prompt_title}...")
-        
-        try:
-            # VBS script
-            vbs_script = f'''userInput = InputBox("Digite o ticker:" & vbCrLf & "Ex: PETR4, AAPL, MSFT", "{prompt_title}", "")
-If userInput <> "" Then WScript.Echo userInput'''
 
-            # Try via mshta
-            result = subprocess.run(
-                ['mshta', 'vbscript:Execute("' + vbs_script.replace('"', '""') + '(Close)")'],
-                capture_output=True,
-                text=True,
-                timeout=30,
-                creationflags=subprocess.CREATE_NO_WINDOW
-            )
-            
-            if not result.stdout.strip():
-                # Fallback via VBS file + cscript
-                vbs_file = os.path.join(os.environ.get('TEMP', '.'), 'txtexp_input.vbs')
-                with open(vbs_file, 'w', encoding='utf-8') as f:
-                    f.write(vbs_script)
-                
-                result = subprocess.run(
-                    ['cscript', '//nologo', vbs_file],
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                    creationflags=subprocess.CREATE_NO_WINDOW
-                )
-                
-                try:
-                    os.remove(vbs_file)
-                except Exception:
-                    pass
-            
-            ticker = result.stdout.strip()
-            
-            if ticker:
-                ticker = ticker.upper()
-                print(f"✓ Ticker digitado: {ticker}")
-                return ticker
-            else:
-                print("⚠ Cancelado ou vazio")
-                return None
-                
-        except subprocess.TimeoutExpired:
-            print("⚠ Timeout no dialog")
-            return None
+        def build(root):
+            result = [None]
+
+            dialog = tk.Toplevel(root)
+            dialog.title(prompt_title)
+            dialog.resizable(False, False)
+            dialog.configure(bg="#F4F6FA")
+            dialog.attributes("-topmost", True)
+            self._set_window_icon(dialog)
+
+            container = tk.Frame(dialog, bg="#F4F6FA", padx=18, pady=18)
+            container.pack(fill=tk.BOTH, expand=True)
+
+            tk.Label(
+                container,
+                text="Digite o ticker:",
+                font=("Segoe UI", 10, "bold"),
+                bg="#F4F6FA",
+                fg="#1F2937",
+            ).pack(anchor="w")
+            tk.Label(
+                container,
+                text="Ex: PETR4, AAPL, MSFT",
+                font=("Segoe UI", 9),
+                bg="#F4F6FA",
+                fg="#5B6472",
+            ).pack(anchor="w", pady=(2, 8))
+
+            entry = tk.Entry(container, font=("Segoe UI", 10), width=28)
+            entry.pack(fill=tk.X, pady=(0, 12))
+
+            buttons = tk.Frame(container, bg="#F4F6FA")
+            buttons.pack(fill=tk.X)
+
+            def on_cancel(_event=None):
+                dialog.destroy()  # result stays None
+
+            def on_ok(_event=None):
+                ticker = entry.get().strip().upper()
+                result[0] = ticker or None
+                dialog.destroy()
+
+            tk.Button(buttons, text="Cancelar", width=12, command=on_cancel).pack(side=tk.RIGHT, padx=(6, 0))
+            tk.Button(buttons, text="OK", width=12, command=on_ok).pack(side=tk.RIGHT)
+
+            entry.bind("<Return>", on_ok)
+            dialog.bind("<Escape>", on_cancel)
+            dialog.protocol("WM_DELETE_WINDOW", on_cancel)
+
+            center_on_screen(dialog)
+            dialog.grab_set()
+            dialog.lift()
+            dialog.focus_force()
+            entry.focus_set()
+
+            dialog.wait_window(dialog)
+            return result[0]
+
+        try:
+            ticker = self.gui.call(build)
         except Exception as e:
-            print(f"⚠ Erro no dialog: {e}")
+            self.logger.error(f"Erro no diálogo de ticker: {e}")
+            self.notify_error(
+                f"Erro ao abrir diálogo de ticker: {e}",
+                key="ticker-dialog-error",
+                cooldown_seconds=5,
+            )
             return None
+
+        if ticker:
+            print(f"✓ Ticker digitado: {ticker}")
+        else:
+            print("⚠ Cancelado ou vazio")
+        return ticker
 
     def ask_whatsapp_input(self, initial_phone: str = "", initial_message: str = ""):
-        """Show a small modal dialog for manual WhatsApp phone/message input."""
-        result = {"phone": None, "message": None}
+        """Show a small modal dialog for manual WhatsApp phone/message input.
 
-        try:
-            root = tk.Tk()
-            root.title("Abrir WhatsApp")
-            root.resizable(False, False)
-            root.configure(bg="#F4F6FA")
-            root.attributes("-topmost", True)
-            root.grab_set()
-            self._set_window_icon(root)
+        Worker-thread only: the dialog is built on the shared GUI thread and
+        this call blocks until the user submits or cancels.
+        """
+        def build(root):
+            result = {"phone": None, "message": None}
 
-            container = tk.Frame(root, bg="#F4F6FA", padx=18, pady=18)
+            dialog = tk.Toplevel(root)
+            dialog.title("Abrir WhatsApp")
+            dialog.resizable(False, False)
+            dialog.configure(bg="#F4F6FA")
+            dialog.attributes("-topmost", True)
+            self._set_window_icon(dialog)
+
+            container = tk.Frame(dialog, bg="#F4F6FA", padx=18, pady=18)
             container.pack(fill=tk.BOTH, expand=True)
             container.grid_columnconfigure(0, weight=1)
 
@@ -655,12 +689,8 @@ If userInput <> "" Then WScript.Echo userInput'''
             buttons = tk.Frame(container, bg="#F4F6FA")
             buttons.grid(row=6, column=0, sticky="e")
 
-            def close_dialog():
-                root.grab_release()
-                root.destroy()
-
-            def cancel_dialog():
-                close_dialog()
+            def cancel_dialog(_event=None):
+                dialog.destroy()  # result stays empty
 
             def submit_dialog(event=None):
                 phone_text = entry_phone.get().strip()
@@ -671,14 +701,14 @@ If userInput <> "" Then WScript.Echo userInput'''
                     messagebox.showwarning(
                         "Telefone inválido",
                         "Informe um telefone com DDD ou código do país em um formato válido.",
-                        parent=root,
+                        parent=dialog,
                     )
                     entry_phone.focus_set()
                     return
 
                 result["phone"] = normalized_phone
                 result["message"] = message_text
-                close_dialog()
+                dialog.destroy()
 
             btn_cancel = tk.Button(buttons, text="Cancelar", width=12, command=cancel_dialog)
             btn_open = tk.Button(buttons, text="Abrir WhatsApp", width=14, command=submit_dialog)
@@ -686,17 +716,20 @@ If userInput <> "" Then WScript.Echo userInput'''
             btn_open.pack(side=tk.LEFT)
 
             entry_phone.bind("<Return>", submit_dialog)
-            root.bind("<Escape>", lambda event: cancel_dialog())
-            root.protocol("WM_DELETE_WINDOW", cancel_dialog)
+            dialog.bind("<Escape>", cancel_dialog)
+            dialog.protocol("WM_DELETE_WINDOW", cancel_dialog)
 
-            root.update_idletasks()
-            width = root.winfo_reqwidth()
-            height = root.winfo_reqheight()
-            pos_x = (root.winfo_screenwidth() - width) // 2
-            pos_y = (root.winfo_screenheight() - height) // 3
-            root.geometry(f"{width}x{height}+{pos_x}+{pos_y}")
+            center_on_screen(dialog, vertical_divisor=3)
+            dialog.grab_set()
+            dialog.lift()
+            dialog.focus_force()
             entry_phone.focus_set()
-            root.mainloop()
+
+            dialog.wait_window(dialog)
+            return result["phone"], result["message"]
+
+        try:
+            return self.gui.call(build)
         except Exception as e:
             self.logger.error(f"Erro ao abrir diálogo do WhatsApp: {e}")
             self.notify_error(
@@ -705,8 +738,6 @@ If userInput <> "" Then WScript.Echo userInput'''
                 cooldown_seconds=5,
             )
             return None, None
-
-        return result["phone"], result["message"]
 
     def open_url_in_browser(self, url: str):
         """Open a URL with webbrowser and fall back to os.startfile on Windows."""
@@ -902,105 +933,114 @@ If userInput <> "" Then WScript.Echo userInput'''
     def _show_form_dialog(self, field_names):
         """
         Show a modal dialog for form-fill variables.
-        Called from a background thread — creates its own Tk root.
+        Called from a worker thread; the dialog is built on the shared GUI
+        thread and this call blocks until it closes.
         Returns {field_name: value} or None if the user cancels.
         """
-        result = [None]
-        entries = {}
+        def build(root):
+            result = [None]
+            entries = {}
 
-        dialog_root = tk.Tk()
-        dialog_root.title("Preencher campos")
-        dialog_root.resizable(False, False)
-        dialog_root.configure(bg="#F4F6FA")
-        self._set_window_icon(dialog_root)
+            dialog = tk.Toplevel(root)
+            dialog.title("Preencher campos")
+            dialog.resizable(False, False)
+            dialog.configure(bg="#F4F6FA")
+            self._set_window_icon(dialog)
 
-        tk.Label(
-            dialog_root,
-            text="Preencha os campos do snippet:",
-            font=("Segoe UI", 9, "bold"),
-            bg="#F4F6FA",
-            fg="#1F2937",
-        ).pack(padx=20, pady=(16, 8), anchor="w")
-
-        frame = tk.Frame(dialog_root, bg="#F4F6FA")
-        frame.pack(fill=tk.BOTH, padx=20, pady=(0, 8))
-        frame.grid_columnconfigure(0, weight=1)
-
-        first_entry = None
-        for i, name in enumerate(field_names):
-            label_text = name.replace("_", " ").title()
             tk.Label(
-                frame,
-                text=label_text + ":",
-                font=("Segoe UI", 9),
+                dialog,
+                text="Preencha os campos do snippet:",
+                font=("Segoe UI", 9, "bold"),
                 bg="#F4F6FA",
-                fg="#374151",
-            ).grid(row=i * 2, column=0, sticky="w", pady=(6, 0))
-            entry = tk.Entry(
-                frame,
-                font=("Segoe UI", 10),
-                width=42,
+                fg="#1F2937",
+            ).pack(padx=20, pady=(16, 8), anchor="w")
+
+            frame = tk.Frame(dialog, bg="#F4F6FA")
+            frame.pack(fill=tk.BOTH, padx=20, pady=(0, 8))
+            frame.grid_columnconfigure(0, weight=1)
+
+            first_entry = None
+            for i, name in enumerate(field_names):
+                label_text = name.replace("_", " ").title()
+                tk.Label(
+                    frame,
+                    text=label_text + ":",
+                    font=("Segoe UI", 9),
+                    bg="#F4F6FA",
+                    fg="#374151",
+                ).grid(row=i * 2, column=0, sticky="w", pady=(6, 0))
+                entry = tk.Entry(
+                    frame,
+                    font=("Segoe UI", 10),
+                    width=42,
+                    relief=tk.FLAT,
+                    highlightthickness=1,
+                    highlightbackground="#D7DEE8",
+                )
+                entry.grid(row=i * 2 + 1, column=0, sticky="ew", pady=(2, 0))
+                entries[name] = entry
+                if first_entry is None:
+                    first_entry = entry
+
+            btn_frame = tk.Frame(dialog, bg="#F4F6FA")
+            btn_frame.pack(fill=tk.X, padx=20, pady=(12, 16))
+
+            def on_ok(_event=None):
+                result[0] = {name: entries[name].get() for name in field_names}
+                dialog.destroy()
+
+            def on_cancel(_event=None):
+                dialog.destroy()  # result[0] stays None
+
+            tk.Button(
+                btn_frame,
+                text="Cancelar",
+                font=("Segoe UI", 9),
+                width=10,
+                command=on_cancel,
                 relief=tk.FLAT,
-                highlightthickness=1,
-                highlightbackground="#D7DEE8",
+                bg="#E7ECF5",
+                activebackground="#D9E2F2",
+                cursor="hand2",
+            ).pack(side=tk.RIGHT, padx=(4, 0))
+            tk.Button(
+                btn_frame,
+                text="OK",
+                font=("Segoe UI", 9),
+                width=10,
+                command=on_ok,
+                relief=tk.FLAT,
+                bg="#265CFF",
+                fg="white",
+                activebackground="#1a4fd4",
+                activeforeground="white",
+                cursor="hand2",
+            ).pack(side=tk.RIGHT)
+
+            dialog.bind("<Return>", on_ok)
+            dialog.bind("<Escape>", on_cancel)
+            dialog.protocol("WM_DELETE_WINDOW", on_cancel)
+
+            center_on_screen(dialog)
+            dialog.grab_set()
+            dialog.lift()
+            dialog.focus_force()
+            if first_entry:
+                first_entry.focus_set()
+
+            dialog.wait_window(dialog)
+            return result[0]
+
+        try:
+            return self.gui.call(build)
+        except Exception as e:
+            self.logger.error(f"Erro no diálogo de campos: {e}")
+            self.notify_error(
+                f"Erro ao abrir diálogo de campos: {e}",
+                key="form-dialog-error",
+                cooldown_seconds=5,
             )
-            entry.grid(row=i * 2 + 1, column=0, sticky="ew", pady=(2, 0))
-            entries[name] = entry
-            if first_entry is None:
-                first_entry = entry
-
-        btn_frame = tk.Frame(dialog_root, bg="#F4F6FA")
-        btn_frame.pack(fill=tk.X, padx=20, pady=(12, 16))
-
-        def on_ok(_event=None):
-            result[0] = {name: entries[name].get() for name in field_names}
-            dialog_root.destroy()
-
-        def on_cancel(_event=None):
-            dialog_root.destroy()  # result[0] stays None
-
-        tk.Button(
-            btn_frame,
-            text="Cancelar",
-            font=("Segoe UI", 9),
-            width=10,
-            command=on_cancel,
-            relief=tk.FLAT,
-            bg="#E7ECF5",
-            activebackground="#D9E2F2",
-            cursor="hand2",
-        ).pack(side=tk.RIGHT, padx=(4, 0))
-        tk.Button(
-            btn_frame,
-            text="OK",
-            font=("Segoe UI", 9),
-            width=10,
-            command=on_ok,
-            relief=tk.FLAT,
-            bg="#265CFF",
-            fg="white",
-            activebackground="#1a4fd4",
-            activeforeground="white",
-            cursor="hand2",
-        ).pack(side=tk.RIGHT)
-
-        dialog_root.bind("<Return>", on_ok)
-        dialog_root.bind("<Escape>", on_cancel)
-
-        dialog_root.update_idletasks()
-        w = dialog_root.winfo_reqwidth()
-        h = dialog_root.winfo_reqheight()
-        sw = dialog_root.winfo_screenwidth()
-        sh = dialog_root.winfo_screenheight()
-        dialog_root.geometry(f"+{(sw - w) // 2}+{(sh - h) // 2}")
-
-        dialog_root.lift()
-        dialog_root.focus_force()
-        if first_entry:
-            first_entry.focus_set()
-
-        dialog_root.mainloop()
-        return result[0]
+            return None
 
     def rebuild_trigger_index(self):
         """Rebuild compiled trigger metadata after snippet changes."""
@@ -1213,18 +1253,42 @@ If userInput <> "" Then WScript.Echo userInput'''
     # =====================================================================
 
     def manage_snippets_gui(self, icon, item):
-        """Open the full GUI for managing static snippets and dynamic mappings."""
-        hwnd = ctypes.windll.user32.FindWindowW(None, "Txt Xpander - Gerenciador de Snippets")
-        if hwnd:
-            ctypes.windll.user32.ShowWindow(hwnd, 9)  # SW_RESTORE
-            ctypes.windll.user32.SetForegroundWindow(hwnd)
-            return
-        self.task_runner.start(self._manage_snippets_gui_thread, name="manage-snippets-gui")
-
-    def _manage_snippets_gui_thread(self):
-        """Thread that runs the full management tkinter window."""
+        """Open (or re-focus) the snippet manager window."""
         try:
-            root = tk.Tk()
+            self.gui.submit(self._show_manager_window)
+        except Exception as e:
+            self.logger.error(f"Erro ao abrir gerenciador: {e}")
+            self.notify_error(
+                f"Erro ao abrir gerenciador: {e}",
+                key="gui-open-error",
+                cooldown_seconds=5,
+            )
+
+    def _show_manager_window(self, tk_root):
+        """Build the manager window, or raise the one already open.
+
+        GUI thread only. In-process window tracking replaces the old Win32
+        FindWindowW lookup now that every window hangs off the shared root.
+        """
+        window = self.manager_window
+        try:
+            already_open = window is not None and bool(window.winfo_exists())
+        except Exception:
+            already_open = False
+
+        if already_open:
+            window.deiconify()
+            window.lift()
+            window.focus_force()
+            return
+
+        self.manager_window = None
+        self._build_manager_window(tk_root)
+
+    def _build_manager_window(self, tk_root):
+        """Construct the management window as a Toplevel of the shared root."""
+        try:
+            root = tk.Toplevel(tk_root)
             root.title("Txt Xpander - Gerenciador de Snippets")
             root.geometry("960x660")
             root.minsize(820, 540)
@@ -1289,9 +1353,17 @@ If userInput <> "" Then WScript.Echo userInput'''
             self._create_dynamic_snippets_tab(tab_builtin, root)
             self._create_backups_tab(tab_backups, root)
 
-            root.mainloop()
+            def on_close():
+                self.manager_window = None
+                root.destroy()
+
+            root.protocol("WM_DELETE_WINDOW", on_close)
+            self.manager_window = root
+            root.lift()
+            root.focus_force()
 
         except Exception as e:
+            self.manager_window = None
             self.logger.error(f"Erro na GUI de gerenciamento: {e}")
             self.notify_error(
                 f"Erro ao abrir gerenciador: {e}",
@@ -2613,6 +2685,7 @@ If userInput <> "" Then WScript.Echo userInput'''
         self.enabled = False
         if self.listener:
             self.listener.stop()
+        self.gui.stop()
         icon.stop()
     
     def run_keyboard_listener(self):
@@ -2654,8 +2727,15 @@ If userInput <> "" Then WScript.Echo userInput'''
         print("  Clique com botão direito no ícone para opções")
         print("=" * 60)
         
+        # Bring the shared Tk root up before the tray, so the first dialog does
+        # not pay interpreter startup while the user waits on an expansion.
+        try:
+            self.gui.ensure_started()
+        except Exception as e:
+            self.logger.error(f"Falha ao iniciar a thread de GUI: {e}")
+
         self.task_runner.start(self.run_keyboard_listener, name="keyboard-listener")
-        
+
         menu = pystray.Menu(
             pystray.MenuItem(
                 lambda text: f"{'✓' if self.enabled else '✗'} Ativado",

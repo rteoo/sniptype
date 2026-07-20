@@ -116,6 +116,16 @@ class TerminatorReemitTests(unittest.TestCase):
             self.app._run_expansion("xhi", append_text=" ")
         self.app.keyboard_controller.type.assert_called_once_with(" ")
 
+    def test_cancelled_form_dialog_inserts_nothing(self):
+        """A cancelled form dialog must leave no text and no terminator."""
+        self.app.snippets["xform"] = "Olá %%nome%%"
+        self.app.refresh_runtime_indexes()
+        with mock.patch.object(self.app, "_show_form_dialog", return_value=None) as dialog:
+            self.app._run_expansion("xform", append_text=" ")
+        dialog.assert_called_once_with(["nome"])
+        self.app.text_inserter.insert_text.assert_not_called()
+        self.app.keyboard_controller.type.assert_not_called()
+
 
 class ClipboardSerializationTests(unittest.TestCase):
     def test_concurrent_pastes_do_not_interleave(self):
