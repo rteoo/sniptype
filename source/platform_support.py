@@ -4,8 +4,9 @@ Windows is the only fully-implemented backend today; this module centralizes the
 platform decisions (paste modifier, single-instance strategy, autostart install)
 so adding a macOS/Linux backend is additive and Windows behavior stays unchanged.
 
-Pure helpers here are unit-tested; the Win32 clipboard and mutex remain in
-``runtime_support``/``txt_xpander`` for now (see README "Cross-platform status").
+Pure helpers here are unit-tested; the clipboard backends live in
+``clipboard_support`` (selected from :func:`current_os`) and the single-instance
+mutex remains in ``txt_xpander`` (see README "Cross-platform status").
 """
 
 import os

@@ -1,6 +1,6 @@
 # Txt Xpander — Improvement Plan
 
-> **Status (2026-07-16):** Phases 0–4 fully implemented; Phases 5–6 implemented except two items that need a running app / non-Windows host to verify. Full unittest suite green (217 tests). Phase 5.1 (single Tk root, audit 3.3) landed 2026-07-20. Remaining, tracked follow-ups: Phase 5 Treeview list/preview (4.2); Phase 6 non-Windows clipboard backend (the last hard Win32 coupling) and wiring the autostart/ticker adapters end-to-end.
+> **Status (2026-07-20):** Phases 0–4 fully implemented; Phases 5–6 implemented except two items that need a running app / non-Windows host to verify. Full unittest suite green (231 tests). Phase 5.1 (single Tk root, audit 3.3) and Phase 6 clipboard backend split (`clipboard_support.py`, last hard Win32 coupling) both landed 2026-07-20 — the POSIX backend is plain-text only and unverified on a real macOS/Linux host. Remaining, tracked follow-ups: Phase 5 Treeview list/preview (4.2); Phase 6 rich-text paste off Windows and wiring the autostart/ticker adapters end-to-end.
 
 Companion to [audit-report.md](audit-report.md). Seven phases (0–6), ordered so that guideline compliance and data safety land before anything else and each phase ships independently. Constraint honored throughout: **JSON files only — no database.**
 

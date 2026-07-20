@@ -68,7 +68,8 @@ Build details: the release is `--onedir` (not `--onefile`); the hidden import `p
 - `source\dynamic_registry.py` binds the `dynamic_snippets.json` registry to named providers.
 - `source\variable_support.py` parses and resolves `%%var%%` tokens: clipboard-paste variables, form fields, and references to every snippet kind — static snippets, dynamic mapping triggers (`cpffulano`), and runtime dynamic snippets (the callable is invoked). Resolving a dynamic reference can block or open a dialog, so `resolve_inline` is worker-thread only.
 - `source\rich_text_support.py` builds and normalizes rich-text payloads, including HTML/RTF generation and style-span handling.
-- `source\runtime_support.py` contains clipboard integration, insertion helpers, background task support, logging, and notification formatting.
+- `source\runtime_support.py` contains insertion helpers (`TextInserter`), background task support, logging, and notification formatting.
+- `source\clipboard_support.py` owns the clipboard backends and exports the `Clipboard` instance selected for the running OS. The Win32 ctypes bindings live behind that selection and never execute off Windows.
 - `source\whatsapp_support.py` normalizes phone numbers and builds WhatsApp URLs.
 - `source\whatsapp_runtime_support.py` runs the `xwapp`, `xlwapp`, and `xpwapp` action flows.
 - `source\bcb_consultor.py` fetches Brazilian Central Bank API values with caching.
@@ -109,7 +110,9 @@ Style spans are range based. When text changes, keep spans normalized and clippe
 
 ## Runtime Notes
 
-This is a Windows-first app using `pynput` for keyboard hooks, `pystray` for the tray icon, `tkinter` for GUI, `ctypes` for Win32 clipboard and mutex calls, and clipboard paste as the primary insertion path. OS-specific decisions are centralized in `source\platform_support.py` (paste modifier, single-instance strategy, autostart builders); adding a macOS/Linux backend should extend that module rather than scatter `sys.platform` checks. The remaining hard Windows coupling is the Win32 clipboard in `runtime_support.py` (loaded at import) — a non-Windows clipboard backend is the next cross-platform step.
+This is a Windows-first app using `pynput` for keyboard hooks, `pystray` for the tray icon, `tkinter` for GUI, `ctypes` for Win32 clipboard and mutex calls, and clipboard paste as the primary insertion path. OS-specific decisions are centralized in `source\platform_support.py` (paste modifier, single-instance strategy, autostart builders); adding a macOS/Linux backend should extend that module rather than scatter `sys.platform` checks.
+
+Clipboard access goes through `source\clipboard_support.py`, which picks a backend at import time: `WindowsClipboard` (ctypes user32/kernel32, text + HTML + RTF) on Windows, `PosixClipboard` (`pbcopy`/`pbpaste`, `wl-copy`/`wl-paste`, `xclip` or `xsel` via subprocess) elsewhere. The `WinDLL` setup only executes on Windows, so `runtime_support` imports cleanly off Windows. Use the module-level `Clipboard` instance — never a backend class directly. The POSIX backend is plain-text only: HTML/RTF payloads are downgraded with a log line, and a desktop with no clipboard tool logs a warning and returns failure instead of crashing.
 
 Single-instance enforcement uses the Win32 mutex `Local\TxtXpanderSingleton` on Windows; other platforms use a PID lockfile in the data dir.
 

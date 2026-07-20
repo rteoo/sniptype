@@ -140,8 +140,8 @@ class ClipboardSerializationTests(unittest.TestCase):
             events.append(("done", value))
             return True
 
-        with mock.patch.object(runtime_support.WindowsClipboard, "get_text", staticmethod(fake_get_text)), \
-                mock.patch.object(runtime_support.WindowsClipboard, "set_content", staticmethod(fake_set_content)):
+        with mock.patch.object(runtime_support.Clipboard, "get_text", fake_get_text), \
+                mock.patch.object(runtime_support.Clipboard, "set_content", fake_set_content):
             inserter = runtime_support.TextInserter(mock.Mock(), restore_delay=0.0)
             threads = [
                 threading.Thread(target=inserter.insert_text, args=(f"payload{i}",))

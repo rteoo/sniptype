@@ -1,23 +1,12 @@
 import unittest
 
 from runtime_support import (
-    _html_clipboard_bytes,
     build_snippet_failure_notification,
     truncate_notification_text,
 )
 
 
 class RuntimeSupportTests(unittest.TestCase):
-    def test_html_clipboard_bytes_include_required_header(self):
-        payload = _html_clipboard_bytes("<div><strong>abc</strong></div>")
-
-        self.assertIn(b"Version:0.9", payload)
-        self.assertIn(b"StartHTML:", payload)
-        self.assertIn(b"EndHTML:", payload)
-        self.assertIn(b"StartFragment:", payload)
-        self.assertIn(b"EndFragment:", payload)
-        self.assertIn(b"<strong>abc</strong>", payload)
-
     def test_build_snippet_failure_notification_handles_error_wrappers(self):
         message = build_snippet_failure_notification("xdolar", "[Erro: timeout na API]")
 
