@@ -75,8 +75,11 @@ from validation_support import validate_trigger
 from platform_support import IS_WINDOWS, acquire_lockfile, release_lockfile
 from dynamic_registry import (
     build_dynamic_snippets,
+    composed_mapping_triggers,
+    effective_trigger,
     load_registry,
     reference_entries_by_category,
+    validate_rename,
 )
 from whatsapp_support import normalize_phone_number
 from whatsapp_runtime_support import execute_whatsapp_action
@@ -781,7 +784,7 @@ If userInput <> "" Then WScript.Echo userInput'''
             return False
 
         # Slow snippets are not run here (they go through the dialog/fetch path)
-        if trigger in self.slow_snippets:
+        if trigger in self.trigger_index["slow_triggers"]:
             return False
             
         snippet = None
@@ -801,7 +804,14 @@ If userInput <> "" Then WScript.Echo userInput'''
 
             # Resolve inline variables (clipboard + snippet refs) before inserting.
             plain_text = extract_plain_text(snippet)
-            resolved_text = resolve_inline(plain_text, self.snippets, WindowsClipboard.get_text, _seen={trigger})
+            resolved_text = resolve_inline(
+                plain_text,
+                self.snippets,
+                WindowsClipboard.get_text,
+                _seen={trigger},
+                prefixes=self.trigger_index["dynamic_prefixes"],
+                notify_failure=self.notify_snippet_failure,
+            )
             if resolved_text != plain_text:
                 if is_rich_text_payload(snippet):
                     snippet = rebuild_rich_text(snippet, resolved_text)
@@ -846,10 +856,18 @@ If userInput <> "" Then WScript.Echo userInput'''
                 # Static snippet routed here because it has form-fill variables.
                 raw = func
                 plain = extract_plain_text(raw)
-                plain = resolve_inline(plain, self.snippets, WindowsClipboard.get_text, _seen={trigger})
+                prefixes = self.trigger_index["dynamic_prefixes"]
+                plain = resolve_inline(
+                    plain,
+                    self.snippets,
+                    WindowsClipboard.get_text,
+                    _seen={trigger},
+                    prefixes=prefixes,
+                    notify_failure=self.notify_snippet_failure,
+                )
                 form_names = [
                     n for n in find_variable_names(plain)
-                    if classify_variable(n, self.snippets) == "form_field"
+                    if classify_variable(n, self.snippets, prefixes) == "form_field"
                 ]
                 form_data = {}
                 if form_names:
@@ -1174,7 +1192,7 @@ If userInput <> "" Then WScript.Echo userInput'''
         if not self.enabled:
             return
         try:
-            if trigger in self.slow_snippets or trigger in self.trigger_index["form_triggers"]:
+            if trigger in self.trigger_index["slow_triggers"] or trigger in self.trigger_index["form_triggers"]:
                 inserted = self.run_slow_snippet(trigger)
             else:
                 inserted = self.expand_snippet(trigger)
@@ -1260,23 +1278,15 @@ If userInput <> "" Then WScript.Echo userInput'''
             tab_dynamic = tk.Frame(notebook, bg="#F4F6FA")
             notebook.add(tab_dynamic, text="Mapeamentos Dinâmicos")
 
-            tab_datetime_eco = tk.Frame(notebook, bg="#F4F6FA")
-            notebook.add(tab_datetime_eco, text="Data/Hora & Economia")
-
-            tab_stocks = tk.Frame(notebook, bg="#F4F6FA")
-            notebook.add(tab_stocks, text="Ações (Stocks)")
-
-            tab_whatsapp = tk.Frame(notebook, bg="#F4F6FA")
-            notebook.add(tab_whatsapp, text="WhatsApp")
+            tab_builtin = tk.Frame(notebook, bg="#F4F6FA")
+            notebook.add(tab_builtin, text="Snippets Dinâmicos")
 
             tab_backups = tk.Frame(notebook, bg="#F4F6FA")
             notebook.add(tab_backups, text="Backups")
 
             self._create_static_snippets_tab(tab_static, root)
             self._create_dynamic_mappings_tab(tab_dynamic, root)
-            self._create_datetime_eco_tab(tab_datetime_eco)
-            self._create_stocks_tab(tab_stocks)
-            self._create_whatsapp_tab(tab_whatsapp)
+            self._create_dynamic_snippets_tab(tab_builtin, root)
             self._create_backups_tab(tab_backups, root)
 
             root.mainloop()
@@ -1707,12 +1717,13 @@ If userInput <> "" Then WScript.Echo userInput'''
             picker.focus_set()
 
         def insert_snippet_ref():
-            choices = sorted([
-                k for k, v in self.snippets.items()
-                if not k.startswith("_") and not callable(v)
-            ])
+            # Every snippet kind is referenceable: static, runtime dynamic and
+            # composed mapping triggers.
+            names = {k for k in self.snippets if not k.startswith("_")}
+            names |= composed_mapping_triggers(self.snippets)
+            choices = sorted(names)
             if not choices:
-                messagebox.showinfo("Variáveis", "Nenhum snippet estático disponível.",
+                messagebox.showinfo("Variáveis", "Nenhum snippet disponível.",
                                     parent=text_widget.winfo_toplevel())
                 return
             _show_snippet_picker(text_widget.winfo_toplevel(), choices)
@@ -1967,22 +1978,7 @@ If userInput <> "" Then WScript.Echo userInput'''
         main.grid_columnconfigure(0, weight=1)
         main.grid_rowconfigure(2, weight=1)
 
-        frame_types = tk.LabelFrame(main, text="Tipos de mapeamento", font=("Segoe UI", 9, "bold"), bg="#FFFFFF", padx=12, pady=12)
-        frame_types.grid(row=0, column=0, sticky="ew", pady=(0, 12))
-
-        types_inner = tk.Frame(frame_types, bg="#FFFFFF")
-        types_inner.pack(fill=tk.X)
-        types_inner.grid_columnconfigure(1, weight=1)
-
-        tk.Label(types_inner, text="Tipos disponíveis", font=("Segoe UI", 9), bg="#FFFFFF").grid(row=0, column=0, sticky="w", padx=(0, 10))
-
         mapping_type = tk.StringVar(value="_cpf_numbers")
-        rb_frame = tk.Frame(types_inner, bg="#FFFFFF")
-        rb_frame.grid(row=0, column=1, sticky="w")
-
-        btn_types_frame = tk.Frame(types_inner, bg="#FFFFFF")
-        btn_types_frame.grid(row=0, column=2, sticky="e")
-        rb_widgets = []
 
         def get_mappings_info():
             base = {
@@ -2010,22 +2006,35 @@ If userInput <> "" Then WScript.Echo userInput'''
             example = info.get("example", "")
             lbl_example.config(text=f"{info.get('label', 'Tipo')} | Prefixo: {prefix} | Exemplo: {example}")
 
-        def refresh_type_radiobuttons():
+        def refresh_type_list():
             nonlocal mappings_info
-            for widget in rb_widgets:
-                widget.destroy()
-            rb_widgets.clear()
-
             mappings_info = get_mappings_info()
-            available_keys = list(mappings_info.keys())
-            if mapping_type.get() not in available_keys and available_keys:
-                mapping_type.set(available_keys[0])
 
+            listbox_types.delete(0, tk.END)
+            type_keys.clear()
             for key, info in sorted(mappings_info.items(), key=lambda item: (not item[1]["builtin"], item[1]["label"])):
-                rb = tk.Radiobutton(rb_frame, text=info["label"], variable=mapping_type, value=key, font=("Segoe UI", 9), bg="#FFFFFF")
-                rb.pack(side=tk.LEFT, padx=(0, 10))
-                rb_widgets.append(rb)
+                type_keys.append(key)
+                listbox_types.insert(tk.END, info["label"])
+
+            if mapping_type.get() not in type_keys and type_keys:
+                mapping_type.set(type_keys[0])
+
+            current = mapping_type.get()
+            if current in type_keys:
+                index = type_keys.index(current)
+                listbox_types.selection_clear(0, tk.END)
+                listbox_types.selection_set(index)
+                listbox_types.see(index)
             update_example_label()
+
+        def on_type_select(_event=None):
+            selection = listbox_types.curselection()
+            if not selection:
+                return
+            key = type_keys[selection[0]]
+            # Guard the write so the trace only fires on a real change.
+            if key != mapping_type.get():
+                mapping_type.set(key)
 
         def ensure_mapping_dict(current_type):
             mapping = self.snippets.get(current_type)
@@ -2039,11 +2048,41 @@ If userInput <> "" Then WScript.Echo userInput'''
 
         content = tk.Frame(main, bg="#F4F6FA")
         content.grid(row=2, column=0, sticky="nsew")
-        content.grid_columnconfigure(1, weight=1)
+        content.grid_columnconfigure(2, weight=1)
         content.grid_rowconfigure(0, weight=1)
 
+        # Types live in a scrollable vertical list so any number of custom
+        # mapping types stays reachable (a horizontal row clipped them).
+        frame_types = tk.LabelFrame(content, text="Tipos", font=("Segoe UI", 9, "bold"), bg="#FFFFFF", padx=12, pady=12)
+        frame_types.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        frame_types.grid_columnconfigure(0, weight=1)
+        frame_types.grid_rowconfigure(0, weight=1)
+
+        types_list_frame = tk.Frame(frame_types, bg="#FFFFFF", highlightbackground="#D7DEE8", highlightthickness=1)
+        types_list_frame.grid(row=0, column=0, sticky="nsew")
+        types_list_frame.grid_columnconfigure(0, weight=1)
+        types_list_frame.grid_rowconfigure(0, weight=1)
+
+        type_keys = []
+        listbox_types = tk.Listbox(
+            types_list_frame,
+            font=("Segoe UI", 10),
+            relief=tk.FLAT,
+            borderwidth=0,
+            activestyle="none",
+            width=16,
+            exportselection=False,
+        )
+        scrollbar_types = tk.Scrollbar(types_list_frame, orient=tk.VERTICAL, command=listbox_types.yview)
+        listbox_types.config(yscrollcommand=scrollbar_types.set)
+        listbox_types.grid(row=0, column=0, sticky="nsew")
+        scrollbar_types.grid(row=0, column=1, sticky="ns")
+
+        btn_types_frame = tk.Frame(frame_types, bg="#FFFFFF")
+        btn_types_frame.grid(row=1, column=0, sticky="ew", pady=(8, 0))
+
         frame_left = tk.LabelFrame(content, text="Itens do mapeamento", font=("Segoe UI", 9, "bold"), bg="#FFFFFF", padx=12, pady=12)
-        frame_left.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        frame_left.grid(row=0, column=1, sticky="nsew", padx=(0, 12))
         frame_left.grid_columnconfigure(0, weight=1)
         frame_left.grid_rowconfigure(2, weight=1)
 
@@ -2063,7 +2102,7 @@ If userInput <> "" Then WScript.Echo userInput'''
         scrollbar_map.grid(row=0, column=1, sticky="ns")
 
         frame_right = tk.LabelFrame(content, text="Editor do item", font=("Segoe UI", 9, "bold"), bg="#FFFFFF", padx=12, pady=12)
-        frame_right.grid(row=0, column=1, sticky="nsew")
+        frame_right.grid(row=0, column=2, sticky="nsew")
         frame_right.grid_columnconfigure(0, weight=1)
         frame_right.grid_rowconfigure(3, weight=1)
 
@@ -2152,7 +2191,7 @@ If userInput <> "" Then WScript.Echo userInput'''
                     )
                     return
                 self.refresh_runtime_indexes()
-                refresh_type_radiobuttons()
+                refresh_type_list()
                 mapping_type.set(map_key)
                 on_type_changed()
                 self.notify_status(f"Tipo '{type_name}' criado.", key=f"mapping-type-create:{type_name}")
@@ -2184,7 +2223,7 @@ If userInput <> "" Then WScript.Echo userInput'''
                 return
             self.refresh_runtime_indexes()
 
-            refresh_type_radiobuttons()
+            refresh_type_list()
             available_keys = list(mappings_info.keys())
             if available_keys:
                 mapping_type.set(available_keys[0])
@@ -2194,9 +2233,11 @@ If userInput <> "" Then WScript.Echo userInput'''
             refresh_mapping_list()
             self.notify_status(f"Tipo '{info.get('label', current_type)}' excluído.", key=f"mapping-type-delete:{current_type}")
 
-        tk.Button(btn_types_frame, text="Novo Tipo", width=12, command=add_new_type).pack(side=tk.LEFT, padx=(0, 6))
-        tk.Button(btn_types_frame, text="Excluir Tipo", width=12, command=delete_current_type).pack(side=tk.LEFT)
+        tk.Button(btn_types_frame, text="Novo Tipo", command=add_new_type).pack(fill=tk.X)
+        tk.Button(btn_types_frame, text="Excluir Tipo", command=delete_current_type).pack(fill=tk.X, pady=(6, 0))
 
+        listbox_types.bind("<<ListboxSelect>>", on_type_select)
+        self._bind_mousewheel(listbox_types, listbox_types)
         self._bind_mousewheel(listbox_map, listbox_map)
         self._bind_mousewheel(text_value, text_value)
 
@@ -2287,7 +2328,7 @@ If userInput <> "" Then WScript.Echo userInput'''
                 refresh_mapping_list()
                 self.notify_status(f"Item '{name}' excluído.", key=f"delete-map:{current_type}:{name}")
 
-        refresh_type_radiobuttons()
+        refresh_type_list()
         mapping_type.trace_add("write", lambda *_: on_type_changed())
         listbox_map.bind("<<ListboxSelect>>", load_selected_mapping)
         btn_new_map.configure(command=on_new_map)
@@ -2297,7 +2338,7 @@ If userInput <> "" Then WScript.Echo userInput'''
 
         refresh_mapping_list()
 
-    def _create_reference_tab(self, parent, section_title, subtitle, sections, footer_text):
+    def _create_reference_tab(self, parent, root, section_title, subtitle, sections, footer_text):
         main = tk.Frame(parent, bg="#F4F6FA", padx=14, pady=14)
         main.pack(fill=tk.BOTH, expand=True)
         main.grid_columnconfigure(0, weight=1)
@@ -2323,32 +2364,57 @@ If userInput <> "" Then WScript.Echo userInput'''
         scrollbar.grid(row=0, column=1, sticky="ns")
         canvas.bind("<Configure>", lambda event: canvas.itemconfigure(canvas_window, width=event.width))
 
-        grouped = reference_entries_by_category(self.dynamic_registry)
-        for title, category_key in sections:
-            entries = grouped.get(category_key, [])
-            section = tk.LabelFrame(inner, text=title, font=("Segoe UI", 9, "bold"), bg="#FFFFFF", padx=12, pady=12)
-            section.pack(fill=tk.X, expand=True, pady=(0, 12))
-            for trigger, desc, enabled in entries:
-                row = tk.Frame(section, bg="#FFFFFF")
-                row.pack(fill=tk.X, pady=2)
-                var = tk.BooleanVar(value=enabled)
-                tk.Checkbutton(
-                    row,
-                    variable=var,
-                    bg="#FFFFFF",
-                    activebackground="#FFFFFF",
-                    command=lambda t=trigger, v=var: self._toggle_registry_entry(t, v.get()),
-                ).pack(side=tk.LEFT)
-                tk.Label(row, text=trigger, font=("Consolas", 10, "bold"), fg="#2D5BD1", bg="#FFFFFF", width=12, anchor="w").pack(side=tk.LEFT)
-                tk.Label(row, text=desc, font=("Segoe UI", 9), bg="#FFFFFF", anchor="w").pack(side=tk.LEFT, padx=(10, 0), fill=tk.X, expand=True)
+        def populate():
+            for child in inner.winfo_children():
+                child.destroy()
+            grouped = reference_entries_by_category(self.dynamic_registry)
+            for title, category_key in sections:
+                entries = grouped.get(category_key, [])
+                section = tk.LabelFrame(inner, text=title, font=("Segoe UI", 9, "bold"), bg="#FFFFFF", padx=12, pady=12)
+                section.pack(fill=tk.X, expand=True, pady=(0, 12))
+                for key, trigger, desc, enabled in entries:
+                    row = tk.Frame(section, bg="#FFFFFF")
+                    row.pack(fill=tk.X, pady=2)
+                    var = tk.BooleanVar(value=enabled)
+                    # The checkbox writes by stable key, not by the (renameable) trigger.
+                    tk.Checkbutton(
+                        row,
+                        variable=var,
+                        bg="#FFFFFF",
+                        activebackground="#FFFFFF",
+                        command=lambda k=key, v=var: self._toggle_registry_entry(k, v.get()),
+                    ).pack(side=tk.LEFT)
+                    trigger_label = tk.Label(row, text=trigger, font=("Consolas", 10, "bold"), fg="#2D5BD1", bg="#FFFFFF", width=12, anchor="w")
+                    trigger_label.pack(side=tk.LEFT)
+                    rename = lambda event=None, k=key, t=trigger: self._rename_registry_entry_dialog(root, k, t, populate)
+                    trigger_label.bind("<Double-Button-1>", rename)
+                    tk.Button(
+                        row,
+                        text="✎",
+                        font=("Segoe UI", 8),
+                        bd=0,
+                        relief=tk.FLAT,
+                        bg="#FFFFFF",
+                        activebackground="#E8EEF9",
+                        fg="#5B6472",
+                        cursor="hand2",
+                        command=rename,
+                    ).pack(side=tk.LEFT, padx=(0, 4))
+                    tk.Label(row, text=desc, font=("Segoe UI", 9), bg="#FFFFFF", anchor="w").pack(side=tk.LEFT, padx=(10, 0), fill=tk.X, expand=True)
+            self._bind_mousewheel_descendants(inner, canvas)
+
+        populate()
 
         tk.Label(main, text=footer_text, font=("Segoe UI", 8), fg="#5B6472", bg="#F4F6FA").grid(row=2, column=0, sticky="w", pady=(10, 0))
 
         self._bind_mousewheel(canvas, canvas)
-        self._bind_mousewheel_descendants(inner, canvas)
 
-    def _toggle_registry_entry(self, trigger, enabled):
-        """Enable/disable a dynamic trigger, persisting to the user override file."""
+    def _toggle_registry_entry(self, key, enabled):
+        """Enable/disable a dynamic trigger, persisting to the user override file.
+
+        Keyed by the stable registry id so a renamed trigger still writes the
+        right override entry.
+        """
         try:
             if os.path.exists(self.dynamic_registry_file):
                 user_override = load_json_file(self.dynamic_registry_file)
@@ -2358,10 +2424,10 @@ If userInput <> "" Then WScript.Echo userInput'''
                 user_override = {}
             # Store a minimal per-field override so future bundled changes to other
             # fields of this trigger still reach the user.
-            existing = user_override.get(trigger)
+            existing = user_override.get(key)
             entry = dict(existing) if isinstance(existing, dict) else {}
             entry["enabled"] = enabled
-            user_override[trigger] = entry
+            user_override[key] = entry
             write_json_atomic(self.dynamic_registry_file, user_override)
         except Exception as e:
             self.logger.error(f"Falha ao salvar registro dinâmico: {e}")
@@ -2375,40 +2441,92 @@ If userInput <> "" Then WScript.Echo userInput'''
         )
         self.reload_snippets_from_disk()
         state = "ativado" if enabled else "desativado"
-        self.notify_status(f"Snippet dinâmico '{trigger}' {state}.", key=f"registry-toggle:{trigger}")
+        trigger = effective_trigger(key, self.dynamic_registry.get(key, {}))
+        self.notify_status(f"Snippet dinâmico '{trigger}' {state}.", key=f"registry-toggle:{key}")
 
-    def _create_datetime_eco_tab(self, parent):
-        """Build the reference tab for Date/Time and Economic Indicator snippets."""
+    def _create_dynamic_snippets_tab(self, parent, root):
+        """Build the single tab listing every built-in dynamic snippet."""
         self._create_reference_tab(
             parent,
-            "Snippets dinâmicos de data e economia",
-            "Esses triggers consultam data/hora local e dados econômicos do Banco Central.",
+            root,
+            "Snippets dinâmicos integrados",
+            "Data/hora local, indicadores do Banco Central, ações e atalhos de WhatsApp.",
             [
                 ("Data e Hora", "datetime"),
                 ("Indicadores Econômicos (Banco Central)", "economy"),
+                ("Ações (B3 e US)", "stock"),
+                ("WhatsApp", "whatsapp"),
             ],
-            "Use a caixa de seleção para ativar/desativar cada trigger. Para renomear, edite dynamic_snippets.json na pasta de dados.",
+            "Use a caixa de seleção para ativar/desativar. Clique em ✎ (ou dê dois cliques no trigger) para renomear.",
         )
 
-    def _create_stocks_tab(self, parent):
-        """Build the reference tab for stock snippets (B3 and US)."""
-        self._create_reference_tab(
-            parent,
-            "Snippets de ações e fundamentos",
-            "Ao digitar um destes triggers, um popup pedirá o ticker antes da consulta.",
-            [("Ações (B3 e US)", "stock")],
-            "Aceita tickers brasileiros (PETR4, VALE3) e americanos (AAPL, MSFT, GOOGL).",
+    def _rename_registry_entry_dialog(self, root, key, current_trigger, refresh):
+        """Ask for a new trigger name, validate it, then persist and refresh."""
+        new_trigger = simpledialog.askstring(
+            "Renomear trigger",
+            f"Novo trigger para '{current_trigger}':",
+            initialvalue=current_trigger,
+            parent=root,
         )
+        if new_trigger is None:
+            return
+        new_trigger = new_trigger.strip()
+        if not new_trigger or new_trigger == current_trigger:
+            return
 
-    def _create_whatsapp_tab(self, parent):
-        """Build the reference tab for the WhatsApp shortcut."""
-        self._create_reference_tab(
-            parent,
-            "Atalho de WhatsApp",
-            "Os triggers podem ler o telefone do clipboard ou abrir um popup, sempre validando no mesmo padrão internacional.",
-            [("WhatsApp", "whatsapp")],
-            "xwapp e xpwapp abrem o navegador. xlwapp insere o link no campo atual e também o mantém no clipboard.",
+        errors, warnings = validate_rename(self.dynamic_registry, key, new_trigger, self.snippets)
+        if errors:
+            messagebox.showerror("Trigger inválido", "\n".join(errors), parent=root)
+            return
+        if warnings:
+            proceed = messagebox.askyesno(
+                "Confirmar trigger",
+                "\n".join(warnings) + "\n\nDeseja continuar mesmo assim?",
+                parent=root,
+            )
+            if not proceed:
+                return
+
+        if self._rename_registry_entry(key, new_trigger):
+            refresh()
+
+    def _rename_registry_entry(self, key, new_trigger):
+        """Persist a trigger rename to the user override file. Returns success."""
+        try:
+            if os.path.exists(self.dynamic_registry_file):
+                user_override = load_json_file(self.dynamic_registry_file)
+                if not isinstance(user_override, dict):
+                    user_override = {}
+            else:
+                user_override = {}
+            existing = user_override.get(key)
+            entry = dict(existing) if isinstance(existing, dict) else {}
+            if new_trigger == key:
+                # Back to the bundled name: drop the override field entirely.
+                entry.pop("trigger", None)
+            else:
+                entry["trigger"] = new_trigger
+            if entry:
+                user_override[key] = entry
+            else:
+                user_override.pop(key, None)
+            write_json_atomic(self.dynamic_registry_file, user_override)
+        except Exception as e:
+            self.logger.error(f"Falha ao renomear trigger dinâmico: {e}")
+            self.notify_error("Falha ao salvar o novo nome do snippet dinâmico.", key="registry-save")
+            return False
+
+        self.dynamic_registry = load_registry(
+            self.resolve_resource_path("dynamic_snippets.json"),
+            self.dynamic_registry_file,
+            logger=self.logger,
         )
+        self.reload_snippets_from_disk()
+        self.notify_status(
+            f"Snippet dinâmico renomeado para '{new_trigger}'.",
+            key=f"registry-rename:{key}",
+        )
+        return True
 
     # =====================================================================
     # UI / SYSTEM TRAY

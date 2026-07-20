@@ -62,6 +62,14 @@ class LoadRegistryTests(unittest.TestCase):
         self.assertEqual(registry["xhj"]["format"], "%d/%m/%Y")  # from bundled
         self.assertEqual(registry["xhj"]["provider"], "datetime")
 
+    def test_thin_trigger_override_renames_without_losing_fields(self):
+        user = os.path.join(self.tmp, "user.json")
+        with open(user, "w", encoding="utf-8") as handle:
+            json.dump({"xhj": {"trigger": "xdata"}}, handle)
+        registry = dr.load_registry(self.bundled, user)
+        self.assertEqual(dr.effective_trigger("xhj", registry["xhj"]), "xdata")
+        self.assertEqual(registry["xhj"]["format"], "%d/%m/%Y")  # from bundled
+
     def test_missing_user_file_returns_bundled(self):
         registry = dr.load_registry(self.bundled, os.path.join(self.tmp, "nope.json"))
         self.assertIn("xhj", registry)
@@ -121,6 +129,28 @@ class BuildDynamicSnippetsTests(unittest.TestCase):
         snippets, _ = dr.build_dynamic_snippets(registry, self.ctx)
         self.assertEqual(snippets, {})
 
+    def test_trigger_field_renames_binding(self):
+        registry = {"xhj": {"provider": "datetime", "format": "%Y", "trigger": "xdata"}}
+        snippets, _ = dr.build_dynamic_snippets(registry, self.ctx)
+        self.assertIn("xdata", snippets)
+        self.assertNotIn("xhj", snippets)
+
+    def test_trigger_field_renames_slow_set(self):
+        registry = {"xdolar": {"provider": "bcb", "method": "dolar", "slow": True,
+                               "trigger": "xusd"}}
+        snippets, slow = dr.build_dynamic_snippets(registry, self.ctx)
+        self.assertEqual(snippets["xusd"](), "dolar-value")
+        self.assertEqual(slow, {"xusd"})
+
+    def test_duplicate_effective_trigger_keeps_first(self):
+        registry = {
+            "xhj": {"provider": "datetime", "format": "%Y"},
+            "xnow": {"provider": "datetime", "method": "extenso", "trigger": "xhj"},
+        }
+        snippets, _ = dr.build_dynamic_snippets(registry, self.ctx)
+        self.assertEqual(len(snippets), 1)
+        self.assertNotEqual(snippets["xhj"](), "segunda-feira")  # first entry won
+
     def test_stock_cancel_returns_marker(self):
         self.ctx._ticker = None
         registry = {"xcot": {"provider": "stock", "method": "cotacao", "dialog": "Cotação"}}
@@ -136,8 +166,78 @@ class ReferenceEntriesTests(unittest.TestCase):
             "xdolar": {"provider": "bcb", "category": "economy", "description": "e1", "enabled": False},
         }
         grouped = dr.reference_entries_by_category(registry)
-        self.assertEqual(grouped["datetime"], [("xhj", "d1", True), ("xnow", "d2", True)])
-        self.assertEqual(grouped["economy"], [("xdolar", "e1", False)])
+        self.assertEqual(
+            grouped["datetime"],
+            [("xhj", "xhj", "d1", True), ("xnow", "xnow", "d2", True)],
+        )
+        self.assertEqual(grouped["economy"], [("xdolar", "xdolar", "e1", False)])
+
+    def test_renamed_entry_reports_key_and_effective_trigger(self):
+        registry = {"xhj": {"provider": "datetime", "category": "datetime",
+                            "description": "d1", "trigger": "xdata"}}
+        grouped = dr.reference_entries_by_category(registry)
+        self.assertEqual(grouped["datetime"], [("xhj", "xdata", "d1", True)])
+
+
+class EffectiveTriggerTests(unittest.TestCase):
+    def test_defaults_to_key(self):
+        self.assertEqual(dr.effective_trigger("xhj", {"provider": "datetime"}), "xhj")
+
+    def test_uses_trigger_field(self):
+        self.assertEqual(dr.effective_trigger("xhj", {"trigger": "xdata"}), "xdata")
+
+    def test_blank_trigger_falls_back_to_key(self):
+        self.assertEqual(dr.effective_trigger("xhj", {"trigger": "   "}), "xhj")
+        self.assertEqual(dr.effective_trigger("xhj", {"trigger": None}), "xhj")
+
+    def test_trigger_is_stripped(self):
+        self.assertEqual(dr.effective_trigger("xhj", {"trigger": " xdata "}), "xdata")
+
+
+class ValidateRenameTests(unittest.TestCase):
+    def setUp(self):
+        self.registry = {
+            "xhj": {"provider": "datetime"},
+            "xdolar": {"provider": "bcb", "method": "dolar"},
+        }
+        self.snippets = {
+            "email": "a@b.com",
+            "_cpf_numbers": {"fulano": "123"},
+            "xhj": lambda: "hoje",
+        }
+
+    def _errors(self, new_trigger):
+        return dr.validate_rename(self.registry, "xhj", new_trigger, self.snippets)[0]
+
+    def test_valid_rename_has_no_errors(self):
+        errors, _ = dr.validate_rename(self.registry, "xhj", "xdata", self.snippets)
+        self.assertEqual(errors, [])
+
+    def test_empty_is_rejected(self):
+        self.assertTrue(self._errors("   "))
+
+    def test_whitespace_is_rejected(self):
+        self.assertTrue(self._errors("x data"))
+
+    def test_collision_with_other_dynamic_is_rejected(self):
+        self.assertTrue(self._errors("xdolar"))
+
+    def test_collision_with_static_snippet_is_rejected(self):
+        self.assertTrue(self._errors("email"))
+
+    def test_collision_with_mapping_prefix_is_rejected(self):
+        self.assertTrue(self._errors("cpf"))
+
+    def test_collision_with_composed_mapping_trigger_is_rejected(self):
+        self.assertTrue(self._errors("cpffulano"))
+
+    def test_renaming_to_own_current_trigger_is_allowed(self):
+        self.assertEqual(self._errors("xhj"), [])
+
+    def test_mapping_prefix_start_is_only_a_warning(self):
+        errors, warnings = dr.validate_rename(self.registry, "xhj", "cpfdata", self.snippets)
+        self.assertEqual(errors, [])
+        self.assertTrue(any("prefixo de mapeamento" in w for w in warnings))
 
 
 class RealContext:
