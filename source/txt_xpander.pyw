@@ -14,6 +14,7 @@ Libraries used:
 """
 
 import time
+import threading
 import os
 import sys
 import shutil
@@ -177,6 +178,8 @@ class TextExpander:
         # of it, marshaled onto its thread. Started in run().
         self.gui = GuiThread(logger=self.logger)
         self.manager_window = None
+        # Serializes expansion dialogs; see _run_modal_dialog.
+        self._dialog_lock = threading.Lock()
         self.text_inserter = TextInserter(self.keyboard_controller, logger=self.logger)
         self.notification_timestamps = {}
         self.notification_history = []
@@ -553,6 +556,29 @@ class TextExpander:
         
         return f"{dia_semana}, {dia:02d} de {mes} de {ano}"
     
+    def _run_modal_dialog(self, build, on_busy, busy_message):
+        """Run one modal dialog at a time on the GUI thread.
+
+        The listener keeps running while a dialog is open, so a second trigger
+        can arrive mid-dialog. Stacking them is not safe: each dialog blocks its
+        worker inside a nested event loop, and those unwind strictly LIFO — if
+        the user answers the older dialog first, its caller stays blocked and
+        its result is lost. So a second dialog is refused rather than stacked,
+        and the caller reports it exactly like a cancel: nothing inserted, no
+        terminator re-emitted.
+        """
+        if not self._dialog_lock.acquire(blocking=False):
+            self.logger.info(f"Diálogo ignorado, outro já está aberto: {busy_message}")
+            self.notify_status(
+                "Outro diálogo já está aberto; conclua-o primeiro.",
+                key="dialog-busy",
+            )
+            return on_busy
+        try:
+            return self.gui.call(build)
+        finally:
+            self._dialog_lock.release()
+
     def ask_ticker_input(self, prompt_title: str):
         """Ask for a ticker symbol in a modal dialog. Worker-thread only.
 
@@ -610,8 +636,9 @@ class TextExpander:
             dialog.bind("<Escape>", on_cancel)
             dialog.protocol("WM_DELETE_WINDOW", on_cancel)
 
+            # No grab_set — see _show_form_dialog: expansion-path dialogs can
+            # legitimately stack, and a grab would let the newer one steal it.
             center_on_screen(dialog)
-            dialog.grab_set()
             dialog.lift()
             dialog.focus_force()
             entry.focus_set()
@@ -620,7 +647,7 @@ class TextExpander:
             return result[0]
 
         try:
-            ticker = self.gui.call(build)
+            ticker = self._run_modal_dialog(build, None, f"ticker ({prompt_title})")
         except Exception as e:
             self.logger.error(f"Erro no diálogo de ticker: {e}")
             self.notify_error(
@@ -729,7 +756,7 @@ class TextExpander:
             return result["phone"], result["message"]
 
         try:
-            return self.gui.call(build)
+            return self._run_modal_dialog(build, (None, None), "whatsapp")
         except Exception as e:
             self.logger.error(f"Erro ao abrir diálogo do WhatsApp: {e}")
             self.notify_error(
@@ -1021,8 +1048,11 @@ class TextExpander:
             dialog.bind("<Escape>", on_cancel)
             dialog.protocol("WM_DELETE_WINDOW", on_cancel)
 
+            # No grab_set: the listener stays live while this dialog is open, so
+            # a second form trigger can legitimately open a second dialog. A grab
+            # here would let the newer dialog steal it and silently leave the
+            # older one non-modal. Matches the pre-refactor behavior.
             center_on_screen(dialog)
-            dialog.grab_set()
             dialog.lift()
             dialog.focus_force()
             if first_entry:
@@ -1032,7 +1062,7 @@ class TextExpander:
             return result[0]
 
         try:
-            return self.gui.call(build)
+            return self._run_modal_dialog(build, None, f"campos ({', '.join(field_names)})")
         except Exception as e:
             self.logger.error(f"Erro no diálogo de campos: {e}")
             self.notify_error(
