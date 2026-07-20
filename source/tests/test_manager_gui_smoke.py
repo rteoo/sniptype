@@ -42,6 +42,12 @@ def _make_app(base_dir):
             os.environ["TXT_XPANDER_HOME"] = previous_home
 
 
+def _descendants(widget):
+    for child in widget.winfo_children():
+        yield child
+        yield from _descendants(child)
+
+
 @unittest.skipUnless(TK_AVAILABLE, "Tk display not available")
 class ManagerGuiSmokeTests(unittest.TestCase):
     def setUp(self):
@@ -58,14 +64,23 @@ class ManagerGuiSmokeTests(unittest.TestCase):
     def test_all_tabs_build(self):
         self.app._configure_manager_styles(self.root)
         frames = {name: tk.Frame(self.root) for name in
-                  ("static", "dyn", "eco", "stocks", "wapp", "backups")}
+                  ("static", "dyn", "builtin", "backups")}
         self.app._create_static_snippets_tab(frames["static"], self.root)
         self.app._create_dynamic_mappings_tab(frames["dyn"], self.root)
-        self.app._create_datetime_eco_tab(frames["eco"])
-        self.app._create_stocks_tab(frames["stocks"])
-        self.app._create_whatsapp_tab(frames["wapp"])
+        self.app._create_dynamic_snippets_tab(frames["builtin"], self.root)
         self.app._create_backups_tab(frames["backups"], self.root)
         self.root.update_idletasks()
+
+    def test_dynamic_mappings_tab_lists_custom_types(self):
+        self.app.snippets["_mail_codes"] = {"__prefix__": "mail", "team": "team@x.com"}
+        frame = tk.Frame(self.root)
+        self.app._create_dynamic_mappings_tab(frame, self.root)
+        self.root.update_idletasks()
+        listboxes = [w for w in _descendants(frame) if isinstance(w, tk.Listbox)]
+        self.assertTrue(listboxes, "expected a types listbox")
+        labels = listboxes[0].get(0, tk.END)
+        self.assertIn("MAIL", labels)
+        self.assertIn("CPF", labels)
 
     def test_notification_history_window_builds(self):
         self.app._open_notification_history(self.root)

@@ -4,6 +4,20 @@ All notable changes to Txt Xpander are documented here. The format is based on [
 
 ## [Unreleased]
 
+### Added
+
+- **Rename built-in dynamic snippets from the manager**: each trigger in the dynamic snippets tab has a ✎ button (or double-click the trigger) to rename it. The rename is stored as a `trigger` field in the per-user `dynamic_snippets.json` override, keyed by the entry's stable id, so enabling/disabling and renaming stay independent and future bundled changes still reach the user. Collisions with another dynamic trigger, a static snippet, a mapping prefix, or a composed mapping trigger are blocked; shadowing risks warn first.
+- **`%%trigger%%` references now resolve every snippet kind**: besides static snippets, a reference can point at a dynamic mapping trigger (`%%cpffulano%%`) or a runtime dynamic snippet (`%%xhj%%`, `%%xdolar%%`, `%%xcot%%`, `%%xlwapp%%`), whose callable is invoked and its result substituted. The `%%s` toolbar picker now lists all three kinds.
+
+### Changed
+
+- **The Data/Hora & Economia, Ações (Stocks) and WhatsApp tabs are now one "Snippets Dinâmicos" tab** with four sections, so every built-in dynamic snippet is managed in one place.
+- **Mapping types are now a scrollable vertical list** instead of a single row of radio buttons, which clipped types once more than a handful existed.
+- A snippet whose body references a *slow* dynamic trigger (BCB, stocks, WhatsApp) is now itself routed through the async expansion path, so resolving the reference never blocks the keyboard listener. Computed once at index-compile time; the per-keystroke path is unchanged.
+- **Behavior change**: a `%%name%%` token matching a dynamic trigger or a dynamic mapping trigger is no longer treated as a form field, so it substitutes instead of prompting. A form field deliberately named after one of those must be renamed.
+- A failing dynamic reference (network down) substitutes an empty string and notifies rather than aborting the containing expansion.
+- Inline `%%xlwapp%%`/`%%xwapp%%` run their flow during resolution; the wa.me URL they place on the clipboard is overwritten by the containing snippet's own paste.
+
 ## [3.0.0] — 2026-07-16
 
 Major release: user data now lives in a stable per-user directory, and Txt Xpander
