@@ -30,10 +30,15 @@ class HtmlClipboardBytesTests(unittest.TestCase):
 
 
 class BackendSelectionTests(unittest.TestCase):
+    @unittest.skipUnless(clipboard_support.IS_WINDOWS, "needs a Windows host")
     def test_windows_selects_the_win32_backend(self):
-        with mock.patch.object(clipboard_support, "IS_WINDOWS", True), \
-                mock.patch.object(clipboard_support, "WindowsClipboard") as backend:
-            self.assertIs(build_clipboard(), backend.return_value)
+        self.assertIsInstance(build_clipboard(), clipboard_support.WindowsClipboard)
+
+    @unittest.skipIf(clipboard_support.IS_WINDOWS, "Win32 names exist on Windows")
+    def test_win32_implementation_is_absent_off_windows(self):
+        """The ctypes bindings must not half-exist: absent beats NameError."""
+        self.assertFalse(hasattr(clipboard_support, "WindowsClipboard"))
+        self.assertFalse(hasattr(clipboard_support, "USER32"))
 
     def test_non_windows_selects_the_posix_backend(self):
         with mock.patch.object(clipboard_support, "IS_WINDOWS", False), \
@@ -98,6 +103,30 @@ class PosixClipboardRoundTripTests(unittest.TestCase):
         self.assertEqual(["xclip", "-selection", "clipboard"], run.call_args.args[0])
         self.assertEqual("olá mundo".encode("utf-8"), run.call_args.kwargs["input"])
 
+    def test_copy_never_captures_output(self):
+        """Regression: xclip/wl-copy fork a daemon that owns the selection and
+        inherits our stdout pipe. Reading it to EOF waits on the daemon, not on
+        the command, so capturing output hangs every paste until the timeout."""
+        clipboard = _make_posix_clipboard("xclip")
+        completed = subprocess.CompletedProcess(["xclip"], 0, b"", b"")
+
+        with mock.patch.object(clipboard_support.subprocess, "run", return_value=completed) as run:
+            clipboard.set_content("texto")
+
+        kwargs = run.call_args.kwargs
+        self.assertNotIn("capture_output", kwargs)
+        self.assertIs(subprocess.DEVNULL, kwargs["stdout"])
+        self.assertIs(subprocess.DEVNULL, kwargs["stderr"])
+        self.assertEqual(clipboard_support._POSIX_TIMEOUT, kwargs["timeout"])
+
+    def test_hanging_copy_tool_fails_instead_of_blocking_forever(self):
+        error = subprocess.TimeoutExpired(["xclip"], clipboard_support._POSIX_TIMEOUT)
+        clipboard = _make_posix_clipboard("xclip")
+
+        with mock.patch.object(clipboard_support.subprocess, "run", side_effect=error), \
+                self.assertLogs(clipboard_support._LOGGER, level=logging.WARNING):
+            self.assertFalse(clipboard.set_content("texto"))
+
     def test_get_text_decodes_the_paste_tool_output(self):
         clipboard = _make_posix_clipboard("xclip")
         completed = subprocess.CompletedProcess(["xclip"], 0, "olá".encode("utf-8"), b"")
@@ -141,9 +170,26 @@ class PosixClipboardRoundTripTests(unittest.TestCase):
         with self.assertLogs(clipboard_support._LOGGER, level=logging.WARNING) as logs:
             clipboard = _make_posix_clipboard()
 
-        self.assertTrue(any("xclip" in line for line in logs.output))
-        self.assertIsNone(clipboard.get_text())
-        self.assertFalse(clipboard.set_content("texto"))
+        with mock.patch.object(clipboard_support, "IS_MAC", False), \
+                mock.patch.object(clipboard_support.shutil, "which", _which()):
+            self.assertTrue(any("xclip" in line for line in logs.output))
+            self.assertIsNone(clipboard.get_text())
+            self.assertFalse(clipboard.set_content("texto"))
+
+    def test_tool_installed_after_startup_is_picked_up_without_a_restart(self):
+        """The app lives in the tray for weeks; a clipboard tool that appears
+        later (session start, fresh install) must work without relaunching."""
+        with self.assertLogs(clipboard_support._LOGGER, level=logging.WARNING):
+            clipboard = _make_posix_clipboard()
+        self.assertFalse(clipboard.set_content("cedo demais"))
+
+        completed = subprocess.CompletedProcess(["xclip"], 0, b"", b"")
+        with mock.patch.object(clipboard_support, "IS_MAC", False), \
+                mock.patch.object(clipboard_support.shutil, "which", _which("xclip")), \
+                mock.patch.object(clipboard_support.subprocess, "run", return_value=completed) as run:
+            self.assertTrue(clipboard.set_content("agora vai"))
+
+        self.assertEqual(["xclip", "-selection", "clipboard"], run.call_args.args[0])
 
 
 class PosixRichTextDowngradeTests(unittest.TestCase):

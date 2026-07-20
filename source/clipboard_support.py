@@ -105,81 +105,83 @@ if IS_WINDOWS:
     CF_HTML = USER32.RegisterClipboardFormatW("HTML Format")
     CF_RTF = USER32.RegisterClipboardFormatW("Rich Text Format")
 
+    # Defined inside the guard on purpose: every name below is a Win32 binding.
+    # A half-defined class off Windows would fail with an obscure NameError at
+    # call time instead of simply not existing.
 
-def _set_clipboard_data(clipboard_format, data, encoding="utf-8"):
-    if clipboard_format == CF_UNICODETEXT:
-        encoded = (data.replace("\n", "\r\n") + "\0").encode("utf-16-le")
-    else:
-        payload = data if isinstance(data, bytes) else str(data).encode(encoding)
-        encoded = payload + b"\0"
+    def _set_clipboard_data(clipboard_format, data, encoding="utf-8"):
+        if clipboard_format == CF_UNICODETEXT:
+            encoded = (data.replace("\n", "\r\n") + "\0").encode("utf-16-le")
+        else:
+            payload = data if isinstance(data, bytes) else str(data).encode(encoding)
+            encoded = payload + b"\0"
 
-    handle = KERNEL32.GlobalAlloc(GMEM_MOVEABLE, len(encoded))
-    if not handle:
-        return False
+        handle = KERNEL32.GlobalAlloc(GMEM_MOVEABLE, len(encoded))
+        if not handle:
+            return False
 
-    locked = KERNEL32.GlobalLock(handle)
-    if not locked:
-        KERNEL32.GlobalFree(handle)
-        return False
+        locked = KERNEL32.GlobalLock(handle)
+        if not locked:
+            KERNEL32.GlobalFree(handle)
+            return False
 
-    try:
-        ctypes.memmove(locked, encoded, len(encoded))
-    finally:
-        KERNEL32.GlobalUnlock(handle)
-
-    if not USER32.SetClipboardData(clipboard_format, handle):
-        KERNEL32.GlobalFree(handle)
-        return False
-    return True
-
-
-class WindowsClipboard:
-    """Clipboard wrapper for text, HTML and RTF payloads on Windows."""
-
-    def _open(self, retries=10, delay=0.02):
-        for _ in range(retries):
-            if USER32.OpenClipboard(None):
-                return True
-            time.sleep(delay)
-        return False
-
-    def get_text(self):
-        if not self._open():
-            return None
         try:
-            if not USER32.IsClipboardFormatAvailable(CF_UNICODETEXT):
-                return None
-            handle = USER32.GetClipboardData(CF_UNICODETEXT)
-            if not handle:
-                return None
-            locked = KERNEL32.GlobalLock(handle)
-            if not locked:
+            ctypes.memmove(locked, encoded, len(encoded))
+        finally:
+            KERNEL32.GlobalUnlock(handle)
+
+        if not USER32.SetClipboardData(clipboard_format, handle):
+            KERNEL32.GlobalFree(handle)
+            return False
+        return True
+
+    class WindowsClipboard:
+        """Clipboard wrapper for text, HTML and RTF payloads on Windows."""
+
+        def _open(self, retries=10, delay=0.02):
+            for _ in range(retries):
+                if USER32.OpenClipboard(None):
+                    return True
+                time.sleep(delay)
+            return False
+
+        def get_text(self):
+            if not self._open():
                 return None
             try:
-                return ctypes.wstring_at(locked)
+                if not USER32.IsClipboardFormatAvailable(CF_UNICODETEXT):
+                    return None
+                handle = USER32.GetClipboardData(CF_UNICODETEXT)
+                if not handle:
+                    return None
+                locked = KERNEL32.GlobalLock(handle)
+                if not locked:
+                    return None
+                try:
+                    return ctypes.wstring_at(locked)
+                finally:
+                    KERNEL32.GlobalUnlock(handle)
             finally:
-                KERNEL32.GlobalUnlock(handle)
-        finally:
-            USER32.CloseClipboard()
+                USER32.CloseClipboard()
 
-    def set_content(self, value):
-        payload = get_clipboard_payload(value)
-        if not self._open():
-            return False
-        try:
-            if not USER32.EmptyClipboard():
+        def set_content(self, value):
+            payload = get_clipboard_payload(value)
+            if not self._open():
                 return False
-            if not _set_clipboard_data(CF_UNICODETEXT, payload["text"]):
-                return False
-            html_fragment = payload.get("html")
-            if html_fragment and not _set_clipboard_data(CF_HTML, _html_clipboard_bytes(html_fragment), encoding="utf-8"):
-                return False
-            rtf_document = payload.get("rtf")
-            if rtf_document and not _set_clipboard_data(CF_RTF, rtf_document, encoding="ascii"):
-                return False
-            return True
-        finally:
-            USER32.CloseClipboard()
+            try:
+                if not USER32.EmptyClipboard():
+                    return False
+                if not _set_clipboard_data(CF_UNICODETEXT, payload["text"]):
+                    return False
+                html_fragment = payload.get("html")
+                if html_fragment and not _set_clipboard_data(CF_HTML, _html_clipboard_bytes(html_fragment), encoding="utf-8"):
+                    return False
+                rtf_document = payload.get("rtf")
+                if rtf_document and not _set_clipboard_data(CF_RTF, rtf_document, encoding="ascii"):
+                    return False
+                return True
+            finally:
+                USER32.CloseClipboard()
 
 
 # ---------------------------------------------------------------------------
@@ -220,10 +222,25 @@ class PosixClipboard:
     """
 
     def __init__(self, environ=None):
+        self._environ = environ
         self._copy_argv, self._paste_argv = posix_clipboard_commands(environ)
         self._warned_missing_tool = False
         if self._copy_argv is None:
             self._warn_missing_tool()
+
+    def _commands(self):
+        """Return ``(copy_argv, paste_argv)``, re-resolving while none is available.
+
+        The app sits in the tray for weeks, so a session that started before the
+        desktop session (or before the tool was installed) must recover without
+        a restart. Once a tool is found the lookup is cached for good.
+        """
+        if self._copy_argv is None:
+            self._copy_argv, self._paste_argv = posix_clipboard_commands(self._environ)
+            if self._copy_argv is not None:
+                self._warned_missing_tool = False
+                _LOGGER.info(f"Área de transferência disponível via {self._copy_argv[0]}.")
+        return self._copy_argv, self._paste_argv
 
     def _warn_missing_tool(self):
         if self._warned_missing_tool:
@@ -235,12 +252,13 @@ class PosixClipboard:
         )
 
     def get_text(self):
-        if self._paste_argv is None:
+        _, paste_argv = self._commands()
+        if paste_argv is None:
             self._warn_missing_tool()
             return None
         try:
             completed = subprocess.run(
-                self._paste_argv,
+                paste_argv,
                 capture_output=True,
                 timeout=_POSIX_TIMEOUT,
             )
@@ -252,7 +270,8 @@ class PosixClipboard:
         return completed.stdout.decode("utf-8", errors="replace")
 
     def set_content(self, value):
-        if self._copy_argv is None:
+        copy_argv, _ = self._commands()
+        if copy_argv is None:
             self._warn_missing_tool()
             return False
         payload = get_clipboard_payload(value)
@@ -262,10 +281,15 @@ class PosixClipboard:
                 "colando apenas o texto simples."
             )
         try:
+            # Never capture the copy tool's output: xclip and wl-copy fork a
+            # daemon that owns the selection until it is replaced, and that child
+            # inherits the stdout pipe. Reading to EOF would block on the daemon
+            # rather than on the command, hanging every paste until the timeout.
             completed = subprocess.run(
-                self._copy_argv,
+                copy_argv,
                 input=payload["text"].encode("utf-8"),
-                capture_output=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
                 timeout=_POSIX_TIMEOUT,
             )
         except (OSError, subprocess.SubprocessError) as error:
