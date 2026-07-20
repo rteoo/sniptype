@@ -1,9 +1,9 @@
 from rich_text_support import extract_plain_text
 from snippet_utils import check_dynamic_pattern, get_dynamic_prefixes
-from variable_support import has_form_variables
+from variable_support import find_variable_names, has_form_variables
 
 
-def _compute_form_triggers(snippets):
+def _compute_form_triggers(snippets, prefixes=None):
     """Return the set of direct triggers whose value needs a form-fill dialog.
 
     Computed once at compile time so the keyboard hot path never runs the
@@ -13,9 +13,24 @@ def _compute_form_triggers(snippets):
     for trigger, value in snippets.items():
         if trigger.startswith("_") or callable(value):
             continue
-        if has_form_variables(extract_plain_text(value), snippets):
+        if has_form_variables(extract_plain_text(value), snippets, prefixes):
             form_triggers.add(trigger)
     return form_triggers
+
+
+def _compute_slow_ref_triggers(snippets, slow_snippets):
+    """Return direct triggers whose body references a slow dynamic trigger.
+
+    Such a snippet must run on the async path: resolving the reference fetches
+    over the network or opens a dialog, which would otherwise block the listener.
+    """
+    slow_ref_triggers = set()
+    for trigger, value in snippets.items():
+        if trigger.startswith("_") or callable(value):
+            continue
+        if any(name in slow_snippets for name in find_variable_names(extract_plain_text(value))):
+            slow_ref_triggers.add(trigger)
+    return slow_ref_triggers
 
 
 def compile_trigger_index(snippets, slow_snippets):
@@ -47,8 +62,8 @@ def compile_trigger_index(snippets, slow_snippets):
         "direct_by_last_char": {key: tuple(value) for key, value in direct_by_last_char.items()},
         "dynamic_prefixes": dynamic_prefixes,
         "ordered_prefixes": tuple(dynamic_prefixes.keys()),
-        "slow_triggers": frozenset(slow_snippets),
-        "form_triggers": frozenset(_compute_form_triggers(snippets)),
+        "slow_triggers": frozenset(slow_snippets) | _compute_slow_ref_triggers(snippets, slow_snippets),
+        "form_triggers": frozenset(_compute_form_triggers(snippets, dynamic_prefixes)),
     }
 
 

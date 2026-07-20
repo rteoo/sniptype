@@ -86,6 +86,38 @@ class FormTriggerMetadataTests(unittest.TestCase):
         index = compile_trigger_index(snippets, set())
         self.assertEqual(frozenset(), index["form_triggers"])
 
+    def test_mapping_and_dynamic_refs_are_not_form_triggers(self):
+        snippets = {
+            "xmap": "CPF %%cpffulano%%",
+            "xdyn": "hoje %%xhj%%",
+            "xhj": lambda: "01/01/2026",
+            "_cpf_numbers": {"fulano": "123"},
+        }
+        index = compile_trigger_index(snippets, set())
+        self.assertNotIn("xmap", index["form_triggers"])
+        self.assertNotIn("xdyn", index["form_triggers"])
+
+
+class SlowTriggerMetadataTests(unittest.TestCase):
+    def test_direct_slow_triggers_are_included(self):
+        index = compile_trigger_index({"xdolar": lambda: "R$5"}, {"xdolar"})
+        self.assertIn("xdolar", index["slow_triggers"])
+
+    def test_snippet_referencing_slow_trigger_becomes_slow(self):
+        snippets = {
+            "xreport": "Dólar hoje: %%xdolar%%",
+            "xplain": "sem referência",
+            "xdolar": lambda: "R$5",
+        }
+        index = compile_trigger_index(snippets, {"xdolar"})
+        self.assertIn("xreport", index["slow_triggers"])
+        self.assertNotIn("xplain", index["slow_triggers"])
+
+    def test_reference_to_fast_trigger_stays_fast(self):
+        snippets = {"xgreet": "Hoje é %%xhj%%", "xhj": lambda: "01/01/2026"}
+        index = compile_trigger_index(snippets, {"xdolar"})
+        self.assertNotIn("xgreet", index["slow_triggers"])
+
 
 if __name__ == "__main__":
     unittest.main()
