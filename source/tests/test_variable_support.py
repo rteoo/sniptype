@@ -51,9 +51,17 @@ class TestClassifyVariable(unittest.TestCase):
         snippets = {"xname": "Example User"}
         self.assertEqual(classify_variable("xname", snippets), "snippet_ref")
 
-    def test_callable_snippet_is_form_field(self):
+    def test_callable_snippet_is_dynamic_ref(self):
         snippets = {"xcot": lambda: "R$10"}
-        self.assertEqual(classify_variable("xcot", snippets), "form_field")
+        self.assertEqual(classify_variable("xcot", snippets), "dynamic_ref")
+
+    def test_mapping_trigger_is_mapping_ref(self):
+        snippets = {"_cpf_numbers": {"fulano": "123.456.789-00"}}
+        self.assertEqual(classify_variable("cpffulano", snippets), "mapping_ref")
+
+    def test_unknown_mapping_item_is_form_field(self):
+        snippets = {"_cpf_numbers": {"fulano": "123.456.789-00"}}
+        self.assertEqual(classify_variable("cpfciclano", snippets), "form_field")
 
     def test_unknown_name_is_form_field(self):
         self.assertEqual(classify_variable("nome", {}), "form_field")
@@ -74,6 +82,13 @@ class TestHasFormVariables(unittest.TestCase):
     def test_only_snippet_ref(self):
         snippets = {"xname": "Example User"}
         self.assertFalse(has_form_variables("Olá %%xname%%", snippets))
+
+    def test_only_mapping_ref(self):
+        snippets = {"_cpf_numbers": {"fulano": "123"}}
+        self.assertFalse(has_form_variables("CPF %%cpffulano%%", snippets))
+
+    def test_only_dynamic_ref(self):
+        self.assertFalse(has_form_variables("%%xcot%%", {"xcot": lambda: "R$10"}))
 
     def test_has_form_field(self):
         self.assertTrue(has_form_variables("Olá %%nome%%", {}))
@@ -107,9 +122,54 @@ class TestResolveInline(unittest.TestCase):
         result = resolve_inline("Ver %%xtitle%%", snippets, lambda: None)
         self.assertEqual(result, "Ver Relatório")
 
-    def test_callable_snippet_not_resolved(self):
+    def test_callable_snippet_is_invoked(self):
         snippets = {"xcot": lambda: "R$10"}
         result = resolve_inline("%%xcot%%", snippets, lambda: None)
+        self.assertEqual(result, "R$10")
+
+    def test_callable_returning_none_becomes_empty(self):
+        # Action-only flows (xwapp opens the browser) substitute nothing.
+        snippets = {"xwapp": lambda: None}
+        result = resolve_inline("link: %%xwapp%%", snippets, lambda: None)
+        self.assertEqual(result, "link: ")
+
+    def test_raising_callable_substitutes_empty_and_notifies(self):
+        def boom():
+            raise RuntimeError("sem rede")
+
+        calls = []
+        result = resolve_inline(
+            "valor: %%xdolar%%", {"xdolar": boom}, lambda: None,
+            notify_failure=lambda name, value: calls.append((name, value)),
+        )
+        self.assertEqual(result, "valor: ")
+        self.assertEqual(calls[0][0], "xdolar")
+        self.assertIn("sem rede", calls[0][1])
+
+    def test_marker_result_is_substituted_and_notified(self):
+        calls = []
+        snippets = {"xdolar": lambda: "[Dado indisponível]"}
+        result = resolve_inline(
+            "%%xdolar%%", snippets, lambda: None,
+            notify_failure=lambda name, value: calls.append((name, value)),
+        )
+        self.assertEqual(result, "[Dado indisponível]")
+        self.assertEqual(calls, [("xdolar", "[Dado indisponível]")])
+
+    def test_mapping_ref_resolved(self):
+        snippets = {"_cpf_numbers": {"fulano": "123.456.789-00"}}
+        result = resolve_inline("CPF: %%cpffulano%%", snippets, lambda: None)
+        self.assertEqual(result, "CPF: 123.456.789-00")
+
+    def test_mapping_ref_rich_text_value(self):
+        snippets = {"_custom_codes": {"__prefix__": "cc",
+                                      "x": {"__kind__": "rich_text", "text": "ABC"}}}
+        result = resolve_inline("%%ccx%%", snippets, lambda: None)
+        self.assertEqual(result, "ABC")
+
+    def test_dynamic_ref_circular_guard(self):
+        snippets = {"xcot": lambda: "R$10"}
+        result = resolve_inline("%%xcot%%", snippets, lambda: None, _seen={"xcot"})
         self.assertEqual(result, "%%xcot%%")
 
     def test_form_field_left_unchanged(self):

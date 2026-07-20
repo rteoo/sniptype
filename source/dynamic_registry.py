@@ -10,7 +10,8 @@ so a bad entry never crashes startup.
 
 import time
 
-from snippet_utils import load_json_file
+from snippet_utils import get_dynamic_prefixes, load_json_file
+from validation_support import validate_trigger
 
 
 # registry 'method' -> BCBConsultor attribute
@@ -145,6 +146,20 @@ def is_enabled(entry):
     return bool(entry.get("enabled", True))
 
 
+def effective_trigger(key, entry):
+    """Return the trigger a registry entry actually binds to.
+
+    The JSON key is the stable identity used by the user override file; an
+    optional ``trigger`` field renames what the user types without breaking
+    overrides written against the original key.
+    """
+    if isinstance(entry, dict):
+        trigger = entry.get("trigger")
+        if isinstance(trigger, str) and trigger.strip():
+            return trigger.strip()
+    return key
+
+
 def build_dynamic_snippets(registry, context, logger=None):
     """Bind enabled registry entries to provider callables.
 
@@ -155,19 +170,24 @@ def build_dynamic_snippets(registry, context, logger=None):
     snippets = {}
     slow_triggers = set()
 
-    for trigger, entry in registry.items():
+    for key, entry in registry.items():
         if not isinstance(entry, dict) or not is_enabled(entry):
+            continue
+        trigger = effective_trigger(key, entry)
+        if trigger in snippets:
+            if logger:
+                logger.warning(f"Trigger dinâmico duplicado '{trigger}' (entrada '{key}'); ignorado.")
             continue
         provider_name = entry.get("provider")
         factory = PROVIDERS.get(provider_name)
         if factory is None:
             if logger:
-                logger.warning(f"Provider desconhecido '{provider_name}' para '{trigger}'; ignorado.")
+                logger.warning(f"Provider desconhecido '{provider_name}' para '{key}'; ignorado.")
             continue
         callable_snippet = factory(trigger, entry, context)
         if callable_snippet is None:
             if logger:
-                logger.warning(f"Método inválido em '{trigger}' (provider {provider_name}); ignorado.")
+                logger.warning(f"Método inválido em '{key}' (provider {provider_name}); ignorado.")
             continue
         snippets[trigger] = callable_snippet
         if entry.get("slow"):
@@ -177,17 +197,81 @@ def build_dynamic_snippets(registry, context, logger=None):
 
 
 def reference_entries_by_category(registry):
-    """Return {category: [(trigger, description, enabled), ...]} for the GUI tabs.
+    """Return {category: [(key, trigger, description, enabled), ...]} for the GUI tab.
 
-    Preserves registry (insertion) order within each category so the reference
-    tabs always match the registered triggers instead of a hand-maintained list.
+    ``key`` is the stable registry id (what the override file is keyed by) and
+    ``trigger`` is what the user actually types. Preserves registry (insertion)
+    order within each category so the tab always matches the registered triggers
+    instead of a hand-maintained list.
     """
     grouped = {}
-    for trigger, entry in registry.items():
+    for key, entry in registry.items():
         if not isinstance(entry, dict):
             continue
         category = entry.get("category", entry.get("provider", "other"))
         grouped.setdefault(category, []).append(
-            (trigger, entry.get("description", ""), is_enabled(entry))
+            (key, effective_trigger(key, entry), entry.get("description", ""), is_enabled(entry))
         )
     return grouped
+
+
+def composed_mapping_triggers(snippets):
+    """Return the set of dynamic mapping triggers (prefix + item) in ``snippets``."""
+    composed = set()
+    for prefix, mapping_key in get_dynamic_prefixes(snippets).items():
+        mapping = snippets.get(mapping_key)
+        if not isinstance(mapping, dict):
+            continue
+        for item_name in mapping:
+            if item_name != "__prefix__":
+                composed.add(prefix + item_name)
+    return composed
+
+
+def validate_rename(registry, key, new_trigger, snippets=None):
+    """Validate a proposed rename of registry entry ``key`` to ``new_trigger``.
+
+    Returns (errors, warnings). Errors block the rename because the trigger would
+    be unreachable or would shadow an existing one; warnings are shown for
+    confirmation only.
+    """
+    snippets = snippets or {}
+    errors = []
+
+    candidate = new_trigger.strip() if isinstance(new_trigger, str) else ""
+    if not candidate:
+        return (["O trigger não pode ficar vazio."], [])
+    if any(ch.isspace() for ch in candidate):
+        errors.append("O trigger não pode conter espaços em branco.")
+
+    other_dynamic = {
+        effective_trigger(other_key, entry)
+        for other_key, entry in registry.items()
+        if other_key != key and isinstance(entry, dict)
+    }
+    if candidate in other_dynamic:
+        errors.append(f"Já existe um snippet dinâmico com o trigger '{candidate}'.")
+
+    static_triggers = {
+        name for name, value in snippets.items()
+        if not name.startswith("_") and not callable(value)
+    }
+    if candidate in static_triggers:
+        errors.append(f"Já existe um snippet estático com o trigger '{candidate}'.")
+
+    prefixes = get_dynamic_prefixes(snippets)
+    if candidate in prefixes:
+        errors.append(f"'{candidate}' é um prefixo de mapeamento dinâmico.")
+    if candidate in composed_mapping_triggers(snippets):
+        errors.append(f"Já existe um mapeamento dinâmico com o trigger '{candidate}'.")
+
+    if errors:
+        return (errors, [])
+
+    warnings = validate_trigger(candidate, static_triggers | other_dynamic, frozenset())
+    for prefix in prefixes:
+        if candidate.startswith(prefix) and candidate != prefix:
+            warnings.append(
+                f"O trigger começa com o prefixo de mapeamento '{prefix}'."
+            )
+    return (errors, warnings)
