@@ -304,7 +304,12 @@ class AutostartStateTests(unittest.TestCase):
         self._redirect("windows", "Txt Xpander.lnk")
         self._write("windows", self.command)
         shouty = [arg.upper().replace("\\", "/") for arg in self.command]
-        with self._windows_read(shouty):
+        # The subject here is the path *comparison*, not the on-disk check: an
+        # uppercased temp path does not exist on a case-sensitive filesystem, so
+        # off Windows the entry would classify as stale before ever being
+        # compared. test_windows_current covers the unmocked chain.
+        with self._windows_read(shouty), \
+                mock.patch.object(ps, "autostart_target_exists", return_value=True):
             self.assertEqual(ps.autostart_state("Txt Xpander", self.command), ps.AUTOSTART_CURRENT)
 
     def test_windows_stale_when_target_is_gone(self):
