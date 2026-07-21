@@ -310,7 +310,7 @@ Given `snippets.json`:
 }
 ```
 
-and the default registry with `xhj` enabled and `xdolar` disabled by the user:
+and a registry containing only `xhj` (enabled) and `xdolar` (disabled by the user) — the real default registry has ~30 entries, which would all appear in `dynamic[]`:
 
 ```json
 {
