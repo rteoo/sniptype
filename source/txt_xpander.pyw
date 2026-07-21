@@ -192,6 +192,8 @@ class TextExpander:
         self._manager_refreshers = []
         # Serializes expansion dialogs; see _run_modal_dialog.
         self._dialog_lock = threading.Lock()
+        # Serializes autostart toggles; see _apply_autostart_toggle.
+        self._autostart_lock = threading.Lock()
         self.text_inserter = TextInserter(self.keyboard_controller, logger=self.logger)
         self.notification_timestamps = {}
         self.notification_history = []
@@ -2828,7 +2830,19 @@ class TextExpander:
             return False
 
     def toggle_autostart(self, icon, item):
-        """Tray action: install/remove the per-user autostart entry."""
+        """Tray action: install/remove the per-user autostart entry.
+
+        The Windows backend shells out to PowerShell, so the work goes to a
+        worker thread; doing it inline would freeze the tray menu for as long as
+        PowerShell takes to start.
+        """
+        self.task_runner.start(self._apply_autostart_toggle, name="autostart-toggle")
+
+    def _apply_autostart_toggle(self):
+        # A toggle now outlives the click, so ignore clicks arriving mid-flight
+        # instead of racing an install against a remove.
+        if not self._autostart_lock.acquire(blocking=False):
+            return
         try:
             if is_autostart_enabled(APP_NAME):
                 remove_autostart(APP_NAME)
@@ -2843,6 +2857,18 @@ class TextExpander:
                 f"Falha ao alterar início automático: {e}",
                 key="autostart-error",
             )
+        finally:
+            self._autostart_lock.release()
+            self.refresh_tray_menu()
+
+    def refresh_tray_menu(self):
+        """Re-render the tray menu so check states reflect a background change."""
+        if not self.icon:
+            return
+        try:
+            self.icon.update_menu()
+        except Exception as e:
+            self.logger.warning(f"Falha ao atualizar o menu da bandeja: {e}")
 
     def tray_open_data_folder(self, icon, item):
         """Tray action: open the user data folder."""
