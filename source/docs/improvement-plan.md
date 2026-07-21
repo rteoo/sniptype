@@ -1,6 +1,6 @@
 # Txt Xpander — Improvement Plan
 
-> **Status (2026-07-16):** Phases 0–4 fully implemented; Phases 5–6 implemented except two items that need a running app / non-Windows host to verify. Full unittest suite green (173 tests). Remaining, tracked follow-ups: Phase 5 single-Tk-root refactor (audit 3.3) and Treeview list/preview (4.2); Phase 6 non-Windows clipboard backend (the last hard Win32 coupling) and wiring the autostart/ticker adapters end-to-end.
+> **Status (2026-07-16):** Phases 0–4 fully implemented; Phases 5–6 implemented except two items that need a running app / non-Windows host to verify. Full unittest suite green (217 tests). Phase 5.1 (single Tk root, audit 3.3) landed 2026-07-20. Remaining, tracked follow-ups: Phase 5 Treeview list/preview (4.2); Phase 6 non-Windows clipboard backend (the last hard Win32 coupling) and wiring the autostart/ticker adapters end-to-end.
 
 Companion to [audit-report.md](audit-report.md). Seven phases (0–6), ordered so that guideline compliance and data safety land before anything else and each phase ships independently. Constraint honored throughout: **JSON files only — no database.**
 
@@ -96,7 +96,7 @@ Effort: medium. Independent of Phase 3; requires Phase 2's data dir.
 
 ## Phase 5 — Manager UI improvements (fixes 3.3, 3.5, 4.2–4.4)
 
-1. **Single Tk root architecture:** one hidden root + dedicated GUI thread created at startup; all dialogs (form fill, WhatsApp, ticker input, manager) become `Toplevel`s marshaled onto it via a queue. Removes the multi-root threading risk and lets the ticker input drop `mshta` (also a Phase 6 win).
+1. **Single Tk root architecture — done.** `gui_thread.GuiThread` owns one hidden root on a dedicated GUI thread started in `run()`; all dialogs (form fill, WhatsApp, ticker input, manager, notification history) are `Toplevel`s marshaled onto it via a queue pumped by `root.after`. Workers block on `GuiThread.call`; the manager uses fire-and-forget `submit` plus in-process window tracking. Dropped `mshta`/VBScript and the `FindWindowW` focus trick (both Phase 6 wins).
 2. **Save-time validation with warnings:** trigger shadowed by a dynamic trigger; trigger is prefix/suffix of an existing one; whitespace/terminators inside the trigger; 1–2 char triggers. Warn-and-confirm, don't hard-block.
 3. **List quality:** value-preview column (Treeview instead of Listbox), rich-text/variables markers, item counts in tab titles.
 4. **Editing flow:** Ctrl+S saves; dirty-state indicator with confirm-on-switch; rename action; duplicate action.
@@ -109,7 +109,7 @@ Effort: medium-large, but each item ships independently. Item 1 first — the re
 Goal: `python txt_xpander.pyw` runs on macOS/Linux with graceful degradation; Windows behavior unchanged.
 
 1. **Platform adapter module** (`platform_support.py`) with a Windows implementation extracted from today's code and interfaces for: clipboard (get/set text+HTML+RTF), single-instance guard (lockfile+PID replaces mutex), paste shortcut (Ctrl+V vs Cmd+V), "already running" message, autostart install/remove.
-2. **Replace remaining Windows-only calls** in the main file: `FindWindowW` focus trick → in-process window tracking (falls out of Phase 5.1); `MessageBoxW` → Tk.
+2. **Replace remaining Windows-only calls** in the main file: `FindWindowW` focus trick → in-process window tracking (**done** with Phase 5.1); `MessageBoxW` → Tk.
 3. **Clipboard adapters for macOS/Linux** (pasteboard / `xclip`-or-`wl-copy` shim or a small dependency — decide then; plain-text-first is acceptable v1).
 4. **Autostart adapter:** Startup .lnk (Windows), LaunchAgent plist (macOS), `~/.config/autostart/*.desktop` (Linux) — replaces the build-script PowerShell block.
 5. Document per-OS caveats (macOS Accessibility permission for pynput; Wayland limitations) in README.

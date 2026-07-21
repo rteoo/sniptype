@@ -72,7 +72,8 @@ Build details: the release is `--onedir` (not `--onefile`); the hidden import `p
 - `source\whatsapp_support.py` normalizes phone numbers and builds WhatsApp URLs.
 - `source\whatsapp_runtime_support.py` runs the `xwapp`, `xlwapp`, and `xpwapp` action flows.
 - `source\bcb_consultor.py` fetches Brazilian Central Bank API values with caching.
-- `source\yf_stocks.py` wraps yfinance stock/fundamentals lookups. The ticker prompt itself is a VBScript/mshta dialog in `txt_xpander.pyw` (`ask_ticker_input`), not in this module.
+- `source\yf_stocks.py` wraps yfinance stock/fundamentals lookups. The ticker prompt itself is a Tk dialog in `txt_xpander.pyw` (`ask_ticker_input`), not in this module.
+- `source\gui_thread.py` owns the process's only `tk.Tk()` root, on a dedicated GUI thread. Worker threads never touch Tk: they pass a callable to `GuiThread.call` (blocks, returns the result, re-raises errors) or `GuiThread.submit` (fire-and-forget), and a `root.after` pump runs it on the GUI thread. The keyboard listener must never call into it.
 - `source\gui_support.py` contains GUI filtering and dialog helpers. The manager's single "Snippets Dinâmicos" tab (sections for Data/Hora, Economia, Ações and WhatsApp) is generated from the dynamic registry, not from hardcoded lists; each row can be enabled/disabled and renamed in place.
 - `source\tests\` contains unit tests.
 - `source\docs\` contains planning notes for refactors and features, plus `audit-report.md` (full code audit) and `improvement-plan.md` (phased roadmap).
@@ -143,7 +144,7 @@ There is no repo-local `pyproject.toml`, `pytest`, `ruff`, `black`, `mypy`, or `
 - Keep keyboard listener work fast and deterministic.
 - Preserve atomic JSON writes via `os.replace`.
 - Avoid persisting runtime-only dynamic snippets.
-- Keep GUI work on the appropriate Tkinter thread.
+- Keep all GUI work on the shared GUI thread via `gui_thread.GuiThread`. Never create a second `tk.Tk()`.
 - Keep slow snippet behavior on background paths.
 - Treat clipboard contents as user state; restore or preserve it according to the existing action-specific behavior.
 - Use existing helper modules before introducing new abstractions.
