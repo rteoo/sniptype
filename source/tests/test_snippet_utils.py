@@ -4,6 +4,7 @@ from pathlib import Path
 
 from snippet_utils import (
     build_saveable_snippets,
+    find_shadowed_statics,
     calculate_max_trigger_length,
     calculate_max_trigger_length_with_mappings,
     check_dynamic_pattern,
@@ -83,6 +84,30 @@ class SnippetUtilsTests(unittest.TestCase):
         saveable = build_saveable_snippets({"xname": "Example User", "xdyn": lambda: "value"})
 
         self.assertEqual({"xname": "Example User"}, saveable)
+
+    def test_find_shadowed_statics_reports_names_taken_by_a_callable(self):
+        shadowed = find_shadowed_statics(
+            {"xhj": "meu texto", "xname": "Example User"},
+            {"xhj": lambda: "data de hoje"},
+        )
+
+        self.assertEqual({"xhj": "meu texto"}, shadowed)
+
+    def test_build_saveable_snippets_keeps_statics_shadowed_by_a_callable(self):
+        # Regression: merging a dynamic trigger over a static of the same name
+        # used to delete the static key from snippets.json on the next save.
+        static = {"xhj": "meu texto importante"}
+        dynamic = {"xhj": lambda: "data de hoje"}
+        merged = merge_snippets(static, dynamic)
+
+        saveable = build_saveable_snippets(merged, find_shadowed_statics(static, dynamic))
+
+        self.assertEqual({"xhj": "meu texto importante"}, saveable)
+
+    def test_build_saveable_snippets_prefers_the_live_value_over_the_shadow(self):
+        saveable = build_saveable_snippets({"xhj": "editado"}, {"xhj": "antigo"})
+
+        self.assertEqual({"xhj": "editado"}, saveable)
 
     def test_merge_snippets_keeps_dynamic_priority(self):
         merged = merge_snippets({"xhj": "static"}, {"xhj": "dynamic", "xnow": "dynamic-now"})

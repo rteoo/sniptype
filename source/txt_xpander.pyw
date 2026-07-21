@@ -36,6 +36,7 @@ from yf_stocks import B3FundamentosConsultor
 from snippet_utils import (
     build_saveable_snippets,
     calculate_max_trigger_length_with_mappings,
+    find_shadowed_statics,
     get_default_snippets as get_static_default_snippets,
     get_dynamic_prefixes,
     load_json_file,
@@ -255,6 +256,10 @@ class TextExpander:
             logger=self.logger,
         )
         self.slow_snippets = set()
+        # Static values whose key a dynamic trigger shadows in the merged map;
+        # kept so no save can drop them from snippets.json. Set by load_snippets,
+        # which itself can save on first run.
+        self.shadowed_static_snippets = {}
 
         # Load snippets before anything else
         self.snippets = self.load_snippets()
@@ -346,6 +351,22 @@ class TextExpander:
         # Merge: JSON snippets + dynamic ones (dynamic take priority)
         all_snippets = merge_snippets(static_snippets, dynamic_snippets)
 
+        # A dynamic trigger sharing a name with a static snippet replaces it in
+        # the merged map with a callable; without this the next save would drop
+        # the static value from disk with no trace.
+        self.shadowed_static_snippets = find_shadowed_statics(static_snippets, dynamic_snippets)
+        if self.shadowed_static_snippets:
+            names = ", ".join(sorted(self.shadowed_static_snippets))
+            self.logger.warning(
+                f"⚠ Snippet(s) estático(s) com o mesmo nome de um trigger dinâmico: {names}. "
+                "O dinâmico tem prioridade ao digitar; o valor estático continua salvo em snippets.json."
+            )
+            self.notify_error(
+                f"Trigger(s) em conflito com snippets dinâmicos: {names}. O dinâmico é que expande.",
+                key="shadowed-static",
+                cooldown_seconds=60,
+            )
+
         self.logger.info(f"✓ Total de snippets: {len(all_snippets)} ({len(static_snippets)} estáticos + {len(dynamic_snippets)} dinâmicos)")
 
         return all_snippets
@@ -426,7 +447,7 @@ class TextExpander:
         pre-write file is taken before the atomic replace so no save can lose an
         earlier state.
         """
-        saveable = build_saveable_snippets(snippets)
+        saveable = build_saveable_snippets(snippets, self.shadowed_static_snippets)
         try:
             # Only back up a valid prior file, so a corrupt on-disk copy can never
             # become the newest backup and defeat recovery.
@@ -541,7 +562,7 @@ class TextExpander:
 
         self._backup_current_library()
         if mode == "merge":
-            merged = {**build_saveable_snippets(self.snippets), **data}
+            merged = {**build_saveable_snippets(self.snippets, self.shadowed_static_snippets), **data}
         else:
             merged = data
 
@@ -2072,7 +2093,10 @@ class TextExpander:
                 messagebox.showwarning("Aviso", "Informe um valor para o snippet.")
                 return
 
-            if trigger not in self.snippets:
+            # "Already in self.snippets" is not the same as "editing an existing
+            # static": a dynamic trigger occupies the key too, and that is exactly
+            # the collision that needs the warning.
+            if trigger not in self.snippets or callable(self.snippets[trigger]):
                 warnings = self._validate_trigger_warnings(trigger)
                 if warnings and not messagebox.askyesno(
                     "Confirmar trigger",
@@ -2080,6 +2104,11 @@ class TextExpander:
                 ):
                     return
 
+            # Saving over a dynamic trigger replaces the callable in memory, so
+            # the static value only survives the next reload+save if it is
+            # tracked as shadowed here.
+            if callable(self.snippets.get(trigger)) or trigger in self.shadowed_static_snippets:
+                self.shadowed_static_snippets[trigger] = value
             self.snippets[trigger] = value
             if not self.save_snippets(self.snippets):
                 messagebox.showerror(
@@ -2101,7 +2130,12 @@ class TextExpander:
 
             if trigger in self.snippets and messagebox.askyesno("Confirmar", f"Excluir '{trigger}'?"):
                 del self.snippets[trigger]
+                # An explicit delete must win over the shadow safety net, or the
+                # preserved value would be written back on the next save.
+                shadowed = self.shadowed_static_snippets.pop(trigger, None)
                 if not self.save_snippets(self.snippets):
+                    if shadowed is not None:
+                        self.shadowed_static_snippets[trigger] = shadowed
                     messagebox.showerror(
                         "Erro ao salvar",
                         "Não foi possível gravar snippets.json. Verifique os logs; a exclusão pode não ter sido salva.",
@@ -2130,6 +2164,12 @@ class TextExpander:
             if old_trigger not in self.snippets:
                 messagebox.showwarning("Aviso", "Selecione um snippet salvo para renomear.")
                 return
+            if callable(self.snippets[old_trigger]):
+                messagebox.showwarning(
+                    "Aviso",
+                    f"'{old_trigger}' é um snippet dinâmico. Renomeie-o na aba Snippets Dinâmicos.",
+                )
+                return
             new_trigger = simpledialog.askstring("Renomear", "Novo trigger:", initialvalue=old_trigger, parent=root)
             if not new_trigger:
                 return
@@ -2151,10 +2191,13 @@ class TextExpander:
             value = self.snippets[old_trigger]
             self.snippets[new_trigger] = value
             del self.snippets[old_trigger]
+            shadowed = self.shadowed_static_snippets.pop(old_trigger, None)
             if not self.save_snippets(self.snippets):
                 # Roll back the in-memory rename on failure.
                 self.snippets[old_trigger] = value
                 self.snippets.pop(new_trigger, None)
+                if shadowed is not None:
+                    self.shadowed_static_snippets[old_trigger] = shadowed
                 messagebox.showerror("Erro ao salvar", "Não foi possível gravar snippets.json.")
                 return
             self.refresh_runtime_indexes()
@@ -2620,7 +2663,7 @@ class TextExpander:
                         variable=var,
                         bg="#FFFFFF",
                         activebackground="#FFFFFF",
-                        command=lambda k=key, v=var: self._toggle_registry_entry(k, v.get()),
+                        command=lambda k=key, v=var: self._on_registry_checkbox(k, v),
                     ).pack(side=tk.LEFT)
                     trigger_label = tk.Label(row, text=trigger, font=("Consolas", 10, "bold"), fg="#2D5BD1", bg="#FFFFFF", width=12, anchor="w")
                     trigger_label.pack(side=tk.LEFT)
@@ -2647,12 +2690,21 @@ class TextExpander:
 
         self._bind_mousewheel(canvas, canvas)
 
+    def _on_registry_checkbox(self, key, var):
+        """Apply a checkbox toggle, snapping the box back when it is refused."""
+        enabled = var.get()
+        if not self._toggle_registry_entry(key, enabled):
+            var.set(not enabled)
+
     def _toggle_registry_entry(self, key, enabled):
         """Enable/disable a dynamic trigger, persisting to the user override file.
 
         Keyed by the stable registry id so a renamed trigger still writes the
-        right override entry.
+        right override entry. Returns True when the change was applied.
         """
+        if enabled and not self._confirm_dynamic_shadows_static(key):
+            return False
+
         try:
             if os.path.exists(self.dynamic_registry_file):
                 user_override = load_json_file(self.dynamic_registry_file)
@@ -2670,7 +2722,7 @@ class TextExpander:
         except Exception as e:
             self.logger.error(f"Falha ao salvar registro dinâmico: {e}")
             self.notify_error("Falha ao salvar alteração do snippet dinâmico.", key="registry-save")
-            return
+            return False
 
         self.dynamic_registry = load_registry(
             self.resolve_resource_path("dynamic_snippets.json"),
@@ -2681,6 +2733,30 @@ class TextExpander:
         state = "ativado" if enabled else "desativado"
         trigger = effective_trigger(key, self.dynamic_registry.get(key, {}))
         self.notify_status(f"Snippet dinâmico '{trigger}' {state}.", key=f"registry-toggle:{key}")
+        return True
+
+    def _confirm_dynamic_shadows_static(self, key):
+        """Ask before enabling a dynamic trigger that shadows a static snippet.
+
+        ``validate_rename`` blocks this collision when it comes from a rename; the
+        enable toggle reaches the same state, so it needs the same check. Enabling
+        is allowed with confirmation: the static value stays on disk, the dynamic
+        snippet is what expands.
+        """
+        trigger = effective_trigger(key, self.dynamic_registry.get(key, {}))
+        value = self.snippets.get(trigger)
+        if trigger.startswith("_") or value is None or callable(value):
+            return True
+
+        self.logger.warning(
+            f"Ativar o snippet dinâmico '{trigger}' sobrepõe o snippet estático de mesmo nome."
+        )
+        return messagebox.askyesno(
+            "Trigger em conflito",
+            f"Já existe um snippet estático com o trigger '{trigger}'.\n\n"
+            "Ao ativar o dinâmico, é ele que passa a expandir. O texto estático "
+            "continua salvo em snippets.json, mas deixa de ser acionado.\n\nAtivar mesmo assim?",
+        )
 
     def _create_dynamic_snippets_tab(self, parent, root):
         """Build the single tab listing every built-in dynamic snippet."""

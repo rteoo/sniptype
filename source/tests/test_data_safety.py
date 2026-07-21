@@ -14,11 +14,13 @@ import runtime_support
 from app_module import txt_xpander as tx  # .pyw is not importable off Windows
 
 
-def make_expander(base_dir, snippets_content=None):
+def make_expander(base_dir, snippets_content=None, resource_dir=None):
     """Construct a TextExpander rooted at base_dir without touching real data.
 
     Pins the data dir to base_dir via TXT_XPANDER_HOME so nothing is written to
-    the real ~/.txt_xpander during tests.
+    the real ~/.txt_xpander during tests. ``resource_dir`` separates the bundled
+    resources from the data dir, which matters when a test writes a user override
+    of a bundled file.
     """
     if snippets_content is not None:
         with open(os.path.join(base_dir, "snippets.json"), "w", encoding="utf-8") as handle:
@@ -27,7 +29,7 @@ def make_expander(base_dir, snippets_content=None):
     os.environ["TXT_XPANDER_HOME"] = base_dir
     try:
         with mock.patch.object(tx, "get_runtime_base_dir", return_value=base_dir), \
-                mock.patch.object(tx, "get_runtime_resource_dir", return_value=base_dir):
+                mock.patch.object(tx, "get_runtime_resource_dir", return_value=resource_dir or base_dir):
             return tx.TextExpander()
     finally:
         if previous_home is None:
@@ -64,6 +66,120 @@ class SaveSnippetsTests(unittest.TestCase):
         with open(self.app.snippets_file, encoding="utf-8") as handle:
             data = json.load(handle)
         self.assertNotIn("xnow", data)
+
+
+def write_bundled_registry(registry):
+    """Write a bundled dynamic_snippets.json into a fresh dir and return it."""
+    resource_dir = tempfile.mkdtemp()
+    with open(os.path.join(resource_dir, "dynamic_snippets.json"), "w", encoding="utf-8") as handle:
+        json.dump(registry, handle)
+    return resource_dir
+
+
+class ShadowedStaticSnippetTests(unittest.TestCase):
+    """A static snippet named like a dynamic trigger must survive every save.
+
+    The merged map holds the dynamic callable at that key, and callables are
+    dropped on the way to disk — so before the fix the static value was silently
+    deleted from snippets.json by the next save.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        resources = write_bundled_registry(
+            {"xhi": {"provider": "datetime", "category": "datetime", "format": "%Y-%m-%d"}}
+        )
+        self.app = make_expander(
+            self.tmp, '{"xhi": "meu texto importante", "xname": "Example User"}', resource_dir=resources
+        )
+
+    def _on_disk(self):
+        with open(self.app.snippets_file, encoding="utf-8") as handle:
+            return json.load(handle)
+
+    def test_collision_is_detected_at_load(self):
+        self.assertTrue(callable(self.app.snippets["xhi"]))
+        self.assertEqual({"xhi": "meu texto importante"}, self.app.shadowed_static_snippets)
+
+    def test_save_of_the_merged_map_keeps_the_shadowed_static(self):
+        self.assertTrue(self.app.save_snippets(self.app.snippets))
+        self.assertEqual(
+            {"xhi": "meu texto importante", "xname": "Example User"}, self._on_disk()
+        )
+
+    def test_reload_then_save_keeps_the_shadowed_static(self):
+        # The original loss needed a reload to re-merge the callable on top.
+        self.app.reload_snippets_from_disk()
+        self.assertTrue(self.app.save_snippets(self.app.snippets))
+        self.assertEqual("meu texto importante", self._on_disk()["xhi"])
+
+    def test_merge_import_keeps_the_shadowed_static(self):
+        src = os.path.join(self.tmp, "incoming.json")
+        with open(src, "w", encoding="utf-8") as handle:
+            json.dump({"xbye": "goodbye"}, handle)
+        ok, error = self.app.import_library(src, mode="merge")
+        self.assertTrue(ok, error)
+        self.assertEqual("meu texto importante", self._on_disk()["xhi"])
+
+
+class DynamicToggleCollisionTests(unittest.TestCase):
+    """Enabling a dynamic trigger over a static name needs the same guard as a rename."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        resources = write_bundled_registry(
+            {
+                "xhi": {
+                    "provider": "datetime",
+                    "category": "datetime",
+                    "format": "%Y-%m-%d",
+                    "enabled": False,
+                },
+                "xfree": {"provider": "datetime", "category": "datetime", "format": "%Y"},
+            }
+        )
+        self.app = make_expander(self.tmp, '{"xhi": "meu texto importante"}', resource_dir=resources)
+
+    def _override(self):
+        if not os.path.exists(self.app.dynamic_registry_file):
+            return {}
+        with open(self.app.dynamic_registry_file, encoding="utf-8") as handle:
+            return json.load(handle)
+
+    def test_enabling_over_a_static_asks_and_a_refusal_changes_nothing(self):
+        with mock.patch.object(tx.messagebox, "askyesno", return_value=False) as ask:
+            self.assertFalse(self.app._toggle_registry_entry("xhi", True))
+        ask.assert_called_once()
+        self.assertEqual({}, self._override())
+        self.assertEqual("meu texto importante", self.app.snippets["xhi"])
+
+    def test_enabling_over_a_static_proceeds_when_confirmed(self):
+        with mock.patch.object(tx.messagebox, "askyesno", return_value=True):
+            self.assertTrue(self.app._toggle_registry_entry("xhi", True))
+        self.assertTrue(self._override()["xhi"]["enabled"])
+        self.assertTrue(callable(self.app.snippets["xhi"]))
+        # The static value it now shadows is still preserved across a save.
+        self.assertTrue(self.app.save_snippets(self.app.snippets))
+        with open(self.app.snippets_file, encoding="utf-8") as handle:
+            self.assertEqual("meu texto importante", json.load(handle)["xhi"])
+
+    def test_enabling_without_a_collision_does_not_prompt(self):
+        self.app._toggle_registry_entry("xfree", False)
+        with mock.patch.object(tx.messagebox, "askyesno") as ask:
+            self.assertTrue(self.app._toggle_registry_entry("xfree", True))
+        ask.assert_not_called()
+
+    def test_disabling_never_prompts(self):
+        with mock.patch.object(tx.messagebox, "askyesno") as ask:
+            self.assertTrue(self.app._toggle_registry_entry("xfree", False))
+        ask.assert_not_called()
+
+    def test_checkbox_snaps_back_when_the_toggle_is_refused(self):
+        var = mock.Mock()
+        var.get.return_value = True
+        with mock.patch.object(self.app, "_toggle_registry_entry", return_value=False):
+            self.app._on_registry_checkbox("xhi", var)
+        var.set.assert_called_once_with(False)
 
 
 class BackupRestoreImportTests(unittest.TestCase):
