@@ -190,6 +190,61 @@ class ManagerGuiSmokeTests(unittest.TestCase):
         rows = self._on_gui(refresh)
         self.assertEqual({"ximported": ("from backup", "")}, rows)
 
+    def _build_mappings_tab(self, shared_root, set_count=None):
+        root = tk.Toplevel(shared_root)
+        root.withdraw()
+        frame = tk.Frame(root)
+        self.app._create_dynamic_mappings_tab(frame, root, set_count=set_count)
+        root.update_idletasks()
+        return frame
+
+    def _tree_rows(self, frame):
+        """{key: (preview, markers)} from the only Treeview in a tab."""
+        trees = [w for w in _descendants(frame) if isinstance(w, ttk.Treeview)]
+        self.assertTrue(trees, "expected a snippet Treeview")
+        tree = trees[0]
+        return {iid: tuple(tree.item(iid, "values"))[1:] for iid in tree.get_children()}
+
+    def test_mapping_tree_shows_preview_and_markers(self):
+        self.app.snippets["_cpf_numbers"] = {
+            "__prefix__": "cpf",
+            "alice": "123.456.789-00",
+            "assinada": {"__kind__": "rich_text", "text": "CPF\noficial", "spans": []},
+            "modelo": "CPF de %%titular%%",
+        }
+
+        rows = self._on_gui(lambda r: self._tree_rows(self._build_mappings_tab(r)))
+
+        self.assertNotIn("__prefix__", rows, "prefix metadata is not an item")
+        self.assertEqual(("123.456.789-00", ""), rows["alice"])
+        self.assertEqual(("CPF oficial", "RT"), rows["assinada"])
+        self.assertEqual(("CPF de %%titular%%", "%%"), rows["modelo"])
+
+    def test_mapping_tab_counts_every_type_not_just_the_selected_one(self):
+        self.app.snippets["_cpf_numbers"] = {"__prefix__": "cpf", "alice": "1", "bruno": "2"}
+        self.app.snippets["_mail_codes"] = {"__prefix__": "mail", "team": "team@x.com"}
+        counts = []
+
+        self._on_gui(lambda r: self._build_mappings_tab(r, set_count=counts.append))
+
+        # 2 CPF + 1 mail; CPF is selected but the title reports the library.
+        self.assertEqual(3, counts[-1])
+
+    def test_mapping_count_ignores_the_search_filter(self):
+        self.app.snippets["_cpf_numbers"] = {"__prefix__": "cpf", "alice": "1", "bruno": "2"}
+        counts = []
+
+        def build_and_search(shared_root):
+            frame = self._build_mappings_tab(shared_root, set_count=counts.append)
+            entries = [w for w in _descendants(frame) if isinstance(w, tk.Entry)]
+            entries[0].insert(0, "alice")
+            frame.winfo_toplevel().update()
+            return self._tree_rows(frame)
+
+        rows = self._on_gui(build_and_search)
+        self.assertEqual(["alice"], list(rows), "search should still narrow the list")
+        self.assertEqual(2, counts[-1], "count reports the library, not the filter")
+
     def test_notification_history_window_builds(self):
         def build(shared_root):
             root = tk.Toplevel(shared_root)

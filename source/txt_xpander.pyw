@@ -2317,6 +2317,22 @@ class TextExpander:
         btn_save_map.pack(side=tk.LEFT, padx=6)
         btn_delete_map.pack(side=tk.LEFT, padx=(6, 0))
 
+        def update_total_count():
+            """Tab title counts every mapping item, across all types.
+
+            Deliberately not the selected type's visible rows: a tab title that
+            changed when you clicked a type or typed in the search box would be
+            reporting selection state, not library size.
+            """
+            if set_count is None:
+                return
+            total = 0
+            for type_key in mappings_info:
+                mapping = self.snippets.get(type_key)
+                if isinstance(mapping, dict):
+                    total += sum(1 for name in mapping if name != "__prefix__")
+            set_count(total)
+
         def refresh_mapping_list():
             tree_map.delete(*tree_map.get_children())
             current_type = mapping_type.get()
@@ -2324,12 +2340,10 @@ class TextExpander:
             mapping = self.snippets.get(current_type, {})
             if not isinstance(mapping, dict):
                 mapping = {}
-            visible = iter_filtered_mapping_items(mapping, query)
-            for key in visible:
+            for key in iter_filtered_mapping_items(mapping, query):
                 tree_map.insert("", tk.END, iid=key,
                                 values=snippet_row_values(key, mapping.get(key, "")))
-            if set_count is not None:
-                set_count(len(visible))
+            update_total_count()
             update_example_label()
 
         def add_new_type():
