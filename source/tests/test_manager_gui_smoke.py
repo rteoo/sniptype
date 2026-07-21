@@ -167,6 +167,47 @@ class ManagerGuiSmokeTests(unittest.TestCase):
         self.assertEqual("xsig", trigger)
         self.assertEqual("Assinatura principal", value)
 
+    def _save_static_from_editor(self, trigger, value):
+        """Type trigger/value into the static editor and click Salvar."""
+
+        def build(shared_root):
+            root = tk.Toplevel(shared_root)
+            root.withdraw()
+            frame = tk.Frame(root)
+            self.app._create_static_snippets_tab(frame, root)
+            root.update_idletasks()
+
+            entries = [w for w in _descendants(frame) if isinstance(w, tk.Entry)]
+            text = [w for w in _descendants(frame) if isinstance(w, tk.Text)][0]
+            entries[1].insert(0, trigger)
+            text.insert("1.0", value)
+            button = [w for w in _descendants(frame)
+                      if isinstance(w, tk.Button) and w.cget("text") == "Salvar"][0]
+            button.invoke()
+
+        self._on_gui(build)
+
+    def test_saving_a_static_over_a_dynamic_trigger_warns_first(self):
+        # Regression: the warning check ran only when the trigger was absent from
+        # the merged map, which is exactly False when a dynamic trigger owns the
+        # name — so the one collision that needed validation skipped it.
+        self.app.snippets["xdyn"] = lambda: "dinâmico"
+        self.app.refresh_runtime_indexes()
+
+        with mock.patch.object(tx.messagebox, "askyesno", return_value=False) as ask:
+            self._save_static_from_editor("xdyn", "meu texto")
+
+        ask.assert_called_once()
+        self.assertIn("dinâmico", ask.call_args[0][1])
+        self.assertTrue(callable(self.app.snippets["xdyn"]), "refused save must not overwrite")
+
+    def test_editing_an_existing_static_does_not_warn(self):
+        with mock.patch.object(tx.messagebox, "askyesno", return_value=True) as ask:
+            self._save_static_from_editor("xhi", "novo texto")
+
+        ask.assert_not_called()
+        self.assertEqual("novo texto", self.app.snippets["xhi"])
+
     def test_static_tab_reports_visible_count(self):
         self.app.snippets["xone"] = "one"
         self.app.snippets["xtwo"] = "two"
