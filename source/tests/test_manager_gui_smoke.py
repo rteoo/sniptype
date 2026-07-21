@@ -98,6 +98,153 @@ class ManagerGuiSmokeTests(unittest.TestCase):
         self.assertIn("MAIL", labels)
         self.assertIn("CPF", labels)
 
+    def _static_rows(self, frame):
+        """{trigger: (preview, markers)} from the static tab's Treeview."""
+        trees = [w for w in _descendants(frame) if isinstance(w, ttk.Treeview)]
+        self.assertTrue(trees, "expected a snippet Treeview")
+        tree = trees[0]
+        return {iid: tuple(tree.item(iid, "values"))[1:] for iid in tree.get_children()}
+
+    def test_static_tree_shows_preview_and_markers(self):
+        self.app.snippets["xsig"] = {
+            "__kind__": "rich_text",
+            "text": "Assinatura\nprincipal",
+            "spans": [],
+        }
+        self.app.snippets["xgreet"] = "Olá %%nome%%, tudo bem?"
+
+        def build(shared_root):
+            root = tk.Toplevel(shared_root)
+            root.withdraw()
+            frame = tk.Frame(root)
+            self.app._create_static_snippets_tab(frame, root)
+            root.update_idletasks()
+            return self._static_rows(frame)
+
+        rows = self._on_gui(build)
+        self.assertEqual(("Assinatura principal", "RT"), rows["xsig"])
+        self.assertEqual(("Olá %%nome%%, tudo bem?", "%%"), rows["xgreet"])
+        self.assertEqual(("hello", ""), rows["xhi"])
+
+    def test_selecting_a_tree_row_loads_the_editor(self):
+        self.app.snippets["xsig"] = {
+            "__kind__": "rich_text", "text": "Assinatura principal", "spans": [],
+        }
+
+        def build(shared_root):
+            root = tk.Toplevel(shared_root)
+            root.withdraw()
+            frame = tk.Frame(root)
+            self.app._create_static_snippets_tab(frame, root)
+            root.update_idletasks()
+
+            tree = [w for w in _descendants(frame) if isinstance(w, ttk.Treeview)][0]
+            tree.selection_set("xsig")
+            root.update()
+
+            # Entry order follows widget creation: search box, then trigger.
+            entries = [w for w in _descendants(frame) if isinstance(w, tk.Entry)]
+            text = [w for w in _descendants(frame) if isinstance(w, tk.Text)][0]
+            return entries[1].get(), text.get("1.0", "end-1c")
+
+        trigger, value = self._on_gui(build)
+        self.assertEqual("xsig", trigger)
+        self.assertEqual("Assinatura principal", value)
+
+    def test_static_tab_reports_visible_count(self):
+        self.app.snippets["xone"] = "one"
+        self.app.snippets["xtwo"] = "two"
+        counts = []
+
+        def build(shared_root):
+            root = tk.Toplevel(shared_root)
+            root.withdraw()
+            frame = tk.Frame(root)
+            self.app._create_static_snippets_tab(frame, root, set_count=counts.append)
+            root.update_idletasks()
+
+        self._on_gui(build)
+        # xhi (seeded) + xone + xtwo; dynamic callables are filtered out.
+        self.assertEqual([3], counts)
+
+    def test_refresh_hook_repopulates_lists_after_library_swap(self):
+        """Restore/import rebind self.snippets; registered lists must rebuild."""
+        def build(shared_root):
+            root = tk.Toplevel(shared_root)
+            root.withdraw()
+            frame = tk.Frame(root)
+            self.app._create_static_snippets_tab(frame, root)
+            root.update_idletasks()
+            return frame
+
+        frame = self._on_gui(build)
+        self.assertNotIn("ximported", self._on_gui(lambda _r: self._static_rows(frame)))
+
+        # Stand in for restore_backup/import_library, which rebind the dict.
+        self.app.snippets = {"ximported": "from backup"}
+
+        def refresh(_root):
+            self.app._refresh_manager_lists()
+            return self._static_rows(frame)
+
+        rows = self._on_gui(refresh)
+        self.assertEqual({"ximported": ("from backup", "")}, rows)
+
+    def _build_mappings_tab(self, shared_root, set_count=None):
+        root = tk.Toplevel(shared_root)
+        root.withdraw()
+        frame = tk.Frame(root)
+        self.app._create_dynamic_mappings_tab(frame, root, set_count=set_count)
+        root.update_idletasks()
+        return frame
+
+    def _tree_rows(self, frame):
+        """{key: (preview, markers)} from the only Treeview in a tab."""
+        trees = [w for w in _descendants(frame) if isinstance(w, ttk.Treeview)]
+        self.assertTrue(trees, "expected a snippet Treeview")
+        tree = trees[0]
+        return {iid: tuple(tree.item(iid, "values"))[1:] for iid in tree.get_children()}
+
+    def test_mapping_tree_shows_preview_and_markers(self):
+        self.app.snippets["_cpf_numbers"] = {
+            "__prefix__": "cpf",
+            "alice": "123.456.789-00",
+            "assinada": {"__kind__": "rich_text", "text": "CPF\noficial", "spans": []},
+            "modelo": "CPF de %%titular%%",
+        }
+
+        rows = self._on_gui(lambda r: self._tree_rows(self._build_mappings_tab(r)))
+
+        self.assertNotIn("__prefix__", rows, "prefix metadata is not an item")
+        self.assertEqual(("123.456.789-00", ""), rows["alice"])
+        self.assertEqual(("CPF oficial", "RT"), rows["assinada"])
+        self.assertEqual(("CPF de %%titular%%", "%%"), rows["modelo"])
+
+    def test_mapping_tab_counts_every_type_not_just_the_selected_one(self):
+        self.app.snippets["_cpf_numbers"] = {"__prefix__": "cpf", "alice": "1", "bruno": "2"}
+        self.app.snippets["_mail_codes"] = {"__prefix__": "mail", "team": "team@x.com"}
+        counts = []
+
+        self._on_gui(lambda r: self._build_mappings_tab(r, set_count=counts.append))
+
+        # 2 CPF + 1 mail; CPF is selected but the title reports the library.
+        self.assertEqual(3, counts[-1])
+
+    def test_mapping_count_ignores_the_search_filter(self):
+        self.app.snippets["_cpf_numbers"] = {"__prefix__": "cpf", "alice": "1", "bruno": "2"}
+        counts = []
+
+        def build_and_search(shared_root):
+            frame = self._build_mappings_tab(shared_root, set_count=counts.append)
+            entries = [w for w in _descendants(frame) if isinstance(w, tk.Entry)]
+            entries[0].insert(0, "alice")
+            frame.winfo_toplevel().update()
+            return self._tree_rows(frame)
+
+        rows = self._on_gui(build_and_search)
+        self.assertEqual(["alice"], list(rows), "search should still narrow the list")
+        self.assertEqual(2, counts[-1], "count reports the library, not the filter")
+
     def test_notification_history_window_builds(self):
         def build(shared_root):
             root = tk.Toplevel(shared_root)
