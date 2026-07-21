@@ -171,18 +171,46 @@ def build_snippet_failure_notification(trigger, value):
     return None
 
 
+def normalize_clipboard_text(value):
+    """Plain text as it compares after a clipboard round-trip.
+
+    The Windows backend stores CF_UNICODETEXT with CRLF while snippets carry LF,
+    so raw strings never compare equal for a multi-line snippet. Comparisons
+    against what the clipboard reports back go through here.
+    """
+    return extract_plain_text(value).replace("\r\n", "\n").replace("\r", "\n")
+
+
 class TextInserter:
     """Insert snippets through the clipboard, with typed fallback."""
 
-    def __init__(self, keyboard_controller, logger=None, restore_delay=0.12):
+    def __init__(self, keyboard_controller, logger=None, restore_delay=0.12, notify=None):
         self.keyboard_controller = keyboard_controller
         self.logger = logger or AppLogger()
         self.restore_delay = restore_delay
+        self.notify = notify
 
     def insert_text(self, value):
         plain_text = extract_plain_text(value)
         if self._paste_value(value):
             return True
+
+        if "\n" in plain_text or "\r" in plain_text:
+            # Never type a multi-line snippet: pynput sends a real Enter for each
+            # newline, which submits the message in a chat app and executes the
+            # line in a terminal. Leaving the payload for a manual Ctrl+V is the
+            # only recovery that cannot fire something irreversible.
+            if Clipboard.set_content(value):
+                message = ("Não foi possível colar o snippet automaticamente. "
+                           "Ele está na área de transferência: use Ctrl+V.")
+            else:
+                message = ("Não foi possível colar o snippet nem copiá-lo "
+                           "para a área de transferência.")
+            self.logger.warning(message)
+            if self.notify:
+                self.notify(message, key="paste-failed")
+            return False
+
         self.logger.warning("Falha ao colar snippet; usando digitacao normal.")
         self.keyboard_controller.type(plain_text)
         return True
@@ -203,10 +231,41 @@ class TextInserter:
             time.sleep(self.restore_delay)
 
             if previous_text is not None:
-                current_text = Clipboard.get_text()
-                if current_text is not None and extract_plain_text(current_text) == plain_text:
-                    Clipboard.set_content(previous_text)
+                self._restore_clipboard(plain_text, previous_text)
             return True
+
+    def _restore_clipboard(self, plain_text, previous_text):
+        """Put the user's clipboard back, and report a third-party overwrite.
+
+        Restoring is a race we cannot observe the other side of: Windows gives no
+        "the target app read the clipboard" signal for real data, so restoring too
+        early lets a slow target paste ``previous_text`` instead of the snippet.
+        """
+        current_text = Clipboard.get_text()
+        if current_text is None:
+            return
+
+        expected = normalize_clipboard_text(plain_text)
+        if normalize_clipboard_text(current_text) != expected:
+            if normalize_clipboard_text(previous_text) != normalize_clipboard_text(current_text):
+                # The clipboard holds neither our payload nor the snapshot, so a
+                # third party wrote it inside the paste window — the signature of
+                # a remote-desktop clipboard sync agent (NoMachine, RDP). This is
+                # the evidence that tells a co-writer apart from a slow target.
+                self.logger.warning(
+                    "Área de transferência sobrescrita por outro programa durante a "
+                    "colagem; o texto colado pode não ser o do snippet."
+                )
+            return
+
+        # ceiling: multi-line snippets deliberately do not restore. The CRLF
+        # comparison bug used to skip them by accident, so they have never been
+        # exposed to the restore race; enabling it while a clipboard co-writer is
+        # still the prime suspect would risk manufacturing the very bug under
+        # investigation. Re-enable once the warning above proves the cause.
+        if "\n" in expected:
+            return
+        Clipboard.set_content(previous_text)
 
     def _send_paste_shortcut(self):
         from pynput.keyboard import Key
