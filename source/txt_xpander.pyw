@@ -636,8 +636,9 @@ class TextExpander:
             dialog.bind("<Escape>", on_cancel)
             dialog.protocol("WM_DELETE_WINDOW", on_cancel)
 
-            # No grab_set — see _show_form_dialog: expansion-path dialogs can
-            # legitimately stack, and a grab would let the newer one steal it.
+            # No grab_set — see _show_form_dialog: _run_modal_dialog already
+            # serializes expansion dialogs, and every window shares one root
+            # now, so a grab would also freeze the manager window.
             center_on_screen(dialog)
             dialog.lift()
             dialog.focus_force()
@@ -746,8 +747,10 @@ class TextExpander:
             dialog.bind("<Escape>", cancel_dialog)
             dialog.protocol("WM_DELETE_WINDOW", cancel_dialog)
 
+            # No grab_set — see _show_form_dialog. The pre-refactor grab was
+            # local to this dialog's own Tcl interpreter; on the shared root it
+            # would freeze the manager window too.
             center_on_screen(dialog, vertical_divisor=3)
-            dialog.grab_set()
             dialog.lift()
             dialog.focus_force()
             entry_phone.focus_set()
@@ -1048,10 +1051,9 @@ class TextExpander:
             dialog.bind("<Escape>", on_cancel)
             dialog.protocol("WM_DELETE_WINDOW", on_cancel)
 
-            # No grab_set: the listener stays live while this dialog is open, so
-            # a second form trigger can legitimately open a second dialog. A grab
-            # here would let the newer dialog steal it and silently leave the
-            # older one non-modal. Matches the pre-refactor behavior.
+            # No grab_set: _run_modal_dialog serializes expansion dialogs, so a
+            # grab adds no modality — and with every window on the shared root
+            # it would freeze the manager window while the form is open.
             center_on_screen(dialog)
             dialog.lift()
             dialog.focus_force()
