@@ -10,6 +10,7 @@ mutex remains in ``txt_xpander`` (see README "Cross-platform status").
 """
 
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -190,9 +191,141 @@ def default_autostart_command():
     return [interpreter, launcher]
 
 
+AUTOSTART_ABSENT = "absent"
+AUTOSTART_CURRENT = "current"
+AUTOSTART_STALE = "stale"
+
+
+def read_autostart_command(app_name=APP_NAME):
+    """Return the argv the existing autostart entry launches, or None if absent.
+
+    macOS and Linux are plain file reads; Windows needs WScript.Shell to open the
+    ``.lnk``, which is a PowerShell round-trip — never call this from a tray menu
+    callback (see :func:`autostart_state`).
+    """
+    path = autostart_target_path(app_name)
+    if not os.path.exists(path):
+        return None
+
+    system = current_os()
+    if system == "windows":
+        return _read_windows_shortcut(path)
+    if system == "darwin":
+        return _read_macos_launch_agent(path)
+    return _read_linux_desktop_entry(path)
+
+
+def classify_autostart(existing, command=None):
+    """Classify an entry's argv as absent, current or stale. Pure; no I/O but a stat.
+
+    Presence alone means nothing: three writers own the same Startup entry (the
+    tray toggle, ``build_release.bat`` and the Inno Setup task), so an entry left
+    by a deleted ``dist`` copy or by a different install would otherwise report as
+    enabled while login starts nothing — or starts the wrong copy.
+
+    ``existing`` is what :func:`read_autostart_command` returned (``None`` when
+    there is no entry).
+    """
+    if existing is None:
+        return AUTOSTART_ABSENT
+    if not autostart_target_exists(existing):
+        return AUTOSTART_STALE
+    expected = list(command or default_autostart_command())
+    return AUTOSTART_CURRENT if _same_command(existing, expected) else AUTOSTART_STALE
+
+
+def autostart_target_exists(existing):
+    """True when the entry actually points at something still on disk.
+
+    Separates the two kinds of stale: a dead pointer (deleted ``dist`` folder,
+    removed venv) that nobody meant to keep, versus a live entry owned by another
+    install of the app. Only the first is safe to rewrite unasked.
+    """
+    return bool(existing) and os.path.exists(existing[0])
+
+
+def autostart_state(app_name=APP_NAME, command=None):
+    """Read the autostart entry and classify it. Worker-thread only on Windows.
+
+    An entry we cannot read counts as stale: it cannot be shown as enabled when
+    we were unable to confirm what it launches.
+    """
+    try:
+        existing = read_autostart_command(app_name)
+    except OSError:
+        return AUTOSTART_STALE
+    return classify_autostart(existing, command)
+
+
 def is_autostart_enabled(app_name=APP_NAME):
-    """True when the per-OS autostart entry is present."""
-    return os.path.exists(autostart_target_path(app_name))
+    """True when the autostart entry exists *and* points at this install."""
+    return autostart_state(app_name) == AUTOSTART_CURRENT
+
+
+def _same_command(left, right):
+    if len(left) != len(right):
+        return False
+    return all(_same_path(a, b) for a, b in zip(left, right))
+
+
+def _same_path(left, right):
+    # Every argv element we write is a path; Windows paths are case-insensitive
+    # and tolerate mixed separators, so compare them normalized.
+    if current_os() == "windows":
+        return os.path.normcase(os.path.normpath(left)) == os.path.normcase(os.path.normpath(right))
+    return left == right
+
+
+def _read_windows_shortcut(path):
+    script = (
+        "$ws = New-Object -ComObject WScript.Shell; "
+        f"$sc = $ws.CreateShortcut({_ps_quote(path)}); "
+        "Write-Output $sc.TargetPath; "
+        "Write-Output $sc.Arguments"
+    )
+    result = subprocess.run(
+        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+        capture_output=True,
+        text=True,
+        creationflags=0x08000000,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        raise OSError(f"Falha ao ler o atalho de inicialização: {detail}")
+
+    lines = (result.stdout or "").splitlines()
+    target = lines[0].strip() if lines else ""
+    arguments = lines[1].strip() if len(lines) > 1 else ""
+    if not target:
+        return []
+    return [target] + _split_windows_args(arguments)
+
+
+def _split_windows_args(arguments):
+    if not arguments:
+        return []
+    return [arg.strip('"') for arg in shlex.split(arguments, posix=False)]
+
+
+def _read_macos_launch_agent(path):
+    with open(path, encoding="utf-8") as handle:
+        content = handle.read()
+    match = re.search(r"<key>ProgramArguments</key>\s*<array>(.*?)</array>", content, re.DOTALL)
+    if not match:
+        return []
+    return [_xml_unescape(value) for value in re.findall(r"<string>(.*?)</string>", match.group(1), re.DOTALL)]
+
+
+def _xml_unescape(value):
+    return value.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+
+
+def _read_linux_desktop_entry(path):
+    with open(path, encoding="utf-8") as handle:
+        for line in handle:
+            if line.startswith("Exec="):
+                return shlex.split(line[len("Exec="):].strip())
+    return []
 
 
 def install_autostart(app_name=APP_NAME, command=None):

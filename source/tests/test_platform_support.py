@@ -1,5 +1,6 @@
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -86,14 +87,14 @@ class AutostartRoundTripTests(unittest.TestCase):
         path = self._redirect("linux", "txt-xpander.desktop")
         created = ps.install_autostart("Txt Xpander", ["/usr/bin/python3", "/opt/txt_xpander.pyw"])
         self.assertEqual(created, path)
-        self.assertTrue(ps.is_autostart_enabled("Txt Xpander"))
+        self.assertTrue(os.path.exists(path))
         with open(path, encoding="utf-8") as handle:
             content = handle.read()
         self.assertIn("[Desktop Entry]", content)
         self.assertIn("Exec=/usr/bin/python3 /opt/txt_xpander.pyw", content)
 
         self.assertTrue(ps.remove_autostart("Txt Xpander"))
-        self.assertFalse(ps.is_autostart_enabled("Txt Xpander"))
+        self.assertFalse(os.path.exists(path))
         self.assertFalse(ps.remove_autostart("Txt Xpander"))
 
     def test_macos_round_trip(self):
@@ -126,7 +127,7 @@ class AutostartRoundTripTests(unittest.TestCase):
         self.assertIn(r"'C:\App\Txt Xpander.exe'", script)
         self.assertIn(r"$sc.WorkingDirectory = 'C:\App'", script)
         self.assertIn("$sc.Arguments = ''", script)
-        self.assertTrue(ps.is_autostart_enabled("Txt Xpander"))
+        self.assertTrue(os.path.exists(path))
         self.assertTrue(ps.remove_autostart("Txt Xpander"))
 
     def test_windows_shortcut_from_source_works_in_the_app_dir(self):
@@ -166,13 +167,13 @@ class AutostartRoundTripTests(unittest.TestCase):
         self.assertNotIn(r"'C:\Users\O'Brien", script)
 
     def test_windows_failure_raises_instead_of_claiming_success(self):
-        self._redirect("windows", "Txt Xpander.lnk")
+        path = self._redirect("windows", "Txt Xpander.lnk")
         failure = mock.Mock(returncode=1, stdout="", stderr="access denied")
         with mock.patch.object(ps.subprocess, "run", return_value=failure):
             with self.assertRaises(OSError) as ctx:
                 ps.install_autostart("Txt Xpander", [r"C:\App\Txt Xpander.exe"])
         self.assertIn("access denied", str(ctx.exception))
-        self.assertFalse(ps.is_autostart_enabled("Txt Xpander"))
+        self.assertFalse(os.path.exists(path))
 
     def test_missing_entry_after_write_raises(self):
         self._redirect("windows", "Txt Xpander.lnk")
@@ -180,6 +181,157 @@ class AutostartRoundTripTests(unittest.TestCase):
         with mock.patch.object(ps.subprocess, "run", return_value=ok):
             with self.assertRaises(OSError):
                 ps.install_autostart("Txt Xpander", [r"C:\App\Txt Xpander.exe"])
+
+
+class AutostartStateTests(unittest.TestCase):
+    """absent/current/stale classification: presence alone must not mean enabled."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        # A real file on disk to stand in for the installed exe/interpreter:
+        # classification rejects an entry whose target no longer exists.
+        self.installed = os.path.join(self.tmp, "current-app.exe")
+        open(self.installed, "wb").close()
+        self.command = [self.installed, os.path.join(self.tmp, "txt_xpander.pyw")]
+        self.missing = [os.path.join(self.tmp, "deleted-dist", "app.exe")]
+        self.other_install = [self.installed, os.path.join(self.tmp, "other", "txt_xpander.pyw")]
+
+    def _redirect(self, system, filename):
+        path = os.path.join(self.tmp, "autostart", filename)
+        for patch in (
+            mock.patch.object(ps, "current_os", return_value=system),
+            mock.patch.object(ps, "autostart_target_path", return_value=path),
+        ):
+            patch.start()
+            self.addCleanup(patch.stop)
+        return path
+
+    def _write(self, system, argv):
+        """Install an entry for ``argv`` with the Windows .lnk write mocked out."""
+        if system != "windows":
+            ps.install_autostart("Txt Xpander", argv)
+            return
+
+        path = ps.autostart_target_path("Txt Xpander")
+        self._lnk = argv
+
+        def fake_run(cmd, **kwargs):
+            open(path, "wb").close()
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        with mock.patch.object(ps.subprocess, "run", side_effect=fake_run):
+            ps.install_autostart("Txt Xpander", argv)
+
+    def _windows_read(self, argv):
+        """Mock the WScript.Shell read-back for the argv the .lnk was written with."""
+        target = argv[0]
+        arguments = subprocess.list2cmdline(argv[1:]) if len(argv) > 1 else ""
+        return mock.patch.object(
+            ps.subprocess,
+            "run",
+            return_value=mock.Mock(returncode=0, stdout=f"{target}\n{arguments}\n", stderr=""),
+        )
+
+    # -- linux ------------------------------------------------------------
+    def test_linux_absent(self):
+        self._redirect("linux", "txt-xpander.desktop")
+        self.assertEqual(ps.autostart_state("Txt Xpander", self.command), ps.AUTOSTART_ABSENT)
+
+    def test_linux_current(self):
+        self._redirect("linux", "txt-xpander.desktop")
+        self._write("linux", self.command)
+        self.assertEqual(ps.autostart_state("Txt Xpander", self.command), ps.AUTOSTART_CURRENT)
+
+    def test_linux_stale_when_target_is_gone(self):
+        self._redirect("linux", "txt-xpander.desktop")
+        self._write("linux", self.missing)
+        self.assertEqual(ps.autostart_state("Txt Xpander", self.command), ps.AUTOSTART_STALE)
+
+    def test_linux_stale_when_another_install_owns_it(self):
+        self._redirect("linux", "txt-xpander.desktop")
+        self._write("linux", self.other_install)
+        self.assertEqual(ps.autostart_state("Txt Xpander", self.command), ps.AUTOSTART_STALE)
+
+    # -- macOS ------------------------------------------------------------
+    def test_macos_absent(self):
+        self._redirect("darwin", "com.txt-xpander.plist")
+        self.assertEqual(ps.autostart_state("Txt Xpander", self.command), ps.AUTOSTART_ABSENT)
+
+    def test_macos_current(self):
+        self._redirect("darwin", "com.txt-xpander.plist")
+        self._write("darwin", self.command)
+        self.assertEqual(ps.autostart_state("Txt Xpander", self.command), ps.AUTOSTART_CURRENT)
+
+    def test_macos_stale_when_target_is_gone(self):
+        self._redirect("darwin", "com.txt-xpander.plist")
+        self._write("darwin", self.missing)
+        self.assertEqual(ps.autostart_state("Txt Xpander", self.command), ps.AUTOSTART_STALE)
+
+    def test_macos_stale_when_another_install_owns_it(self):
+        self._redirect("darwin", "com.txt-xpander.plist")
+        self._write("darwin", self.other_install)
+        self.assertEqual(ps.autostart_state("Txt Xpander", self.command), ps.AUTOSTART_STALE)
+
+    # -- windows ----------------------------------------------------------
+    def test_windows_absent_reads_nothing(self):
+        self._redirect("windows", "Txt Xpander.lnk")
+        with mock.patch.object(ps.subprocess, "run") as run:
+            self.assertEqual(ps.autostart_state("Txt Xpander", self.command), ps.AUTOSTART_ABSENT)
+        run.assert_not_called()
+
+    def test_windows_current(self):
+        self._redirect("windows", "Txt Xpander.lnk")
+        self._write("windows", self.command)
+        with self._windows_read(self.command) as run:
+            self.assertEqual(ps.autostart_state("Txt Xpander", self.command), ps.AUTOSTART_CURRENT)
+        # One shortcut read, not one per caller.
+        self.assertEqual(run.call_count, 1)
+
+    def test_windows_current_ignores_case_and_separators(self):
+        self._redirect("windows", "Txt Xpander.lnk")
+        self._write("windows", self.command)
+        shouty = [arg.upper().replace("\\", "/") for arg in self.command]
+        with self._windows_read(shouty):
+            self.assertEqual(ps.autostart_state("Txt Xpander", self.command), ps.AUTOSTART_CURRENT)
+
+    def test_windows_stale_when_target_is_gone(self):
+        self._redirect("windows", "Txt Xpander.lnk")
+        self._write("windows", self.missing)
+        with self._windows_read(self.missing):
+            self.assertEqual(ps.autostart_state("Txt Xpander", self.command), ps.AUTOSTART_STALE)
+
+    def test_windows_stale_when_another_install_owns_it(self):
+        self._redirect("windows", "Txt Xpander.lnk")
+        self._write("windows", self.other_install)
+        with self._windows_read(self.other_install):
+            self.assertEqual(ps.autostart_state("Txt Xpander", self.command), ps.AUTOSTART_STALE)
+
+    def test_windows_unreadable_shortcut_is_stale_not_enabled(self):
+        self._redirect("windows", "Txt Xpander.lnk")
+        self._write("windows", self.command)
+        failure = mock.Mock(returncode=1, stdout="", stderr="cannot open")
+        with mock.patch.object(ps.subprocess, "run", return_value=failure):
+            self.assertEqual(ps.autostart_state("Txt Xpander", self.command), ps.AUTOSTART_STALE)
+
+    def test_is_enabled_is_no_longer_presence_only(self):
+        """The old predicate trusted the path alone; a dead entry fooled it."""
+        path = self._redirect("linux", "txt-xpander.desktop")
+        self._write("linux", self.missing)
+        with mock.patch.object(ps, "default_autostart_command", return_value=self.command):
+            self.assertTrue(os.path.exists(path))
+            self.assertFalse(ps.is_autostart_enabled("Txt Xpander"))
+
+            self._write("linux", self.command)
+            self.assertTrue(ps.is_autostart_enabled("Txt Xpander"))
+
+    def test_windows_quoted_arguments_round_trip(self):
+        """A .lnk stores args as one string; splitting it must recover the argv."""
+        self._redirect("windows", "Txt Xpander.lnk")
+        spaced = [self.installed, os.path.join(self.tmp, "with space", "txt_xpander.pyw")]
+        self._write("windows", spaced)
+        with self._windows_read(spaced):
+            self.assertEqual(ps.autostart_state("Txt Xpander", spaced), ps.AUTOSTART_CURRENT)
 
 
 class AutostartCommandTests(unittest.TestCase):
