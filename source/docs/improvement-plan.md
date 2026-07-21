@@ -98,7 +98,7 @@ Effort: medium. Independent of Phase 3; requires Phase 2's data dir.
 
 1. **Single Tk root architecture — done.** `gui_thread.GuiThread` owns one hidden root on a dedicated GUI thread started in `run()`; all dialogs (form fill, WhatsApp, ticker input, manager, notification history) are `Toplevel`s marshaled onto it via a queue pumped by `root.after`. Workers block on `GuiThread.call`; the manager uses fire-and-forget `submit` plus in-process window tracking. Dropped `mshta`/VBScript and the `FindWindowW` focus trick (both Phase 6 wins).
 2. **Save-time validation with warnings:** trigger shadowed by a dynamic trigger; trigger is prefix/suffix of an existing one; whitespace/terminators inside the trigger; 1–2 char triggers. Warn-and-confirm, don't hard-block.
-3. **List quality:** value-preview column (Treeview instead of Listbox), rich-text/variables markers, item counts in tab titles.
+3. **List quality — done.** The static and mapping-item lists are `ttk.Treeview`s with trigger/value-preview/markers columns (`RT` for rich text, `%%` for variables), built by `gui_support.snippet_row_values`; the notebook tab titles carry item counts — the static tab counts what the search shows, the mappings tab counts every item across all types so the title can't shift when you click a type. The mapping *types* list stays a Listbox (short labels only). Restore/import now replay registered list refreshers so the tabs can't show a stale library.
 4. **Editing flow:** Ctrl+S saves; dirty-state indicator with confirm-on-switch; rename action; duplicate action.
 5. **Polish:** `SetProcessDpiAwareness` at startup (per-monitor v2) for crisp Tk on high-DPI; persist notification history to a small JSON ring file; centralize colors in one theme dict.
 

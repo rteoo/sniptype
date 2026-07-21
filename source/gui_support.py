@@ -1,4 +1,25 @@
-from rich_text_support import extract_plain_text
+from rich_text_support import extract_plain_text, is_rich_text_payload
+from variable_support import find_variable_names
+
+PREVIEW_CHARS = 60
+
+
+def snippet_row_values(key, value, preview_chars=PREVIEW_CHARS):
+    """Return ``(trigger, preview, markers)`` for one Treeview row.
+
+    Read-only: snippet values are user data and are never mutated here.
+    """
+    plain = extract_plain_text(value)
+    preview = " ".join(plain.split())
+    if len(preview) > preview_chars:
+        preview = preview[: preview_chars - 1].rstrip() + "…"
+
+    markers = []
+    if is_rich_text_payload(value):
+        markers.append("RT")
+    if find_variable_names(plain):
+        markers.append("%%")
+    return key, preview, " ".join(markers)
 
 
 def filter_static_snippets(snippets, query):
