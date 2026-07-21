@@ -131,6 +131,7 @@ The data layer already protects the library and the app must keep these guarante
 - Every `save_snippets` takes a rotating backup of the prior file first (newest 30 kept in `backups\`) and returns success/failure; GUI call sites surface failures and roll back in-memory state.
 - A corrupt `snippets.json` is quarantined (`snippets.corrupt-<ts>.json`) and restored from the newest **valid** backup — never overwritten with defaults while a backup exists.
 - A corrupt file is never copied into the backup set (it could otherwise rank newest by mtime and defeat recovery).
+- A static snippet whose name collides with a dynamic trigger is never dropped by a save. `merge_snippets` is `{**static, **dynamic}`, so the callable replaces the static value in the merged map the app saves from; `find_shadowed_statics` records those values at load and `build_saveable_snippets(snippets, preserved)` writes them back. Every path that creates the collision (static editor, enable toggle) asks for confirmation first, and the dynamic snippet is what expands.
 - `backup_support.py` owns backup/quarantine helpers; `app_paths.py` owns path resolution and migration; `settings_support.py` owns `settings.json`.
 
 `build_release.bat` no longer syncs `dist`→`source` or restores data into `dist` (user data is not in `dist` anymore); it keeps a one-time safety copy of any pre-existing packaged `snippets.json`. The optional `settings.json` key `mirror_dir` makes each successful save also copy to a write-only mirror.
