@@ -42,7 +42,9 @@ Alternatively, [`build_release.bat`](build_release.bat) offers to create the Sta
 
 Txt Xpander is Windows-first. The OS-specific couplings are being factored behind [`source/platform_support.py`](source/platform_support.py): the paste modifier (Ctrl+V on Windows/Linux, Cmd+V on macOS), a PID-lockfile single-instance guard for non-Windows (Windows keeps its named mutex), and per-OS autostart builders (Startup `.lnk`, macOS LaunchAgent plist, Linux `.desktop`). The keyboard listener (pynput), tray (pystray), GUI (Tk) and the JSON data layer are already portable, and the data directory (`~/.txt_xpander`) is identical on all three OSes.
 
-Remaining before the app runs unmodified on macOS/Linux: the clipboard integration in `runtime_support.py` still uses the Win32 API directly (loaded at import), so a macOS pasteboard / Linux `xclip`/`wl-copy` backend is needed. On macOS, pynput also requires granting Accessibility permission; Wayland restricts global keyboard hooks. These are tracked as the next cross-platform step.
+Clipboard access is factored the same way, behind [`source/clipboard_support.py`](source/clipboard_support.py): Windows keeps the ctypes user32/kernel32 backend (text, HTML and RTF), while macOS uses `pbcopy`/`pbpaste` and Linux uses `wl-copy`/`wl-paste` under Wayland, falling back to `xclip` then `xsel`. The Win32 bindings now load only on Windows, so the app imports cleanly on macOS/Linux. The POSIX backend is plain-text only for now — rich-text snippets paste as their plain text and log the downgrade — and a desktop with none of those tools installed logs a warning rather than failing hard.
+
+Remaining before the app runs unmodified on macOS/Linux: rich-text paste off Windows, plus platform limits outside our control — on macOS pynput requires granting Accessibility permission, and Wayland restricts global keyboard hooks. The non-Windows backends are untested on real macOS/Linux hosts; CI runs on Windows only.
 
 ## Work From Source
 
