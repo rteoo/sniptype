@@ -98,6 +98,98 @@ class ManagerGuiSmokeTests(unittest.TestCase):
         self.assertIn("MAIL", labels)
         self.assertIn("CPF", labels)
 
+    def _static_rows(self, frame):
+        """{trigger: (preview, markers)} from the static tab's Treeview."""
+        trees = [w for w in _descendants(frame) if isinstance(w, ttk.Treeview)]
+        self.assertTrue(trees, "expected a snippet Treeview")
+        tree = trees[0]
+        return {iid: tuple(tree.item(iid, "values"))[1:] for iid in tree.get_children()}
+
+    def test_static_tree_shows_preview_and_markers(self):
+        self.app.snippets["xsig"] = {
+            "__kind__": "rich_text",
+            "text": "Assinatura\nprincipal",
+            "spans": [],
+        }
+        self.app.snippets["xgreet"] = "Olá %%nome%%, tudo bem?"
+
+        def build(shared_root):
+            root = tk.Toplevel(shared_root)
+            root.withdraw()
+            frame = tk.Frame(root)
+            self.app._create_static_snippets_tab(frame, root)
+            root.update_idletasks()
+            return self._static_rows(frame)
+
+        rows = self._on_gui(build)
+        self.assertEqual(("Assinatura principal", "RT"), rows["xsig"])
+        self.assertEqual(("Olá %%nome%%, tudo bem?", "%%"), rows["xgreet"])
+        self.assertEqual(("hello", ""), rows["xhi"])
+
+    def test_selecting_a_tree_row_loads_the_editor(self):
+        self.app.snippets["xsig"] = {
+            "__kind__": "rich_text", "text": "Assinatura principal", "spans": [],
+        }
+
+        def build(shared_root):
+            root = tk.Toplevel(shared_root)
+            root.withdraw()
+            frame = tk.Frame(root)
+            self.app._create_static_snippets_tab(frame, root)
+            root.update_idletasks()
+
+            tree = [w for w in _descendants(frame) if isinstance(w, ttk.Treeview)][0]
+            tree.selection_set("xsig")
+            root.update()
+
+            # Entry order follows widget creation: search box, then trigger.
+            entries = [w for w in _descendants(frame) if isinstance(w, tk.Entry)]
+            text = [w for w in _descendants(frame) if isinstance(w, tk.Text)][0]
+            return entries[1].get(), text.get("1.0", "end-1c")
+
+        trigger, value = self._on_gui(build)
+        self.assertEqual("xsig", trigger)
+        self.assertEqual("Assinatura principal", value)
+
+    def test_static_tab_reports_visible_count(self):
+        self.app.snippets["xone"] = "one"
+        self.app.snippets["xtwo"] = "two"
+        counts = []
+
+        def build(shared_root):
+            root = tk.Toplevel(shared_root)
+            root.withdraw()
+            frame = tk.Frame(root)
+            self.app._create_static_snippets_tab(frame, root, set_count=counts.append)
+            root.update_idletasks()
+
+        self._on_gui(build)
+        # xhi (seeded) + xone + xtwo; dynamic callables are filtered out.
+        self.assertEqual([3], counts)
+
+    def test_refresh_hook_repopulates_lists_after_library_swap(self):
+        """Restore/import rebind self.snippets; registered lists must rebuild."""
+        def build(shared_root):
+            root = tk.Toplevel(shared_root)
+            root.withdraw()
+            frame = tk.Frame(root)
+            self.app._create_static_snippets_tab(frame, root)
+            root.update_idletasks()
+            return frame
+
+        frame = self._on_gui(build)
+        self.assertNotIn("ximported", self._on_gui(lambda _r: self._static_rows(frame)))
+
+        # Stand in for restore_backup/import_library, which rebind the dict.
+        self.app.snippets = {"ximported": "from backup"}
+
+        def refresh(_root):
+            self.app._refresh_manager_lists()
+            return self._static_rows(frame)
+
+        rows = self._on_gui(refresh)
+        self.assertEqual({"ximported": ("from backup", "")}, rows)
+
     def test_notification_history_window_builds(self):
         def build(shared_root):
             root = tk.Toplevel(shared_root)
