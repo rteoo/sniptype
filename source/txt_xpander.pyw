@@ -74,10 +74,15 @@ from settings_support import load_settings
 from validation_support import validate_trigger
 from platform_support import (
     APP_NAME,
+    AUTOSTART_ABSENT,
+    AUTOSTART_CURRENT,
+    AUTOSTART_STALE,
     IS_WINDOWS,
     acquire_lockfile,
+    autostart_target_exists,
+    classify_autostart,
     install_autostart,
-    is_autostart_enabled,
+    read_autostart_command,
     release_lockfile,
     remove_autostart,
 )
@@ -194,6 +199,10 @@ class TextExpander:
         self._dialog_lock = threading.Lock()
         # Serializes autostart toggles; see _apply_autostart_toggle.
         self._autostart_lock = threading.Lock()
+        # Cached autostart classification. Reading the real entry costs a
+        # PowerShell round-trip on Windows and pystray re-evaluates `checked=`
+        # on every menu render, so the menu only ever reads this.
+        self._autostart_state = AUTOSTART_ABSENT
         self.text_inserter = TextInserter(self.keyboard_controller, logger=self.logger)
         self.notification_timestamps = {}
         self.notification_history = []
@@ -1178,6 +1187,7 @@ class TextExpander:
         self.icon = icon
         icon.visible = True
         self.task_runner.start(self.notify_launch_ready, name="startup-notify")
+        self.task_runner.start(self.resolve_autostart_state, name="autostart-state")
 
     def notify_launch_ready(self, icon=None):
         if icon is not None:
@@ -2822,12 +2832,56 @@ class TextExpander:
             self.notify_error("Falha ao criar backup. Verifique os logs.", key="manual-backup")
 
     def autostart_is_enabled(self, item=None):
-        """Menu state for the autostart toggle; never raises into pystray."""
+        """Menu state for the autostart toggle: a cache read, never a disk read."""
+        return self._autostart_state == AUTOSTART_CURRENT
+
+    def resolve_autostart_state(self):
+        """Classify the autostart entry once at startup and repair a dead one.
+
+        Worker-thread only: reading a Windows ``.lnk`` shells out to PowerShell.
+
+        Repair is deliberately narrow. An entry whose target no longer exists (a
+        deleted ``dist`` folder, a removed venv) is dead at login and nobody
+        meant to keep it, so rewrite it to the running copy. An entry pointing at
+        a *different but installed* copy is left alone: a source checkout and the
+        packaged release legitimately coexist, and clobbering the release's
+        shortcut on every dev run would be its own bug. It shows as unchecked —
+        the toggle repoints it here when the user asks for that.
+        """
+        if not self._autostart_lock.acquire(blocking=False):
+            return
         try:
-            return is_autostart_enabled(APP_NAME)
+            existing = read_autostart_command(APP_NAME)
+            state = classify_autostart(existing)
+            if state == AUTOSTART_STALE and not autostart_target_exists(existing):
+                state = self._repair_autostart(existing)
+            elif state == AUTOSTART_STALE:
+                self.logger.info(
+                    "Inicialização automática aponta para outra instalação: "
+                    f"{existing[0]}"
+                )
+            self._autostart_state = state
         except OSError as e:
+            # Unreadable entry: report it unchecked rather than claim it works.
             self.logger.warning(f"Falha ao verificar inicialização automática: {e}")
-            return False
+            self._autostart_state = AUTOSTART_STALE
+        finally:
+            self._autostart_lock.release()
+            self.refresh_tray_menu()
+
+    def _repair_autostart(self, existing):
+        """Rewrite an autostart entry whose target is gone. Caller holds the lock."""
+        dead = existing[0] if existing else "(vazio)"
+        try:
+            path = install_autostart(APP_NAME)
+        except OSError as e:
+            self.logger.error(f"Falha ao corrigir inicialização automática: {e}")
+            return AUTOSTART_STALE
+        self.logger.info(
+            f"Inicialização automática apontava para um alvo inexistente ({dead}); "
+            f"atualizada para esta instalação: {path}"
+        )
+        return AUTOSTART_CURRENT
 
     def toggle_autostart(self, icon, item):
         """Tray action: install/remove the per-user autostart entry.
@@ -2844,11 +2898,15 @@ class TextExpander:
         if not self._autostart_lock.acquire(blocking=False):
             return
         try:
-            if is_autostart_enabled(APP_NAME):
+            # Direction follows the cached state, so a stale entry (shown
+            # unchecked) is overwritten by the install branch rather than removed.
+            if self._autostart_state == AUTOSTART_CURRENT:
                 remove_autostart(APP_NAME)
+                self._autostart_state = AUTOSTART_ABSENT
                 self.notify_status("Início automático desativado.", key="autostart")
             else:
                 path = install_autostart(APP_NAME)
+                self._autostart_state = AUTOSTART_CURRENT
                 self.logger.info(f"Inicialização automática instalada: {path}")
                 self.notify_status("Início automático ativado.", key="autostart")
         except OSError as e:
