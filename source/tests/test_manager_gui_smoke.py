@@ -31,7 +31,8 @@ if IS_MAC:
     # the process ("NSWindow should only be instantiated on the main thread!")
     # instead of raising, so this has to be decided *before* the probe below:
     # the probe would take the whole suite down with it rather than fail over.
-    # Running the manager on macOS needs the Tk root moved to the main thread.
+    # Moving the Tk root to the main thread is tracked as issue #24 (tray + Tk
+    # threading model on macOS); until then there is nothing here to exercise.
     TK_SKIP_REASON = "macOS requires AppKit on the main thread; the Tk root runs on a worker thread"
 else:
     try:
