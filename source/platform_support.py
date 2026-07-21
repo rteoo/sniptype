@@ -39,6 +39,21 @@ def paste_modifier_is_cmd():
     return IS_MAC
 
 
+def pin_tray_backend(environ=None):
+    """Pin pystray to the win32 backend on Windows. Return the value set, or None.
+
+    Belt-and-braces only: pystray already resolves a single ``win32`` candidate
+    when ``sys.platform == 'win32'``, and the frozen build ships that backend as
+    the spec's hidden import. Off Windows the same pin is fatal — it forces a
+    backend that cannot import — so it must not be set there. Must run *before*
+    ``import pystray``, which reads the variable at import time.
+    """
+    env = os.environ if environ is None else environ
+    if current_os() != "windows":
+        return None
+    return env.setdefault("PYSTRAY_BACKEND", "win32")
+
+
 # ---------------------------------------------------------------------------
 # Single instance via PID lockfile (used where a native mutex is unavailable)
 # ---------------------------------------------------------------------------
