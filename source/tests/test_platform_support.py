@@ -141,9 +141,29 @@ class AutostartRoundTripTests(unittest.TestCase):
         with mock.patch.object(ps.subprocess, "run", side_effect=fake_run) as run:
             ps.install_autostart("Txt Xpander", [r"C:\Py\pythonw.exe", launcher])
 
+        # Literal expectations: building these with _ps_quote would let a broken
+        # quoter satisfy its own test.
         script = run.call_args[0][0][-1]
-        self.assertIn(f"$sc.WorkingDirectory = {ps._ps_quote(source_dir)}", script)
-        self.assertIn(f"$sc.Arguments = {ps._ps_quote(launcher)}", script)
+        self.assertIn(f"$sc.WorkingDirectory = '{source_dir}'", script)
+        self.assertIn(f"$sc.Arguments = '{launcher}'", script)
+        self.assertIn(r"$sc.TargetPath = 'C:\Py\pythonw.exe'", script)
+
+    def test_windows_single_quote_in_path_is_escaped(self):
+        """A quote in the path must not break out of the PowerShell string literal."""
+        path = self._redirect("windows", "Txt Xpander.lnk")
+        target = r"C:\Users\O'Brien\Txt Xpander.exe"
+
+        def fake_run(argv, **kwargs):
+            open(path, "wb").close()
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        with mock.patch.object(ps.subprocess, "run", side_effect=fake_run) as run:
+            ps.install_autostart("Txt Xpander", [target])
+
+        script = run.call_args[0][0][-1]
+        self.assertIn(r"$sc.TargetPath = 'C:\Users\O''Brien\Txt Xpander.exe'", script)
+        # Doubling is the only escape: no lone quote may survive to end the literal.
+        self.assertNotIn(r"'C:\Users\O'Brien", script)
 
     def test_windows_failure_raises_instead_of_claiming_success(self):
         self._redirect("windows", "Txt Xpander.lnk")
