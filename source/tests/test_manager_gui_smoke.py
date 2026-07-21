@@ -3,7 +3,8 @@
 Builds every manager tab and the notification window on the app's shared Tk
 root, driven through the GUI thread exactly the way the app drives it. Catches
 widget-wiring bugs that the headless unit tests miss. Skipped automatically
-where Tk cannot open a display (e.g. headless CI).
+where Tk cannot open a display (e.g. headless CI), and on macOS, where the
+app's worker-thread Tk root is not something AppKit permits at all.
 """
 
 import os
@@ -15,19 +16,34 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import txt_xpander as tx
+from app_module import txt_xpander as tx  # .pyw is not importable off Windows
 from gui_thread import GuiThread
+from platform_support import IS_MAC
 
-try:
-    import tkinter as tk
-    from tkinter import ttk
-    _probe = GuiThread()
-    _probe.ensure_started()
-    _probe.stop()
-    TK_AVAILABLE = True
-except Exception:
-    TK_AVAILABLE = False
+TK_AVAILABLE = False
+TK_SKIP_REASON = "Tk display not available"
+
+if IS_MAC:
+    # The app owns its Tk root on a dedicated worker thread (see gui_thread).
+    # macOS AppKit refuses to build an NSWindow off the main thread and aborts
+    # the process ("NSWindow should only be instantiated on the main thread!")
+    # instead of raising, so this has to be decided *before* the probe below:
+    # the probe would take the whole suite down with it rather than fail over.
+    # Moving the Tk root to the main thread is tracked as issue #24 (tray + Tk
+    # threading model on macOS); until then there is nothing here to exercise.
+    TK_SKIP_REASON = "macOS requires AppKit on the main thread; the Tk root runs on a worker thread"
+else:
+    try:
+        import tkinter as tk
+        from tkinter import ttk
+        _probe = GuiThread()
+        _probe.ensure_started()
+        _probe.stop()
+        TK_AVAILABLE = True
+    except Exception:
+        pass
 
 
 def _make_app(base_dir):
@@ -53,7 +69,7 @@ def _descendants(widget):
         yield from _descendants(child)
 
 
-@unittest.skipUnless(TK_AVAILABLE, "Tk display not available")
+@unittest.skipUnless(TK_AVAILABLE, TK_SKIP_REASON)
 class ManagerGuiSmokeTests(unittest.TestCase):
     def setUp(self):
         self.app = _make_app(tempfile.mkdtemp())
@@ -315,7 +331,7 @@ def _find_form(root, label_text):
     return None
 
 
-@unittest.skipUnless(TK_AVAILABLE, "Tk display not available")
+@unittest.skipUnless(TK_AVAILABLE, TK_SKIP_REASON)
 class ModalDialogSerializationTests(unittest.TestCase):
     """A second expansion dialog must be refused, never stacked.
 
@@ -388,7 +404,7 @@ class ModalDialogSerializationTests(unittest.TestCase):
         self.assertEqual(self.results["later"], {"later": "two"})
 
 
-@unittest.skipUnless(TK_AVAILABLE, "Tk display not available")
+@unittest.skipUnless(TK_AVAILABLE, TK_SKIP_REASON)
 class GuiThreadTests(unittest.TestCase):
     def setUp(self):
         self.gui = GuiThread()

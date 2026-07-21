@@ -8,12 +8,15 @@ on:
 
 jobs:
   tests:
-    # Windows-first app: pynput, pystray and the Tk GUI smoke tests need a
-    # Windows session. The GUI tests self-skip where Tk has no display.
-    runs-on: windows-latest
+    name: tests (${{ matrix.os }}, py${{ matrix.python-version }})
+    # Windows-first app, but the POSIX backends (clipboard, autostart,
+    # single-instance lockfile) are only honestly covered if they run on a real
+    # macOS/Linux host. The GUI tests self-skip where Tk has no display.
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
         python-version: ["3.12", "3.14"]
 
     steps:
@@ -25,10 +28,25 @@ jobs:
           cache: pip
           cache-dependency-path: source/requirements.txt
 
+      # pynput and pystray both bind to Xorg on Linux and raise at import time
+      # with no DISPLAY, and setup-python's CPython links _tkinter against the
+      # system libtk8.6. Xvfb plus those libs is what makes the suite runnable.
+      - name: Install Linux headless GUI runtime
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb tk
+
       - name: Install dependencies
         working-directory: source
         run: python -m pip install -r requirements.txt
 
       - name: Run test suite
+        if: runner.os != 'Linux'
         working-directory: source
         run: python -m unittest discover -s tests -v
+
+      - name: Run test suite (headless X server)
+        if: runner.os == 'Linux'
+        working-directory: source
+        run: xvfb-run -a python -m unittest discover -s tests -v

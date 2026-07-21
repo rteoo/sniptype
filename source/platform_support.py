@@ -9,6 +9,7 @@ Pure helpers here are unit-tested; the clipboard backends live in
 mutex remains in ``txt_xpander`` (see README "Cross-platform status").
 """
 
+import ntpath
 import os
 import re
 import shlex
@@ -288,9 +289,11 @@ def _same_command(left, right):
 
 def _same_path(left, right):
     # Every argv element we write is a path; Windows paths are case-insensitive
-    # and tolerate mixed separators, so compare them normalized.
+    # and tolerate mixed separators, so compare them normalized. ntpath rather
+    # than os.path: the two are the same module on Windows, but this branch
+    # applies Windows path rules and must do so wherever it is evaluated.
     if current_os() == "windows":
-        return os.path.normcase(os.path.normpath(left)) == os.path.normcase(os.path.normpath(right))
+        return ntpath.normcase(ntpath.normpath(left)) == ntpath.normcase(ntpath.normpath(right))
     return left == right
 
 
@@ -403,9 +406,10 @@ def _write_windows_shortcut(path, argv):
     arguments = subprocess.list2cmdline(argv[1:]) if len(argv) > 1 else ""
     # The app dir is where the last argument lives (the exe when frozen, the
     # .pyw launcher from source), not where the interpreter is installed.
-    working_dir = os.path.dirname(argv[-1])
+    # argv holds Windows paths, so split them with ntpath (== os.path here).
+    working_dir = ntpath.dirname(argv[-1])
     if not os.path.isdir(working_dir):
-        working_dir = os.path.dirname(target)
+        working_dir = ntpath.dirname(target)
     script = (
         "$ws = New-Object -ComObject WScript.Shell; "
         f"$sc = $ws.CreateShortcut({_ps_quote(path)}); "
