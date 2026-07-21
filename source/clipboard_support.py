@@ -33,6 +33,18 @@ GMEM_MOVEABLE = 0x0002
 _POSIX_TIMEOUT = 5
 
 
+def normalize_clipboard_newlines(text):
+    """Return ``text`` with CRLF line endings, idempotently.
+
+    CF_UNICODETEXT is a CRLF format, but a blind ``\\n`` -> ``\\r\\n`` is only
+    correct for text that is already LF-only. Text that came *from* the clipboard
+    already carries CRLF — every ``%%clipboard-paste%%`` substitution does — and
+    doubling it to ``\\r\\r\\n`` pastes an extra blank line per break and makes the
+    payload no longer compare equal to the snippet it was built from.
+    """
+    return text.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\r\n")
+
+
 def _html_clipboard_bytes(fragment):
     """Wrap an HTML fragment in the CF_HTML header Windows expects."""
     start_marker = "<!--StartFragment-->"
@@ -119,7 +131,7 @@ if IS_WINDOWS:
 
     def _set_clipboard_data(clipboard_format, data, encoding="utf-8"):
         if clipboard_format == CF_UNICODETEXT:
-            encoded = (data.replace("\n", "\r\n") + "\0").encode("utf-16-le")
+            encoded = (normalize_clipboard_newlines(data) + "\0").encode("utf-16-le")
         else:
             payload = data if isinstance(data, bytes) else str(data).encode(encoding)
             encoded = payload + b"\0"

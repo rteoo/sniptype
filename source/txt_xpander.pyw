@@ -203,7 +203,9 @@ class TextExpander:
         # PowerShell round-trip on Windows and pystray re-evaluates `checked=`
         # on every menu render, so the menu only ever reads this.
         self._autostart_state = AUTOSTART_ABSENT
-        self.text_inserter = TextInserter(self.keyboard_controller, logger=self.logger)
+        self.text_inserter = TextInserter(
+            self.keyboard_controller, logger=self.logger, notify=self.notify_error
+        )
         self.notification_timestamps = {}
         self.notification_history = []
         self.pending_notifications = []
