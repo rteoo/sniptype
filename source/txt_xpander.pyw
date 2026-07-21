@@ -21,7 +21,10 @@ import shutil
 import ctypes
 import webbrowser
 
-os.environ.setdefault("PYSTRAY_BACKEND", "win32")
+import platform_support
+
+# Must run before ``import pystray``: it reads PYSTRAY_BACKEND at import time.
+platform_support.pin_tray_backend()
 
 from pynput import keyboard
 from pynput.keyboard import Controller, Key
