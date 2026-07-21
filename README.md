@@ -43,7 +43,7 @@ Clipboard access is factored the same way, behind [`source/clipboard_support.py`
 
 CI runs the unit suite on `windows-latest`, `macos-latest` and `ubuntu-latest` (Python 3.12 and 3.14) on every pull request, so the POSIX branches of the clipboard, autostart and single-instance code are exercised on real macOS and Linux hosts rather than only under mocks. Linux runs under `xvfb-run`: pynput and pystray both bind to Xorg at import time and raise without a display.
 
-Remaining before the app runs unmodified on macOS/Linux: rich-text paste off Windows, opening the data folder (`os.startfile` has no POSIX equivalent in place yet), plus platform limits outside our control — on macOS pynput requires granting Accessibility permission, and Wayland restricts global keyboard hooks. What CI does *not* cover is end-to-end behavior on a real desktop session: tray icon, actual paste into another app, and macOS Accessibility permission are still unverified.
+Remaining before the app runs unmodified on macOS/Linux: on macOS the manager GUI cannot open at all as currently architected — the shared Tk root is created on a worker thread, and AppKit aborts the process rather than building an `NSWindow` off the main thread (issue #24), which is why the Tk smoke tests are skipped there. Beyond that: rich-text paste off Windows, opening the data folder (`os.startfile` has no POSIX equivalent in place yet), plus platform limits outside our control — on macOS pynput requires granting Accessibility permission, and Wayland restricts global keyboard hooks. What CI does *not* cover is end-to-end behavior on a real desktop session: tray icon, actual paste into another app, and macOS Accessibility permission are still unverified.
 
 ## Work From Source
 
