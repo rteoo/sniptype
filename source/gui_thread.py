@@ -90,16 +90,42 @@ class GuiThread:
         with self._lock:
             if self._thread is None or not self._thread.is_alive():
                 self._stopping = True
+                self._fail_pending()
                 return
             self._stopping = True
             thread = self._thread
 
-        def _quit(root):
-            root.quit()
+        def _teardown(root):
+            # destroy(), not quit(): mainloop exits when the window count hits
+            # zero, which is deterministic. quit() relies on _tkinter's quit
+            # flag, which proved unreliable once the process has had earlier
+            # Tk interpreters (observed on 3.14: stop() hung until the join
+            # timeout while the pump kept ticking).
+            root.destroy()
 
         # Cannot use call(): ensure_started() refuses once _stopping is set.
-        self._queue.put((_quit, None, None))
+        self._queue.put((_teardown, None, None))
         thread.join(timeout)
+        self._fail_pending()
+
+    def _fail_pending(self):
+        """Wake workers whose queued calls will never run.
+
+        Items still queued after the loop exits would otherwise leave their
+        callers blocked forever in ``call(timeout=None)`` — ``done`` is only
+        set by the GUI thread that no longer exists.
+        """
+        while True:
+            try:
+                _func, box, done = self._queue.get_nowait()
+            except queue.Empty:
+                return
+            if box is not None:
+                box["error"] = RuntimeError(
+                    "GUI thread stopped before the call could run"
+                )
+            if done is not None:
+                done.set()
 
     # -----------------------------------------------------------------
     # Marshaling
