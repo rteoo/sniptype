@@ -2019,7 +2019,11 @@ class TextExpander:
         self._bind_mousewheel(text_value, text_value)
 
         def get_static_visible_snippets():
-            return filter_static_snippets(self.snippets, search_var.get())
+            visible = filter_static_snippets(self.snippets, search_var.get())
+            # A blank key cannot be a Treeview row iid (or a trigger); hand-
+            # edited data must not produce a phantom row or skew the count.
+            visible.pop("", None)
+            return visible
 
         static_snips = get_static_visible_snippets()
 
@@ -2350,7 +2354,7 @@ class TextExpander:
             for type_key in mappings_info:
                 mapping = self.snippets.get(type_key)
                 if isinstance(mapping, dict):
-                    total += sum(1 for name in mapping if name != "__prefix__")
+                    total += sum(1 for name in mapping if name and name != "__prefix__")
             set_count(total)
 
         def refresh_mapping_list():
@@ -2361,6 +2365,8 @@ class TextExpander:
             if not isinstance(mapping, dict):
                 mapping = {}
             for key in iter_filtered_mapping_items(mapping, query):
+                if not key:
+                    continue  # a blank key cannot be a Treeview row iid
                 tree_map.insert("", tk.END, iid=key,
                                 values=snippet_row_values(key, mapping.get(key, "")))
             update_total_count()
@@ -2841,7 +2847,7 @@ class TextExpander:
         Worker-thread only: reading a Windows ``.lnk`` shells out to PowerShell.
 
         Repair is deliberately narrow. An entry whose target no longer exists (a
-        deleted ``dist`` folder, a removed venv) is dead at login and nobody
+        deleted ``dist`` folder, a removed venv or checkout) is dead at login and nobody
         meant to keep it, so rewrite it to the running copy. An entry pointing at
         a *different but installed* copy is left alone: a source checkout and the
         packaged release legitimately coexist, and clobbering the release's
@@ -2861,8 +2867,11 @@ class TextExpander:
                     f"{existing[0]}"
                 )
             self._autostart_state = state
-        except OSError as e:
-            # Unreadable entry: report it unchecked rather than claim it works.
+        except Exception as e:
+            # Unreadable or unparseable entry (PowerShell failure, corrupt
+            # plist/desktop file): report it unchecked rather than claim it
+            # works. Broad on purpose — task_runner threads have no wrapper,
+            # so anything escaping here would die invisibly under pythonw.
             self.logger.warning(f"Falha ao verificar inicialização automática: {e}")
             self._autostart_state = AUTOSTART_STALE
         finally:
@@ -2893,9 +2902,15 @@ class TextExpander:
         self.task_runner.start(self._apply_autostart_toggle, name="autostart-toggle")
 
     def _apply_autostart_toggle(self):
-        # A toggle now outlives the click, so ignore clicks arriving mid-flight
-        # instead of racing an install against a remove.
+        # A toggle now outlives the click, so clicks arriving mid-flight are
+        # refused instead of racing an install against a remove — but say so:
+        # the startup resolve can hold the lock for a PowerShell round-trip,
+        # and a silently dropped click reads as a broken toggle.
         if not self._autostart_lock.acquire(blocking=False):
+            self.notify_status(
+                "Alteração de início automático em andamento; aguarde.",
+                key="autostart-busy",
+            )
             return
         try:
             # Direction follows the cached state, so a stale entry (shown
@@ -2909,7 +2924,9 @@ class TextExpander:
                 self._autostart_state = AUTOSTART_CURRENT
                 self.logger.info(f"Inicialização automática instalada: {path}")
                 self.notify_status("Início automático ativado.", key="autostart")
-        except OSError as e:
+        except Exception as e:
+            # Broad for the same reason as resolve_autostart_state: an escape
+            # here dies invisibly on the worker thread and eats the click.
             self.logger.error(f"Falha ao alterar inicialização automática: {e}")
             self.notify_error(
                 f"Falha ao alterar início automático: {e}",

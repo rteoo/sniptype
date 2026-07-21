@@ -189,13 +189,16 @@ class AutostartStateTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.tmp, True)
-        # A real file on disk to stand in for the installed exe/interpreter:
-        # classification rejects an entry whose target no longer exists.
+        # Real files on disk to stand in for the installed exe/interpreter and
+        # scripts: classification requires every argv element to still exist.
         self.installed = os.path.join(self.tmp, "current-app.exe")
         open(self.installed, "wb").close()
         self.command = [self.installed, os.path.join(self.tmp, "txt_xpander.pyw")]
+        open(self.command[1], "wb").close()
         self.missing = [os.path.join(self.tmp, "deleted-dist", "app.exe")]
         self.other_install = [self.installed, os.path.join(self.tmp, "other", "txt_xpander.pyw")]
+        os.makedirs(os.path.dirname(self.other_install[1]))
+        open(self.other_install[1], "wb").close()
 
     def _redirect(self, system, filename):
         path = os.path.join(self.tmp, "autostart", filename)
@@ -252,6 +255,15 @@ class AutostartStateTests(unittest.TestCase):
         self._redirect("linux", "txt-xpander.desktop")
         self._write("linux", self.other_install)
         self.assertEqual(ps.autostart_state("Txt Xpander", self.command), ps.AUTOSTART_STALE)
+
+    def test_stale_when_script_is_gone_even_if_interpreter_survives(self):
+        """A surviving interpreter must not make a deleted checkout's entry live."""
+        self._redirect("linux", "txt-xpander.desktop")
+        dead = [self.installed, os.path.join(self.tmp, "deleted-checkout", "txt_xpander.pyw")]
+        self._write("linux", dead)
+        self.assertEqual(ps.autostart_state("Txt Xpander", self.command), ps.AUTOSTART_STALE)
+        # And it is the dead kind of stale — the one the app may repair.
+        self.assertFalse(ps.autostart_target_exists(dead))
 
     # -- macOS ------------------------------------------------------------
     def test_macos_absent(self):
@@ -329,6 +341,8 @@ class AutostartStateTests(unittest.TestCase):
         """A .lnk stores args as one string; splitting it must recover the argv."""
         self._redirect("windows", "Txt Xpander.lnk")
         spaced = [self.installed, os.path.join(self.tmp, "with space", "txt_xpander.pyw")]
+        os.makedirs(os.path.dirname(spaced[1]))
+        open(spaced[1], "wb").close()
         self._write("windows", spaced)
         with self._windows_read(spaced):
             self.assertEqual(ps.autostart_state("Txt Xpander", spaced), ps.AUTOSTART_CURRENT)
