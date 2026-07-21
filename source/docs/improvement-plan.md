@@ -1,6 +1,6 @@
 # Txt Xpander — Improvement Plan
 
-> **Status (2026-07-20):** Phases 0–4 fully implemented; Phases 5–6 implemented except two items that need a running app / non-Windows host to verify. Full unittest suite green (231 tests). Phase 5.1 (single Tk root, audit 3.3) and Phase 6 clipboard backend split (`clipboard_support.py`, last hard Win32 coupling) both landed 2026-07-20 — the POSIX backend is plain-text only and unverified on a real macOS/Linux host. Remaining, tracked follow-ups: Phase 5 Treeview list/preview (4.2); Phase 6 rich-text paste off Windows and wiring the autostart/ticker adapters end-to-end.
+> **Status (2026-07-20):** Phases 0–4 fully implemented; Phases 5–6 implemented except two items that need a running app / non-Windows host to verify. Full unittest suite green (261 tests). Phase 5.1 (single Tk root, audit 3.3) and Phase 6 clipboard backend split (`clipboard_support.py`, last hard Win32 coupling) both landed 2026-07-20 — the POSIX backend is plain-text only and unverified on a real macOS/Linux host. Phase 5 Treeview list/preview (4.2) landed 2026-07-20; the autostart adapter is wired to a tray toggle and the ticker dialog moved to Tk with Phase 5.1, closing the adapter follow-ups. Remaining, tracked follow-up: Phase 6 rich-text paste off Windows.
 
 Companion to [audit-report.md](audit-report.md). Seven phases (0–6), ordered so that guideline compliance and data safety land before anything else and each phase ships independently. Constraint honored throughout: **JSON files only — no database.**
 
@@ -111,7 +111,7 @@ Goal: `python txt_xpander.pyw` runs on macOS/Linux with graceful degradation; Wi
 1. **Platform adapter module** (`platform_support.py`) with a Windows implementation extracted from today's code and interfaces for: clipboard (get/set text+HTML+RTF), single-instance guard (lockfile+PID replaces mutex), paste shortcut (Ctrl+V vs Cmd+V), "already running" message, autostart install/remove.
 2. **Replace remaining Windows-only calls** in the main file: `FindWindowW` focus trick → in-process window tracking (**done** with Phase 5.1); `MessageBoxW` → Tk.
 3. **Clipboard adapters for macOS/Linux** (pasteboard / `xclip`-or-`wl-copy` shim or a small dependency — decide then; plain-text-first is acceptable v1).
-4. **Autostart adapter:** Startup .lnk (Windows), LaunchAgent plist (macOS), `~/.config/autostart/*.desktop` (Linux) — replaces the build-script PowerShell block.
+4. **Autostart adapter — done.** `install_autostart` / `remove_autostart` / `is_autostart_enabled` in `platform_support.py` write the Startup `.lnk` (Windows, via the same `WScript.Shell` COM object the build script uses), the LaunchAgent plist (macOS) or the `~/.config/autostart/*.desktop` entry (Linux), driven by the tray check item "Iniciar com o sistema". `build_release.bat` keeps its install-time prompt for packaged convenience; the tray toggle is the canonical runtime path. macOS/Linux writes are covered by mocked-OS tests only — unverified on a real host.
 5. Document per-OS caveats (macOS Accessibility permission for pynput; Wayland limitations) in README.
 
 Effort: large, but Phases 2 and 5 will have already removed most couplings. Ship Windows-refactor first (adapter with only a Windows backend), then add OS backends opportunistically.
