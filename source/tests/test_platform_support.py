@@ -353,6 +353,58 @@ class AutostartStateTests(unittest.TestCase):
             self.assertEqual(ps.autostart_state("Txt Xpander", spaced), ps.AUTOSTART_CURRENT)
 
 
+class TrayBackendTests(unittest.TestCase):
+    """The win32 pin makes ``import pystray`` fail off Windows (issue #23)."""
+
+    def test_windows_pins_win32(self):
+        env = {}
+        with mock.patch.object(ps, "current_os", return_value="windows"):
+            self.assertEqual(ps.pin_tray_backend(env), "win32")
+        self.assertEqual(env, {"PYSTRAY_BACKEND": "win32"})
+
+    def test_windows_respects_an_explicit_override(self):
+        env = {"PYSTRAY_BACKEND": "xorg"}
+        with mock.patch.object(ps, "current_os", return_value="windows"):
+            self.assertEqual(ps.pin_tray_backend(env), "xorg")
+        self.assertEqual(env, {"PYSTRAY_BACKEND": "xorg"})
+
+    def test_non_windows_leaves_the_backend_unset(self):
+        for system in ("darwin", "linux"):
+            with self.subTest(system=system):
+                env = {}
+                with mock.patch.object(ps, "current_os", return_value=system):
+                    self.assertIsNone(ps.pin_tray_backend(env))
+                self.assertEqual(env, {})
+
+    def test_defaults_to_the_process_environment(self):
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("PYSTRAY_BACKEND", None)
+            with mock.patch.object(ps, "current_os", return_value="linux"):
+                ps.pin_tray_backend()
+            self.assertNotIn("PYSTRAY_BACKEND", os.environ)
+            with mock.patch.object(ps, "current_os", return_value="windows"):
+                ps.pin_tray_backend()
+            self.assertEqual(os.environ.get("PYSTRAY_BACKEND"), "win32")
+
+
+class LauncherPinTests(unittest.TestCase):
+    """The pin must still be applied before ``import pystray`` in the launcher."""
+
+    def test_launcher_pins_before_importing_pystray(self):
+        launcher = os.path.join(os.path.dirname(__file__), "..", "txt_xpander.pyw")
+        with open(launcher, encoding="utf-8") as handle:
+            lines = [line.strip() for line in handle]
+        pin = next((i for i, line in enumerate(lines) if line.startswith("platform_support.pin_tray_backend(")), None)
+        pystray_import = next((i for i, line in enumerate(lines) if line == "import pystray"), None)
+        self.assertIsNotNone(pin, "launcher no longer calls pin_tray_backend()")
+        self.assertIsNotNone(pystray_import, "launcher no longer imports pystray")
+        self.assertLess(pin, pystray_import)
+        # No code line may set the variable itself: the platform guard inside
+        # pin_tray_backend is what keeps the pin off macOS/Linux.
+        code = [line for line in lines if not line.startswith("#")]
+        self.assertEqual([line for line in code if "PYSTRAY_BACKEND" in line], [])
+
+
 class AutostartCommandTests(unittest.TestCase):
     def test_frozen_build_points_at_the_executable(self):
         with mock.patch.object(ps.sys, "frozen", True, create=True), \
