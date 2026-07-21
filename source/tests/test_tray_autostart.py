@@ -1,0 +1,133 @@
+"""Tray-side autostart policy: what the menu shows and when the entry is repaired.
+
+Classification itself lives in ``platform_support`` (see test_platform_support);
+these tests cover the app's decisions on top of it — the cached ``checked=``
+state, and repairing only an entry whose target is gone.
+"""
+
+import os
+import sys
+import threading
+import unittest
+from unittest import mock
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+import platform_support as ps
+import txt_xpander as tx
+
+
+def make_tray_app():
+    """A TextExpander with only what the autostart path touches.
+
+    Bypasses __init__: constructing the real app loads snippets, starts the GUI
+    thread and installs a keyboard listener, none of which this policy involves.
+    """
+    app = tx.TextExpander.__new__(tx.TextExpander)
+    app._autostart_lock = threading.Lock()
+    app._autostart_state = tx.AUTOSTART_ABSENT
+    app.logger = mock.Mock()
+    app.icon = None  # refresh_tray_menu returns early without a tray icon
+    return app
+
+
+class MenuStateTests(unittest.TestCase):
+    def test_checked_reads_the_cache_without_touching_disk(self):
+        app = make_tray_app()
+        with mock.patch.object(tx, "read_autostart_command") as read:
+            app._autostart_state = tx.AUTOSTART_CURRENT
+            self.assertTrue(app.autostart_is_enabled())
+            for state in (tx.AUTOSTART_ABSENT, tx.AUTOSTART_STALE):
+                app._autostart_state = state
+                self.assertFalse(app.autostart_is_enabled())
+        # pystray re-evaluates checked= on every menu render; a read here is the
+        # freeze that #17 removed.
+        read.assert_not_called()
+
+
+class ResolveStateTests(unittest.TestCase):
+    def setUp(self):
+        self.app = make_tray_app()
+        self.current = ps.default_autostart_command()
+
+    def _resolve(self, existing, install=None):
+        with mock.patch.object(tx, "read_autostart_command", return_value=existing) as read, \
+                mock.patch.object(tx, "install_autostart", side_effect=install) as install_mock:
+            self.app.resolve_autostart_state()
+        self.assertEqual(read.call_count, 1, "startup must read the entry exactly once")
+        return install_mock
+
+    def test_absent_entry_stays_absent(self):
+        install = self._resolve(None)
+        self.assertEqual(self.app._autostart_state, tx.AUTOSTART_ABSENT)
+        install.assert_not_called()
+
+    def test_entry_for_this_install_is_current(self):
+        install = self._resolve(list(self.current))
+        self.assertEqual(self.app._autostart_state, tx.AUTOSTART_CURRENT)
+        install.assert_not_called()
+
+    def test_dead_target_is_repaired(self):
+        """Case 1/3: a deleted dist folder or a removed interpreter."""
+        gone = [os.path.join(os.path.dirname(__file__), "no-such-dir", "app.exe")]
+        install = self._resolve(gone, install=lambda *a, **k: r"C:\Startup\Txt Xpander.lnk")
+        self.assertEqual(self.app._autostart_state, tx.AUTOSTART_CURRENT)
+        install.assert_called_once()
+
+    def test_repair_failure_leaves_it_unchecked(self):
+        gone = [os.path.join(os.path.dirname(__file__), "no-such-dir", "app.exe")]
+        self._resolve(gone, install=OSError("access denied"))
+        self.assertEqual(self.app._autostart_state, tx.AUTOSTART_STALE)
+        self.app.logger.error.assert_called_once()
+
+    def test_another_live_install_is_stale_but_untouched(self):
+        """Case 2: the packaged release's shortcut must survive a dev-mode run."""
+        other = [sys.executable, os.path.join(os.path.dirname(__file__), "other.pyw")]
+        install = self._resolve(other)
+        self.assertEqual(self.app._autostart_state, tx.AUTOSTART_STALE)
+        install.assert_not_called()
+        self.app.logger.info.assert_called_once()
+
+    def test_unreadable_entry_is_not_reported_as_enabled(self):
+        with mock.patch.object(tx, "read_autostart_command", side_effect=OSError("boom")), \
+                mock.patch.object(tx, "install_autostart") as install:
+            self.app.resolve_autostart_state()
+        self.assertEqual(self.app._autostart_state, tx.AUTOSTART_STALE)
+        install.assert_not_called()
+        self.app.logger.warning.assert_called_once()
+
+
+class ToggleTests(unittest.TestCase):
+    def setUp(self):
+        self.app = make_tray_app()
+        self.app.notify_status = mock.Mock()
+        self.app.notify_error = mock.Mock()
+
+    def test_toggle_off_removes_and_updates_the_cache(self):
+        self.app._autostart_state = tx.AUTOSTART_CURRENT
+        with mock.patch.object(tx, "remove_autostart") as remove, \
+                mock.patch.object(tx, "install_autostart") as install:
+            self.app._apply_autostart_toggle()
+        remove.assert_called_once()
+        install.assert_not_called()
+        self.assertEqual(self.app._autostart_state, tx.AUTOSTART_ABSENT)
+
+    def test_toggle_on_a_stale_entry_overwrites_instead_of_removing(self):
+        self.app._autostart_state = tx.AUTOSTART_STALE
+        with mock.patch.object(tx, "remove_autostart") as remove, \
+                mock.patch.object(tx, "install_autostart", return_value="p") as install:
+            self.app._apply_autostart_toggle()
+        install.assert_called_once()
+        remove.assert_not_called()
+        self.assertEqual(self.app._autostart_state, tx.AUTOSTART_CURRENT)
+
+    def test_failed_install_does_not_claim_enabled(self):
+        self.app._autostart_state = tx.AUTOSTART_ABSENT
+        with mock.patch.object(tx, "install_autostart", side_effect=OSError("denied")):
+            self.app._apply_autostart_toggle()
+        self.assertEqual(self.app._autostart_state, tx.AUTOSTART_ABSENT)
+        self.app.notify_error.assert_called_once()
+
+
+if __name__ == "__main__":
+    unittest.main()
