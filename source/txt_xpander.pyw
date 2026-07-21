@@ -97,6 +97,7 @@ from dynamic_registry import (
     reference_entries_by_category,
     validate_rename,
 )
+from sync_export import STATE_FILENAME as SYNC_STATE_FILENAME, export_bundle
 from whatsapp_support import normalize_phone_number
 from whatsapp_runtime_support import execute_whatsapp_action
 from rich_text_support import (
@@ -128,6 +129,22 @@ from gui_thread import GuiThread
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog, filedialog, font as tkfont
 
+
+def _read_app_version():
+    """Read the app version from this module's docstring.
+
+    Derived rather than duplicated: the docstring and installer/txt_xpander.iss are
+    the two hand-maintained places today, and a third constant would be a third
+    place to forget. Returns None if the line is missing — the sync bundle's
+    ``generator.version`` is nullable by design.
+    """
+    for line in (__doc__ or "").splitlines():
+        if line.startswith("Version:"):
+            return line.split(":", 1)[1].strip() or None
+    return None
+
+
+APP_VERSION = _read_app_version()
 
 APP_MUTEX_NAME = r"Local\TxtXpanderSingleton"
 APP_MUTEX_HANDLE = None
@@ -446,6 +463,7 @@ class TextExpander:
         # Mirroring is best-effort redundancy: it must never turn a persisted
         # save into a reported failure, so it runs after the write succeeded.
         self.mirror_snippets_file()
+        self.export_sync_bundle()
         return True
 
     def mirror_snippets_file(self):
@@ -464,6 +482,52 @@ class TextExpander:
             # Broad guard: a bad mirror_dir value (e.g. hand-edited to a non-path)
             # must not disturb the already-successful save.
             self.logger.warning(f"Falha ao espelhar snippets para {mirror_dir}: {e}")
+
+    def export_sync_bundle(self):
+        """Write the compiled mobile bundle when ``sync_export_dir`` is configured.
+
+        Both inputs are re-read from disk rather than taken from ``self``. That is
+        not symmetry: ``self.snippets`` holds bound callables and no registry
+        metadata, it does not exist yet when ``load_snippets`` saves on first run,
+        and it is stale between a restore/import write and the reload that follows.
+        ``self.dynamic_registry`` is likewise reassigned only *after* the registry
+        writers persist, so reading it here would compile the pre-toggle state.
+
+        Best-effort: any failure logs and returns, never turning a persisted save
+        into a reported failure.
+        """
+        export_dir = self.settings.get("sync_export_dir")
+        if not export_dir:
+            return
+
+        try:
+            static_snippets = validate_static_snippets(load_json_file(self.snippets_file))
+        except Exception as e:
+            self.logger.warning(f"Bundle de sincronização ignorado: falha ao ler snippets.json ({e}).")
+            return
+        if static_snippets is None:
+            self.logger.warning("Bundle de sincronização ignorado: snippets.json com formato inválido.")
+            return
+
+        try:
+            registry = load_registry(
+                self.resolve_resource_path("dynamic_snippets.json"),
+                self.dynamic_registry_file,
+                logger=self.logger,
+            )
+            export_bundle(
+                static_snippets,
+                registry,
+                export_dir,
+                os.path.join(self.data_dir, SYNC_STATE_FILENAME),
+                mirror_dir=self.settings.get("mirror_dir"),
+                app_version=APP_VERSION,
+                logger=self.logger,
+            )
+        except Exception as e:
+            # Broad guard for the same reason as mirror_snippets_file: a bad
+            # hand-edited value must not disturb an already-successful save.
+            self.logger.warning(f"Falha ao gerar o bundle de sincronização: {e}")
 
     # =====================================================================
     # BACKUP / RESTORE / EXPORT / IMPORT
@@ -515,6 +579,7 @@ class TextExpander:
             return False, f"Falha ao restaurar: {e}"
 
         self.mirror_snippets_file()
+        self.export_sync_bundle()
         self.reload_snippets_from_disk()
         return True, None
 
@@ -551,6 +616,7 @@ class TextExpander:
             return False, f"Falha ao importar: {e}"
 
         self.mirror_snippets_file()
+        self.export_sync_bundle()
         self.reload_snippets_from_disk()
         return True, None
 
@@ -2678,6 +2744,7 @@ class TextExpander:
             logger=self.logger,
         )
         self.reload_snippets_from_disk()
+        self.export_sync_bundle()
         state = "ativado" if enabled else "desativado"
         trigger = effective_trigger(key, self.dynamic_registry.get(key, {}))
         self.notify_status(f"Snippet dinâmico '{trigger}' {state}.", key=f"registry-toggle:{key}")
@@ -2760,6 +2827,7 @@ class TextExpander:
             logger=self.logger,
         )
         self.reload_snippets_from_disk()
+        self.export_sync_bundle()
         self.notify_status(
             f"Snippet dinâmico renomeado para '{new_trigger}'.",
             key=f"registry-rename:{key}",
