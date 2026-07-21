@@ -249,6 +249,20 @@ class GuiThreadTests(unittest.TestCase):
         # The thread must survive a failing task.
         self.assertEqual(self.gui.call(lambda _root: "alive", timeout=10), "alive")
 
+    def test_stop_wakes_callers_whose_work_never_ran(self):
+        """Regression: a call still queued when the loop exits must fail its
+        caller instead of leaving it blocked forever on ``done``."""
+        self.gui.stop()
+
+        # Inject a stranded item the way call() would have queued it.
+        box = {}
+        done = threading.Event()
+        self.gui._queue.put((lambda _root: "never runs", box, done))
+
+        self.gui.stop()
+        self.assertTrue(done.is_set(), "stranded caller was never woken")
+        self.assertIsInstance(box.get("error"), RuntimeError)
+
 
 if __name__ == "__main__":
     unittest.main()
