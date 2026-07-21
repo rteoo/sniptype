@@ -9,6 +9,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+import clipboard_support
 import runtime_support
 import txt_xpander as tx
 
@@ -159,6 +160,103 @@ class ClipboardSerializationTests(unittest.TestCase):
             self.assertEqual(events[i][0], "set")
             self.assertEqual(events[i + 1][0], "done")
             self.assertEqual(events[i][1], events[i + 1][1])
+
+
+class FakeClipboard:
+    """In-memory clipboard that mirrors the Windows backend's CRLF storage."""
+
+    def __init__(self, initial=None):
+        self.value = initial
+        self.writes = []
+
+    def get_text(self):
+        return self.value
+
+    def set_content(self, value):
+        text = runtime_support.extract_plain_text(value)
+        self.writes.append(text)
+        self.value = clipboard_support.normalize_clipboard_newlines(text)
+        return True
+
+
+class TypedFallbackSafetyTests(unittest.TestCase):
+    """A failed paste must never inject Enter keys."""
+
+    def test_multiline_snippet_is_never_typed(self):
+        # pynput types "\n" as a real Enter: in a terminal that executes the
+        # line, in a chat app it sends the message. The user's xcattle snippet
+        # ("cd ~/Projects/...\nuv run ...") would run a command mid-insert.
+        clipboard = FakeClipboard(initial="orig")
+        keyboard = mock.Mock()
+        notify = mock.Mock()
+        snippet = "cd ~/Projects/cattle-auction/\nuv run python main.py"
+
+        with mock.patch.object(runtime_support, "Clipboard", clipboard):
+            inserter = runtime_support.TextInserter(keyboard, notify=notify)
+            with mock.patch.object(inserter, "_paste_value", return_value=False):
+                self.assertFalse(inserter.insert_text(snippet))
+
+        keyboard.type.assert_not_called()
+        # Payload left where the user can retrieve it with a manual Ctrl+V.
+        self.assertEqual(clipboard.writes[-1], snippet)
+        notify.assert_called_once()
+        self.assertIn("Ctrl+V", notify.call_args.args[0])
+
+    def test_single_line_snippet_still_falls_back_to_typing(self):
+        clipboard = FakeClipboard(initial="orig")
+        keyboard = mock.Mock()
+
+        with mock.patch.object(runtime_support, "Clipboard", clipboard):
+            inserter = runtime_support.TextInserter(keyboard)
+            with mock.patch.object(inserter, "_paste_value", return_value=False):
+                self.assertTrue(inserter.insert_text("bom dia"))
+
+        keyboard.type.assert_called_once_with("bom dia")
+
+
+class ClipboardCoWriterTests(unittest.TestCase):
+    def _insert(self, clipboard, snippet):
+        logger = mock.Mock()
+        with mock.patch.object(runtime_support, "Clipboard", clipboard):
+            inserter = runtime_support.TextInserter(
+                mock.Mock(), logger=logger, restore_delay=0.0
+            )
+            with mock.patch.object(inserter, "_send_paste_shortcut"):
+                inserter.insert_text(snippet)
+        return logger
+
+    def test_third_party_overwrite_is_logged(self):
+        """The evidence that distinguishes a co-writer from a slow target."""
+        clipboard = FakeClipboard(initial="orig")
+
+        def hostile_set(value):
+            # A sync agent wins the clipboard right after our write.
+            clipboard.writes.append(runtime_support.extract_plain_text(value))
+            clipboard.value = "texto de outra maquina"
+            return True
+
+        clipboard.set_content = hostile_set
+        logger = self._insert(clipboard, "bom dia")
+
+        warnings = " ".join(str(call.args[0]) for call in logger.warning.call_args_list)
+        self.assertIn("sobrescrita por outro programa", warnings)
+
+    def test_normal_paste_logs_no_warning(self):
+        logger = self._insert(FakeClipboard(initial="orig"), "bom dia")
+        logger.warning.assert_not_called()
+
+    def test_single_line_restores_previous_clipboard(self):
+        clipboard = FakeClipboard(initial="orig")
+        self._insert(clipboard, "bom dia")
+        self.assertEqual(clipboard.value, "orig")
+
+    def test_multiline_does_not_restore(self):
+        # Deliberate: multi-line has never restored (the old CRLF comparison
+        # skipped it), and enabling it now would expose exactly the snippets
+        # under investigation to the restore race.
+        clipboard = FakeClipboard(initial="orig")
+        self._insert(clipboard, "linha um\nlinha dois")
+        self.assertEqual(clipboard.value, "linha um\r\nlinha dois")
 
 
 class SlowRefRoutingTests(unittest.TestCase):
