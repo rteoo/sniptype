@@ -167,6 +167,25 @@ class ManagerGuiSmokeTests(unittest.TestCase):
         # xhi (seeded) + xone + xtwo; dynamic callables are filtered out.
         self.assertEqual([3], counts)
 
+    def test_blank_key_is_not_a_row(self):
+        """A blank key cannot be a Treeview iid; hand-edited data must not
+        produce a phantom row or skew the tab count."""
+        self.app.snippets[""] = "lixo"
+        counts = []
+
+        def build(shared_root):
+            root = tk.Toplevel(shared_root)
+            root.withdraw()
+            frame = tk.Frame(root)
+            self.app._create_static_snippets_tab(frame, root, set_count=counts.append)
+            root.update_idletasks()
+            return self._static_rows(frame)
+
+        rows = self._on_gui(build)
+        self.assertNotIn("", rows)
+        self.assertIn("xhi", rows)
+        self.assertEqual([1], counts)
+
     def test_refresh_hook_repopulates_lists_after_library_swap(self):
         """Restore/import rebind self.snippets; registered lists must rebuild."""
         def build(shared_root):
@@ -244,6 +263,19 @@ class ManagerGuiSmokeTests(unittest.TestCase):
         rows = self._on_gui(build_and_search)
         self.assertEqual(["alice"], list(rows), "search should still narrow the list")
         self.assertEqual(2, counts[-1], "count reports the library, not the filter")
+
+    def test_mapping_blank_key_is_not_a_row(self):
+        self.app.snippets["_cpf_numbers"] = {"__prefix__": "cpf", "": "lixo", "alice": "1"}
+        counts = []
+
+        def build(shared_root):
+            frame = self._build_mappings_tab(shared_root, set_count=counts.append)
+            return self._tree_rows(frame)
+
+        rows = self._on_gui(build)
+        self.assertNotIn("", rows)
+        self.assertEqual(["alice"], list(rows))
+        self.assertEqual(1, counts[-1], "a blank key is not an item")
 
     def test_notification_history_window_builds(self):
         def build(shared_root):
@@ -407,6 +439,23 @@ class GuiThreadTests(unittest.TestCase):
         self.gui._queue.put((lambda _root: "never runs", box, done))
 
         self.gui.stop()
+        self.assertTrue(done.is_set(), "stranded caller was never woken")
+        self.assertIsInstance(box.get("error"), RuntimeError)
+
+    def test_abnormal_loop_exit_fails_stranded_callers(self):
+        """Regression: a GUI loop that dies without stop() must also wake
+        queued callers — a stranded one blocks forever in call(timeout=None)
+        while holding the dialog lock, refusing every later dialog."""
+        gui = GuiThread(logger=mock.Mock())
+        box = {}
+        done = threading.Event()
+        gui._queue.put((lambda _root: "never runs", box, done))
+
+        with mock.patch.object(gui, "_pump", side_effect=RuntimeError("boom")):
+            gui.ensure_started()
+            gui._thread.join(10)
+
+        self.assertFalse(gui._thread.is_alive())
         self.assertTrue(done.is_set(), "stranded caller was never woken")
         self.assertIsInstance(box.get("error"), RuntimeError)
 
