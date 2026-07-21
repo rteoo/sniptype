@@ -103,7 +103,9 @@ The erase loop sleeps 10 ms per backspace inside the listener callback (both in 
 
 CLAUDE.md/README describe expansion as "trigger word followed by a terminator (space, punctuation)", but the code expands **immediately** on the last matching character. Any trigger that is a prefix of a real word misfires mid-word. Either implement optional terminator-gated expansion (per-snippet or global setting) or fix the docs. Given daily use, an opt-in "expand only after space/punctuation" flag is the safer long-term direction.
 
-### 3.3 [P2] Multiple Tk roots across threads
+### 3.3 [P2] Multiple Tk roots across threads — **resolved**
+
+Resolved by `gui_thread.GuiThread`: one hidden root on a dedicated GUI thread, every window a `Toplevel` marshaled onto it. The `mshta`/VBScript ticker prompt and the `FindWindowW` manager-focus trick are gone with it. Original finding below.
 
 `_show_form_dialog`, `ask_whatsapp_input`, and the manager GUI each create their own `tk.Tk()` mainloop on whatever background thread runs them. Tkinter is not thread-safe; two dialogs alive at once (e.g. a form dialog fires while the manager is open) is a crash/hang risk. A single hidden Tk root on one dedicated GUI thread, with dialogs marshaled onto it, removes the whole class of problem.
 
