@@ -104,6 +104,7 @@ from gui_support import (
     center_on_screen,
     filter_static_snippets,
     iter_filtered_mapping_items,
+    snippet_row_values,
 )
 from gui_thread import GuiThread
 
@@ -178,6 +179,9 @@ class TextExpander:
         # of it, marshaled onto its thread. Started in run().
         self.gui = GuiThread(logger=self.logger)
         self.manager_window = None
+        # List-rebuild callbacks registered by the manager tabs, replayed after
+        # a restore/import swaps the whole library out from under them.
+        self._manager_refreshers = []
         # Serializes expansion dialogs; see _run_modal_dialog.
         self._dialog_lock = threading.Lock()
         self.text_inserter = TextInserter(self.keyboard_controller, logger=self.logger)
@@ -1380,8 +1384,16 @@ class TextExpander:
             tab_backups = tk.Frame(notebook, bg="#F4F6FA")
             notebook.add(tab_backups, text="Backups")
 
-            self._create_static_snippets_tab(tab_static, root)
-            self._create_dynamic_mappings_tab(tab_dynamic, root)
+            def tab_counter(tab, label):
+                return lambda count: notebook.tab(tab, text=f"{label} ({count})")
+
+            # Tabs are rebuilt with the window; drop the previous window's
+            # callbacks so they can't fire against destroyed widgets.
+            self._manager_refreshers = []
+            self._create_static_snippets_tab(
+                tab_static, root, set_count=tab_counter(tab_static, "Snippets Estáticos"))
+            self._create_dynamic_mappings_tab(
+                tab_dynamic, root, set_count=tab_counter(tab_dynamic, "Mapeamentos Dinâmicos"))
             self._create_dynamic_snippets_tab(tab_builtin, root)
             self._create_backups_tab(tab_backups, root)
 
@@ -1494,6 +1506,7 @@ class TextExpander:
                 self.notify_status(f"Backup restaurado: {name}", key="restore-backup")
                 messagebox.showinfo("Backups", f"Backup '{name}' restaurado.", parent=root)
                 refresh_backups()
+                self._refresh_manager_lists()
             else:
                 messagebox.showerror("Backups", f"Falha ao restaurar: {error}", parent=root)
 
@@ -1532,6 +1545,7 @@ class TextExpander:
                 self.notify_status("Biblioteca importada.", key="import-library")
                 messagebox.showinfo("Backups", "Biblioteca importada com sucesso.", parent=root)
                 refresh_backups()
+                self._refresh_manager_lists()
             else:
                 messagebox.showerror("Backups", f"Falha ao importar: {error}", parent=root)
 
@@ -1576,6 +1590,64 @@ class TextExpander:
             background=[("selected", "#FFFFFF"), ("!selected", "#E7ECF5")],
             foreground=[("selected", "#1F2937"), ("!selected", "#2F3A4A")],
         )
+        style.configure(
+            "Manager.Treeview",
+            background="#FFFFFF",
+            fieldbackground="#FFFFFF",
+            foreground="#1F2937",
+            font=("Segoe UI", 10),
+            borderwidth=0,
+            rowheight=22,
+        )
+        style.configure("Manager.Treeview.Heading", font=("Segoe UI", 9), padding=(6, 4))
+        style.layout("Manager.Treeview", style.layout("Treeview"))
+
+    def _create_snippet_tree(self, shell, trigger_heading="Trigger",
+                             trigger_width=104, preview_width=186):
+        """Build the trigger/preview/markers Treeview used by the snippet lists.
+
+        ``shell`` must be a grid container whose row 0 / column 0 expands.
+        Widths are per-tab because the mappings tab splits the same row three
+        ways and has far less to spare.
+        """
+        columns = ("trigger", "preview", "markers")
+        tree = ttk.Treeview(
+            shell,
+            columns=columns,
+            show="headings",
+            selectmode="browse",
+            style="Manager.Treeview",
+        )
+        tree.heading("trigger", text=trigger_heading, anchor="w")
+        tree.heading("preview", text="Valor", anchor="w")
+        tree.heading("markers", text="", anchor="center")
+        # Widths are deliberately tight: the list shares the tab with the editor
+        # pane, whose button row and format status get clipped if this grows.
+        tree.column("trigger", width=trigger_width, minwidth=76, anchor="w", stretch=False)
+        tree.column("preview", width=preview_width, minwidth=100, anchor="w", stretch=True)
+        tree.column("markers", width=46, minwidth=46, anchor="center", stretch=False)
+        tree.grid(row=0, column=0, sticky="nsew")
+
+        scrollbar = ttk.Scrollbar(shell, orient=tk.VERTICAL, command=tree.yview)
+        tree.configure(yscrollcommand=scrollbar.set)
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        self._bind_mousewheel(tree, tree)
+        return tree
+
+    def _register_manager_refresher(self, refresher):
+        """Register a list-rebuild callback invoked after restore/import.
+
+        Those operations rebind ``self.snippets`` wholesale, so every tab that
+        renders it must repopulate or it silently shows the old library.
+        """
+        self._manager_refreshers.append(refresher)
+
+    def _refresh_manager_lists(self):
+        for refresher in list(self._manager_refreshers):
+            try:
+                refresher()
+            except Exception as e:
+                self.logger.warning(f"Falha ao atualizar lista do gerenciador: {e}")
 
     def _bind_mousewheel(self, widget, target=None):
         scroll_target = target or widget
@@ -1856,8 +1928,12 @@ class TextExpander:
         text_widget.bind("<ButtonRelease-1>", update_status)
         update_status()
         return update_status
-    def _create_static_snippets_tab(self, parent, root):
-        """Build the static snippets tab UI."""
+    def _create_static_snippets_tab(self, parent, root, set_count=None):
+        """Build the static snippets tab UI.
+
+        ``set_count`` receives the visible snippet count whenever the list is
+        rebuilt, so the notebook tab title can show it.
+        """
 
         main = tk.Frame(parent, bg="#F4F6FA", padx=14, pady=14)
         main.pack(fill=tk.BOTH, expand=True)
@@ -1879,11 +1955,7 @@ class TextExpander:
         listbox_shell.grid_columnconfigure(0, weight=1)
         listbox_shell.grid_rowconfigure(0, weight=1)
 
-        listbox = tk.Listbox(listbox_shell, font=("Segoe UI", 10), relief=tk.FLAT, borderwidth=0, activestyle="none", selectborderwidth=0)
-        scrollbar = tk.Scrollbar(listbox_shell, orient=tk.VERTICAL, command=listbox.yview)
-        listbox.config(yscrollcommand=scrollbar.set)
-        listbox.grid(row=0, column=0, sticky="nsew")
-        scrollbar.grid(row=0, column=1, sticky="ns")
+        tree = self._create_snippet_tree(listbox_shell, trigger_heading="Trigger")
 
         frame_right = tk.LabelFrame(main, text="Editor de snippet", font=("Segoe UI", 9, "bold"), bg="#FFFFFF", padx=12, pady=12)
         frame_right.grid(row=0, column=1, sticky="nsew")
@@ -1924,7 +1996,6 @@ class TextExpander:
         btn_rename.pack(side=tk.LEFT, padx=6)
         btn_delete.pack(side=tk.LEFT, padx=(6, 0))
 
-        self._bind_mousewheel(listbox, listbox)
         self._bind_mousewheel(text_value, text_value)
 
         def get_static_visible_snippets():
@@ -1933,17 +2004,20 @@ class TextExpander:
         static_snips = get_static_visible_snippets()
 
         def refresh_listbox():
-            listbox.delete(0, tk.END)
+            tree.delete(*tree.get_children())
             static_snips.clear()
             static_snips.update(get_static_visible_snippets())
             for key in sorted(static_snips.keys()):
-                listbox.insert(tk.END, key)
+                tree.insert("", tk.END, iid=key,
+                            values=snippet_row_values(key, static_snips[key]))
+            if set_count is not None:
+                set_count(len(static_snips))
 
         def load_selected(event=None):
-            selection = listbox.curselection()
+            selection = tree.selection()
             if not selection:
                 return
-            key = listbox.get(selection[0])
+            key = selection[0]
             entry_trigger.delete(0, tk.END)
             entry_trigger.insert(0, key)
             load_value_into_text_widget(text_value, static_snips.get(key, ""))
@@ -2060,7 +2134,7 @@ class TextExpander:
             refresh_listbox()
             self.notify_status(f"Snippet renomeado para '{new_trigger}'.", key=f"rename-static:{new_trigger}")
 
-        listbox.bind("<<ListboxSelect>>", load_selected)
+        tree.bind("<<TreeviewSelect>>", load_selected)
         btn_new.configure(command=on_new)
         btn_save.configure(command=on_save)
         btn_duplicate.configure(command=on_duplicate)
@@ -2068,14 +2142,19 @@ class TextExpander:
         btn_delete.configure(command=on_delete)
         search_var.trace_add("write", lambda *_: refresh_listbox())
         # Ctrl+S saves the current static snippet from anywhere in the editor.
-        for widget in (entry_trigger, text_value, listbox):
+        for widget in (entry_trigger, text_value, tree):
             widget.bind("<Control-s>", lambda _event: (on_save(), "break")[1])
 
         refresh_listbox()
+        self._register_manager_refresher(refresh_listbox)
         search_entry.focus_set()
 
-    def _create_dynamic_mappings_tab(self, parent, root):
-        """Build the dynamic mappings UI with customizable types."""
+    def _create_dynamic_mappings_tab(self, parent, root, set_count=None):
+        """Build the dynamic mappings UI with customizable types.
+
+        ``set_count`` receives the visible item count of the selected mapping
+        type whenever the list is rebuilt.
+        """
 
         main = tk.Frame(parent, bg="#F4F6FA", padx=14, pady=14)
         main.pack(fill=tk.BOTH, expand=True)
@@ -2199,11 +2278,9 @@ class TextExpander:
         listbox_frame.grid_columnconfigure(0, weight=1)
         listbox_frame.grid_rowconfigure(0, weight=1)
 
-        listbox_map = tk.Listbox(listbox_frame, font=("Segoe UI", 10), relief=tk.FLAT, borderwidth=0, activestyle="none")
-        scrollbar_map = tk.Scrollbar(listbox_frame, orient=tk.VERTICAL, command=listbox_map.yview)
-        listbox_map.config(yscrollcommand=scrollbar_map.set)
-        listbox_map.grid(row=0, column=0, sticky="nsew")
-        scrollbar_map.grid(row=0, column=1, sticky="ns")
+        tree_map = self._create_snippet_tree(
+            listbox_frame, trigger_heading="Identificador",
+            trigger_width=88, preview_width=118)
 
         frame_right = tk.LabelFrame(content, text="Editor do item", font=("Segoe UI", 9, "bold"), bg="#FFFFFF", padx=12, pady=12)
         frame_right.grid(row=0, column=2, sticky="nsew")
@@ -2241,12 +2318,18 @@ class TextExpander:
         btn_delete_map.pack(side=tk.LEFT, padx=(6, 0))
 
         def refresh_mapping_list():
-            listbox_map.delete(0, tk.END)
+            tree_map.delete(*tree_map.get_children())
             current_type = mapping_type.get()
             query = map_search_var.get()
             mapping = self.snippets.get(current_type, {})
-            for key in iter_filtered_mapping_items(mapping, query):
-                listbox_map.insert(tk.END, key)
+            if not isinstance(mapping, dict):
+                mapping = {}
+            visible = iter_filtered_mapping_items(mapping, query)
+            for key in visible:
+                tree_map.insert("", tk.END, iid=key,
+                                values=snippet_row_values(key, mapping.get(key, "")))
+            if set_count is not None:
+                set_count(len(visible))
             update_example_label()
 
         def add_new_type():
@@ -2342,16 +2425,15 @@ class TextExpander:
 
         listbox_types.bind("<<ListboxSelect>>", on_type_select)
         self._bind_mousewheel(listbox_types, listbox_types)
-        self._bind_mousewheel(listbox_map, listbox_map)
         self._bind_mousewheel(text_value, text_value)
 
         def load_selected_mapping(event=None):
-            selection = listbox_map.curselection()
+            selection = tree_map.selection()
             if not selection:
                 return
 
             current_type = mapping_type.get()
-            key = listbox_map.get(selection[0])
+            key = selection[0]
             mapping = self.snippets.get(current_type, {})
 
             entry_name.delete(0, tk.END)
@@ -2434,13 +2516,20 @@ class TextExpander:
 
         refresh_type_list()
         mapping_type.trace_add("write", lambda *_: on_type_changed())
-        listbox_map.bind("<<ListboxSelect>>", load_selected_mapping)
+        tree_map.bind("<<TreeviewSelect>>", load_selected_mapping)
         btn_new_map.configure(command=on_new_map)
         btn_save_map.configure(command=on_save_map)
         btn_delete_map.configure(command=on_delete_map)
         map_search_var.trace_add("write", lambda *_: refresh_mapping_list())
 
+        def refresh_all_mappings():
+            # A restore/import can drop the selected type entirely, so the type
+            # list has to be rebuilt before the items are.
+            refresh_type_list()
+            refresh_mapping_list()
+
         refresh_mapping_list()
+        self._register_manager_refresher(refresh_all_mappings)
 
     def _create_reference_tab(self, parent, root, section_title, subtitle, sections, footer_text):
         main = tk.Frame(parent, bg="#F4F6FA", padx=14, pady=14)
