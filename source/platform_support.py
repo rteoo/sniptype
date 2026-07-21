@@ -235,13 +235,16 @@ def classify_autostart(existing, command=None):
 
 
 def autostart_target_exists(existing):
-    """True when the entry actually points at something still on disk.
+    """True when everything the entry points at is still on disk.
 
     Separates the two kinds of stale: a dead pointer (deleted ``dist`` folder,
-    removed venv) that nobody meant to keep, versus a live entry owned by another
-    install of the app. Only the first is safe to rewrite unasked.
+    removed venv or checkout) that nobody meant to keep, versus a live entry
+    owned by another install of the app. Only the first is safe to rewrite
+    unasked. Every argv element we ever write is a path (the exe, or
+    interpreter + script), so one missing element makes the entry dead at
+    login — a surviving interpreter does not keep it alive.
     """
-    return bool(existing) and os.path.exists(existing[0])
+    return bool(existing) and all(os.path.exists(arg) for arg in existing)
 
 
 def autostart_state(app_name=APP_NAME, command=None):

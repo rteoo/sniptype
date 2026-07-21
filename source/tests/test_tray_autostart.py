@@ -82,11 +82,32 @@ class ResolveStateTests(unittest.TestCase):
 
     def test_another_live_install_is_stale_but_untouched(self):
         """Case 2: the packaged release's shortcut must survive a dev-mode run."""
-        other = [sys.executable, os.path.join(os.path.dirname(__file__), "other.pyw")]
+        # This test file stands in for the other install's script: it must be a
+        # real file, or the entry would classify as dead and get repaired.
+        other = [sys.executable, os.path.abspath(__file__)]
         install = self._resolve(other)
         self.assertEqual(self.app._autostart_state, tx.AUTOSTART_STALE)
         install.assert_not_called()
         self.app.logger.info.assert_called_once()
+
+    def test_dead_script_with_live_interpreter_is_repaired(self):
+        """Case 1 from the source side: the checkout is gone but its
+        interpreter survives — the entry is just as dead at login."""
+        gone = [sys.executable,
+                os.path.join(os.path.dirname(__file__), "no-such-dir", "txt_xpander.pyw")]
+        install = self._resolve(gone, install=lambda *a, **k: r"C:\Startup\Txt Xpander.lnk")
+        self.assertEqual(self.app._autostart_state, tx.AUTOSTART_CURRENT)
+        install.assert_called_once()
+
+    def test_unexpected_error_is_not_reported_as_enabled(self):
+        """Reading a corrupt entry can raise more than OSError (decode/parse
+        errors); none of it may kill the worker or leave the box checked."""
+        with mock.patch.object(tx, "read_autostart_command", side_effect=ValueError("plist corrompida")), \
+                mock.patch.object(tx, "install_autostart") as install:
+            self.app.resolve_autostart_state()
+        self.assertEqual(self.app._autostart_state, tx.AUTOSTART_STALE)
+        install.assert_not_called()
+        self.app.logger.warning.assert_called_once()
 
     def test_unreadable_entry_is_not_reported_as_enabled(self):
         with mock.patch.object(tx, "read_autostart_command", side_effect=OSError("boom")), \
@@ -127,6 +148,29 @@ class ToggleTests(unittest.TestCase):
             self.app._apply_autostart_toggle()
         self.assertEqual(self.app._autostart_state, tx.AUTOSTART_ABSENT)
         self.app.notify_error.assert_called_once()
+
+    def test_unexpected_install_error_is_surfaced_not_swallowed(self):
+        """Non-OSError failures must also notify instead of dying silently
+        on the worker thread and eating the click."""
+        self.app._autostart_state = tx.AUTOSTART_ABSENT
+        with mock.patch.object(tx, "install_autostart", side_effect=ValueError("boom")):
+            self.app._apply_autostart_toggle()
+        self.assertEqual(self.app._autostart_state, tx.AUTOSTART_ABSENT)
+        self.app.notify_error.assert_called_once()
+
+    def test_busy_click_notifies_instead_of_dropping_silently(self):
+        """The startup resolve can hold the lock for a PowerShell round-trip;
+        a click landing then must say "wait", not vanish."""
+        self.app._autostart_lock.acquire()
+        try:
+            with mock.patch.object(tx, "install_autostart") as install, \
+                    mock.patch.object(tx, "remove_autostart") as remove:
+                self.app._apply_autostart_toggle()
+        finally:
+            self.app._autostart_lock.release()
+        install.assert_not_called()
+        remove.assert_not_called()
+        self.app.notify_status.assert_called_once()
 
 
 if __name__ == "__main__":
