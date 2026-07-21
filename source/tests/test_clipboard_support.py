@@ -18,6 +18,34 @@ def _which(*available):
     return lambda name: f"/usr/bin/{name}" if name in known else None
 
 
+class NormalizeClipboardNewlinesTests(unittest.TestCase):
+    def test_lf_text_becomes_crlf(self):
+        self.assertEqual(
+            clipboard_support.normalize_clipboard_newlines("a\nb"), "a\r\nb"
+        )
+
+    def test_crlf_text_is_not_doubled(self):
+        """Regression: text taken from the clipboard already carries CRLF.
+
+        A blind ``\\n`` -> ``\\r\\n`` turned it into ``\\r\\r\\n``, which pastes a
+        doubled blank line and makes the stored payload no longer equal to the
+        snippet it was built from. Every ``%%clipboard-paste%%`` snippet hits this
+        whenever the copied text is multi-line.
+        """
+        self.assertEqual(
+            clipboard_support.normalize_clipboard_newlines("a\r\nb"), "a\r\nb"
+        )
+
+    def test_normalization_is_idempotent(self):
+        once = clipboard_support.normalize_clipboard_newlines("a\r\nb\nc\rd")
+        self.assertEqual(clipboard_support.normalize_clipboard_newlines(once), once)
+
+    def test_lone_cr_is_normalized(self):
+        self.assertEqual(
+            clipboard_support.normalize_clipboard_newlines("a\rb"), "a\r\nb"
+        )
+
+
 class HtmlClipboardBytesTests(unittest.TestCase):
     def test_html_clipboard_bytes_include_required_header(self):
         payload = _html_clipboard_bytes("<div><strong>abc</strong></div>")
