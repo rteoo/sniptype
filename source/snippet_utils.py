@@ -37,9 +37,18 @@ def validate_static_snippets(data):
     return data if isinstance(data, dict) else None
 
 
-def build_saveable_snippets(snippets):
-    """Remove runtime callables before persisting snippets to JSON."""
-    return {key: value for key, value in snippets.items() if not callable(value)}
+def build_saveable_snippets(snippets, preserved=None):
+    """Remove runtime callables before persisting snippets to JSON.
+
+    ``preserved`` holds static values whose key is shadowed by a dynamic trigger
+    in the merged map (see ``find_shadowed_statics``). Without it, saving the
+    merged map silently deletes those keys from disk: the callable replaced the
+    static value in memory and callables are not persistable.
+    """
+    saveable = {key: value for key, value in snippets.items() if not callable(value)}
+    for key, value in (preserved or {}).items():
+        saveable.setdefault(key, value)
+    return saveable
 
 
 def write_json_atomic(path, data):
@@ -63,6 +72,20 @@ def write_json_atomic(path, data):
 def merge_snippets(static_snippets, dynamic_snippets):
     """Merge static and dynamic snippets, keeping dynamic priority."""
     return {**static_snippets, **dynamic_snippets}
+
+
+def find_shadowed_statics(static_snippets, dynamic_snippets):
+    """Return the static entries a dynamic trigger overwrites in the merged map.
+
+    These keys expand as the dynamic snippet, but their static value must still
+    reach disk on the next save, so callers pass this to
+    ``build_saveable_snippets`` as ``preserved``.
+    """
+    return {
+        key: value
+        for key, value in static_snippets.items()
+        if key in dynamic_snippets and not callable(value)
+    }
 
 
 def get_dynamic_prefixes(snippets):
