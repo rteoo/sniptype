@@ -42,11 +42,11 @@ from snippet_utils import (
     check_dynamic_pattern as resolve_dynamic_pattern,
 )
 from trigger_index import compile_trigger_index, find_direct_trigger, find_dynamic_trigger
+from clipboard_support import Clipboard
 from runtime_support import (
     AppLogger,
     BackgroundTaskRunner,
     TextInserter,
-    WindowsClipboard,
     build_snippet_failure_notification,
     configure_logging,
     load_notification_history,
@@ -812,9 +812,9 @@ class TextExpander:
         """Execute one of the built-in WhatsApp actions."""
         return execute_whatsapp_action(
             trigger,
-            get_clipboard_text=WindowsClipboard.get_text,
+            get_clipboard_text=Clipboard.get_text,
             ask_input=self.ask_whatsapp_input,
-            set_clipboard_content=WindowsClipboard.set_content,
+            set_clipboard_content=Clipboard.set_content,
             open_url=self.open_url_in_browser,
             notify_error=self.notify_error,
         )
@@ -868,7 +868,7 @@ class TextExpander:
             resolved_text = resolve_inline(
                 plain_text,
                 self.snippets,
-                WindowsClipboard.get_text,
+                Clipboard.get_text,
                 _seen={trigger},
                 prefixes=self.trigger_index["dynamic_prefixes"],
                 notify_failure=self.notify_snippet_failure,
@@ -921,7 +921,7 @@ class TextExpander:
                 plain = resolve_inline(
                     plain,
                     self.snippets,
-                    WindowsClipboard.get_text,
+                    Clipboard.get_text,
                     _seen={trigger},
                     prefixes=prefixes,
                     notify_failure=self.notify_snippet_failure,
@@ -949,7 +949,7 @@ class TextExpander:
             time.sleep(0.05)
             self.text_inserter.insert_text(result)
             if trigger == "xlwapp":
-                WindowsClipboard.set_content(result)
+                Clipboard.set_content(result)
             return True
         except Exception as e:
             self.logger.error(f"Erro ao executar snippet lento {trigger}: {e}")
