@@ -8,9 +8,10 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import runtime_support
-import txt_xpander as tx
+from app_module import txt_xpander as tx  # .pyw is not importable off Windows
 
 
 def make_app(base_dir, snippets):
