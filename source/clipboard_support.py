@@ -48,8 +48,16 @@ def _html_clipboard_bytes(fragment):
     dummy_header = header_template.format(start_html=0, end_html=0, start_fragment=0, end_fragment=0)
     start_html = len(dummy_header.encode("utf-8"))
     encoded_document = document.encode("utf-8")
-    start_fragment = start_html + document.index(start_marker) + len(start_marker)
-    end_fragment = start_html + document.index(end_marker)
+    # CF_HTML offsets are byte offsets into the UTF-8 payload, so they must be
+    # computed on the encoded document: character offsets drift as soon as the
+    # fragment contains a multi-byte character (any accented letter).
+    start_marker_bytes = start_marker.encode("utf-8")
+    start_fragment = (
+        start_html
+        + encoded_document.index(start_marker_bytes)
+        + len(start_marker_bytes)
+    )
+    end_fragment = start_html + encoded_document.index(end_marker.encode("utf-8"))
     end_html = start_html + len(encoded_document)
     header = header_template.format(
         start_html=start_html,
@@ -225,6 +233,7 @@ class PosixClipboard:
         self._environ = environ
         self._copy_argv, self._paste_argv = posix_clipboard_commands(environ)
         self._warned_missing_tool = False
+        self._warned_rich_text = False
         if self._copy_argv is None:
             self._warn_missing_tool()
 
@@ -275,7 +284,10 @@ class PosixClipboard:
             self._warn_missing_tool()
             return False
         payload = get_clipboard_payload(value)
-        if payload.get("html") or payload.get("rtf"):
+        if (payload.get("html") or payload.get("rtf")) and not self._warned_rich_text:
+            # Once per session: a daily-use rich snippet would otherwise write
+            # this line on every single paste.
+            self._warned_rich_text = True
             _LOGGER.info(
                 "Texto formatado não é suportado nesta plataforma; "
                 "colando apenas o texto simples."

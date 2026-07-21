@@ -1,4 +1,5 @@
 import logging
+import re
 import subprocess
 import unittest
 from unittest import mock
@@ -27,6 +28,19 @@ class HtmlClipboardBytesTests(unittest.TestCase):
         self.assertIn(b"StartFragment:", payload)
         self.assertIn(b"EndFragment:", payload)
         self.assertIn(b"<strong>abc</strong>", payload)
+
+    def test_fragment_offsets_are_byte_offsets_for_non_ascii_content(self):
+        """Regression: CF_HTML offsets are byte offsets into the UTF-8 payload.
+        Character offsets undercount once the fragment has accented letters,
+        making EndFragment land short and truncating the pasted rich text."""
+        fragment = "<div>expansão de ação</div>"
+        payload = _html_clipboard_bytes(fragment)
+
+        header = payload.decode("utf-8")
+        start = int(re.search(r"StartFragment:(\d+)", header).group(1))
+        end = int(re.search(r"EndFragment:(\d+)", header).group(1))
+
+        self.assertEqual(fragment, payload[start:end].decode("utf-8"))
 
 
 class BackendSelectionTests(unittest.TestCase):
@@ -210,6 +224,12 @@ class PosixRichTextDowngradeTests(unittest.TestCase):
 
         self.assertEqual(b"negrito", run.call_args.kwargs["input"])
         self.assertTrue(any("texto simples" in line for line in logs.output))
+
+        # The downgrade is logged once per session, not once per paste — a
+        # daily-use rich snippet would otherwise flood the log.
+        with mock.patch.object(clipboard_support.subprocess, "run", return_value=completed), \
+                self.assertNoLogs(clipboard_support._LOGGER, level=logging.INFO):
+            self.assertTrue(clipboard.set_content(rich_value))
 
 
 if __name__ == "__main__":
