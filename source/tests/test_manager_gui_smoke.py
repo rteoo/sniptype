@@ -15,8 +15,9 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import txt_xpander as tx
+from app_module import txt_xpander as tx  # .pyw is not importable off Windows
 from gui_thread import GuiThread
 
 try:

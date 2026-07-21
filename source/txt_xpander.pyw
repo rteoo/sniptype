@@ -21,7 +21,12 @@ import shutil
 import ctypes
 import webbrowser
 
-os.environ.setdefault("PYSTRAY_BACKEND", "win32")
+from platform_support import IS_WINDOWS
+
+# pystray probes for a backend at import time; pinning it saves that probe on
+# Windows, but forcing win32 elsewhere makes the import fail outright.
+if IS_WINDOWS:
+    os.environ.setdefault("PYSTRAY_BACKEND", "win32")
 
 from pynput import keyboard
 from pynput.keyboard import Controller, Key
@@ -77,7 +82,6 @@ from platform_support import (
     AUTOSTART_ABSENT,
     AUTOSTART_CURRENT,
     AUTOSTART_STALE,
-    IS_WINDOWS,
     acquire_lockfile,
     autostart_target_exists,
     classify_autostart,

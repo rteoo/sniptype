@@ -41,7 +41,9 @@ Txt Xpander is Windows-first. The OS-specific couplings are being factored behin
 
 Clipboard access is factored the same way, behind [`source/clipboard_support.py`](source/clipboard_support.py): Windows keeps the ctypes user32/kernel32 backend (text, HTML and RTF), while macOS uses `pbcopy`/`pbpaste` and Linux uses `wl-copy`/`wl-paste` under Wayland, falling back to `xclip` then `xsel`. The Win32 bindings now load only on Windows, so the app imports cleanly on macOS/Linux. The POSIX backend is plain-text only for now — rich-text snippets paste as their plain text and log the downgrade — and a desktop with none of those tools installed logs a warning rather than failing hard.
 
-Remaining before the app runs unmodified on macOS/Linux: rich-text paste off Windows, plus platform limits outside our control — on macOS pynput requires granting Accessibility permission, and Wayland restricts global keyboard hooks. The non-Windows backends are untested on real macOS/Linux hosts; CI runs on Windows only.
+CI runs the unit suite on `windows-latest`, `macos-latest` and `ubuntu-latest` (Python 3.12 and 3.14) on every pull request, so the POSIX branches of the clipboard, autostart and single-instance code are exercised on real macOS and Linux hosts rather than only under mocks. Linux runs under `xvfb-run`: pynput and pystray both bind to Xorg at import time and raise without a display.
+
+Remaining before the app runs unmodified on macOS/Linux: rich-text paste off Windows, opening the data folder (`os.startfile` has no POSIX equivalent in place yet), plus platform limits outside our control — on macOS pynput requires granting Accessibility permission, and Wayland restricts global keyboard hooks. What CI does *not* cover is end-to-end behavior on a real desktop session: tray icon, actual paste into another app, and macOS Accessibility permission are still unverified.
 
 ## Work From Source
 
