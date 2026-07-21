@@ -4,6 +4,19 @@ All notable changes to Txt Xpander are documented here. The format is based on [
 
 ## [Unreleased]
 
+## [3.2.1] — 2026-07-21
+
+### Fixed
+
+- **Pasted clipboard content no longer gains a blank line per break**: snippets that embed `%%clipboard-paste%%` receive the clipboard's text with CRLF line endings, and the Windows write site converted line endings a second time, turning every `\r\n` into `\r\r\n`. Copying multi-line text and expanding a snippet that quotes it now pastes exactly the breaks that were copied.
+- **A failed paste no longer types multi-line snippets**: the typed fallback sends a real Enter for each newline, which submitted the message in a chat app and executed the line in a terminal. A multi-line snippet that cannot be pasted is now left on the clipboard with a tray notification to press Ctrl+V; single-line snippets still fall back to typing as before.
+
+### Technical
+
+- The app now logs when the clipboard holds neither the snippet nor the previous contents at restore time — the signature of a remote-desktop clipboard sync agent (NoMachine, RDP) overwriting the clipboard mid-paste, which the app was previously silent about.
+- Multi-line snippets keep their existing behaviour of not restoring the previous clipboard, now as an explicit, documented branch rather than a side effect of the line-ending bug above.
+- 306 tests pass, up from 300.
+
 ## [3.2.0] — 2026-07-20
 
 ### Added
