@@ -4,6 +4,33 @@ All notable changes to Txt Xpander are documented here. The format is based on [
 
 ## [Unreleased]
 
+## [3.2.0] — 2026-07-20
+
+### Added
+
+- **"Iniciar com o sistema" tray toggle**: right-click the tray icon to create or remove the per-user autostart entry — Startup `.lnk` on Windows, LaunchAgent plist on macOS, `~/.config/autostart` entry on Linux — replacing the manual `shell:startup` instructions. The work runs off the menu thread so the tray never freezes, and failures are reported instead of silently claimed.
+- **Snippet lists with value preview**: the static snippets and mapping items lists are now tables showing the trigger, a one-line value preview, and markers (`RT` for rich text, `%%` for variables). Notebook tab titles show item counts.
+
+### Changed
+
+- **Behavior change — the autostart checkbox now tells the truth**: it is checked only when the Startup entry actually launches *this* install. An entry left by a deleted `dist` folder, a removed interpreter, or a deleted checkout is detected as dead and repaired automatically at startup; an entry owned by another *live* install shows unchecked and is left alone (clicking the toggle repoints it here). Users running both a source checkout and the packaged release will see the box unchecked where it used to be misleadingly checked.
+- **Single GUI architecture**: every dialog and the manager window now share one Tk root on a dedicated GUI thread, removing the crash/hang risk of two windows built on separate roots. The stock ticker prompt is a proper Tk dialog (the old `mshta`/VBScript popup is gone). Only one expansion dialog can be open at a time; a second trigger arriving mid-dialog is refused and reported like a cancel — nothing inserted, no terminator re-emitted.
+- **Per-OS clipboard backend** (`clipboard_support.py`): Windows keeps the full ctypes backend (text, HTML, RTF); macOS/Linux get a plain-text backend (`pbcopy`/`pbpaste`, `wl-copy`/`wl-paste`, `xclip`, `xsel`), so the app imports and runs off Windows. POSIX rich-text pastes downgrade to plain text with a log line. Unverified on real macOS/Linux hosts; CI is Windows-only.
+- Restoring a backup or importing a library now refreshes the manager's snippet lists immediately instead of showing the pre-restore library.
+
+### Fixed
+
+- **Pasted rich text with accented characters no longer truncates**: the Windows HTML-clipboard fragment offsets were computed in characters instead of UTF-8 bytes, cutting formatted pastes short whenever the snippet contained accents.
+- A stale Startup entry no longer reads as "enabled" while starting nothing (or the wrong copy) at login.
+- A GUI-thread failure can no longer leave an expansion worker blocked forever holding the dialog lock, and autostart worker errors are always surfaced instead of dying invisibly under `pythonw`.
+- Blank snippet keys in hand-edited files no longer produce broken rows in the manager lists.
+
+### Technical
+
+- 296 tests pass, up from 210: GuiThread marshaling, modal-dialog serialization, clipboard backend selection and degradation, autostart install/read round-trips and absent/current/stale classification, tray autostart policy, and Treeview row rendering
+- New modules: `gui_thread.py`, `clipboard_support.py`; autostart adapters live in `platform_support.py`
+- Snippet file format is unchanged
+
 ## [3.1.0] — 2026-07-20
 
 ### Added
