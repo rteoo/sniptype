@@ -84,6 +84,10 @@ class GuiThread:
             except Exception:
                 pass
             self.root = None
+            # An abnormal exit strands queued callers exactly like stop()
+            # would — and a caller blocked in call(timeout=None) is holding
+            # the dialog lock, which would refuse every later dialog.
+            self._fail_pending()
 
     def stop(self, timeout=5.0):
         """Tear the root down and join the GUI thread."""
