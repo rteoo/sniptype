@@ -223,7 +223,13 @@ class PosixClipboardRoundTripTests(unittest.TestCase):
         later (session start, fresh install) must work without relaunching."""
         with self.assertLogs(clipboard_support._LOGGER, level=logging.WARNING):
             clipboard = _make_posix_clipboard()
-        self.assertFalse(clipboard.set_content("cedo demais"))
+
+        # The commands are re-resolved on every call, so the "no tool yet" state
+        # has to hold for the assertion too — otherwise the host's real pbcopy
+        # (macOS) or xclip (Linux) answers and the clipboard reports success.
+        with mock.patch.object(clipboard_support, "IS_MAC", False), \
+                mock.patch.object(clipboard_support.shutil, "which", _which()):
+            self.assertFalse(clipboard.set_content("cedo demais"))
 
         completed = subprocess.CompletedProcess(["xclip"], 0, b"", b"")
         with mock.patch.object(clipboard_support, "IS_MAC", False), \
