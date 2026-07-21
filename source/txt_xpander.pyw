@@ -72,7 +72,15 @@ from app_paths import (
 )
 from settings_support import load_settings
 from validation_support import validate_trigger
-from platform_support import IS_WINDOWS, acquire_lockfile, release_lockfile
+from platform_support import (
+    APP_NAME,
+    IS_WINDOWS,
+    acquire_lockfile,
+    install_autostart,
+    is_autostart_enabled,
+    release_lockfile,
+    remove_autostart,
+)
 from dynamic_registry import (
     build_dynamic_snippets,
     composed_mapping_triggers,
@@ -2811,6 +2819,31 @@ class TextExpander:
         else:
             self.notify_error("Falha ao criar backup. Verifique os logs.", key="manual-backup")
 
+    def autostart_is_enabled(self, item=None):
+        """Menu state for the autostart toggle; never raises into pystray."""
+        try:
+            return is_autostart_enabled(APP_NAME)
+        except OSError as e:
+            self.logger.warning(f"Falha ao verificar inicialização automática: {e}")
+            return False
+
+    def toggle_autostart(self, icon, item):
+        """Tray action: install/remove the per-user autostart entry."""
+        try:
+            if is_autostart_enabled(APP_NAME):
+                remove_autostart(APP_NAME)
+                self.notify_status("Início automático desativado.", key="autostart")
+            else:
+                path = install_autostart(APP_NAME)
+                self.logger.info(f"Inicialização automática instalada: {path}")
+                self.notify_status("Início automático ativado.", key="autostart")
+        except OSError as e:
+            self.logger.error(f"Falha ao alterar inicialização automática: {e}")
+            self.notify_error(
+                f"Falha ao alterar início automático: {e}",
+                key="autostart-error",
+            )
+
     def tray_open_data_folder(self, icon, item):
         """Tray action: open the user data folder."""
         self.open_data_folder()
@@ -2883,6 +2916,12 @@ class TextExpander:
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Backup agora", self.tray_backup_now),
             pystray.MenuItem("Abrir pasta de dados", self.tray_open_data_folder),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem(
+                "Iniciar com o sistema",
+                self.toggle_autostart,
+                checked=self.autostart_is_enabled,
+            ),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Sair", self.quit_app)
         )

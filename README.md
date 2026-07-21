@@ -29,18 +29,15 @@ Usage notes:
 
 ### Auto-start with Windows
 
-To have Txt Xpander launch automatically when you sign in:
+Right-click the tray icon and tick **Iniciar com o sistema**. Txt Xpander creates the Startup shortcut for the current user (pointing at the packaged executable, or at `pythonw txt_xpander.pyw` when running from source); unticking it removes the shortcut. No admin rights, no registry keys.
 
-1. Press **Win + R**
-2. Type `shell:startup` and press **Enter**
-3. Copy a shortcut to `Txt Xpander.exe` into that folder
-4. Txt Xpander will now start automatically with Windows
+The same toggle is the autostart path on macOS (LaunchAgent plist) and Linux (`~/.config/autostart` entry).
 
-Alternatively, [`build_release.bat`](build_release.bat) offers to create the Startup shortcut after a successful build (skipped automatically if the shortcut already exists).
+[`build_release.bat`](build_release.bat) still offers to create the Startup shortcut after a successful build (skipped automatically if the shortcut already exists), and you can always drop a shortcut into `shell:startup` yourself.
 
 ### Cross-platform status
 
-Txt Xpander is Windows-first. The OS-specific couplings are being factored behind [`source/platform_support.py`](source/platform_support.py): the paste modifier (Ctrl+V on Windows/Linux, Cmd+V on macOS), a PID-lockfile single-instance guard for non-Windows (Windows keeps its named mutex), and per-OS autostart builders (Startup `.lnk`, macOS LaunchAgent plist, Linux `.desktop`). The keyboard listener (pynput), tray (pystray), GUI (Tk) and the JSON data layer are already portable, and the data directory (`~/.txt_xpander`) is identical on all three OSes.
+Txt Xpander is Windows-first. The OS-specific couplings are being factored behind [`source/platform_support.py`](source/platform_support.py): the paste modifier (Ctrl+V on Windows/Linux, Cmd+V on macOS), a PID-lockfile single-instance guard for non-Windows (Windows keeps its named mutex), and per-OS autostart install/remove (Startup `.lnk`, macOS LaunchAgent plist, Linux `.desktop`) driven by the tray toggle — the non-Windows writes are covered by tests but unverified on a real host. The keyboard listener (pynput), tray (pystray), GUI (Tk) and the JSON data layer are already portable, and the data directory (`~/.txt_xpander`) is identical on all three OSes.
 
 Clipboard access is factored the same way, behind [`source/clipboard_support.py`](source/clipboard_support.py): Windows keeps the ctypes user32/kernel32 backend (text, HTML and RTF), while macOS uses `pbcopy`/`pbpaste` and Linux uses `wl-copy`/`wl-paste` under Wayland, falling back to `xclip` then `xsel`. The Win32 bindings now load only on Windows, so the app imports cleanly on macOS/Linux. The POSIX backend is plain-text only for now — rich-text snippets paste as their plain text and log the downgrade — and a desktop with none of those tools installed logs a warning rather than failing hard.
 
