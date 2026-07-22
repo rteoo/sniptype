@@ -395,6 +395,24 @@ class MainThreadModeHeadlessTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             gui.run_mainloop()
 
+    def test_stop_from_the_gui_thread_never_schedules_a_tcl_timer(self):
+        """Issue #53: ``stop()`` runs in a Cocoa frame (the tray's *Sair*).
+
+        ``root.after`` there is a Tcl call from outside any ENTER_PYTHON frame,
+        which clears ``_tkinter``'s ``tcl_tstate`` and aborts the mainloop on its
+        next timer. The teardown must go on the queue instead.
+        """
+        gui = GuiThread(main_thread=True)
+        root = mock.Mock()
+        with mock.patch.object(gt.tk, "Tk", return_value=root):
+            gui.adopt_main_thread()
+
+        gui.stop()
+
+        root.after.assert_not_called()
+        queued = [item[0] for item in list(gui._queue.queue)]
+        self.assertIn(gui._teardown, queued)
+
     def test_failed_adopt_leaves_no_thread_designated(self):
         """A designated thread with no root would make call() run inline on None."""
         gui = GuiThread(main_thread=True)
@@ -489,6 +507,22 @@ class MainThreadModeTkTests(unittest.TestCase):
         onto a pump they are themselves blocking."""
         self.assertEqual(self.gui.call(lambda _root: "inline", timeout=5), "inline")
 
+    def test_submit_from_the_gui_thread_queues_instead_of_running_inline(self):
+        """The macOS rule (#53): a tray callback is a *Cocoa* frame, and any Tcl
+        call made there clears ``tcl_tstate`` for the running mainloop, aborting
+        the process on its next timer. Only Python state may be touched, so the
+        work has to leave the Cocoa frame and run from the pump."""
+        order = []
+
+        def from_the_gui_thread():
+            self.gui.submit(lambda _root: order.append("queued work"))
+            order.append("submit returned")
+
+        self.gui.root.after(0, from_the_gui_thread)
+        self.gui.root.after(600, self.gui.stop)
+        self.gui.run_mainloop()
+        self.assertEqual(order, ["submit returned", "queued work"])
+
     def test_stop_from_a_worker_tears_the_root_down_and_ends_the_loop(self):
         holder = self._drive(lambda: "worker done")
         self.assertEqual(holder["result"], "worker done")
@@ -503,19 +537,24 @@ class MainThreadModeTkTests(unittest.TestCase):
         self.assertIsNone(self.gui.root)
 
     def test_stop_wakes_callers_whose_queued_work_will_never_run(self):
-        box = {}
-        done = threading.Event()
+        early_box, early_done = {}, threading.Event()
+        late_box, late_done = {}, threading.Event()
 
         def shutdown():
             # Queued from inside the loop: the pump drains synchronously on
             # entry, so an item put before run_mainloop would simply have run.
-            self.gui._queue.put((lambda _root: "never", box, done))
+            self.gui._queue.put((lambda _root: "in time", early_box, early_done))
             self.gui.stop()
+            self.gui._queue.put((lambda _root: "never", late_box, late_done))
 
         self.gui.root.after(0, shutdown)
         self.gui.run_mainloop()
-        self.assertTrue(done.is_set(), "stranded caller was never woken")
-        self.assertIsInstance(box.get("error"), RuntimeError)
+        # The teardown is queued, so work already in line still runs; only what
+        # lands behind it is stranded. Either way no caller is left blocked.
+        self.assertTrue(early_done.is_set(), "queued caller was never woken")
+        self.assertEqual(early_box.get("value"), "in time")
+        self.assertTrue(late_done.is_set(), "stranded caller was never woken")
+        self.assertIsInstance(late_box.get("error"), RuntimeError)
 
 
 def _raise(exc):
