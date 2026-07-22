@@ -233,12 +233,61 @@ def posix_clipboard_commands(environ=None):
     return None, None
 
 
-class PosixClipboard:
-    """Plain-text clipboard driven by the desktop's CLI tool.
+def _mac_html_document(fragment):
+    """Wrap an HTML fragment for the ``public.html`` pasteboard flavor.
 
-    ceiling: plain text only — HTML/RTF payloads are downgraded to their plain
-    text and logged. Bind a native pasteboard/portal API if rich paste is ever
-    needed off Windows.
+    NSPasteboard hands the bytes to the reading app as-is, so the charset has to
+    be declared in the document itself or accented text is decoded as Latin-1.
+    """
+    return (
+        "<html><head><meta charset=\"utf-8\"></head>"
+        f"<body>{fragment}</body></html>"
+    )
+
+
+def _applescript_data(type_code, data):
+    """Return an AppleScript ``«data ...»`` literal for raw bytes.
+
+    Hex keeps the generated script free of quoting, escaping and embedded
+    newline problems: only the chevrons themselves are non-ASCII.
+    """
+    return f"«data {type_code}{data.hex().upper()}»"
+
+
+def mac_rich_clipboard_script(payload):
+    """Return the AppleScript that puts ``payload``'s flavors on the pasteboard.
+
+    ``pbcopy`` can only carry plain text, so the rich write goes through
+    ``osascript``: a single ``set the clipboard to`` record with the UTF-8 text
+    plus the HTML and RTF flavors. Staying on subprocesses keeps macOS rich text
+    dependency-free — PyObjC's ``NSPasteboard`` would be the direct API but is a
+    new runtime dependency for one call site.
+    """
+    entries = [
+        f"«class utf8»:{_applescript_data('utf8', payload['text'].encode('utf-8'))}"
+    ]
+    html_fragment = payload.get("html")
+    if html_fragment:
+        document = _mac_html_document(html_fragment).encode("utf-8")
+        entries.append(f"«class HTML»:{_applescript_data('HTML', document)}")
+    rtf_document = payload.get("rtf")
+    if rtf_document:
+        # The four-char code is "RTF " — the trailing space is part of it.
+        entries.append(
+            f"«class RTF »:{_applescript_data('RTF ', rtf_document.encode('utf-8'))}"
+        )
+    return "set the clipboard to {" + ", ".join(entries) + "}"
+
+
+class PosixClipboard:
+    """Clipboard driven by the desktop's CLI tools.
+
+    Plain text goes through the copy tool (``pbcopy``/``wl-copy``/``xclip``).
+    On macOS a rich-text payload is written with ``osascript`` so HTML and RTF
+    survive; every other POSIX desktop downgrades to plain text with a log line.
+
+    ceiling: Linux rich text is still plain-only — wire a Wayland/X11 portal or
+    ``wl-copy --type`` fan-out if formatted paste is ever needed there.
     """
 
     def __init__(self, environ=None):
@@ -246,6 +295,7 @@ class PosixClipboard:
         self._copy_argv, self._paste_argv = posix_clipboard_commands(environ)
         self._warned_missing_tool = False
         self._warned_rich_text = False
+        self._warned_rich_failure = False
         if self._copy_argv is None:
             self._warn_missing_tool()
 
@@ -290,20 +340,76 @@ class PosixClipboard:
             return None
         return completed.stdout.decode("utf-8", errors="replace")
 
+    def _rich_text_command(self):
+        """Return the argv that writes rich text, or ``None`` on this desktop.
+
+        Resolved per call, like :meth:`_commands`: only rich pastes reach here,
+        so the lookup cost is irrelevant and a session outliving a broken PATH
+        still recovers without a restart.
+        """
+        if IS_MAC and shutil.which("osascript"):
+            return ["osascript", "-"]
+        return None
+
+    def _warn_rich_downgrade(self):
+        if self._warned_rich_text:
+            return
+        # Once per session: a daily-use rich snippet would otherwise write this
+        # line on every single paste.
+        self._warned_rich_text = True
+        _LOGGER.info(
+            "Texto formatado não é suportado nesta plataforma; "
+            "colando apenas o texto simples."
+        )
+
+    def _set_rich_content(self, rich_argv, payload):
+        """Write every flavor through ``osascript``; ``True`` on success."""
+        script = mac_rich_clipboard_script(payload)
+        try:
+            # stderr is captured here on purpose, unlike the plain copy path:
+            # osascript writes the AppleScript error there and exits, so there
+            # is no selection-owning daemon left holding the pipe open. It is
+            # the only diagnostic available when a pasteboard write fails.
+            completed = subprocess.run(
+                rich_argv,
+                input=script.encode("utf-8"),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                timeout=_POSIX_TIMEOUT,
+            )
+        except (OSError, subprocess.SubprocessError) as error:
+            self._warn_rich_failure(error)
+            return False
+        if completed.returncode != 0:
+            self._warn_rich_failure(
+                (completed.stderr or b"").decode("utf-8", errors="replace").strip()
+            )
+            return False
+        return True
+
+    def _warn_rich_failure(self, detail):
+        if self._warned_rich_failure:
+            return
+        self._warned_rich_failure = True
+        _LOGGER.warning(
+            f"Falha ao escrever texto formatado na área de transferência ({detail}); "
+            "colando apenas o texto simples."
+        )
+
     def set_content(self, value):
         copy_argv, _ = self._commands()
         if copy_argv is None:
             self._warn_missing_tool()
             return False
         payload = get_clipboard_payload(value)
-        if (payload.get("html") or payload.get("rtf")) and not self._warned_rich_text:
-            # Once per session: a daily-use rich snippet would otherwise write
-            # this line on every single paste.
-            self._warned_rich_text = True
-            _LOGGER.info(
-                "Texto formatado não é suportado nesta plataforma; "
-                "colando apenas o texto simples."
-            )
+        if payload.get("html") or payload.get("rtf"):
+            rich_argv = self._rich_text_command()
+            if rich_argv is None:
+                self._warn_rich_downgrade()
+            elif self._set_rich_content(rich_argv, payload):
+                return True
+            # A failed rich write leaves the previous clipboard untouched, so
+            # the plain-text copy below is still the right fallback.
         try:
             # Never capture the copy tool's output: xclip and wl-copy fork a
             # daemon that owns the selection until it is replaced, and that child
