@@ -52,6 +52,9 @@ class RunStartupTests(unittest.TestCase):
                     tx.platform_support, "tk_runs_on_main_thread", return_value=main_thread
                 ), \
                 mock.patch.object(
+                    tx.platform_support, "hide_dock_icon", return_value=True
+                ), \
+                mock.patch.object(
                     tx.platform_support, "tray_icon_options", return_value=dict(options or {})
                 ):
             app.run()
@@ -79,6 +82,56 @@ class RunStartupTests(unittest.TestCase):
         icon.run.assert_not_called()
         app.gui.run_mainloop.assert_called_once_with()
         self.assertEqual(icon_cls.call_args.kwargs, {"darwin_nsapplication": shared})
+
+    def test_macos_drops_the_dock_icon_after_the_root_exists(self):
+        """Order is the whole point: Tk sets the Regular policy as it starts.
+
+        Reversing the policy before ``tk.Tk()`` would simply be overwritten,
+        and the menu-bar-only bundle would still show a Dock icon.
+        """
+        order = []
+        app = make_startup_app()
+        app.gui.adopt_main_thread.side_effect = lambda: order.append("root") or True
+        with mock.patch.object(tx.pystray, "Icon", return_value=mock.Mock()), \
+                mock.patch.object(
+                    tx.platform_support, "tk_runs_on_main_thread", return_value=True
+                ), \
+                mock.patch.object(
+                    tx.platform_support,
+                    "hide_dock_icon",
+                    side_effect=lambda: order.append("dock") or True,
+                ), \
+                mock.patch.object(tx.platform_support, "tray_icon_options", return_value={}):
+            app.run()
+        self.assertEqual(order, ["root", "dock"])
+        app.logger.warning.assert_not_called()
+
+    def test_windows_never_touches_the_activation_policy(self):
+        app = make_startup_app()
+        with mock.patch.object(tx.pystray, "Icon", return_value=mock.Mock()), \
+                mock.patch.object(
+                    tx.platform_support, "tk_runs_on_main_thread", return_value=False
+                ), \
+                mock.patch.object(tx.platform_support, "hide_dock_icon") as hide, \
+                mock.patch.object(tx.platform_support, "tray_icon_options", return_value={}):
+            app.run()
+        hide.assert_not_called()
+
+    def test_a_dock_icon_that_will_not_hide_only_warns(self):
+        """Cosmetic failure: the tray must still come up."""
+        app = make_startup_app()
+        icon = mock.Mock()
+        with mock.patch.object(tx.pystray, "Icon", return_value=icon), \
+                mock.patch.object(
+                    tx.platform_support, "tk_runs_on_main_thread", return_value=True
+                ), \
+                mock.patch.object(
+                    tx.platform_support, "hide_dock_icon", return_value=False
+                ), \
+                mock.patch.object(tx.platform_support, "tray_icon_options", return_value={}):
+            app.run()
+        app.logger.warning.assert_called_once()
+        icon.run_detached.assert_called_once_with(setup=app.on_tray_ready)
 
     def test_the_root_exists_before_the_nsapplication_is_read(self):
         """``sharedApplication()`` creates a bare NSApplication when none exists.
