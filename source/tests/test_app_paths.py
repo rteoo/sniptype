@@ -72,6 +72,85 @@ class MigrationHelperTests(unittest.TestCase):
         breadcrumb = os.path.join(self.data_dir, app_paths.MIGRATION_BREADCRUMB)
         self.assertTrue(os.path.exists(breadcrumb))
 
+    def test_needs_migration_false_when_legacy_missing(self):
+        # No legacy file to migrate from: nothing to do, even if dest is absent.
+        missing_legacy = os.path.join(self.tmp, "does-not-exist", "snippets.json")
+        self.assertFalse(app_paths.needs_migration(missing_legacy, self.data_dir))
+
+    def test_migrate_breadcrumb_records_legacy_absolute_path(self):
+        app_paths.migrate_snippets(self.legacy, self.data_dir)
+        breadcrumb = os.path.join(self.data_dir, app_paths.MIGRATION_BREADCRUMB)
+        with open(breadcrumb, encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), os.path.abspath(self.legacy) + "\n")
+
+    def test_migrate_creates_data_dir_when_absent(self):
+        # data_dir does not exist yet; migrate_snippets must create it.
+        self.assertFalse(os.path.isdir(self.data_dir))
+        dest = app_paths.migrate_snippets(self.legacy, self.data_dir)
+        self.assertTrue(os.path.isdir(self.data_dir))
+        self.assertEqual(dest, app_paths.get_snippets_path(self.data_dir))
+
+
+class EnvOverrideAdversarialTests(unittest.TestCase):
+    """TXT_XPANDER_HOME edge cases: empty, relative, tilde, unicode, a file."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self._saved = os.environ.get(app_paths.ENV_HOME)
+
+    def tearDown(self):
+        if self._saved is None:
+            os.environ.pop(app_paths.ENV_HOME, None)
+        else:
+            os.environ[app_paths.ENV_HOME] = self._saved
+
+    def test_empty_env_falls_back_to_default(self):
+        # An empty string is falsy: the override must not win over the default.
+        os.environ[app_paths.ENV_HOME] = ""
+        expected = os.path.join(os.path.expanduser("~"), app_paths.DIR_NAME)
+        self.assertEqual(app_paths.get_data_dir(), expected)
+
+    def test_relative_env_is_made_absolute(self):
+        os.environ[app_paths.ENV_HOME] = os.path.join("relative", "data")
+        result = app_paths.get_data_dir()
+        self.assertTrue(os.path.isabs(result))
+        self.assertTrue(result.endswith(os.path.join("relative", "data")))
+
+    def test_tilde_env_is_expanded(self):
+        os.environ[app_paths.ENV_HOME] = os.path.join("~", "xp_home_test")
+        result = app_paths.get_data_dir()
+        self.assertNotIn("~", result)
+        self.assertEqual(
+            result, os.path.abspath(os.path.join(os.path.expanduser("~"), "xp_home_test"))
+        )
+
+    def test_unicode_and_spaces_env_is_usable(self):
+        fancy = os.path.join(self.tmp, "Área de Trabalho ☂")
+        os.environ[app_paths.ENV_HOME] = fancy
+        created = app_paths.ensure_data_dir()
+        self.assertTrue(os.path.isdir(created))
+        # The resolved layout paths must be writable under the fancy directory.
+        snippets = app_paths.get_snippets_path()
+        with open(snippets, "w", encoding="utf-8") as handle:
+            handle.write("{}")
+        self.assertTrue(os.path.exists(snippets))
+
+    def test_deep_nonexistent_env_is_created(self):
+        deep = os.path.join(self.tmp, "a", "b", "c", "d")
+        os.environ[app_paths.ENV_HOME] = deep
+        app_paths.ensure_data_dir()
+        self.assertTrue(os.path.isdir(deep))
+
+    def test_ensure_data_dir_raises_when_target_is_a_file(self):
+        # Pointed at a regular file, ensure_data_dir must fail loudly, not silently
+        # treat the file as a directory.
+        as_file = os.path.join(self.tmp, "iam-a-file")
+        with open(as_file, "w", encoding="utf-8") as handle:
+            handle.write("x")
+        os.environ[app_paths.ENV_HOME] = as_file
+        with self.assertRaises(OSError):
+            app_paths.ensure_data_dir()
+
 
 if __name__ == "__main__":
     unittest.main()

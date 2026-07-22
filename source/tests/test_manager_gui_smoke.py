@@ -445,76 +445,10 @@ class ModalDialogSerializationTests(unittest.TestCase):
         self.assertEqual(self.results["later"], {"later": "two"})
 
 
-@unittest.skipUnless(TK_AVAILABLE, TK_SKIP_REASON)
-class GuiThreadTests(unittest.TestCase):
-    def setUp(self):
-        self.gui = GuiThread()
-        self.gui.ensure_started()
-
-    def tearDown(self):
-        self.gui.stop()
-
-    def test_call_runs_on_gui_thread_and_returns_value(self):
-        caller_thread = threading.current_thread()
-        seen = self.gui.call(lambda root: threading.current_thread(), timeout=10)
-        self.assertIsNot(seen, caller_thread)
-
-    def test_call_propagates_exceptions(self):
-        def boom(_root):
-            raise ValueError("nope")
-
-        with self.assertRaises(ValueError):
-            self.gui.call(boom, timeout=10)
-
-    def test_call_from_gui_thread_runs_inline(self):
-        def outer(_root):
-            return self.gui.call(lambda _r: "inner", timeout=10)
-
-        self.assertEqual(self.gui.call(outer, timeout=10), "inner")
-
-    def test_submit_does_not_block_and_still_runs(self):
-        done = threading.Event()
-        self.gui.submit(lambda _root: done.set())
-        self.assertTrue(done.wait(10))
-
-    def test_submit_swallows_errors(self):
-        def boom(_root):
-            raise RuntimeError("ignored")
-
-        self.gui.submit(boom)
-        # The thread must survive a failing task.
-        self.assertEqual(self.gui.call(lambda _root: "alive", timeout=10), "alive")
-
-    def test_stop_wakes_callers_whose_work_never_ran(self):
-        """Regression: a call still queued when the loop exits must fail its
-        caller instead of leaving it blocked forever on ``done``."""
-        self.gui.stop()
-
-        # Inject a stranded item the way call() would have queued it.
-        box = {}
-        done = threading.Event()
-        self.gui._queue.put((lambda _root: "never runs", box, done))
-
-        self.gui.stop()
-        self.assertTrue(done.is_set(), "stranded caller was never woken")
-        self.assertIsInstance(box.get("error"), RuntimeError)
-
-    def test_abnormal_loop_exit_fails_stranded_callers(self):
-        """Regression: a GUI loop that dies without stop() must also wake
-        queued callers — a stranded one blocks forever in call(timeout=None)
-        while holding the dialog lock, refusing every later dialog."""
-        gui = GuiThread(logger=mock.Mock())
-        box = {}
-        done = threading.Event()
-        gui._queue.put((lambda _root: "never runs", box, done))
-
-        with mock.patch.object(gui, "_pump", side_effect=RuntimeError("boom")):
-            gui.ensure_started()
-            gui._thread.join(10)
-
-        self.assertFalse(gui._thread.is_alive())
-        self.assertTrue(done.is_set(), "stranded caller was never woken")
-        self.assertIsInstance(box.get("error"), RuntimeError)
+# GuiThread's own marshaling contract (call/submit/stop, exceptions, reentrancy,
+# stranded callers) is covered directly and adversarially in test_gui_thread.py.
+# This file keeps only the manager-GUI construction and dialog-serialization
+# smoke tests that genuinely exercise TextExpander widgets on the shared root.
 
 
 if __name__ == "__main__":

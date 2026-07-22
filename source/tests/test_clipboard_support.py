@@ -1,6 +1,8 @@
+import contextlib
 import logging
 import re
 import subprocess
+import types
 import unittest
 from unittest import mock
 
@@ -44,6 +46,38 @@ class NormalizeClipboardNewlinesTests(unittest.TestCase):
         self.assertEqual(
             clipboard_support.normalize_clipboard_newlines("a\rb"), "a\r\nb"
         )
+
+    def test_empty_string_is_unchanged(self):
+        self.assertEqual("", clipboard_support.normalize_clipboard_newlines(""))
+
+    def test_bare_newline_characters_become_crlf(self):
+        self.assertEqual("\r\n", clipboard_support.normalize_clipboard_newlines("\n"))
+        self.assertEqual("\r\n", clipboard_support.normalize_clipboard_newlines("\r"))
+        self.assertEqual(
+            "\r\n", clipboard_support.normalize_clipboard_newlines("\r\n")
+        )
+
+    def test_cr_followed_by_crlf_expands_to_two_stable_breaks(self):
+        # "\r\r\n" is a bare CR then a CRLF: two line breaks, normalized to two
+        # CRLF breaks. It must be a fixed point, never grow on a second pass.
+        result = clipboard_support.normalize_clipboard_newlines("\r\r\n")
+        self.assertEqual("\r\n\r\n", result)
+        self.assertEqual(result, clipboard_support.normalize_clipboard_newlines(result))
+
+    def test_lf_then_cr_expands_to_two_stable_breaks(self):
+        result = clipboard_support.normalize_clipboard_newlines("\n\r")
+        self.assertEqual("\r\n\r\n", result)
+        self.assertEqual(result, clipboard_support.normalize_clipboard_newlines(result))
+
+    def test_hostile_mixes_are_all_idempotent(self):
+        # The load-bearing property: whatever the input, a second normalization
+        # pass must not change the result (no CRLF doubling).
+        for hostile in ["", "\n", "\r", "\r\n", "\r\r\n", "\n\r", "\n\n",
+                        "a\nb\r\nc\rd", "\r\n\r\n", "line\r\r\rend"]:
+            once = clipboard_support.normalize_clipboard_newlines(hostile)
+            twice = clipboard_support.normalize_clipboard_newlines(once)
+            self.assertEqual(once, twice, f"not idempotent for {hostile!r}")
+            self.assertNotIn("\r\r", once, f"produced doubled CR for {hostile!r}")
 
 
 class HtmlClipboardBytesTests(unittest.TestCase):
@@ -264,6 +298,199 @@ class PosixRichTextDowngradeTests(unittest.TestCase):
         with mock.patch.object(clipboard_support.subprocess, "run", return_value=completed), \
                 self.assertNoLogs(clipboard_support._LOGGER, level=logging.INFO):
             self.assertTrue(clipboard.set_content(rich_value))
+
+
+@contextlib.contextmanager
+def _win32_backend():
+    """Patch the ctypes Win32 bindings with success-configured mocks.
+
+    Every clipboard test drives ``WindowsClipboard`` through these mocks so no
+    real user32/kernel32 call ever runs and the real clipboard is never touched.
+    ``ctypes.memmove``/``wstring_at`` are stubbed because the mocked GlobalLock
+    hands back a plain int rather than a writable address. Individual tests
+    override single return values to force a failure at one step.
+    """
+    with mock.patch.object(clipboard_support, "USER32") as user32, \
+            mock.patch.object(clipboard_support, "KERNEL32") as kernel32, \
+            mock.patch.object(clipboard_support.ctypes, "memmove") as memmove, \
+            mock.patch.object(
+                clipboard_support.ctypes, "wstring_at", return_value="conteúdo"
+            ) as wstring_at, \
+            mock.patch.object(clipboard_support.time, "sleep"):
+        user32.OpenClipboard.return_value = 1
+        user32.CloseClipboard.return_value = 1
+        user32.EmptyClipboard.return_value = 1
+        user32.SetClipboardData.return_value = 1
+        user32.IsClipboardFormatAvailable.return_value = 1
+        user32.GetClipboardData.return_value = 0xABC
+        kernel32.GlobalAlloc.return_value = 0x1000
+        kernel32.GlobalLock.return_value = 0x2000
+        kernel32.GlobalUnlock.return_value = 1
+        kernel32.GlobalFree.return_value = 0
+        yield types.SimpleNamespace(
+            user32=user32,
+            kernel32=kernel32,
+            memmove=memmove,
+            wstring_at=wstring_at,
+        )
+
+
+_RICH_VALUE = {
+    "__kind__": "rich_text",
+    "text": "negrito",
+    "spans": [{"tag": "bold", "start": 0, "end": 7}],
+    "html": "<div><strong>negrito</strong></div>",
+    "rtf": r"{\rtf1\ansi negrito}",
+}
+
+
+@unittest.skipUnless(clipboard_support.IS_WINDOWS, "needs the Win32 backend")
+class WindowsClipboardSetContentTests(unittest.TestCase):
+    def test_plain_text_success_writes_utf16_and_closes(self):
+        with _win32_backend() as m:
+            clipboard = clipboard_support.WindowsClipboard()
+            self.assertTrue(clipboard.set_content("olá mundo"))
+
+        m.user32.EmptyClipboard.assert_called_once()
+        self.assertEqual(1, m.user32.SetClipboardData.call_count)
+        m.user32.CloseClipboard.assert_called_once()
+        buffer = m.memmove.call_args.args[1]
+        self.assertEqual("olá mundo\0", buffer.decode("utf-16-le"))
+
+    def test_emoji_payload_survives_utf16_encoding(self):
+        with _win32_backend() as m:
+            clipboard = clipboard_support.WindowsClipboard()
+            self.assertTrue(clipboard.set_content("café 🎉"))
+
+        buffer = m.memmove.call_args.args[1]
+        self.assertEqual("café 🎉\0", buffer.decode("utf-16-le"))
+
+    def test_embedded_null_byte_is_encoded_verbatim(self):
+        # Null-byte hostility: a snippet carrying an interior NUL must not crash
+        # the encoder. It is written faithfully (the truncation risk is on the
+        # read side via wstring_at, not here).
+        with _win32_backend() as m:
+            clipboard = clipboard_support.WindowsClipboard()
+            self.assertTrue(clipboard.set_content("a\0b"))
+
+        buffer = m.memmove.call_args.args[1]
+        self.assertEqual("a\0b\0", buffer.decode("utf-16-le"))
+
+    def test_open_failure_returns_false_and_never_closes(self):
+        with _win32_backend() as m:
+            m.user32.OpenClipboard.return_value = 0
+            clipboard = clipboard_support.WindowsClipboard()
+            self.assertFalse(clipboard.set_content("x"))
+
+        self.assertEqual(10, m.user32.OpenClipboard.call_count)  # retried
+        m.user32.CloseClipboard.assert_not_called()
+
+    def test_empty_clipboard_failure_still_closes(self):
+        with _win32_backend() as m:
+            m.user32.EmptyClipboard.return_value = 0
+            clipboard = clipboard_support.WindowsClipboard()
+            self.assertFalse(clipboard.set_content("x"))
+
+        m.user32.SetClipboardData.assert_not_called()
+        m.user32.CloseClipboard.assert_called_once()
+
+    def test_global_alloc_failure_closes_without_freeing(self):
+        with _win32_backend() as m:
+            m.kernel32.GlobalAlloc.return_value = 0
+            clipboard = clipboard_support.WindowsClipboard()
+            self.assertFalse(clipboard.set_content("x"))
+
+        m.kernel32.GlobalFree.assert_not_called()
+        m.user32.SetClipboardData.assert_not_called()
+        m.user32.CloseClipboard.assert_called_once()
+
+    def test_global_lock_failure_frees_handle_and_closes(self):
+        with _win32_backend() as m:
+            m.kernel32.GlobalLock.return_value = 0
+            clipboard = clipboard_support.WindowsClipboard()
+            self.assertFalse(clipboard.set_content("x"))
+
+        m.kernel32.GlobalFree.assert_called_once_with(0x1000)
+        m.user32.CloseClipboard.assert_called_once()
+
+    def test_set_clipboard_data_failure_frees_handle_and_closes(self):
+        with _win32_backend() as m:
+            m.user32.SetClipboardData.return_value = 0
+            clipboard = clipboard_support.WindowsClipboard()
+            self.assertFalse(clipboard.set_content("x"))
+
+        m.kernel32.GlobalFree.assert_called_once_with(0x1000)
+        m.user32.CloseClipboard.assert_called_once()
+
+    def test_rich_text_writes_unicode_html_and_rtf(self):
+        with _win32_backend() as m:
+            clipboard = clipboard_support.WindowsClipboard()
+            self.assertTrue(clipboard.set_content(_RICH_VALUE))
+
+        formats = [call.args[0] for call in m.user32.SetClipboardData.call_args_list]
+        self.assertEqual(3, len(formats))
+        self.assertIn(clipboard_support.CF_UNICODETEXT, formats)
+        self.assertIn(clipboard_support.CF_HTML, formats)
+        self.assertIn(clipboard_support.CF_RTF, formats)
+        buffers = [call.args[1] for call in m.memmove.call_args_list]
+        self.assertTrue(any(b"Version:0.9" in buffer for buffer in buffers))
+        m.user32.CloseClipboard.assert_called_once()
+
+    def test_html_write_failure_mid_sequence_frees_and_closes(self):
+        def set_side_effect(clipboard_format, handle):
+            return 0 if clipboard_format == clipboard_support.CF_HTML else 1
+
+        with _win32_backend() as m:
+            m.user32.SetClipboardData.side_effect = set_side_effect
+            clipboard = clipboard_support.WindowsClipboard()
+            self.assertFalse(clipboard.set_content(_RICH_VALUE))
+
+        # The unicode write consumed its handle; the failed HTML handle is freed.
+        m.kernel32.GlobalFree.assert_called_once_with(0x1000)
+        m.user32.CloseClipboard.assert_called_once()
+
+
+@unittest.skipUnless(clipboard_support.IS_WINDOWS, "needs the Win32 backend")
+class WindowsClipboardGetTextTests(unittest.TestCase):
+    def test_success_returns_text_and_closes(self):
+        with _win32_backend() as m:
+            clipboard = clipboard_support.WindowsClipboard()
+            self.assertEqual("conteúdo", clipboard.get_text())
+
+        m.kernel32.GlobalUnlock.assert_called_once()
+        m.user32.CloseClipboard.assert_called_once()
+
+    def test_open_failure_returns_none_without_closing(self):
+        with _win32_backend() as m:
+            m.user32.OpenClipboard.return_value = 0
+            clipboard = clipboard_support.WindowsClipboard()
+            self.assertIsNone(clipboard.get_text())
+
+        m.user32.CloseClipboard.assert_not_called()
+
+    def test_format_unavailable_returns_none_but_closes(self):
+        with _win32_backend() as m:
+            m.user32.IsClipboardFormatAvailable.return_value = 0
+            clipboard = clipboard_support.WindowsClipboard()
+            self.assertIsNone(clipboard.get_text())
+
+        m.user32.CloseClipboard.assert_called_once()
+
+    def test_null_data_handle_returns_none_but_closes(self):
+        with _win32_backend() as m:
+            m.user32.GetClipboardData.return_value = 0
+            clipboard = clipboard_support.WindowsClipboard()
+            self.assertIsNone(clipboard.get_text())
+
+        m.user32.CloseClipboard.assert_called_once()
+
+    def test_lock_failure_returns_none_but_closes(self):
+        with _win32_backend() as m:
+            m.kernel32.GlobalLock.return_value = 0
+            clipboard = clipboard_support.WindowsClipboard()
+            self.assertIsNone(clipboard.get_text())
+
+        m.user32.CloseClipboard.assert_called_once()
 
 
 if __name__ == "__main__":

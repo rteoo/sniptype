@@ -344,6 +344,12 @@ class AcceptSetTests(unittest.TestCase):
         bundle = build({}, {"xhj": "not a dict"})
         self.assertEqual(bundle["dynamic"], [])
 
+    def test_entry_without_a_provider_is_skipped_with_warning(self):
+        logger = RecordingLogger()
+        bundle = build({}, {"xhj": {"category": "datetime", "description": "x"}}, logger=logger)
+        self.assertEqual(bundle["dynamic"], [])
+        self.assertTrue(any("provider" in w.lower() for w in logger.warnings))
+
     def test_unknown_provider_skipped_with_warning(self):
         logger = RecordingLogger()
         bundle = build({}, {"xhj": {"provider": "nope"}}, logger=logger)
@@ -721,6 +727,56 @@ class ExportBundleTests(unittest.TestCase):
 
     def test_missing_mirror_dir_does_not_raise(self):
         self.assertTrue(self.export({"xa": "A"}, mirror_dir=os.path.join(self.tmp.name, "nope")))
+
+    def test_export_dir_that_is_a_file_has_no_side_effects(self):
+        target = os.path.join(self.tmp.name, "afile")
+        with open(target, "w", encoding="utf-8") as handle:
+            handle.write("x")
+        self.assertFalse(self.export({"xa": "A"}, export_dir=target))
+        # The file is untouched and no bundle/state was created beside it.
+        with open(target, "r", encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), "x")
+        self.assertFalse(os.path.exists(self.state_path))
+
+    def test_oversized_bundle_warns_but_still_writes(self):
+        original = se.SIZE_WARN_BYTES
+        se.SIZE_WARN_BYTES = 1  # any real bundle exceeds one byte
+        self.addCleanup(lambda: setattr(se, "SIZE_WARN_BYTES", original))
+        self.assertTrue(self.export({"xa": "A"}))
+        self.assertTrue(os.path.exists(self.bundle_path))
+        self.assertTrue(any("grande" in w for w in self.logger.warnings))
+
+    def test_state_file_that_is_a_json_list_forces_an_export(self):
+        # Valid JSON but not the expected object: _load_state must treat it as
+        # absent and export unconditionally rather than crash on .get().
+        self.export({"xa": "A"})
+        with open(self.state_path, "w", encoding="utf-8") as handle:
+            handle.write("[1, 2, 3]")
+        self.assertTrue(self.export({"xa": "A"}))
+
+    def test_unicode_and_rich_text_survive_a_file_round_trip(self):
+        static = {
+            "xacento": "Ação, coração e não",
+            "xrt": {
+                "__kind__": "rich_text",
+                "text": "Café ☕ com açúcar",
+                "spans": [],
+                "html": "<b>Café</b>",
+                "rtf": "{}",
+            },
+        }
+        self.assertTrue(self.export(static))
+        bundle = self.read_bundle()
+        self.assertEqual(entry_for(bundle, "xacento")["text"], "Ação, coração e não")
+        rt = entry_for(bundle, "xrt")
+        self.assertEqual(rt["kind"], "rich_text")
+        self.assertEqual(rt["text"], "Café ☕ com açúcar")
+        self.assertEqual(rt["html"], "<b>Café</b>")
+        # The bytes on disk are real UTF-8, not \u-escaped ASCII (ensure_ascii=False).
+        with open(self.bundle_path, "rb") as handle:
+            raw = handle.read()
+        self.assertIn("coração".encode("utf-8"), raw)
+        self.assertNotIn(b"\\u00e7", raw)
 
 
 class CallSiteTests(unittest.TestCase):
