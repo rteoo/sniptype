@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import sys
 import tempfile
 import threading
@@ -16,8 +17,12 @@ from app_module import txt_xpander as tx  # .pyw is not importable off Windows
 from pynput.keyboard import Key, KeyCode
 
 
-def make_app(base_dir, snippets):
-    """Construct a TextExpander with keyboard/task side effects mocked out."""
+def make_app(base_dir, snippets, stub_inserter=True):
+    """Construct a TextExpander with keyboard/task side effects mocked out.
+
+    ``stub_inserter=False`` keeps the real ``TextInserter`` so its wiring (the
+    paste delays) can be inspected; it is never driven in that state.
+    """
     with open(os.path.join(base_dir, "snippets.json"), "w", encoding="utf-8") as handle:
         json.dump(snippets, handle)
     previous_home = os.environ.get("TXT_XPANDER_HOME")
@@ -33,7 +38,8 @@ def make_app(base_dir, snippets):
             os.environ["TXT_XPANDER_HOME"] = previous_home
     app.keyboard_controller = mock.Mock()
     app.task_runner = mock.Mock()
-    app.text_inserter = mock.Mock()
+    if stub_inserter:
+        app.text_inserter = mock.Mock()
     return app
 
 
@@ -414,6 +420,52 @@ class FormRoutingTests(unittest.TestCase):
             self.app._run_expansion("xplain")
         fast.assert_called_once_with("xplain")
         slow.assert_not_called()
+
+
+class InsertionTimingWiringTests(unittest.TestCase):
+    """settings.json reaches the erase loop and the inserter (issue #27)."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _app(self, settings):
+        with open(os.path.join(self.tmp, "settings.json"), "w", encoding="utf-8") as handle:
+            json.dump(settings, handle)
+        return make_app(self.tmp, {"xhi": "hello"}, stub_inserter=False)
+
+    def test_defaults_come_from_the_running_platform(self):
+        import platform_support
+
+        defaults = platform_support.default_insertion_timings()
+        app = self._app({})
+        self.assertEqual(defaults["erase_key_delay"], app.erase_key_delay)
+        self.assertEqual(defaults["clipboard_settle_delay"], app.text_inserter.settle_delay)
+        self.assertEqual(defaults["paste_restore_delay"], app.text_inserter.restore_delay)
+
+    def test_overrides_reach_both_the_erase_loop_and_the_inserter(self):
+        app = self._app({
+            "erase_key_delay": 0.02,
+            "clipboard_settle_delay": 0.07,
+            "paste_restore_delay": 0.2,
+        })
+        self.assertEqual(0.02, app.erase_key_delay)
+        self.assertEqual(0.07, app.text_inserter.settle_delay)
+        self.assertEqual(0.2, app.text_inserter.restore_delay)
+
+    def test_a_bad_override_is_logged_and_the_default_survives(self):
+        import platform_support
+
+        default = platform_support.default_insertion_timings()["erase_key_delay"]
+        logger = mock.Mock()
+        with mock.patch.object(tx, "AppLogger", return_value=logger):
+            app = self._app({"erase_key_delay": 10})
+        self.assertEqual(default, app.erase_key_delay)
+        self.assertTrue(
+            any("erase_key_delay" in str(call) for call in logger.warning.call_args_list)
+        )
 
 
 if __name__ == "__main__":

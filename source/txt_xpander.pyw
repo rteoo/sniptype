@@ -76,16 +76,20 @@ from app_paths import (
 )
 from settings_support import load_settings
 from validation_support import validate_trigger
+import macos_permissions
 from platform_support import (
     APP_NAME,
     AUTOSTART_ABSENT,
     AUTOSTART_CURRENT,
     AUTOSTART_STALE,
+    IS_MAC,
     IS_WINDOWS,
     acquire_lockfile,
     autostart_target_exists,
     classify_autostart,
     install_autostart,
+    insertion_timings,
+    invalid_timing_overrides,
     read_autostart_command,
     release_lockfile,
     remove_autostart,
@@ -213,6 +217,11 @@ class TextExpander:
         # of it, marshaled onto its thread. Started in run().
         self.gui = GuiThread(logger=self.logger)
         self.manager_window = None
+        self.macos_permission_window = None
+        # Cached macOS TCC probe. Like the autostart cache, the tray menu only
+        # ever reads this: pystray re-evaluates `visible=` on every render and
+        # the probe is a TCC round-trip. Empty (all unknown) off macOS.
+        self._macos_permission_status = {}
         # List-rebuild callbacks registered by the manager tabs, replayed after
         # a restore/import swaps the whole library out from under them.
         self._manager_refreshers = []
@@ -224,9 +233,6 @@ class TextExpander:
         # PowerShell round-trip on Windows and pystray re-evaluates `checked=`
         # on every menu render, so the menu only ever reads this.
         self._autostart_state = AUTOSTART_ABSENT
-        self.text_inserter = TextInserter(
-            self.keyboard_controller, logger=self.logger, notify=self.notify_error
-        )
         self.notification_timestamps = {}
         self.notification_history = []
         self.pending_notifications = []
@@ -247,7 +253,23 @@ class TextExpander:
         # Opt-in: expand only after a terminator (space/punctuation). Default off
         # to preserve the existing expand-on-last-character muscle memory.
         self.terminator_mode = bool(self.settings.get("terminator_mode", False))
+        # Clipboard/erase delays: per-OS defaults, overridable per key from
+        # settings.json. Resolved once — they are read on the listener thread.
+        timings = insertion_timings(self.settings)
+        self.erase_key_delay = timings["erase_key_delay"]
+        self.text_inserter = TextInserter(
+            self.keyboard_controller,
+            logger=self.logger,
+            settle_delay=timings["clipboard_settle_delay"],
+            restore_delay=timings["paste_restore_delay"],
+            notify=self.notify_error,
+        )
         configure_logging(self.logs_dir)
+        for key in invalid_timing_overrides(self.settings):
+            self.logger.warning(
+                f"settings.json: valor inválido para '{key}'; usando o padrão "
+                f"da plataforma ({timings[key]}s)."
+            )
         self.migrate_legacy_data()
         self.ensure_seed_snippets_file(snippets_file)
         self.logger.info(f"➡ Diretório de dados: {self.data_dir}")
@@ -1280,6 +1302,9 @@ class TextExpander:
         icon.visible = True
         self.task_runner.start(self.notify_launch_ready, name="startup-notify")
         self.task_runner.start(self.resolve_autostart_state, name="autostart-state")
+        # After the icon exists, so the denied state can be notified rather than
+        # queued, and the window opens over an app that is already up.
+        self.task_runner.start(self.resolve_macos_permissions, name="macos-permissions")
 
     def notify_launch_ready(self, icon=None):
         if icon is not None:
@@ -1356,19 +1381,40 @@ class TextExpander:
 
     def _dispatch_expansion(self, trigger, erase_length, append_text=""):
         """Erase the typed trigger and run the expansion on a worker thread."""
+        if self._secure_input_blocks_expansion():
+            self.typed_text = ""
+            return
         self._erase_chars(erase_length)
         self.typed_text = ""
         self.task_runner.start(self._run_expansion, trigger, append_text, name="expand")
 
+    def _secure_input_blocks_expansion(self):
+        """True when macOS Secure Keyboard Entry is swallowing synthesized input.
+
+        Checked before the erase, not after: while secure input is on the system
+        drops the backspaces and the Cmd+V alike, so the only clean outcome is to
+        leave the trigger exactly as the user typed it and say why. Always False
+        off macOS.
+        """
+        if not IS_MAC or not macos_permissions.secure_input_enabled():
+            return False
+        self.logger.info(macos_permissions.SECURE_INPUT_MESSAGE)
+        self.notify(
+            macos_permissions.SECURE_INPUT_MESSAGE,
+            key="secure-input",
+            cooldown_seconds=60,
+        )
+        return True
+
     def _erase_chars(self, count):
         """Backspace over ``count`` characters on the listener thread."""
-        # ceiling: 10 ms sleep per char keeps the erase reliable across apps; with
+        # ceiling: the per-char sleep keeps the erase reliable across apps; with
         # expansion now off-thread this only adds latency proportional to trigger
         # length, not to network work (audit 2.6).
         for _ in range(count):
             self.keyboard_controller.press(Key.backspace)
             self.keyboard_controller.release(Key.backspace)
-            time.sleep(0.01)
+            time.sleep(self.erase_key_delay)
 
     def _run_expansion(self, trigger, append_text=""):
         """Worker entry point: produce and insert the expansion for a trigger.
@@ -3040,6 +3086,216 @@ class TextExpander:
         )
         return AUTOSTART_CURRENT
 
+    # =====================================================================
+    # MACOS PERMISSIONS (TCC)
+    # =====================================================================
+
+    def macos_permissions_pending(self, item=None):
+        """Menu state for the permission entry: a cache read, never a probe."""
+        return bool(macos_permissions.denied_permissions(self._macos_permission_status))
+
+    def resolve_macos_permissions(self):
+        """Probe the macOS grants once at startup and onboard when one is missing.
+
+        Worker-thread only. This is the app's only chance to notice: pynput's
+        darwin backend does not raise when untrusted, it just never delivers a
+        key, so without this probe a denied Mac looks like an app that runs and
+        silently does nothing (issue #24 field notes).
+        """
+        if not IS_MAC:
+            return
+
+        try:
+            status = macos_permissions.check_permissions()
+        except Exception as e:
+            # Broad on purpose: task_runner threads have no wrapper, and an
+            # escape here would die invisibly under pythonw.
+            self.logger.warning(f"Falha ao verificar permissões do macOS: {e}")
+            return
+
+        self._macos_permission_status = status
+        self.logger.info(f"Permissões do macOS: {macos_permissions.describe_status(status)}")
+
+        unknown = macos_permissions.unknown_permissions(status)
+        if unknown:
+            names = ", ".join(macos_permissions.PERMISSION_LABELS[name] for name in unknown)
+            # Not a prompt: a grant we cannot read is a state we cannot tell the
+            # user to fix, so it is logged and the app carries on.
+            self.logger.warning(f"Permissões do macOS não verificáveis: {names}")
+
+        if not macos_permissions.needs_onboarding(status):
+            self.logger.info("Permissões do macOS concedidas.")
+            return
+
+        denied = ", ".join(
+            macos_permissions.PERMISSION_LABELS[name]
+            for name in macos_permissions.denied_permissions(status)
+        )
+        self.logger.error(f"Permissões do macOS ausentes: {denied}. A expansão não vai funcionar.")
+        self.notify_error(
+            macos_permissions.build_tray_message(status),
+            key="macos-permissions",
+            cooldown_seconds=60,
+        )
+        self.refresh_tray_menu()
+        self.open_macos_permission_window()
+
+    def tray_macos_permissions(self, icon, item):
+        """Tray action: re-open the permission window."""
+        self.open_macos_permission_window()
+
+    def open_macos_permission_window(self):
+        """Show the permission window on the GUI thread. Never blocks the caller."""
+        try:
+            self.gui.submit(self._show_macos_permission_window)
+        except Exception as e:
+            self.logger.error(f"Erro ao abrir a janela de permissões do macOS: {e}")
+
+    def _show_macos_permission_window(self, tk_root):
+        """Build the permission window, or raise the one already open. GUI thread only.
+
+        Deliberately modeless: unlike an expansion dialog nothing waits on the
+        answer, and the user has to leave the app entirely (System Settings) to
+        act on it.
+        """
+        window = self.macos_permission_window
+        try:
+            already_open = window is not None and bool(window.winfo_exists())
+        except Exception:
+            already_open = False
+
+        if already_open:
+            window.deiconify()
+            window.lift()
+            window.focus_force()
+            return
+
+        status = dict(self._macos_permission_status)
+        window = tk.Toplevel(tk_root)
+        self.macos_permission_window = window
+        window.title("Permissões do macOS")
+        window.resizable(False, False)
+        window.configure(bg="#F4F6FA")
+        window.attributes("-topmost", True)
+        self._set_window_icon(window)
+
+        container = tk.Frame(window, bg="#F4F6FA", padx=18, pady=18)
+        container.pack(fill=tk.BOTH, expand=True)
+
+        tk.Label(
+            container,
+            text="Permissões necessárias",
+            font=("Helvetica", 13, "bold"),
+            bg="#F4F6FA",
+            fg="#1F2937",
+        ).pack(anchor="w")
+
+        body = tk.Label(
+            container,
+            text=macos_permissions.build_prompt_message(status),
+            justify=tk.LEFT,
+            font=("Helvetica", 11),
+            bg="#F4F6FA",
+            fg="#1F2937",
+        )
+        body.pack(anchor="w", pady=(8, 12))
+
+        feedback = tk.Label(
+            container,
+            text="",
+            justify=tk.LEFT,
+            wraplength=420,
+            font=("Helvetica", 11),
+            bg="#F4F6FA",
+            fg="#B45309",
+        )
+        feedback.pack(anchor="w", pady=(0, 10))
+
+        panes = tk.Frame(container, bg="#F4F6FA")
+        panes.pack(fill=tk.X)
+        for name in macos_permissions.denied_permissions(status):
+            tk.Button(
+                panes,
+                text=f"Abrir {macos_permissions.PERMISSION_LABELS[name]}",
+                command=lambda permission=name: self._open_macos_settings_pane(permission),
+            ).pack(side=tk.LEFT, padx=(0, 8))
+
+        buttons = tk.Frame(container, bg="#F4F6FA")
+        buttons.pack(fill=tk.X, pady=(14, 0))
+
+        def on_close():
+            self.macos_permission_window = None
+            window.destroy()
+
+        def on_recheck():
+            feedback.config(text="Verificando…", fg="#5B6472")
+            self.task_runner.start(
+                lambda: self._recheck_macos_permissions(status, window, feedback),
+                name="macos-permissions-recheck",
+            )
+
+        tk.Button(buttons, text="Fechar", width=12, command=on_close).pack(side=tk.RIGHT, padx=(6, 0))
+        tk.Button(buttons, text="Verificar novamente", command=on_recheck).pack(side=tk.RIGHT)
+
+        window.protocol("WM_DELETE_WINDOW", on_close)
+        center_on_screen(window)
+        window.lift()
+        window.focus_force()
+
+    def _open_macos_settings_pane(self, permission):
+        """Deep-link System Settings to one pane. GUI thread; `open` returns at once."""
+        label = macos_permissions.PERMISSION_LABELS.get(permission, permission)
+        if macos_permissions.open_settings_pane(permission):
+            self.logger.info(f"Painel de permissão aberto: {label}")
+            return
+        self.logger.error(f"Falha ao abrir o painel de permissão: {label}")
+        self.notify_error(
+            f"Não foi possível abrir o painel {label}. "
+            "Abra Ajustes do Sistema › Privacidade e Segurança manualmente.",
+            key="macos-permissions-pane",
+        )
+
+    def _recheck_macos_permissions(self, previous, window, feedback):
+        """Worker: re-probe after the user visited System Settings and report honestly.
+
+        A grant never reactivates this process — the frameworks read TCC at
+        startup — so the only truthful success message asks for a restart.
+        """
+        try:
+            current = macos_permissions.check_permissions()
+        except Exception as e:
+            self.logger.warning(f"Falha ao reverificar permissões do macOS: {e}")
+            self._update_permission_feedback(window, feedback, "Não foi possível verificar agora.", "#B45309")
+            return
+
+        self._macos_permission_status = current
+        state, message = macos_permissions.recheck_outcome(previous, current)
+        self.logger.info(
+            f"Reverificação de permissões do macOS ({state}): "
+            f"{macos_permissions.describe_status(current)}"
+        )
+        self.refresh_tray_menu()
+        color = "#166534" if state == macos_permissions.RECHECK_RESOLVED else "#B45309"
+        self._update_permission_feedback(window, feedback, message, color)
+
+    def _update_permission_feedback(self, window, feedback, message, color):
+        """Write the re-check result back onto the window from a worker thread."""
+
+        def apply(_root):
+            # The user can close the window while the re-check is in flight;
+            # a destroyed widget raises from Tcl rather than answering False.
+            try:
+                if not window.winfo_exists():
+                    return
+                feedback.config(text=message, fg=color)
+            except tk.TclError:
+                pass
+
+        try:
+            self.gui.submit(apply)
+        except Exception as e:
+            self.logger.warning(f"Falha ao atualizar a janela de permissões: {e}")
+
     def toggle_autostart(self, icon, item):
         """Tray action: install/remove the per-user autostart entry.
 
@@ -3176,6 +3432,11 @@ class TextExpander:
                 lambda text: f"{'✓' if self.enabled else '✗'} Ativado",
                 self.toggle_enabled,
                 checked=lambda item: self.enabled
+            ),
+            pystray.MenuItem(
+                "⚠ Permissões do macOS",
+                self.tray_macos_permissions,
+                visible=self.macos_permissions_pending,
             ),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Gerenciar Snippets", self.manage_snippets_gui, default=True),
