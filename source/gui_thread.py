@@ -44,6 +44,13 @@ class GuiThread:
         self._thread = None
         self._start_error = None
         self._stopping = False
+        # Pump state. The handle is what pause_pump cancels; the flag survives
+        # a tick that is already in flight. See pause_pump for why macOS needs
+        # the pump silenced at all.
+        self._pump_handle = None
+        self._pump_paused = False
+        # Set by the teardown so the pump stops draining into a destroyed root.
+        self._destroyed = False
         self._main_thread = (
             tk_runs_on_main_thread() if main_thread is None else bool(main_thread)
         )
@@ -170,13 +177,13 @@ class GuiThread:
             # the dialog lock, which would refuse every later dialog.
             self._fail_pending()
 
-    @staticmethod
-    def _teardown(root):
+    def _teardown(self, root):
         # destroy(), not quit(): mainloop exits when the window count hits
         # zero, which is deterministic. quit() relies on _tkinter's quit
         # flag, which proved unreliable once the process has had earlier
         # Tk interpreters (observed on 3.14: stop() hung until the join
         # timeout while the pump kept ticking).
+        self._destroyed = True
         root.destroy()
 
     def stop(self, timeout=5.0):
@@ -209,13 +216,14 @@ class GuiThread:
             # A tray menu callback lands here: on macOS pystray dispatches it
             # on the main thread, from inside the very loop ``mainloop()`` is
             # pumping. Destroying the interpreter mid-dispatch is not safe, so
-            # the teardown goes to the next tick; ``_loop`` fails the pending
+            # the teardown goes through the queue; ``_loop`` fails the pending
             # queue when it unwinds.
-            try:
-                self.root.after(0, self._teardown, self.root)
-            except Exception as exc:
-                self._log(f"Falha ao agendar o encerramento do root do Tk: {exc}")
-                self._fail_pending()
+            #
+            # The queue rather than a raw ``after``: while AppKit's menu
+            # tracking loop is up the pump is paused, and a Tcl timer firing
+            # inside that loop is exactly what aborts the process (issue #53).
+            # Queued, the teardown runs on the tick after tracking ends.
+            self._queue.put((self._teardown, None, None))
             return
 
         done = threading.Event()
@@ -268,25 +276,81 @@ class GuiThread:
         return box.get("value")
 
     def submit(self, func):
-        """Queue ``func(root)`` on the GUI thread without waiting for it."""
+        """Queue ``func(root)`` on the GUI thread without waiting for it.
+
+        Main-thread mode never runs it inline, even when the caller *is* the GUI
+        thread. There the caller is a tray menu callback, which AppKit dispatches
+        from inside its menu-tracking loop: building a window there spins a
+        nested Tcl event loop from within a Cocoa callback and aborts the process
+        (issue #53). Queuing costs one pump tick — the tick right after tracking
+        ends — and nothing is lost. ``call`` cannot do the same: its caller
+        blocks on the result, and on the GUI thread that would deadlock.
+        """
         self.ensure_started()
-        if threading.current_thread() is self._thread:
+        if threading.current_thread() is self._thread and not self._main_thread:
             func(self.root)
             return
         self._queue.put((func, None, None))
 
+    def pause_pump(self):
+        """Stop the pump until :meth:`resume_pump`. Queued work waits, it is not lost.
+
+        macOS menu tracking is why this exists. Clicking the tray icon makes
+        AppKit run a nested tracking loop on the main thread, and Tk-Aqua's
+        notifier rides that same run loop — so a pending Tcl timer fires inside
+        it, calling back into Python while ``_tkinter``'s ``tcl_tstate`` is NULL
+        and aborting the process (``PyEval_RestoreThread``, issue #53). Silencing
+        the pump for the duration removes the timer, and the work it would have
+        run happens a tick after tracking ends instead.
+
+        Safe to call from an AppKit callback: it only cancels a timer.
+        """
+        with self._lock:
+            self._pump_paused = True
+            handle, self._pump_handle = self._pump_handle, None
+        root = self.root
+        if handle is not None and root is not None:
+            try:
+                root.after_cancel(handle)
+            except Exception:
+                pass
+
+    def resume_pump(self):
+        """Restart the pump after :meth:`pause_pump`, draining what queued up."""
+        with self._lock:
+            if not self._pump_paused:
+                return
+            self._pump_paused = False
+        root = self.root
+        if root is None:
+            return
+        try:
+            # after(0), not an immediate drain: this runs while AppKit is still
+            # unwinding the tracking session, and the queued work builds windows.
+            handle = root.after(0, self._pump)
+        except Exception:
+            return
+        with self._lock:
+            self._pump_handle = handle
+
     def _pump(self):
         if self.root is None:
             return
+        with self._lock:
+            if self._pump_paused:
+                self._pump_handle = None
+                return
         # Reschedule before draining, and unconditionally: a queued callable
         # may open a modal dialog and block here inside a nested event loop,
         # and the next tick is what keeps later requests (and the manager
         # window) responsive. Gating this on the stop flag would also risk
         # dropping the quit sentinel itself. The loop dies with the root.
         try:
-            self.root.after(PUMP_INTERVAL_MS, self._pump)
+            handle = self.root.after(PUMP_INTERVAL_MS, self._pump)
         except Exception:
             return
+        with self._lock:
+            self._pump_handle = handle
 
         while True:
             try:
@@ -294,6 +358,11 @@ class GuiThread:
             except queue.Empty:
                 return
             self._invoke(item)
+            if self._destroyed:
+                # The teardown was one of the queued items. Anything behind it
+                # would run against a destroyed root; ``_loop`` fails those
+                # callers as it unwinds.
+                return
 
     def _invoke(self, item):
         func, box, done = item

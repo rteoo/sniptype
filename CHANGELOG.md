@@ -4,6 +4,10 @@ All notable changes to Txt Xpander are documented here. The format is based on [
 
 ## [Unreleased]
 
+### Fixed
+
+- **macOS: using the menu-bar menu no longer kills the app**: clicking the tray icon made AppKit run a nested menu-tracking loop on the main thread, where a Tk timer fired into Python with no valid thread state and aborted the process (`PyEval_RestoreThread`, "Txt Xpander quit unexpectedly"). Opening the menu, opening the snippet manager and quitting all work now. Windows behaviour is unchanged.
+
 ### Added
 
 - **macOS build**: `build_release_macos.sh` produces `dist/Txt Xpander.app`, a menu-bar-only bundle (`LSUIElement` plus an accessory activation policy applied after Tk starts, since Tk otherwise forces the app into the Dock) with the icon converted to `.icns` at build time. The tray autostart toggle writes a LaunchAgent pointing at the bundle's binary, verified with `launchctl`. Build, Gatekeeper and permission steps — including that rebuilding invalidates the app's Input Monitoring/Accessibility grants — are documented in the README.
