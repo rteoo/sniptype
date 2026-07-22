@@ -103,46 +103,6 @@ def hide_dock_icon():
         return False
 
 
-# Notification tokens have to outlive this call: NSNotificationCenter does not
-# retain the observer it hands back, and a collected token stops delivering.
-_MENU_TRACKING_OBSERVERS = []
-
-
-def observe_menu_tracking(on_begin, on_end):
-    """Call ``on_begin``/``on_end`` around AppKit menu-tracking sessions (macOS).
-
-    Clicking the tray icon makes AppKit run a nested menu-tracking loop on the
-    main thread, and Tk-Aqua's notifier rides that same run loop: a Tcl timer
-    firing in there calls into Python with ``_tkinter``'s ``tcl_tstate`` NULL,
-    which aborts the process outright (issue #53). These notifications are the
-    only signal for when that window of danger opens and closes.
-
-    Delivery is synchronous — ``queue=None`` — on purpose: an asynchronous
-    observer could be scheduled *after* the timer it is meant to prevent.
-
-    Returns True when the observers were installed, False off macOS or when
-    AppKit refused; never raises.
-    """
-    if not IS_MAC:
-        return False
-    try:
-        import AppKit
-
-        center = AppKit.NSNotificationCenter.defaultCenter()
-        pairs = (
-            (AppKit.NSMenuDidBeginTrackingNotification, on_begin),
-            (AppKit.NSMenuDidEndTrackingNotification, on_end),
-        )
-        for name, callback in pairs:
-            token = center.addObserverForName_object_queue_usingBlock_(
-                name, None, None, lambda _note, cb=callback: cb()
-            )
-            _MENU_TRACKING_OBSERVERS.append(token)
-        return True
-    except Exception:
-        return False
-
-
 def pin_tray_backend(environ=None):
     """Pin pystray to the win32 backend on Windows. Return the value set, or None.
 

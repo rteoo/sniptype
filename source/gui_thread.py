@@ -14,6 +14,17 @@ the GUI thread instead: the caller runs :meth:`adopt_main_thread` then
 marshaling contract is identical in both modes — only the thread the pump ticks
 on changes. See ``source/docs/macos-threading.md``.
 
+On macOS one more rule applies, and breaking it aborts the process rather
+than raising: **never call into Tcl/Tk from a Cocoa callback** — a tray menu
+action, an NSNotification observer, an NSTimer block. ``_tkinter`` keeps a
+single global ``tcl_tstate``, set while Python is inside a Tcl call and cleared
+by ``LEAVE_TCL``. A Cocoa callback runs while ``mainloop()`` is already inside
+``ENTER_TCL``, so a Tcl call made there clears that global with no
+``ENTER_PYTHON`` frame left to restore it, and the next Tcl→Python callback
+dies with ``Fatal Python error: PyEval_RestoreThread`` (issue #53). Cocoa
+callbacks may therefore only touch Python state — ``submit`` queues, the pump
+does the Tk work from inside the Tk loop where the invariant holds.
+
 The keyboard listener thread must never call into this module; dialog
 marshaling belongs to the expansion worker path only.
 """
@@ -44,11 +55,6 @@ class GuiThread:
         self._thread = None
         self._start_error = None
         self._stopping = False
-        # Pump state. The handle is what pause_pump cancels; the flag survives
-        # a tick that is already in flight. See pause_pump for why macOS needs
-        # the pump silenced at all.
-        self._pump_handle = None
-        self._pump_paused = False
         # Set by the teardown so the pump stops draining into a destroyed root.
         self._destroyed = False
         self._main_thread = (
@@ -219,10 +225,9 @@ class GuiThread:
             # the teardown goes through the queue; ``_loop`` fails the pending
             # queue when it unwinds.
             #
-            # The queue rather than a raw ``after``: while AppKit's menu
-            # tracking loop is up the pump is paused, and a Tcl timer firing
-            # inside that loop is exactly what aborts the process (issue #53).
-            # Queued, the teardown runs on the tick after tracking ends.
+            # The queue rather than a raw ``root.after``: this runs in a Cocoa
+            # frame, and scheduling a Tcl timer from there is itself the call
+            # that poisons ``tcl_tstate`` and aborts the loop (issue #53).
             self._queue.put((self._teardown, None, None))
             return
 
@@ -279,12 +284,12 @@ class GuiThread:
         """Queue ``func(root)`` on the GUI thread without waiting for it.
 
         Main-thread mode never runs it inline, even when the caller *is* the GUI
-        thread. There the caller is a tray menu callback, which AppKit dispatches
-        from inside its menu-tracking loop: building a window there spins a
-        nested Tcl event loop from within a Cocoa callback and aborts the process
-        (issue #53). Queuing costs one pump tick — the tick right after tracking
-        ends — and nothing is lost. ``call`` cannot do the same: its caller
-        blocks on the result, and on the GUI thread that would deadlock.
+        thread. There the caller is a tray menu callback — a Cocoa frame, not a
+        Tk one — and any Tcl call made from there poisons ``tcl_tstate`` for the
+        running ``mainloop``, aborting the process on its next timer (issue #53,
+        and the module docstring for the mechanism). Queuing costs one pump tick
+        and nothing is lost. ``call`` cannot do the same: its caller blocks on
+        the result, and on the GUI thread that would deadlock.
         """
         self.ensure_started()
         if threading.current_thread() is self._thread and not self._main_thread:
@@ -292,65 +297,18 @@ class GuiThread:
             return
         self._queue.put((func, None, None))
 
-    def pause_pump(self):
-        """Stop the pump until :meth:`resume_pump`. Queued work waits, it is not lost.
-
-        macOS menu tracking is why this exists. Clicking the tray icon makes
-        AppKit run a nested tracking loop on the main thread, and Tk-Aqua's
-        notifier rides that same run loop — so a pending Tcl timer fires inside
-        it, calling back into Python while ``_tkinter``'s ``tcl_tstate`` is NULL
-        and aborting the process (``PyEval_RestoreThread``, issue #53). Silencing
-        the pump for the duration removes the timer, and the work it would have
-        run happens a tick after tracking ends instead.
-
-        Safe to call from an AppKit callback: it only cancels a timer.
-        """
-        with self._lock:
-            self._pump_paused = True
-            handle, self._pump_handle = self._pump_handle, None
-        root = self.root
-        if handle is not None and root is not None:
-            try:
-                root.after_cancel(handle)
-            except Exception:
-                pass
-
-    def resume_pump(self):
-        """Restart the pump after :meth:`pause_pump`, draining what queued up."""
-        with self._lock:
-            if not self._pump_paused:
-                return
-            self._pump_paused = False
-        root = self.root
-        if root is None:
-            return
-        try:
-            # after(0), not an immediate drain: this runs while AppKit is still
-            # unwinding the tracking session, and the queued work builds windows.
-            handle = root.after(0, self._pump)
-        except Exception:
-            return
-        with self._lock:
-            self._pump_handle = handle
-
     def _pump(self):
         if self.root is None:
             return
-        with self._lock:
-            if self._pump_paused:
-                self._pump_handle = None
-                return
         # Reschedule before draining, and unconditionally: a queued callable
         # may open a modal dialog and block here inside a nested event loop,
         # and the next tick is what keeps later requests (and the manager
         # window) responsive. Gating this on the stop flag would also risk
         # dropping the quit sentinel itself. The loop dies with the root.
         try:
-            handle = self.root.after(PUMP_INTERVAL_MS, self._pump)
+            self.root.after(PUMP_INTERVAL_MS, self._pump)
         except Exception:
             return
-        with self._lock:
-            self._pump_handle = handle
 
         while True:
             try:

@@ -595,62 +595,6 @@ class DockIconTests(unittest.TestCase):
             self.assertFalse(ps.hide_dock_icon())
 
 
-class MenuTrackingObserverTests(unittest.TestCase):
-    """The window in which a Tcl timer aborts the process (issue #53)."""
-
-    def setUp(self):
-        ps._MENU_TRACKING_OBSERVERS.clear()
-        self.addCleanup(ps._MENU_TRACKING_OBSERVERS.clear)
-
-    @staticmethod
-    def _appkit():
-        appkit = mock.Mock()
-        appkit.NSMenuDidBeginTrackingNotification = "begin"
-        appkit.NSMenuDidEndTrackingNotification = "end"
-        return appkit
-
-    def test_non_macos_installs_nothing(self):
-        with mock.patch.object(ps, "IS_MAC", False):
-            self.assertFalse(ps.observe_menu_tracking(lambda: None, lambda: None))
-        self.assertEqual(ps._MENU_TRACKING_OBSERVERS, [])
-
-    def test_macos_observes_both_edges_of_a_tracking_session(self):
-        appkit = self._appkit()
-        center = appkit.NSNotificationCenter.defaultCenter.return_value
-        begun, ended = [], []
-        with mock.patch.object(ps, "IS_MAC", True), \
-                mock.patch.dict(sys.modules, {"AppKit": appkit}):
-            self.assertTrue(ps.observe_menu_tracking(
-                lambda: begun.append(True), lambda: ended.append(True)))
-
-        names = [call.args[0] for call in center.addObserverForName_object_queue_usingBlock_.call_args_list]
-        self.assertEqual(names, ["begin", "end"])
-        # queue=None means synchronous delivery. An asynchronous observer could
-        # be scheduled after the very timer it exists to prevent.
-        for call in center.addObserverForName_object_queue_usingBlock_.call_args_list:
-            self.assertIsNone(call.args[2])
-
-        blocks = [call.args[3] for call in center.addObserverForName_object_queue_usingBlock_.call_args_list]
-        blocks[0]("notification")
-        blocks[1]("notification")
-        self.assertEqual((begun, ended), ([True], [True]))
-
-    def test_tokens_are_kept_alive(self):
-        """NSNotificationCenter does not retain them; a collected token is deaf."""
-        appkit = self._appkit()
-        with mock.patch.object(ps, "IS_MAC", True), \
-                mock.patch.dict(sys.modules, {"AppKit": appkit}):
-            ps.observe_menu_tracking(lambda: None, lambda: None)
-        self.assertEqual(len(ps._MENU_TRACKING_OBSERVERS), 2)
-
-    def test_an_appkit_failure_is_reported_not_raised(self):
-        appkit = self._appkit()
-        appkit.NSNotificationCenter.defaultCenter.side_effect = RuntimeError("no AppKit")
-        with mock.patch.object(ps, "IS_MAC", True), \
-                mock.patch.dict(sys.modules, {"AppKit": appkit}):
-            self.assertFalse(ps.observe_menu_tracking(lambda: None, lambda: None))
-
-
 class TkMainThreadSeamTests(unittest.TestCase):
     """The macOS tray + Tk threading seam (issue #24)."""
 
