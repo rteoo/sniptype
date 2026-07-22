@@ -70,6 +70,7 @@ Build details: the release is `--onedir` (not `--onefile`); the hidden import `p
 - `source\rich_text_support.py` builds and normalizes rich-text payloads, including HTML/RTF generation and style-span handling.
 - `source\runtime_support.py` contains insertion helpers (`TextInserter`), background task support, logging, and notification formatting.
 - `source\clipboard_support.py` owns the clipboard backends and exports the `Clipboard` instance selected for the running OS. The Win32 ctypes bindings live behind that selection and never execute off Windows.
+- `source\sync_export.py` compiles the static library plus dynamic registry into the versioned mobile bundle (`txt_xpander_bundle.json`) described by `source\docs\sync-design.md`. `build_bundle` is pure and provably never invokes a provider: dynamic triggers are mapped to a sentinel callable purely so `classify_variable` still returns `dynamic_ref` for them.
 - `source\whatsapp_support.py` normalizes phone numbers and builds WhatsApp URLs.
 - `source\whatsapp_runtime_support.py` runs the `xwapp`, `xlwapp`, and `xpwapp` action flows.
 - `source\bcb_consultor.py` fetches Brazilian Central Bank API values with caching.
@@ -135,6 +136,8 @@ The data layer already protects the library and the app must keep these guarante
 - `backup_support.py` owns backup/quarantine helpers; `app_paths.py` owns path resolution and migration; `settings_support.py` owns `settings.json`.
 
 `build_release.bat` no longer syncs `dist`→`source` or restores data into `dist` (user data is not in `dist` anymore); it keeps a one-time safety copy of any pre-existing packaged `snippets.json`. The optional `settings.json` key `mirror_dir` makes each successful save also copy to a write-only mirror.
+
+The optional key `sync_export_dir` turns on the mobile sync bundle: every path that changes the live library (`save_snippets`, `restore_backup`, `import_library`, and both registry writers) calls `export_sync_bundle()`, which re-reads `snippets.json` and the registry **from disk** — `self.snippets` is stale between a restore/import write and its reload, and `self.dynamic_registry` is reassigned only after the registry writers persist. Absent key = feature off, zero behavior change. Unlike `mirror_dir`, a missing export directory is **never created**: a typo'd path would otherwise silently publish the user's full plaintext CPF/CNPJ library somewhere they never chose. Skip-if-unchanged is driven by `~/.txt_xpander\sync_export.state` (content digest excluding `exported_at`/`generator`, plus the recorded path and an existence check) so the bundle is not rewritten on every save; the export is best-effort and never turns a persisted save into a reported failure.
 
 ## Testing Guidance
 
