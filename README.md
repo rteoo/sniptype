@@ -108,7 +108,25 @@ First launch, Gatekeeper and permissions:
 
 1. The bundle is **ad-hoc signed**, so a double-click is blocked. Right-click the app → **Open** once, or run `xattr -dr com.apple.quarantine "dist/Txt Xpander.app"`.
 2. Grant **Input Monitoring** and **Accessibility** in *System Settings → Privacy & Security* — pynput cannot see keystrokes without them, and the app logs `This process is not trusted!` until they are granted.
-3. **TCC grants are tied to the bundle's identity.** Rebuilding or re-signing produces a new signature, macOS drops the old grants, and you have to approve the app again — worth knowing before iterating on a build. Removing the stale entry from the permission list and re-adding the rebuilt app is the usual fix.
+3. **TCC grants are tied to the bundle's signing identity.** Under ad-hoc signing there is no identity, so macOS pins the grant to the binary's *cdhash* and every rebuild silently revokes it: the switch still shows as on, the app still probes `denied`. Removing the stale row (the **−** button) and adding the rebuilt app again is the manual fix — the permanent one is a stable identity, below.
+
+#### A stable signing identity (stops the permission churn)
+
+Create a self-signed code-signing certificate once, and every later build keeps the grants:
+
+```bash
+openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 3650 -nodes \
+  -subj "/CN=Txt Xpander Dev" \
+  -addext "basicConstraints=critical,CA:false" \
+  -addext "keyUsage=critical,digitalSignature" \
+  -addext "extendedKeyUsage=critical,codeSigning"
+openssl pkcs12 -export -out identity.p12 -inkey key.pem -in cert.pem -name "Txt Xpander Dev" \
+  -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES -macalg sha1 -passout pass:txpdev
+security import identity.p12 -k ~/Library/Keychains/login.keychain-db -P txpdev -T /usr/bin/codesign
+security add-trusted-cert -r trustRoot -p codeSign -k ~/Library/Keychains/login.keychain-db cert.pem
+```
+
+`security import` needs an unlocked login keychain, so run it in your own terminal session (the legacy PKCS#12 algorithms are required — macOS cannot read OpenSSL 3's defaults). The build script picks the identity up automatically when `security find-identity -v -p codesigning` lists **Txt Xpander Dev**, and falls back to ad-hoc when it does not; `CODESIGN_IDENTITY` still overrides. Signing with an identity is what makes the app's designated requirement reference the *certificate* instead of the cdhash, so the TCC rows keep matching after a rebuild. Grant the permissions once more after the first signed build — that grant is the last one you need.
 
 Autostart: tick **Iniciar com o sistema** in the menu-bar menu. Inside a bundle `sys.executable` is `Txt Xpander.app/Contents/MacOS/Txt Xpander`, so the LaunchAgent (`~/Library/LaunchAgents/com.txt-xpander.plist`, `RunAtLoad`) runs that path directly — no `open -a` wrapper needed; launchd starting it that way still gets the bundle's Info.plist and identity. Verified by loading the generated plist with `launchctl bootstrap gui/$UID`; survival across a real reboot has not been tested.
 
