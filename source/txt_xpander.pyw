@@ -3164,6 +3164,11 @@ class TextExpander:
             self.logger.error("Sem root do Tk na thread principal: a bandeja não tem loop para rodar.")
             return
 
+        if platform_support.tk_runs_on_main_thread() and not platform_support.hide_dock_icon():
+            # Cosmetic only: the tray still works, the app just also sits in the
+            # Dock. Logged rather than raised for exactly that reason.
+            self.logger.warning("Não foi possível ocultar o ícone do Dock.")
+
         self.task_runner.start(self.run_keyboard_listener, name="keyboard-listener")
 
         menu = pystray.Menu(

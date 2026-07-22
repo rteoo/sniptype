@@ -559,6 +559,42 @@ class AutostartCommandTests(unittest.TestCase):
         self.assertTrue(os.path.exists(argv[1]))
 
 
+class DockIconTests(unittest.TestCase):
+    """LSUIElement alone does not keep the packaged .app out of the Dock."""
+
+    def test_non_macos_is_a_no_op(self):
+        with mock.patch.object(ps, "IS_MAC", False):
+            self.assertFalse(ps.hide_dock_icon())
+
+    def test_macos_sets_the_accessory_activation_policy(self):
+        appkit = mock.Mock()
+        appkit.NSApplicationActivationPolicyAccessory = 1
+        shared = appkit.NSApplication.sharedApplication.return_value
+        shared.setActivationPolicy_.return_value = True
+        with mock.patch.object(ps, "IS_MAC", True), \
+                mock.patch.dict(sys.modules, {"AppKit": appkit}):
+            self.assertTrue(ps.hide_dock_icon())
+        # Aqua Tk set the policy to Regular while creating the root; accessory
+        # is what puts it back, and it must be applied to the same shared
+        # NSApplication the tray attaches to.
+        shared.setActivationPolicy_.assert_called_once_with(1)
+
+    def test_a_refused_policy_is_reported_not_raised(self):
+        appkit = mock.Mock()
+        appkit.NSApplication.sharedApplication.return_value.setActivationPolicy_.return_value = False
+        with mock.patch.object(ps, "IS_MAC", True), \
+                mock.patch.dict(sys.modules, {"AppKit": appkit}):
+            self.assertFalse(ps.hide_dock_icon())
+
+    def test_an_appkit_failure_never_escapes(self):
+        """A Dock icon is cosmetic; it must not take the tray down."""
+        appkit = mock.Mock()
+        appkit.NSApplication.sharedApplication.side_effect = RuntimeError("no AppKit")
+        with mock.patch.object(ps, "IS_MAC", True), \
+                mock.patch.dict(sys.modules, {"AppKit": appkit}):
+            self.assertFalse(ps.hide_dock_icon())
+
+
 class TkMainThreadSeamTests(unittest.TestCase):
     """The macOS tray + Tk threading seam (issue #24)."""
 

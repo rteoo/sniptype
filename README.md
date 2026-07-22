@@ -88,7 +88,7 @@ This produces the shipping folder in [`dist\Txt Xpander\`](dist/Txt%20Xpander).
 
 ### Build on macOS
 
-[`build_release_macos.sh`](build_release_macos.sh) is the macOS counterpart. It builds `dist/Txt Xpander.app` — a **menu-bar-only** bundle (`LSUIElement`, so no Dock icon and no app menu), with the `.icns` generated from the shipped `.ico` at build time:
+[`build_release_macos.sh`](build_release_macos.sh) is the macOS counterpart. It builds `dist/Txt Xpander.app` — a **menu-bar-only** bundle (`LSUIElement`, so no Dock icon and no app menu), with the `.icns` generated from the shipped `.ico` at build time. `LSUIElement` alone is not enough: Aqua Tk sets the Regular activation policy while it creates the root, which overrides the plist at runtime, so the app puts the policy back to *accessory* right after (`platform_support.hide_dock_icon()`) — that is what actually keeps it out of the Dock, and it applies to a source checkout too.
 
 ```bash
 python3 -m pip install -r source/requirements.txt pyinstaller
