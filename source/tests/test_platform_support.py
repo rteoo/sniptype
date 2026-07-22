@@ -545,5 +545,33 @@ class AutostartCommandTests(unittest.TestCase):
         self.assertTrue(os.path.exists(argv[1]))
 
 
+class TkMainThreadSeamTests(unittest.TestCase):
+    """The macOS tray + Tk threading seam (issue #24)."""
+
+    def test_only_macos_moves_tk_to_the_main_thread(self):
+        self.assertEqual(ps.tk_runs_on_main_thread(), ps.IS_MAC)
+        with mock.patch.object(ps, "IS_MAC", True):
+            self.assertTrue(ps.tk_runs_on_main_thread())
+        with mock.patch.object(ps, "IS_MAC", False):
+            self.assertFalse(ps.tk_runs_on_main_thread())
+
+    def test_non_macos_adds_no_icon_options(self):
+        """Windows must keep constructing the icon exactly as it always has."""
+        with mock.patch.object(ps, "IS_MAC", False):
+            self.assertEqual(ps.tray_icon_options(), {})
+
+    def test_macos_hands_pystray_the_shared_nsapplication(self):
+        appkit = mock.Mock()
+        shared = object()
+        appkit.NSApplication.sharedApplication.return_value = shared
+        with mock.patch.object(ps, "IS_MAC", True), \
+                mock.patch.dict(sys.modules, {"AppKit": appkit}):
+            options = ps.tray_icon_options()
+        # The singleton, not a fresh instance: Tk already created the one the
+        # process is allowed to have, and pystray has to attach to that loop.
+        self.assertEqual(options, {"darwin_nsapplication": shared})
+        appkit.NSApplication.sharedApplication.assert_called_once_with()
+
+
 if __name__ == "__main__":
     unittest.main()
