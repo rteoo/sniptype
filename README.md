@@ -4,7 +4,7 @@ Txt Xpander is a Windows text expander with a system tray app, snippet manager G
 
 ## Project Layout
 
-- [`dist\Txt Xpander\`](dist/Txt%20Xpander): packaged app folder to run or ship.
+- [`dist\Txt Xpander\`](dist/Txt%20Xpander): packaged app folder to run or ship (`dist/Txt Xpander.app` on macOS — see [Build on macOS](#build-on-macos)).
 - [`source\`](source): editable Python source, assets, launcher, tests, and docs.
 - [`source\docs\`](source/docs): planning notes, plus [`audit-report.md`](source/docs/audit-report.md) (full code audit) and [`improvement-plan.md`](source/docs/improvement-plan.md) (phased roadmap).
 
@@ -38,9 +38,11 @@ The same toggle is the autostart path on macOS (LaunchAgent plist) and Linux (`~
 
 ### Cross-platform status
 
-Txt Xpander is Windows-first. The OS-specific couplings are being factored behind [`source/platform_support.py`](source/platform_support.py): the paste modifier (Ctrl+V on Windows/Linux, Cmd+V on macOS), a PID-lockfile single-instance guard for non-Windows (Windows keeps its named mutex), per-OS autostart install/remove (Startup `.lnk`, macOS LaunchAgent plist, Linux `.desktop`) driven by the tray toggle, and the `PYSTRAY_BACKEND=win32` pin, now applied on Windows only. The autostart writes for non-Windows are covered by tests, now run on real macOS/Linux CI hosts (see below), though whether the written entries actually launch the app at login remains unverified. The pin previously ran unconditionally, forcing a backend that cannot import off Windows and killing startup before any seam had a chance to run. The keyboard listener (pynput), tray (pystray), GUI (Tk) and the JSON data layer are already portable, and the data directory (`~/.txt_xpander`) is identical on all three OSes.
+Txt Xpander is Windows-first. The OS-specific couplings are factored behind [`source/platform_support.py`](source/platform_support.py): the paste modifier (Ctrl+V on Windows/Linux, Cmd+V on macOS), a PID-lockfile single-instance guard for non-Windows (Windows keeps its named mutex), per-OS autostart install/remove (Startup `.lnk`, macOS LaunchAgent plist, Linux `.desktop`) driven by the tray toggle, which event loop owns the main thread (see below), and the `PYSTRAY_BACKEND=win32` pin, now applied on Windows only. The pin previously ran unconditionally, forcing a backend that cannot import off Windows and killing startup before any seam had a chance to run. The keyboard listener (pynput), tray (pystray), GUI (Tk) and the JSON data layer are portable, and the data directory (`~/.txt_xpander`) is identical on all three OSes. The macOS LaunchAgent is now verified to actually start the app (`launchctl bootstrap` against the plist the toggle writes); the Linux `.desktop` entry is still covered only by its write tests.
 
-Clipboard access is factored the same way, behind [`source/clipboard_support.py`](source/clipboard_support.py): Windows keeps the ctypes user32/kernel32 backend (text, HTML and RTF), while macOS uses `pbcopy`/`pbpaste` and Linux uses `wl-copy`/`wl-paste` under Wayland, falling back to `xclip` then `xsel`. The Win32 bindings now load only on Windows, so the app imports cleanly on macOS/Linux. The POSIX backend is plain-text only for now — rich-text snippets paste as their plain text and log the downgrade — and a desktop with none of those tools installed logs a warning rather than failing hard.
+macOS gives Tk and AppKit a single main thread between them, which is the one place the two OSes genuinely diverge (issue #24, [`source/docs/macos-threading.md`](source/docs/macos-threading.md)). On Windows `icon.run()` blocks the main thread and the shared Tk root lives on a worker; on macOS the root is created on the main thread first, pystray is handed the `NSApplication` Tk just created, the tray goes up with `run_detached()`, and `mainloop()` blocks. The `GuiThread.call`/`submit` contract is identical in both modes, so the manager GUI and every dialog open on macOS.
+
+Clipboard access is factored the same way, behind [`source/clipboard_support.py`](source/clipboard_support.py): Windows keeps the ctypes user32/kernel32 backend (text, HTML and RTF), while macOS uses `pbcopy`/`pbpaste` and Linux uses `wl-copy`/`wl-paste` under Wayland, falling back to `xclip` then `xsel`. The Win32 bindings now load only on Windows, so the app imports cleanly on macOS/Linux. Rich text works on macOS too — `pbcopy` cannot carry HTML, so a rich payload is written by piping an AppleScript pasteboard record through `osascript`, falling back to plain text if that fails. Linux is still plain-text only (rich snippets paste as their plain text and log the downgrade), and a desktop with none of those tools installed logs a warning rather than failing hard.
 
 CI runs the unit suite on `windows-latest`, `macos-latest` and `ubuntu-latest` (Python 3.12 and 3.14) on every pull request, so the POSIX branches of the clipboard, autostart and single-instance code are exercised on real macOS and Linux hosts rather than only under mocks. Linux runs under `xvfb-run`: pynput and pystray both bind to Xorg at import time and raise without a display.
 
@@ -48,7 +50,7 @@ On macOS the app also has to ask for permission before it can work at all: **Inp
 
 macOS **Secure Keyboard Entry** (Terminal's menu item, a focused password field, the login window) is a separate gate that cannot be granted: while it is on the system drops synthesized keystrokes in both directions. The app checks for it *before* erasing the trigger, so a snippet typed into a password field is left exactly as typed — never half-erased — and the tray explains why nothing expanded. The insertion delays themselves are per-OS and settings-overridable; the values, the measurements behind them and the manual matrix still to be run on a granted Mac are in [`source/docs/macos-insertion.md`](source/docs/macos-insertion.md).
 
-Remaining before the app runs unmodified on macOS/Linux: on macOS the manager GUI cannot open at all as currently architected — the shared Tk root is created on a worker thread, and AppKit aborts the process rather than building an `NSWindow` off the main thread (issue #24), which is why the Tk smoke tests are skipped there. Beyond that: rich-text paste off Windows, opening the data folder (`os.startfile` has no POSIX equivalent in place yet), plus platform limits outside our control — Wayland restricts global keyboard hooks. What CI does *not* cover is end-to-end behavior on a real desktop session: tray icon, actual paste into another app, and expansion after the macOS grants are still unverified.
+macOS has a packaged build of its own — a menu-bar-only `.app` produced by [`build_release_macos.sh`](build_release_macos.sh), see [Build on macOS](#build-on-macos). Remaining before the app runs unmodified on macOS/Linux: rich-text paste on Linux, opening the data folder (still `os.startfile`, with no POSIX equivalent in place yet; `open_url_in_browser` only uses it as a fallback behind the portable `webbrowser` path), plus the platform limit outside our control — Wayland restricts global keyboard hooks. The Tk smoke tests stay skipped on macOS because they drive the *worker-thread* root, which AppKit does not permit — the app itself uses the main-thread mode above, so this is a test-harness limit, not an app one. What CI does *not* cover is end-to-end behavior on a real desktop session: tray icon, actual paste into another app, and expansion after the macOS grants are still unverified.
 
 ## Work From Source
 
@@ -88,6 +90,45 @@ python -m PyInstaller --noconfirm --clean --windowed --onedir --name "Txt Xpande
 ```
 
 This produces the shipping folder in [`dist\Txt Xpander\`](dist/Txt%20Xpander).
+
+### Build on macOS
+
+[`build_release_macos.sh`](build_release_macos.sh) is the macOS counterpart. It builds `dist/Txt Xpander.app` — a **menu-bar-only** bundle (`LSUIElement`, so no Dock icon and no app menu), with the `.icns` generated from the shipped `.ico` at build time. `LSUIElement` alone is not enough: Aqua Tk sets the Regular activation policy while it creates the root, which overrides the plist at runtime, so the app puts the policy back to *accessory* right after (`platform_support.hide_dock_icon()`) — that is what actually keeps it out of the Dock, and it applies to a source checkout too.
+
+```bash
+python3 -m pip install -r source/requirements.txt pyinstaller
+./build_release_macos.sh
+```
+
+Use `PYTHON=/path/to/venv/bin/python ./build_release_macos.sh` to build with a specific interpreter, and `CODESIGN_IDENTITY="Developer ID Application: …"` to sign with a real identity instead of ad-hoc.
+
+Like the Windows script it stages into a temp folder and swaps `dist` only on success, and it refuses to run while the app is running. It deliberately does **not** port the Windows-only steps: there is no Startup shortcut to offer (macOS autostart is the LaunchAgent the tray toggle writes) and no packaged `snippets.json` to preserve (user data lives in `~/.txt_xpander`).
+
+First launch, Gatekeeper and permissions:
+
+1. The bundle is **ad-hoc signed**, so a double-click is blocked. Right-click the app → **Open** once, or run `xattr -dr com.apple.quarantine "dist/Txt Xpander.app"`.
+2. Grant **Input Monitoring** and **Accessibility** in *System Settings → Privacy & Security* — pynput cannot see keystrokes without them, and the app logs `This process is not trusted!` until they are granted.
+3. **TCC grants are tied to the bundle's signing identity.** Under ad-hoc signing there is no identity, so macOS pins the grant to the binary's *cdhash* and every rebuild silently revokes it: the switch still shows as on, the app still probes `denied`. Removing the stale row (the **−** button) and adding the rebuilt app again is the manual fix — the permanent one is a stable identity, below.
+
+#### A stable signing identity (stops the permission churn)
+
+Create a self-signed code-signing certificate once, and every later build keeps the grants:
+
+```bash
+openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 3650 -nodes \
+  -subj "/CN=Txt Xpander Dev" \
+  -addext "basicConstraints=critical,CA:false" \
+  -addext "keyUsage=critical,digitalSignature" \
+  -addext "extendedKeyUsage=critical,codeSigning"
+openssl pkcs12 -export -out identity.p12 -inkey key.pem -in cert.pem -name "Txt Xpander Dev" \
+  -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES -macalg sha1 -passout pass:txpdev
+security import identity.p12 -k ~/Library/Keychains/login.keychain-db -P txpdev -T /usr/bin/codesign
+security add-trusted-cert -r trustRoot -p codeSign -k ~/Library/Keychains/login.keychain-db cert.pem
+```
+
+`security import` needs an unlocked login keychain, so run it in your own terminal session (the legacy PKCS#12 algorithms are required — macOS cannot read OpenSSL 3's defaults). The build script picks the identity up automatically when `security find-identity -v -p codesigning` lists **Txt Xpander Dev**, and falls back to ad-hoc when it does not; `CODESIGN_IDENTITY` still overrides. Signing with an identity is what makes the app's designated requirement reference the *certificate* instead of the cdhash, so the TCC rows keep matching after a rebuild. Grant the permissions once more after the first signed build — that grant is the last one you need.
+
+Autostart: tick **Iniciar com o sistema** in the menu-bar menu. Inside a bundle `sys.executable` is `Txt Xpander.app/Contents/MacOS/Txt Xpander`, so the LaunchAgent (`~/Library/LaunchAgents/com.txt-xpander.plist`, `RunAtLoad`) runs that path directly — no `open -a` wrapper needed; launchd starting it that way still gets the bundle's Info.plist and identity. Verified by loading the generated plist with `launchctl bootstrap gui/$UID`; survival across a real reboot has not been tested.
 
 ## Build The Installer (Setup.exe)
 

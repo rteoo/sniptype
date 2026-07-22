@@ -44,6 +44,12 @@ python -m unittest tests.test_snippet_utils -v
 build_release.bat
 ```
 
+**Build the macOS release (`.app` bundle):**
+
+```bash
+./build_release_macos.sh
+```
+
 **Build the Windows installer (Setup.exe):**
 
 ```powershell
@@ -56,6 +62,10 @@ build_installer.bat    # compile installer\Output\TxtXpanderSetup-<version>.exe
 The build script backs up and restores the packaged `snippets.json`, stages the PyInstaller output, swaps `dist\Txt Xpander`, and can update the Windows Startup shortcut.
 
 Build details: the release is `--onedir` (not `--onefile`); the hidden import `pystray._win32` is required; `snippets.json` and the icon are bundled as data files, but the user-editable copy in `dist\Txt Xpander\` is separate from the bundled fallback in `_internal\`.
+
+`build_release_macos.sh` mirrors the same staging discipline (build into a temp dist, promote `dist/Txt Xpander.app` only on success, refuse to run while the app is running) and drops the Windows-only steps — no Startup shortcut (macOS autostart is the LaunchAgent the tray toggle writes), no packaged `snippets.json` to preserve. macOS specifics worth knowing before touching it: the `.icns` is generated from `source/txt_xpander.ico` with `sips`/`iconutil` (256px source, so no size above that is emitted rather than upscaled); `LSUIElement` is written with `plutil` *after* the build because PyInstaller has no CLI flag for extra Info.plist keys, which breaks the seal PyInstaller put on the bundle and is why the script re-signs afterwards (ad-hoc, or `CODESIGN_IDENTITY` when set). Inside the bundle `sys._MEIPASS` is `Contents/Frameworks` and `sys.executable` is `Contents/MacOS/Txt Xpander`, so `get_runtime_resource_dir()` and `default_autostart_command()` both work unchanged — the LaunchAgent runs that binary directly and needs no `open -a` wrapper. Every rebuild or re-sign changes the bundle's signature and therefore invalidates its TCC grants (Input Monitoring/Accessibility), which macOS then asks for again.
+
+`LSUIElement` in the plist does not by itself keep the app out of the Dock: Aqua Tk sets `NSApplicationActivationPolicyRegular` on the shared `NSApplication` while creating the root, and a runtime policy beats the plist. `platform_support.hide_dock_icon()` puts it back to accessory and `run()` calls it **after** the root exists (order asserted in `test_tray_startup`) — reversing it earlier would just be overwritten. Failure there only warns: a Dock icon is cosmetic and must not take the tray down.
 
 ## Repository Layout
 
@@ -82,6 +92,7 @@ Build details: the release is `--onedir` (not `--onefile`); the hidden import `p
 - `source\docs\` contains planning notes for refactors and features, plus `audit-report.md` (full code audit) and `improvement-plan.md` (phased roadmap).
 - `source\run_txt_xpander.bat` is the source-side launcher. It checks/install dependencies and starts the app with `pythonw`.
 - `installer\txt_xpander.iss` is the Inno Setup script; `build_installer.bat` compiles it into `installer\Output\` (gitignored). The per-user install location is independent of where user data lives (`~/.txt_xpander`), which is what makes a Program-Files-style install safe.
+- `build_release_macos.sh` is the macOS build script; it produces `dist/Txt Xpander.app` (menu-bar-only bundle).
 - `dist\Txt Xpander\` is the packaged application folder. Treat `build\`, `dist\`, and `dist_staging\` as generated output unless the task is explicitly about packaging.
 
 ## Architecture Notes

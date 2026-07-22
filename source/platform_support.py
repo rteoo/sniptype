@@ -147,6 +147,37 @@ def tray_icon_options():
     return {"darwin_nsapplication": AppKit.NSApplication.sharedApplication()}
 
 
+def hide_dock_icon():
+    """Drop the Dock icon on macOS. **Call after the Tk root exists.**
+
+    ``LSUIElement`` in the bundle's Info.plist is not enough: Aqua Tk sets
+    ``NSApplicationActivationPolicyRegular`` on the shared ``NSApplication``
+    while it initializes, and a runtime policy overrides the plist — so the
+    packaged ``.app`` shows a Dock icon and an app menu despite being built
+    menu-bar-only. Putting the policy back to *accessory* after Tk has had its
+    say is what makes the plist key stick, and it is equally what gives a
+    source checkout the menu-bar-only behavior the bundle has.
+
+    Accessory keeps windows usable: a Toplevel still maps, activates and takes
+    keyboard focus through the existing ``lift()``/``focus_force()`` calls.
+
+    Returns True when the policy was applied, False off macOS or if AppKit
+    refused it — never raises, because a Dock icon is a cosmetic failure and
+    must not take the tray down with it.
+    """
+    if not IS_MAC:
+        return False
+    try:
+        import AppKit
+
+        app = AppKit.NSApplication.sharedApplication()
+        return bool(
+            app.setActivationPolicy_(AppKit.NSApplicationActivationPolicyAccessory)
+        )
+    except Exception:
+        return False
+
+
 def pin_tray_backend(environ=None):
     """Pin pystray to the win32 backend on Windows. Return the value set, or None.
 
