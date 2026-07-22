@@ -257,6 +257,32 @@ class BackupRestoreImportTests(unittest.TestCase):
         with open(mirrored, encoding="utf-8") as handle:
             self.assertEqual(json.load(handle)["xhi"], "mirrored")
 
+    def test_mirror_failure_does_not_fail_save(self):
+        # mirror_dir whose parent is a regular file: makedirs cannot create it.
+        # Mirroring is best-effort redundancy and must never fail a persisted save.
+        blocker = os.path.join(self.tmp, "blocker")
+        with open(blocker, "w", encoding="utf-8") as handle:
+            handle.write("x")
+        self.app.settings = {"mirror_dir": os.path.join(blocker, "mirror")}
+        self.app.snippets["xhi"] = "kept"
+        self.assertTrue(self.app.save_snippets(self.app.snippets))
+        # The real library was written despite the mirror failure.
+        with open(self.app.snippets_file, encoding="utf-8") as handle:
+            self.assertEqual(json.load(handle)["xhi"], "kept")
+
+    def test_restore_rejects_wrong_root_type_backup(self):
+        # Valid JSON, but a list where an object is required: must be refused, not
+        # loaded as the live library.
+        bad = os.path.join(self.app.backups_dir, "snippets-20990101-000000.json")
+        os.makedirs(self.app.backups_dir, exist_ok=True)
+        with open(bad, "w", encoding="utf-8") as handle:
+            json.dump([1, 2, 3], handle)
+        ok, error = self.app.restore_backup(bad)
+        self.assertFalse(ok)
+        self.assertIn("formato", error.lower())
+        # Live library untouched.
+        self.assertEqual(self.app.snippets["xhi"], "hello")
+
 
 class RecoverSnippetsTests(unittest.TestCase):
     def setUp(self):
@@ -335,6 +361,95 @@ class RecoverSnippetsTests(unittest.TestCase):
         merged = self.app.load_snippets()
         # Static "xhi" survived via backup restore; dynamic snippets merged on top.
         self.assertEqual(merged.get("xhi"), "hello")
+
+    def test_wrong_root_type_file_recovers_from_backup(self):
+        # Valid JSON but the wrong shape (a list) is as unusable as broken JSON:
+        # it must be quarantined and the good backup restored.
+        with open(self.app.snippets_file, "w", encoding="utf-8") as handle:
+            handle.write("[1, 2, 3]")
+        merged = self.app.load_snippets()
+        self.assertEqual(merged.get("xhi"), "hello")
+        quarantined = [n for n in os.listdir(self.tmp) if n.startswith(bs.QUARANTINE_PREFIX)]
+        self.assertEqual(len(quarantined), 1)
+
+    def test_empty_file_recovers_from_backup(self):
+        # A 0-byte snippets.json (an interrupted write) is not valid JSON; recovery
+        # must quarantine it and restore the newest good backup.
+        with open(self.app.snippets_file, "w", encoding="utf-8") as handle:
+            handle.write("")
+        recovered = self.app.recover_snippets_file("empty file")
+        self.assertEqual(recovered, {"xhi": "hello"})
+        quarantined = [n for n in os.listdir(self.tmp) if n.startswith(bs.QUARANTINE_PREFIX)]
+        self.assertEqual(len(quarantined), 1)
+        with open(os.path.join(self.tmp, quarantined[0]), encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), "")  # corrupt (empty) bytes preserved
+
+    def test_save_does_not_back_up_a_corrupt_on_disk_file(self):
+        # A corrupt live file must never enter the backup rotation, or it could
+        # rank newest by mtime and defeat a later recovery.
+        for path in bs.list_backups(self.app.backups_dir):
+            os.remove(path)
+        with open(self.app.snippets_file, "w", encoding="utf-8") as handle:
+            handle.write("{ corrupt on disk")
+        self.assertTrue(self.app.save_snippets({"xhi": "recovered"}))
+        # No backup was created from the corrupt content...
+        self.assertEqual(bs.list_backups(self.app.backups_dir), [])
+        # ...and the new good data was written.
+        with open(self.app.snippets_file, encoding="utf-8") as handle:
+            self.assertEqual(json.load(handle), {"xhi": "recovered"})
+
+
+class AtomicSaveTests(unittest.TestCase):
+    """A failed save must never damage the prior on-disk library."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.app = make_expander(self.tmp, '{"xhi": "hello"}')
+
+    def _leftover_temps(self):
+        return [
+            n for n in os.listdir(self.tmp)
+            if n.startswith("snippets.json.") and n.endswith(".tmp")
+        ]
+
+    def test_failed_write_leaves_prior_file_intact(self):
+        with mock.patch.object(tx, "write_json_atomic", side_effect=OSError("disk full")):
+            self.assertFalse(self.app.save_snippets({"xhi": "changed"}))
+        with open(self.app.snippets_file, encoding="utf-8") as handle:
+            self.assertEqual(json.load(handle), {"xhi": "hello"})
+
+    def test_non_serializable_value_fails_cleanly(self):
+        # Exercises the real atomic write: json.dump raises mid-write on a set().
+        # The original file must survive and no temp file may be left behind.
+        self.assertFalse(self.app.save_snippets({"xhi": {1, 2, 3}}))
+        with open(self.app.snippets_file, encoding="utf-8") as handle:
+            self.assertEqual(json.load(handle), {"xhi": "hello"})
+        self.assertEqual(self._leftover_temps(), [])
+
+
+class SyncExportDirTests(unittest.TestCase):
+    """The mobile-bundle export directory is never auto-created (unlike mirror).
+
+    A typo'd sync_export_dir must not silently publish the full plaintext library
+    somewhere the user never chose, so a missing directory is skipped -- while
+    mirror_dir is created on demand. AGENTS.md 'Snippets File Safety' documents
+    this asymmetry.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.app = make_expander(self.tmp, '{"xhi": "hello"}')
+
+    def test_missing_sync_export_dir_is_not_created_but_mirror_is(self):
+        sync_dir = os.path.join(self.tmp, "not_created_export")
+        mirror_dir = os.path.join(self.tmp, "mirror")
+        self.app.settings = {"sync_export_dir": sync_dir, "mirror_dir": mirror_dir}
+        self.app.snippets["xhi"] = "published"
+        self.assertTrue(self.app.save_snippets(self.app.snippets))
+        # sync_export_dir absent -> never created; bundle silently skipped.
+        self.assertFalse(os.path.exists(sync_dir))
+        # mirror_dir, by contrast, is created on demand.
+        self.assertTrue(os.path.exists(os.path.join(mirror_dir, "snippets.json")))
 
 
 class MigrationTests(unittest.TestCase):

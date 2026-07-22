@@ -100,6 +100,21 @@ class ResolveStateTests(unittest.TestCase):
         self.assertEqual(self.app._autostart_state, tx.AUTOSTART_CURRENT)
         install.assert_called_once()
 
+    def test_resolve_skips_when_the_lock_is_already_held(self):
+        """A toggle in flight holds the lock; the startup resolve must back off
+        rather than race it — and must not touch disk or change the cache."""
+        self.app._autostart_state = tx.AUTOSTART_CURRENT
+        self.app._autostart_lock.acquire()
+        try:
+            with mock.patch.object(tx, "read_autostart_command") as read, \
+                    mock.patch.object(tx, "install_autostart") as install:
+                self.app.resolve_autostart_state()
+            read.assert_not_called()
+            install.assert_not_called()
+        finally:
+            self.app._autostart_lock.release()
+        self.assertEqual(self.app._autostart_state, tx.AUTOSTART_CURRENT)
+
     def test_unexpected_error_is_not_reported_as_enabled(self):
         """Reading a corrupt entry can raise more than OSError (decode/parse
         errors); none of it may kill the worker or leave the box checked."""
@@ -133,6 +148,18 @@ class ToggleTests(unittest.TestCase):
         remove.assert_called_once()
         install.assert_not_called()
         self.assertEqual(self.app._autostart_state, tx.AUTOSTART_ABSENT)
+
+    def test_toggle_on_from_absent_installs_and_marks_current(self):
+        """The happy activation path: no entry yet, so install and check the box."""
+        self.app._autostart_state = tx.AUTOSTART_ABSENT
+        with mock.patch.object(tx, "install_autostart", return_value="p") as install, \
+                mock.patch.object(tx, "remove_autostart") as remove:
+            self.app._apply_autostart_toggle()
+        install.assert_called_once()
+        remove.assert_not_called()
+        self.assertEqual(self.app._autostart_state, tx.AUTOSTART_CURRENT)
+        self.app.notify_status.assert_called_once()
+        self.app.notify_error.assert_not_called()
 
     def test_toggle_on_a_stale_entry_overwrites_instead_of_removing(self):
         self.app._autostart_state = tx.AUTOSTART_STALE
@@ -172,6 +199,24 @@ class ToggleTests(unittest.TestCase):
         install.assert_not_called()
         remove.assert_not_called()
         self.app.notify_status.assert_called_once()
+
+
+class RefreshMenuTests(unittest.TestCase):
+    """refresh_tray_menu runs after every resolve/toggle; a dying tray icon must
+    not take the worker thread down with it."""
+
+    def test_no_icon_is_a_noop(self):
+        app = make_tray_app()  # icon is None
+        app.refresh_tray_menu()  # must not raise
+        app.logger.warning.assert_not_called()
+
+    def test_update_menu_error_is_swallowed_and_logged(self):
+        app = make_tray_app()
+        app.icon = mock.Mock()
+        app.icon.update_menu.side_effect = RuntimeError("tray gone")
+        app.refresh_tray_menu()  # must not raise
+        app.icon.update_menu.assert_called_once()
+        app.logger.warning.assert_called_once()
 
 
 if __name__ == "__main__":
