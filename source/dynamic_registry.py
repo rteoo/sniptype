@@ -73,6 +73,11 @@ def load_registry(bundled_path, user_path=None, logger=None):
     for trigger, entry in user.items():
         if isinstance(entry, dict) and isinstance(merged.get(trigger), dict):
             merged[trigger] = {**merged[trigger], **entry}
+        elif not isinstance(entry, dict) and isinstance(merged.get(trigger), dict):
+            # A corrupt override entry must not wipe the good bundled entry —
+            # the per-entry version of the guarantee _safe_load gives per file.
+            if logger:
+                logger.warning(f"Entrada inválida ignorada no registro dinâmico do usuário: {trigger}")
         else:
             merged[trigger] = entry
     return merged
