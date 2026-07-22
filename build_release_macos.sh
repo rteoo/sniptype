@@ -109,7 +109,27 @@ else
 fi
 
 if ! codesign --force --deep --sign "$SIGN_IDENTITY" "$STAGED_APP" 2>&1; then
-    echo "Warning: codesign failed; the bundle may be rejected by Gatekeeper." >&2
+    if [[ "$SIGN_IDENTITY" == "-" ]]; then
+        echo "Ad-hoc signing failed; the bundle would not launch. dist left unchanged." >&2
+        exit 1
+    fi
+    echo "Warning: signing with \"$SIGN_IDENTITY\" failed; falling back to ad-hoc." >&2
+    echo "         errSecInternalComponent here means codesign could not reach the" >&2
+    echo "         private key: run this script from your own terminal once and allow" >&2
+    echo "         the keychain prompt, or add codesign to the key's partition list." >&2
+    SIGN_IDENTITY="-"
+    if ! codesign --force --deep --sign - "$STAGED_APP" 2>&1; then
+        echo "Ad-hoc signing failed too. dist left unchanged." >&2
+        exit 1
+    fi
+fi
+
+# The plutil edit above breaks the seal PyInstaller applied, so an unsigned or
+# half-signed bundle is not a cosmetic problem: on Apple silicon macOS kills a
+# bundle whose signature does not match its Info.plist. Never promote one.
+if ! codesign --verify --deep --strict "$STAGED_APP"; then
+    echo "The staged bundle failed signature verification. dist left unchanged." >&2
+    exit 1
 fi
 
 # --- Promote --------------------------------------------------------------
