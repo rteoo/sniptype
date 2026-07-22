@@ -75,7 +75,7 @@ Build details: the release is `--onedir` (not `--onefile`); the hidden import `p
 - `source\whatsapp_runtime_support.py` runs the `xwapp`, `xlwapp`, and `xpwapp` action flows.
 - `source\bcb_consultor.py` fetches Brazilian Central Bank API values with caching.
 - `source\yf_stocks.py` wraps yfinance stock/fundamentals lookups. The ticker prompt itself is a Tk dialog in `txt_xpander.pyw` (`ask_ticker_input`), not in this module.
-- `source\gui_thread.py` owns the process's only `tk.Tk()` root, on a dedicated GUI thread. Worker threads never touch Tk: they pass a callable to `GuiThread.call` (blocks, returns the result, re-raises errors) or `GuiThread.submit` (fire-and-forget), and a `root.after` pump runs it on the GUI thread. The keyboard listener must never call into it.
+- `source\gui_thread.py` owns the process's only `tk.Tk()` root. Worker threads never touch Tk: they pass a callable to `GuiThread.call` (blocks, returns the result, re-raises errors) or `GuiThread.submit` (fire-and-forget), and a `root.after` pump runs it on the GUI thread. The keyboard listener must never call into it. *Which* thread that is depends on the OS: a dedicated worker thread on Windows (`ensure_started`), the main thread on macOS (`adopt_main_thread` + `run_mainloop`, selected by `platform_support.tk_runs_on_main_thread`). The marshaling contract is identical in both modes — only the thread the pump ticks on changes.
 - `source\gui_support.py` contains GUI filtering and dialog helpers. The manager's single "Snippets Dinâmicos" tab (sections for Data/Hora, Economia, Ações and WhatsApp) is generated from the dynamic registry, not from hardcoded lists; each row can be enabled/disabled and renamed in place.
 - `source\tests\` contains unit tests.
 - `source\docs\` contains planning notes for refactors and features, plus `audit-report.md` (full code audit) and `improvement-plan.md` (phased roadmap).
@@ -111,7 +111,9 @@ Style spans are range based. When text changes, keep spans normalized and clippe
 
 ## Runtime Notes
 
-This is a Windows-first app using `pynput` for keyboard hooks, `pystray` for the tray icon, `tkinter` for GUI, `ctypes` for Win32 clipboard and mutex calls, and clipboard paste as the primary insertion path. OS-specific decisions are centralized in `source\platform_support.py` (paste modifier, single-instance strategy, autostart install/remove behind the tray toggle, the Windows-only `PYSTRAY_BACKEND` pin); adding a macOS/Linux backend should extend that module rather than scatter `sys.platform` checks.
+This is a Windows-first app using `pynput` for keyboard hooks, `pystray` for the tray icon, `tkinter` for GUI, `ctypes` for Win32 clipboard and mutex calls, and clipboard paste as the primary insertion path. OS-specific decisions are centralized in `source\platform_support.py` (paste modifier, single-instance strategy, autostart install/remove behind the tray toggle, the Windows-only `PYSTRAY_BACKEND` pin, and the tray/Tk threading seam); adding a macOS/Linux backend should extend that module rather than scatter `sys.platform` checks.
+
+Which event loop owns the main thread is the one place the two OSes genuinely diverge, because macOS gives Tk and AppKit only one main thread between them (issue #24, `source\docs\macos-threading.md`). On Windows `icon.run()` blocks the main thread and Tk lives on a worker. On macOS `TextExpander.run()` takes the mirror branch: the Tk root is created on the main thread first, `platform_support.tray_icon_options()` then hands pystray the `NSApplication` Tk just created (`darwin_nsapplication`, an **`Icon` constructor** kwarg — order matters, `sharedApplication()` would otherwise mint a bare one nobody runs), the tray goes up with `run_detached()`, and `gui.run_mainloop()` blocks. Consequence worth remembering: on macOS tray menu callbacks arrive *on* the GUI thread, so `call`/`submit` run them inline — and `GuiThread.stop()` from that thread defers the `destroy()` one tick rather than tearing the interpreter down mid-dispatch.
 
 The autostart entry is classified, not just probed for existence: three writers own the same Startup entry (the tray toggle, `build_release.bat`, the Inno Setup `startup` task), so `classify_autostart` compares the entry's argv against `default_autostart_command()` and yields absent/current/stale. Two rules are load-bearing, both with tests. Reading the entry costs a PowerShell round-trip on Windows, and pystray re-evaluates `checked=` on every menu render — so the app resolves once at startup on a worker thread, caches the result in `_autostart_state`, and the menu only reads the cache. Repair is narrow: an entry whose target no longer exists is rewritten to the running copy, but one pointing at another *installed* copy is left alone and shown unchecked, because a source checkout and the packaged release legitimately coexist.
 
@@ -145,6 +147,8 @@ The test suite is under `source\tests\` and uses `unittest`. Source modules are 
 
 Use focused tests for narrow changes and run the full suite before finalizing changes that touch trigger detection, snippet persistence, variable resolution, rich text, runtime insertion, or WhatsApp flows.
 
+Never probe Tk availability by building a throwaway `tk.Tk()` in the test process. On macOS Tk 9.0.3 a root created and destroyed outside any mainloop leaves the Aqua interpreter in a state where a *later* root destroyed from inside an `after` callback traps the whole runner (SIGTRAP, no Python traceback). `test_gui_thread` probes out of process for exactly this reason; the app itself is unaffected because it only ever builds one root.
+
 Temporary test artifacts belong in `source\tests\tmp\`, which is gitignored.
 
 There is no repo-local `pyproject.toml`, `pytest`, `ruff`, `black`, `mypy`, or `tox` configuration at the time of writing.
@@ -155,7 +159,7 @@ There is no repo-local `pyproject.toml`, `pytest`, `ruff`, `black`, `mypy`, or `
 - Keep keyboard listener work fast and deterministic.
 - Preserve atomic JSON writes via `os.replace`.
 - Avoid persisting runtime-only dynamic snippets.
-- Keep all GUI work on the shared GUI thread via `gui_thread.GuiThread`. Never create a second `tk.Tk()`.
+- Keep all GUI work on the shared GUI thread via `gui_thread.GuiThread`. Never create a second `tk.Tk()`, and never assume which thread the root is on — go through `call`/`submit`.
 - Keep slow snippet behavior on background paths.
 - Treat clipboard contents as user state; restore or preserve it according to the existing action-specific behavior.
 - Use existing helper modules before introducing new abstractions.

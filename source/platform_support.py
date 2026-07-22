@@ -39,6 +39,39 @@ def paste_modifier_is_cmd():
     return IS_MAC
 
 
+def tk_runs_on_main_thread():
+    """True where the Tk root must live on the main thread rather than a worker.
+
+    macOS only. Aqua Tk *is* a Cocoa app — ``tk.Tk()`` instantiates the process's
+    shared ``NSApplication`` — and AppKit only drives its event loop on thread 0,
+    so the worker-thread root that Windows tolerates crashes or misrenders there.
+    ``GuiThread`` reads this to decide whether ``ensure_started`` spawns a thread
+    or adopts the main one; the ``call``/``submit`` contract is identical either
+    way. See ``source/docs/macos-threading.md``.
+    """
+    return IS_MAC
+
+
+def tray_icon_options():
+    """Return the extra ``pystray.Icon`` kwargs this OS needs. Empty on Windows.
+
+    On macOS the tray cannot start its own ``NSApplication``: there is one per
+    process (``+sharedApplication``) and Tk already created it. Handing pystray
+    that instance as ``darwin_nsapplication`` makes it attach its status item to
+    the loop ``root.mainloop()`` is driving, which is what allows
+    ``icon.run_detached()`` instead of a second, impossible, main loop.
+
+    **Call this only after the Tk root exists** — ``sharedApplication()`` creates
+    a plain ``NSApplication`` when none is around yet, and pystray would then be
+    integrating with a loop nobody runs.
+    """
+    if not IS_MAC:
+        return {}
+    import AppKit  # transitive dependency of pystray's darwin backend
+
+    return {"darwin_nsapplication": AppKit.NSApplication.sharedApplication()}
+
+
 def pin_tray_backend(environ=None):
     """Pin pystray to the win32 backend on Windows. Return the value set, or None.
 
