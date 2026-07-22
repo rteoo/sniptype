@@ -55,9 +55,6 @@ class RunStartupTests(unittest.TestCase):
                     tx.platform_support, "hide_dock_icon", return_value=True
                 ), \
                 mock.patch.object(
-                    tx.platform_support, "observe_menu_tracking", return_value=True
-                ), \
-                mock.patch.object(
                     tx.platform_support, "tray_icon_options", return_value=dict(options or {})
                 ):
             app.run()
@@ -85,49 +82,6 @@ class RunStartupTests(unittest.TestCase):
         icon.run.assert_not_called()
         app.gui.run_mainloop.assert_called_once_with()
         self.assertEqual(icon_cls.call_args.kwargs, {"darwin_nsapplication": shared})
-
-    def test_macos_guards_the_pump_against_menu_tracking(self):
-        """Issue #53: a Tcl timer firing inside AppKit's tracking loop aborts."""
-        app = make_startup_app()
-        with mock.patch.object(tx.pystray, "Icon", return_value=mock.Mock()), \
-                mock.patch.object(
-                    tx.platform_support, "tk_runs_on_main_thread", return_value=True
-                ), \
-                mock.patch.object(tx.platform_support, "hide_dock_icon", return_value=True), \
-                mock.patch.object(
-                    tx.platform_support, "observe_menu_tracking", return_value=True
-                ) as observe, \
-                mock.patch.object(tx.platform_support, "tray_icon_options", return_value={}):
-            app.run()
-        observe.assert_called_once_with(app.gui.pause_pump, app.gui.resume_pump)
-        app.logger.error.assert_not_called()
-
-    def test_a_missing_menu_observer_is_reported(self):
-        app = make_startup_app()
-        with mock.patch.object(tx.pystray, "Icon", return_value=mock.Mock()), \
-                mock.patch.object(
-                    tx.platform_support, "tk_runs_on_main_thread", return_value=True
-                ), \
-                mock.patch.object(tx.platform_support, "hide_dock_icon", return_value=True), \
-                mock.patch.object(
-                    tx.platform_support, "observe_menu_tracking", return_value=False
-                ), \
-                mock.patch.object(tx.platform_support, "tray_icon_options", return_value={}):
-            app.run()
-        app.logger.error.assert_called_once()
-
-    def test_windows_never_installs_the_menu_observer(self):
-        app = make_startup_app()
-        with mock.patch.object(tx.pystray, "Icon", return_value=mock.Mock()), \
-                mock.patch.object(
-                    tx.platform_support, "tk_runs_on_main_thread", return_value=False
-                ), \
-                mock.patch.object(
-                    tx.platform_support, "observe_menu_tracking"
-                ) as observe, \
-                mock.patch.object(tx.platform_support, "tray_icon_options", return_value={}):
-            app.run()
-        observe.assert_not_called()
 
     def test_macos_drops_the_dock_icon_after_the_root_exists(self):
         """Order is the whole point: Tk sets the Regular policy as it starts.

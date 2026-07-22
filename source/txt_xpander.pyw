@@ -3164,15 +3164,6 @@ class TextExpander:
             self.logger.error("Sem root do Tk na thread principal: a bandeja não tem loop para rodar.")
             return
 
-        if platform_support.tk_runs_on_main_thread() and not platform_support.observe_menu_tracking(
-            self.gui.pause_pump, self.gui.resume_pump
-        ):
-            # Without the tracking window the pump keeps ticking inside AppKit's
-            # menu loop, which aborts the process on the first tray click.
-            self.logger.error(
-                "Sem observador de menu do AppKit: a bandeja pode derrubar o app ao ser aberta."
-            )
-
         if platform_support.tk_runs_on_main_thread() and not platform_support.hide_dock_icon():
             # Cosmetic only: the tray still works, the app just also sits in the
             # Dock. Logged rather than raised for exactly that reason.
