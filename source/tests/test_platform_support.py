@@ -353,6 +353,132 @@ class AutostartStateTests(unittest.TestCase):
             self.assertEqual(ps.autostart_state("Txt Xpander", spaced), ps.AUTOSTART_CURRENT)
 
 
+class ClassifyAutostartTests(unittest.TestCase):
+    """Direct unit coverage of the pure classifier the state resolver builds on.
+
+    The round-trip tests above drive classify_autostart through
+    autostart_state/install; these pin the argv-comparison rules themselves.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.exe = os.path.join(self.tmp, "app.exe")
+        self.script = os.path.join(self.tmp, "txt_xpander.pyw")
+        for path in (self.exe, self.script):
+            open(path, "wb").close()
+        self.command = [self.exe, self.script]
+
+    def test_none_is_absent(self):
+        self.assertEqual(ps.classify_autostart(None, self.command), ps.AUTOSTART_ABSENT)
+
+    def test_identical_argv_is_current(self):
+        self.assertEqual(
+            ps.classify_autostart(list(self.command), self.command), ps.AUTOSTART_CURRENT
+        )
+
+    def test_differing_length_is_stale(self):
+        # A single-element exe entry versus an interpreter+script expected command.
+        self.assertEqual(ps.classify_autostart([self.exe], self.command), ps.AUTOSTART_STALE)
+
+    def test_pythonw_versus_python_is_stale(self):
+        pythonw = os.path.join(self.tmp, "pythonw.exe")
+        open(pythonw, "wb").close()
+        entry = [pythonw, self.script]
+        expected = [self.exe, self.script]
+        self.assertEqual(ps.classify_autostart(entry, expected), ps.AUTOSTART_STALE)
+
+    def test_missing_target_is_stale_even_when_expected_matches(self):
+        gone = [os.path.join(self.tmp, "nope", "app.exe"), self.script]
+        # Even if the expected command were these exact strings, a path that does
+        # not exist is dead at login and must classify stale, not current.
+        self.assertEqual(ps.classify_autostart(gone, gone), ps.AUTOSTART_STALE)
+
+    def test_relative_path_entry_is_stale(self):
+        # A relative argv element cannot be confirmed on disk, so it is a dead
+        # pointer regardless of what the expected command is.
+        self.assertEqual(
+            ps.classify_autostart(["app.exe", "txt_xpander.pyw"], self.command),
+            ps.AUTOSTART_STALE,
+        )
+
+    def test_windows_comparison_ignores_case_and_separators(self):
+        # Only meaningful under Windows path rules; force them and stub the
+        # on-disk check, since the shouty variant will not exist on disk.
+        shouty = [arg.upper().replace("\\", "/") for arg in self.command]
+        with mock.patch.object(ps, "current_os", return_value="windows"), \
+                mock.patch.object(ps, "autostart_target_exists", return_value=True):
+            self.assertEqual(
+                ps.classify_autostart(shouty, self.command), ps.AUTOSTART_CURRENT
+            )
+
+    def test_defaults_to_default_autostart_command_when_expected_is_none(self):
+        with mock.patch.object(ps, "default_autostart_command", return_value=self.command):
+            self.assertEqual(ps.classify_autostart(list(self.command)), ps.AUTOSTART_CURRENT)
+
+
+class ReadShortcutFailureTests(unittest.TestCase):
+    """The Windows .lnk reader is a PowerShell round-trip; garbage and failures
+    must degrade to a safe classification, never a crash or a false 'enabled'."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.lnk = os.path.join(self.tmp, "Txt Xpander.lnk")
+        open(self.lnk, "wb").close()
+
+    def _windows(self, run_result):
+        return (
+            mock.patch.object(ps, "current_os", return_value="windows"),
+            mock.patch.object(ps, "autostart_target_path", return_value=self.lnk),
+            mock.patch.object(ps.subprocess, "run", return_value=run_result),
+        )
+
+    def test_nonzero_exit_raises_oserror_with_detail(self):
+        result = mock.Mock(returncode=1, stdout="", stderr="access is denied")
+        patches = self._windows(result)
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+        with self.assertRaises(OSError) as ctx:
+            ps.read_autostart_command("Txt Xpander")
+        self.assertIn("access is denied", str(ctx.exception))
+
+    def test_empty_output_yields_no_command(self):
+        result = mock.Mock(returncode=0, stdout="\n\n", stderr="")
+        patches = self._windows(result)
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+        self.assertEqual(ps.read_autostart_command("Txt Xpander"), [])
+
+    def test_target_only_output_has_no_arguments(self):
+        result = mock.Mock(returncode=0, stdout=r"C:\App\Txt Xpander.exe" + "\n", stderr="")
+        patches = self._windows(result)
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+        self.assertEqual(ps.read_autostart_command("Txt Xpander"), [r"C:\App\Txt Xpander.exe"])
+
+    def test_garbage_output_classifies_stale_not_enabled(self):
+        # Empty stdout -> [] from the reader -> classify_autostart([]) is stale,
+        # so the tray box shows unchecked instead of claiming a working entry.
+        result = mock.Mock(returncode=0, stdout="", stderr="")
+        patches = self._windows(result)
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+        self.assertEqual(ps.autostart_state("Txt Xpander"), ps.AUTOSTART_STALE)
+
+    def test_nonzero_exit_is_caught_as_stale_by_autostart_state(self):
+        result = mock.Mock(returncode=1, stdout="", stderr="cannot open")
+        patches = self._windows(result)
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+        self.assertEqual(ps.autostart_state("Txt Xpander"), ps.AUTOSTART_STALE)
+
+
 class TrayBackendTests(unittest.TestCase):
     """The win32 pin makes ``import pystray`` fail off Windows (issue #23)."""
 

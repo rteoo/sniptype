@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import clipboard_support
 import runtime_support
 from app_module import txt_xpander as tx  # .pyw is not importable off Windows
+from pynput.keyboard import Key, KeyCode
 
 
 def make_app(base_dir, snippets):
@@ -281,6 +282,133 @@ class SlowRefRoutingTests(unittest.TestCase):
         fast.assert_not_called()
 
     def test_plain_snippet_still_uses_fast_path(self):
+        with mock.patch.object(self.app, "run_slow_snippet", return_value=True) as slow, \
+                mock.patch.object(self.app, "expand_snippet", return_value=True) as fast:
+            self.app._run_expansion("xplain")
+        fast.assert_called_once_with("xplain")
+        slow.assert_not_called()
+
+
+class OnPressSpecialKeyTests(unittest.TestCase):
+    """on_press feeds the detection buffer; Enter must reset it and Backspace
+    must pop it so the buffer tracks what the user actually typed."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.app = make_app(self.tmp, {"xhi": "hello"})
+
+    def _press(self, text):
+        for char in text:
+            self.app.on_press(KeyCode.from_char(char))
+
+    def test_char_keys_accumulate_in_the_buffer(self):
+        self._press("ab")
+        self.assertEqual("ab", self.app.typed_text)
+
+    def test_enter_resets_the_buffer(self):
+        # KNOWN DEFECT — kept as a failing regression marker (no source fix).
+        # on_press (txt_xpander.pyw:1304) guards with ``hasattr(key, 'char')``,
+        # which is False for Key.enter, so the try body short-circuits WITHOUT
+        # touching key.char, no AttributeError is raised, and the
+        # ``except AttributeError`` block that clears the buffer is dead code.
+        # The code's own comment says "Enter always just resets the buffer".
+        self._press("ab")
+        self.app.on_press(Key.enter)
+        self.assertEqual("", self.app.typed_text)
+
+    def test_backspace_pops_the_last_buffered_char(self):
+        # KNOWN DEFECT — same root cause as Enter. Backspace never pops the
+        # buffer, so detection diverges from the on-screen text after a typo
+        # correction (stale chars accumulate → missed or phantom matches).
+        self._press("abx")
+        self.app.on_press(Key.backspace)
+        self.assertEqual("ab", self.app.typed_text)
+
+    def test_unknown_special_key_neither_crashes_nor_changes_buffer(self):
+        self._press("ab")
+        self.app.on_press(Key.shift)
+        self.assertEqual("ab", self.app.typed_text)
+
+
+class BufferMarginDispatchTests(unittest.TestCase):
+    """The typed-text buffer must be sized so a trigger longer than the default,
+    and a composed dynamic trigger, are never truncated out before matching."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def _make(self, snippets):
+        app = make_app(self.tmp, snippets)
+        app._erase_chars = mock.Mock()  # avoid the real per-char erase sleeps
+        return app
+
+    def _type(self, app, text):
+        for char in text:
+            app._handle_char(char)
+
+    def test_long_composed_dynamic_trigger_dispatches_in_full(self):
+        long_name = "verylongidentifiername"
+        app = self._make({"_custom_codes": {"__prefix__": "cc", long_name: "VALUE"}})
+        composed = "cc" + long_name
+        self._type(app, "noise" + composed)
+        app.task_runner.start.assert_called_once()
+        args = app.task_runner.start.call_args
+        self.assertEqual(app._run_expansion, args.args[0])
+        self.assertEqual(composed, args.args[1])
+        app._erase_chars.assert_called_once_with(len(composed))
+
+    def test_direct_trigger_longer_than_default_buffer_still_matches(self):
+        long_trigger = "x" + "a" * 40  # 41 chars, exceeds the 20-char fallback
+        app = self._make({long_trigger: "big"})
+        self._type(app, "prefixpad" + long_trigger)
+        app.task_runner.start.assert_called_once()
+        self.assertEqual(long_trigger, app.task_runner.start.call_args.args[1])
+        app._erase_chars.assert_called_once_with(len(long_trigger))
+
+
+class TerminatorBufferMarginTests(unittest.TestCase):
+    """In terminator mode the terminator pushes one extra char into the buffer;
+    the safety margin must keep the trigger body from being truncated."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def test_full_buffer_trigger_plus_terminator_still_expands(self):
+        long_trigger = "x" + "y" * 30
+        app = make_app(self.tmp, {long_trigger: "big"})
+        app._erase_chars = mock.Mock()
+        app.terminator_mode = True
+
+        # Saturate the buffer, then the trigger, then the terminator.
+        for char in ("z" * app.max_trigger_length + long_trigger):
+            app._handle_char(char)
+        app.task_runner.start.assert_not_called()  # no terminator seen yet
+
+        app._handle_char(" ")
+        app.task_runner.start.assert_called_once()
+        args = app.task_runner.start.call_args
+        self.assertEqual(long_trigger, args.args[1])
+        self.assertEqual(" ", args.args[2])  # terminator carried through for re-emit
+
+
+class FormRoutingTests(unittest.TestCase):
+    """A snippet carrying a form variable must be classified into form_triggers
+    and routed to the slow (dialog) path, never the fast paste path."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.app = make_app(self.tmp, {"xform": "Olá %%nome%%", "xplain": "texto"})
+
+    def test_form_snippet_is_flagged_and_routed_to_slow_path(self):
+        self.assertIn("xform", self.app.trigger_index["form_triggers"])
+        with mock.patch.object(self.app, "run_slow_snippet", return_value=True) as slow, \
+                mock.patch.object(self.app, "expand_snippet", return_value=True) as fast:
+            self.app._run_expansion("xform")
+        slow.assert_called_once_with("xform")
+        fast.assert_not_called()
+
+    def test_plain_snippet_is_not_flagged_and_uses_fast_path(self):
+        self.assertNotIn("xplain", self.app.trigger_index["form_triggers"])
         with mock.patch.object(self.app, "run_slow_snippet", return_value=True) as slow, \
                 mock.patch.object(self.app, "expand_snippet", return_value=True) as fast:
             self.app._run_expansion("xplain")

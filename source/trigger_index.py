@@ -45,7 +45,9 @@ def compile_trigger_index(snippets, slow_snippets):
     direct_by_last_char = {}
 
     for trigger in snippets.keys():
-        if trigger.startswith("_"):
+        # An empty key has no last char (crash below) and would suffix-match
+        # every keystroke — never index it.
+        if not trigger or trigger.startswith("_"):
             continue
 
         direct_triggers.append(trigger)
