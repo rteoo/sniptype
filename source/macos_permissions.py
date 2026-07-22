@@ -116,6 +116,38 @@ def check_accessibility():
         return UNKNOWN
 
 
+def secure_input_enabled():
+    """True when macOS Secure Keyboard Entry is active for the focused app.
+
+    This is a separate gate from TCC and it cannot be granted: while it is on
+    (Terminal's "Secure Keyboard Entry", a focused password field, the login
+    window) the system drops *both* directions of an expansion — the listener
+    never sees the trigger and the synthesized backspaces and Cmd+V never land.
+
+    The app checks this before erasing anything, so a trigger typed into a
+    secure field is left exactly as typed instead of being half-erased by
+    backspaces that some other app might receive. Always False off macOS.
+    """
+    if not IS_MAC:
+        return False
+
+    is_enabled = _framework_symbol("Carbon", "IsSecureEventInputEnabled")
+    if is_enabled is None:
+        return False
+    try:
+        is_enabled.restype = ctypes.c_bool
+        is_enabled.argtypes = []
+        return bool(is_enabled())
+    except OSError:
+        return False
+
+
+SECURE_INPUT_MESSAGE = (
+    "Entrada segura do macOS ativa (campo de senha ou Terminal com "
+    "\"Secure Keyboard Entry\"). O snippet não foi expandido."
+)
+
+
 def check_permissions():
     """Probe both grants. Returns ``{permission: granted|denied|unknown}``."""
     return {
