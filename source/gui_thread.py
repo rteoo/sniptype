@@ -6,6 +6,14 @@ threads never touch Tk directly: they hand a callable to ``call`` (blocking,
 returns the result) or ``submit`` (fire-and-forget) and an ``after``-driven
 pump runs it on the GUI thread.
 
+Which thread that is depends on the OS. On Windows the root lives on a spawned
+worker thread while pystray blocks the main one. On macOS both Aqua Tk and
+AppKit demand thread 0, so ``main_thread`` mode designates the main thread as
+the GUI thread instead: the caller runs :meth:`adopt_main_thread` then
+:meth:`run_mainloop`, and the tray runs detached on the same loop. The
+marshaling contract is identical in both modes — only the thread the pump ticks
+on changes. See ``source/docs/macos-threading.md``.
+
 The keyboard listener thread must never call into this module; dialog
 marshaling belongs to the expansion worker path only.
 """
@@ -14,6 +22,8 @@ import queue
 import threading
 
 import tkinter as tk
+
+from platform_support import tk_runs_on_main_thread
 
 
 # Pump cadence. Low enough that a dialog feels instant, high enough that an
@@ -26,7 +36,7 @@ _START_TIMEOUT_SECONDS = 10.0
 class GuiThread:
     """Owns the process-wide Tk root and marshals work onto its thread."""
 
-    def __init__(self, logger=None):
+    def __init__(self, logger=None, main_thread=None):
         self._logger = logger
         self._queue = queue.Queue()
         self._lock = threading.RLock()
@@ -34,14 +44,78 @@ class GuiThread:
         self._thread = None
         self._start_error = None
         self._stopping = False
+        self._main_thread = (
+            tk_runs_on_main_thread() if main_thread is None else bool(main_thread)
+        )
         self.root = None
 
     # -----------------------------------------------------------------
     # Lifecycle
     # -----------------------------------------------------------------
 
+    def adopt_main_thread(self):
+        """Make the calling thread the GUI thread and create the root there.
+
+        Main-thread mode only (macOS). Does not block: the caller is expected to
+        enter :meth:`run_mainloop` once the rest of startup is wired, and queued
+        work drains from the moment that loop begins.
+        """
+        if not self._main_thread:
+            raise RuntimeError("adopt_main_thread requires main-thread mode")
+        if threading.current_thread() is not threading.main_thread():
+            raise RuntimeError("adopt_main_thread must run on the main thread")
+
+        with self._lock:
+            if self._stopping:
+                raise RuntimeError("GUI thread is shutting down")
+            if self.root is not None:
+                return True
+            self._start_error = None
+            self._thread = threading.current_thread()
+
+        try:
+            self.root = tk.Tk()
+            self.root.withdraw()
+        except Exception:
+            # Never leave a thread designated with no root behind it: call()
+            # would then run callables inline against ``None``.
+            with self._lock:
+                self._thread = None
+            raise
+
+        self._ready.set()
+        return True
+
+    def run_mainloop(self):
+        """Block on the Tk loop until the root is destroyed. Main-thread mode only.
+
+        This is what ``run()`` enters on macOS in place of ``icon.run()``.
+        """
+        if not self._main_thread:
+            raise RuntimeError("run_mainloop requires main-thread mode")
+        if self.root is None:
+            raise RuntimeError("adopt_main_thread must run before run_mainloop")
+        if threading.current_thread() is not self._thread:
+            raise RuntimeError("run_mainloop must run on the adopted GUI thread")
+        self._loop()
+
     def ensure_started(self, timeout=_START_TIMEOUT_SECONDS):
         """Start the GUI thread if needed and block until the root exists."""
+        if self._main_thread:
+            with self._lock:
+                if self._stopping:
+                    raise RuntimeError("GUI thread is shutting down")
+                if self.root is not None:
+                    return True
+                if threading.current_thread() is not threading.main_thread():
+                    # Loud on purpose: spawning a thread here is the exact
+                    # unsupported configuration this mode exists to prevent.
+                    raise RuntimeError(
+                        "Tk root not started; on this platform it must be "
+                        "adopted on the main thread before any worker call"
+                    )
+            return self.adopt_main_thread()
+
         with self._lock:
             if self._stopping:
                 raise RuntimeError("GUI thread is shutting down")
@@ -61,7 +135,11 @@ class GuiThread:
 
     @property
     def running(self):
-        return self._thread is not None and self._thread.is_alive()
+        if self._thread is None or not self._thread.is_alive():
+            return False
+        # In main-thread mode the designated thread outlives the root, so
+        # liveness alone would keep reporting a torn-down GUI as running.
+        return not self._main_thread or self.root is not None
 
     def _run(self):
         try:
@@ -73,6 +151,9 @@ class GuiThread:
             return
 
         self._ready.set()
+        self._loop()
+
+    def _loop(self):
         try:
             self._pump()
             self.root.mainloop()
@@ -89,27 +170,58 @@ class GuiThread:
             # the dialog lock, which would refuse every later dialog.
             self._fail_pending()
 
+    @staticmethod
+    def _teardown(root):
+        # destroy(), not quit(): mainloop exits when the window count hits
+        # zero, which is deterministic. quit() relies on _tkinter's quit
+        # flag, which proved unreliable once the process has had earlier
+        # Tk interpreters (observed on 3.14: stop() hung until the join
+        # timeout while the pump kept ticking).
+        root.destroy()
+
     def stop(self, timeout=5.0):
         """Tear the root down and join the GUI thread."""
         with self._lock:
-            if self._thread is None or not self._thread.is_alive():
+            if not self.running:
                 self._stopping = True
                 self._fail_pending()
                 return
             self._stopping = True
             thread = self._thread
 
-        def _teardown(root):
-            # destroy(), not quit(): mainloop exits when the window count hits
-            # zero, which is deterministic. quit() relies on _tkinter's quit
-            # flag, which proved unreliable once the process has had earlier
-            # Tk interpreters (observed on 3.14: stop() hung until the join
-            # timeout while the pump kept ticking).
-            root.destroy()
+        if self._main_thread:
+            self._stop_main_thread(timeout)
+            return
 
         # Cannot use call(): ensure_started() refuses once _stopping is set.
-        self._queue.put((_teardown, None, None))
+        self._queue.put((self._teardown, None, None))
         thread.join(timeout)
+        self._fail_pending()
+
+    def _stop_main_thread(self, timeout):
+        """Tear the root down when the GUI thread is the main thread.
+
+        There is no thread to join — the main thread is the process — so the
+        destroy is awaited through the pump instead. Draining the queue before
+        it has run would swallow the teardown itself.
+        """
+        if threading.current_thread() is self._thread:
+            # A tray menu callback lands here: on macOS pystray dispatches it
+            # on the main thread, from inside the very loop ``mainloop()`` is
+            # pumping. Destroying the interpreter mid-dispatch is not safe, so
+            # the teardown goes to the next tick; ``_loop`` fails the pending
+            # queue when it unwinds.
+            try:
+                self.root.after(0, self._teardown, self.root)
+            except Exception as exc:
+                self._log(f"Falha ao agendar o encerramento do root do Tk: {exc}")
+                self._fail_pending()
+            return
+
+        done = threading.Event()
+        self._queue.put((self._teardown, {}, done))
+        if not done.wait(timeout):
+            self._log("Root do Tk não confirmou o encerramento a tempo")
         self._fail_pending()
 
     def _fail_pending(self):
