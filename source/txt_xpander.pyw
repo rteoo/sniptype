@@ -88,6 +88,8 @@ from platform_support import (
     autostart_target_exists,
     classify_autostart,
     install_autostart,
+    insertion_timings,
+    invalid_timing_overrides,
     read_autostart_command,
     release_lockfile,
     remove_autostart,
@@ -231,9 +233,6 @@ class TextExpander:
         # PowerShell round-trip on Windows and pystray re-evaluates `checked=`
         # on every menu render, so the menu only ever reads this.
         self._autostart_state = AUTOSTART_ABSENT
-        self.text_inserter = TextInserter(
-            self.keyboard_controller, logger=self.logger, notify=self.notify_error
-        )
         self.notification_timestamps = {}
         self.notification_history = []
         self.pending_notifications = []
@@ -254,7 +253,23 @@ class TextExpander:
         # Opt-in: expand only after a terminator (space/punctuation). Default off
         # to preserve the existing expand-on-last-character muscle memory.
         self.terminator_mode = bool(self.settings.get("terminator_mode", False))
+        # Clipboard/erase delays: per-OS defaults, overridable per key from
+        # settings.json. Resolved once — they are read on the listener thread.
+        timings = insertion_timings(self.settings)
+        self.erase_key_delay = timings["erase_key_delay"]
+        self.text_inserter = TextInserter(
+            self.keyboard_controller,
+            logger=self.logger,
+            settle_delay=timings["clipboard_settle_delay"],
+            restore_delay=timings["paste_restore_delay"],
+            notify=self.notify_error,
+        )
         configure_logging(self.logs_dir)
+        for key in invalid_timing_overrides(self.settings):
+            self.logger.warning(
+                f"settings.json: valor inválido para '{key}'; usando o padrão "
+                f"da plataforma ({timings[key]}s)."
+            )
         self.migrate_legacy_data()
         self.ensure_seed_snippets_file(snippets_file)
         self.logger.info(f"➡ Diretório de dados: {self.data_dir}")
@@ -1366,19 +1381,40 @@ class TextExpander:
 
     def _dispatch_expansion(self, trigger, erase_length, append_text=""):
         """Erase the typed trigger and run the expansion on a worker thread."""
+        if self._secure_input_blocks_expansion():
+            self.typed_text = ""
+            return
         self._erase_chars(erase_length)
         self.typed_text = ""
         self.task_runner.start(self._run_expansion, trigger, append_text, name="expand")
 
+    def _secure_input_blocks_expansion(self):
+        """True when macOS Secure Keyboard Entry is swallowing synthesized input.
+
+        Checked before the erase, not after: while secure input is on the system
+        drops the backspaces and the Cmd+V alike, so the only clean outcome is to
+        leave the trigger exactly as the user typed it and say why. Always False
+        off macOS.
+        """
+        if not IS_MAC or not macos_permissions.secure_input_enabled():
+            return False
+        self.logger.info(macos_permissions.SECURE_INPUT_MESSAGE)
+        self.notify(
+            macos_permissions.SECURE_INPUT_MESSAGE,
+            key="secure-input",
+            cooldown_seconds=60,
+        )
+        return True
+
     def _erase_chars(self, count):
         """Backspace over ``count`` characters on the listener thread."""
-        # ceiling: 10 ms sleep per char keeps the erase reliable across apps; with
+        # ceiling: the per-char sleep keeps the erase reliable across apps; with
         # expansion now off-thread this only adds latency proportional to trigger
         # length, not to network work (audit 2.6).
         for _ in range(count):
             self.keyboard_controller.press(Key.backspace)
             self.keyboard_controller.release(Key.backspace)
-            time.sleep(0.01)
+            time.sleep(self.erase_key_delay)
 
     def _run_expansion(self, trigger, append_text=""):
         """Worker entry point: produce and insert the expansion for a trigger.

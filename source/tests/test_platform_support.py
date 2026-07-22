@@ -555,6 +555,78 @@ class TkMainThreadSeamTests(unittest.TestCase):
         with mock.patch.object(ps, "IS_MAC", False):
             self.assertFalse(ps.tk_runs_on_main_thread())
 
+
+class InsertionTimingTests(unittest.TestCase):
+    """Per-OS paste/erase delays with settings.json overrides (issue #27)."""
+
+    def test_every_platform_defines_every_key(self):
+        for system in ("windows", "darwin", "linux"):
+            timings = ps.default_insertion_timings(system)
+            self.assertEqual(set(timings), set(ps.INSERTION_TIMING_KEYS), system)
+            for key, value in timings.items():
+                self.assertIsInstance(value, float, f"{system}.{key}")
+
+    def test_windows_timings_are_the_historical_constants(self):
+        # These are the values the paste path shipped with; a macOS retune must
+        # not move them.
+        self.assertEqual(
+            {
+                "clipboard_settle_delay": 0.05,
+                "paste_restore_delay": 0.12,
+                "erase_key_delay": 0.01,
+            },
+            ps.default_insertion_timings("windows"),
+        )
+
+    def test_macos_settles_faster_than_windows(self):
+        # pbcopy/osascript exit only once NSPasteboard holds the payload, so the
+        # Windows settle margin is latency macOS does not need.
+        self.assertLess(
+            ps.default_insertion_timings("darwin")["clipboard_settle_delay"],
+            ps.default_insertion_timings("windows")["clipboard_settle_delay"],
+        )
+
+    def test_unknown_platform_falls_back_instead_of_raising(self):
+        self.assertEqual(
+            ps.default_insertion_timings("haiku"), ps.default_insertion_timings("linux")
+        )
+
+    def test_settings_override_a_single_key_and_leave_the_rest(self):
+        timings = ps.insertion_timings({"paste_restore_delay": 0.3}, system="darwin")
+        self.assertEqual(0.3, timings["paste_restore_delay"])
+        self.assertEqual(
+            ps.default_insertion_timings("darwin")["erase_key_delay"],
+            timings["erase_key_delay"],
+        )
+
+    def test_unrelated_settings_keys_are_ignored(self):
+        self.assertEqual(
+            ps.default_insertion_timings("windows"),
+            ps.insertion_timings({"terminator_mode": True, "bcb_timeout": 3}, system="windows"),
+        )
+
+    def test_bad_overrides_fall_back_to_the_platform_default(self):
+        # A delay written in milliseconds, a negative, a string and a bool would
+        # each freeze or break the listener thread if they reached it.
+        for bad in (500, -0.1, "0.2", True, None, [0.2]):
+            with self.subTest(bad=bad):
+                timings = ps.insertion_timings({"erase_key_delay": bad}, system="windows")
+                self.assertEqual(0.01, timings["erase_key_delay"])
+                self.assertEqual(["erase_key_delay"], ps.invalid_timing_overrides({"erase_key_delay": bad}))
+
+    def test_zero_is_a_valid_delay(self):
+        timings = ps.insertion_timings({"erase_key_delay": 0}, system="windows")
+        self.assertEqual(0.0, timings["erase_key_delay"])
+        self.assertEqual([], ps.invalid_timing_overrides({"erase_key_delay": 0}))
+
+    def test_no_settings_reports_no_invalid_overrides(self):
+        self.assertEqual([], ps.invalid_timing_overrides(None))
+        self.assertEqual([], ps.invalid_timing_overrides({}))
+
+
+class TrayIconOptionTests(unittest.TestCase):
+    """The pystray/NSApplication handoff on macOS (issue #24)."""
+
     def test_non_macos_adds_no_icon_options(self):
         """Windows must keep constructing the icon exactly as it always has."""
         with mock.patch.object(ps, "IS_MAC", False):
