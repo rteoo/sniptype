@@ -20,6 +20,12 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="Txt Xpander"
 BUNDLE_ID="com.txt-xpander"
+# A stable signing identity is what lets the bundle keep its TCC grants across
+# rebuilds: ad-hoc signing has no identity, so macOS pins Input Monitoring and
+# Accessibility to the binary's cdhash and every build silently revokes them.
+# Any code-signing identity works; this is the name the README's self-signed
+# certificate uses. Ad-hoc stays the fallback so a fresh checkout still builds.
+DEFAULT_SIGN_IDENTITY="Txt Xpander Dev"
 DIST_ROOT="$REPO_DIR/dist"
 TARGET_APP="$DIST_ROOT/$APP_NAME.app"
 PREVIOUS_APP="$DIST_ROOT/$APP_NAME.app.previous"
@@ -90,9 +96,21 @@ fi
 plutil -replace LSUIElement -bool true "$STAGED_APP/Contents/Info.plist" 2>/dev/null \
     || plutil -insert LSUIElement -bool true "$STAGED_APP/Contents/Info.plist"
 
-codesign --force --deep --sign "${CODESIGN_IDENTITY:--}" "$STAGED_APP" >/dev/null 2>&1 || {
+SIGN_IDENTITY="${CODESIGN_IDENTITY:-}"
+if [[ -z "$SIGN_IDENTITY" ]] \
+    && security find-identity -v -p codesigning 2>/dev/null | grep -qF "$DEFAULT_SIGN_IDENTITY"; then
+    SIGN_IDENTITY="$DEFAULT_SIGN_IDENTITY"
+fi
+if [[ -z "$SIGN_IDENTITY" ]]; then
+    SIGN_IDENTITY="-"
+    echo "Signing ad-hoc: macOS will re-ask for Input Monitoring/Accessibility after this build."
+else
+    echo "Signing with identity: $SIGN_IDENTITY"
+fi
+
+if ! codesign --force --deep --sign "$SIGN_IDENTITY" "$STAGED_APP" 2>&1; then
     echo "Warning: codesign failed; the bundle may be rejected by Gatekeeper." >&2
-}
+fi
 
 # --- Promote --------------------------------------------------------------
 mkdir -p "$DIST_ROOT"
@@ -120,5 +138,6 @@ echo "First launch: the bundle is unsigned/ad-hoc signed, so Gatekeeper blocks a
 echo "double-click — right-click the app and choose Open once, or run:"
 echo "  xattr -dr com.apple.quarantine \"$TARGET_APP\""
 echo "Then grant Input Monitoring and Accessibility in System Settings > Privacy"
-echo "& Security. Those grants are tied to the bundle's identity: rebuilding or"
-echo "re-signing invalidates them and macOS asks again."
+echo "& Security. Those grants are tied to the bundle's signing identity — with"
+echo "\"$SIGN_IDENTITY\" they survive rebuilds; under ad-hoc (-) every build revokes"
+echo "them and the stale row has to be removed and re-added."
