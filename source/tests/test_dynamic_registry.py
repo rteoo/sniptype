@@ -3,6 +3,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest.mock import MagicMock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -284,6 +285,283 @@ class BundledRegistryTests(unittest.TestCase):
         self.assertEqual(set(registry.keys()), set(snippets.keys()))
         self.assertIn("xdolar", snippets)
         self.assertIn("xcot", slow)
+
+
+# --------------------------------------------------------------------------- #
+# Adversarial: load_registry robustness
+# --------------------------------------------------------------------------- #
+class LoadRegistryAdversarialTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.bundled = os.path.join(self.tmp, "dynamic_snippets.json")
+        with open(self.bundled, "w", encoding="utf-8") as handle:
+            json.dump({"xhj": {"provider": "datetime", "format": "%d/%m/%Y"}}, handle)
+
+    def _write_user(self, raw):
+        path = os.path.join(self.tmp, "user.json")
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(raw)
+        return path
+
+    def test_bundled_root_list_returns_empty(self):
+        with open(self.bundled, "w", encoding="utf-8") as handle:
+            json.dump([1, 2, 3], handle)
+        self.assertEqual(dr.load_registry(self.bundled), {})
+
+    def test_bundled_root_scalar_returns_empty(self):
+        with open(self.bundled, "w", encoding="utf-8") as handle:
+            handle.write("42")
+        self.assertEqual(dr.load_registry(self.bundled), {})
+
+    def test_user_root_list_is_ignored(self):
+        user = self._write_user("[1, 2, 3]")
+        registry = dr.load_registry(self.bundled, user)
+        self.assertIn("xhj", registry)
+        self.assertEqual(registry["xhj"]["format"], "%d/%m/%Y")
+
+    def test_empty_user_dict_leaves_bundled(self):
+        user = self._write_user("{}")
+        registry = dr.load_registry(self.bundled, user)
+        self.assertEqual(registry["xhj"]["format"], "%d/%m/%Y")
+
+    def test_malformed_user_json_returns_bundled_and_warns(self):
+        user = self._write_user("{ not json")
+        logger = MagicMock()
+        registry = dr.load_registry(self.bundled, user, logger=logger)
+        self.assertIn("xhj", registry)
+        logger.warning.assert_called_once()
+
+    def test_user_adds_new_trigger(self):
+        user = self._write_user(json.dumps({"xnew": {"provider": "datetime", "format": "%H"}}))
+        registry = dr.load_registry(self.bundled, user)
+        self.assertIn("xnew", registry)
+        self.assertIn("xhj", registry)
+
+    def test_user_nondict_entry_keeps_bundled_entry(self):
+        # REGRESSION: a single malformed override entry (non-dict) used to
+        # replace the good bundled entry wholesale, silently dropping the
+        # trigger. It must be ignored -- the per-entry version of the
+        # "one bad layer never wipes the other" guarantee.
+        user = self._write_user(json.dumps({"xhj": "garbage"}))
+        registry = dr.load_registry(self.bundled, user)
+        self.assertEqual(registry["xhj"], {"provider": "datetime", "format": "%d/%m/%Y"})
+        snippets, _ = dr.build_dynamic_snippets(registry, FakeContext())
+        self.assertIn("xhj", snippets)
+
+    def test_bundled_nondict_entry_survives_load_then_skipped_by_build(self):
+        with open(self.bundled, "w", encoding="utf-8") as handle:
+            json.dump(
+                {"xhj": "notadict", "xok": {"provider": "datetime", "format": "%Y"}},
+                handle,
+            )
+        registry = dr.load_registry(self.bundled)
+        self.assertEqual(registry["xhj"], "notadict")
+        snippets, _ = dr.build_dynamic_snippets(registry, FakeContext())
+        self.assertNotIn("xhj", snippets)
+        self.assertIn("xok", snippets)
+
+
+# --------------------------------------------------------------------------- #
+# Adversarial: effective_trigger edge inputs
+# --------------------------------------------------------------------------- #
+class EffectiveTriggerAdversarialTests(unittest.TestCase):
+    def test_non_string_trigger_falls_back_to_key(self):
+        self.assertEqual(dr.effective_trigger("xhj", {"trigger": 5}), "xhj")
+        self.assertEqual(dr.effective_trigger("xhj", {"trigger": ["x"]}), "xhj")
+
+    def test_entry_not_a_dict_returns_key(self):
+        self.assertEqual(dr.effective_trigger("xhj", "notadict"), "xhj")
+        self.assertEqual(dr.effective_trigger("xhj", None), "xhj")
+
+    def test_tab_newline_trigger_falls_back(self):
+        self.assertEqual(dr.effective_trigger("xhj", {"trigger": "\t\n"}), "xhj")
+
+
+# --------------------------------------------------------------------------- #
+# Adversarial: build_dynamic_snippets
+# --------------------------------------------------------------------------- #
+class BuildDynamicAdversarialTests(unittest.TestCase):
+    def setUp(self):
+        self.ctx = FakeContext()
+
+    def test_two_entries_renamed_to_same_trigger_first_wins(self):
+        logger = MagicMock()
+        registry = {
+            "a": {"provider": "datetime", "format": "%Y", "trigger": "xsame"},
+            "b": {"provider": "datetime", "method": "extenso", "trigger": "xsame"},
+        }
+        snippets, _ = dr.build_dynamic_snippets(registry, self.ctx, logger=logger)
+        self.assertEqual(list(snippets.keys()), ["xsame"])
+        # The first entry (a format lambda) won; not the extenso method.
+        self.assertNotEqual(snippets["xsame"](), "segunda-feira")
+        logger.warning.assert_called_once()
+        self.assertIn("xsame", logger.warning.call_args[0][0])
+
+    def test_non_dict_entry_is_skipped(self):
+        snippets, _ = dr.build_dynamic_snippets({"x": "notadict"}, self.ctx)
+        self.assertEqual(snippets, {})
+
+    def test_datetime_unknown_method_falls_back_to_format(self):
+        # Unlike bcb/stock, datetime never returns None: any method other than
+        # 'extenso' is ignored and the format branch is used.
+        registry = {"x": {"provider": "datetime", "method": "bogus", "format": "%Y"}}
+        snippets, _ = dr.build_dynamic_snippets(registry, self.ctx)
+        self.assertIn("x", snippets)
+        self.assertTrue(snippets["x"]().isdigit())
+
+    def test_datetime_default_format_when_absent(self):
+        registry = {"x": {"provider": "datetime"}}
+        snippets, _ = dr.build_dynamic_snippets(registry, self.ctx)
+        self.assertRegex(snippets["x"](), r"^\d{2}/\d{2}/\d{4}$")
+
+    def test_unknown_provider_logs_warning(self):
+        logger = MagicMock()
+        snippets, _ = dr.build_dynamic_snippets({"xbad": {"provider": "nope"}}, self.ctx, logger=logger)
+        self.assertEqual(snippets, {})
+        logger.warning.assert_called_once()
+        self.assertIn("nope", logger.warning.call_args[0][0])
+
+    def test_unknown_method_logs_warning(self):
+        logger = MagicMock()
+        registry = {"xbad": {"provider": "bcb", "method": "does_not_exist"}}
+        snippets, _ = dr.build_dynamic_snippets(registry, self.ctx, logger=logger)
+        self.assertEqual(snippets, {})
+        logger.warning.assert_called_once()
+        self.assertIn("xbad", logger.warning.call_args[0][0])
+
+    def test_bcb_bind_does_not_invoke_the_method(self):
+        class CountingBCB:
+            def __init__(self):
+                self.calls = 0
+
+            def get_dolar(self):
+                self.calls += 1
+                return "dolar-value"
+
+        self.ctx.bcb = CountingBCB()
+        registry = {"xdolar": {"provider": "bcb", "method": "dolar"}}
+        snippets, _ = dr.build_dynamic_snippets(registry, self.ctx)
+        self.assertEqual(self.ctx.bcb.calls, 0)  # binding must not fetch
+        self.assertEqual(snippets["xdolar"](), "dolar-value")
+        self.assertEqual(self.ctx.bcb.calls, 1)
+
+    def test_stock_bind_does_not_open_dialog(self):
+        called = []
+        self.ctx.ask_ticker_input = lambda label: called.append(label) or "PETR4"
+        registry = {"xcot": {"provider": "stock", "method": "cotacao", "dialog": "Cotação"}}
+        snippets, _ = dr.build_dynamic_snippets(registry, self.ctx)
+        self.assertEqual(called, [])  # no dialog at bind time
+        self.assertEqual(snippets["xcot"](), "cotacao-PETR4")
+        self.assertEqual(called, ["Cotação"])
+
+    def test_string_enabled_false_still_binds(self):
+        # Footgun characterization: is_enabled uses bool(), so the JSON string
+        # "false" is truthy and does NOT disable the entry. Only a real boolean
+        # false (or 0/empty) disables it.
+        registry = {"x": {"provider": "datetime", "format": "%Y", "enabled": "false"}}
+        snippets, _ = dr.build_dynamic_snippets(registry, self.ctx)
+        self.assertIn("x", snippets)
+
+
+# --------------------------------------------------------------------------- #
+# Adversarial: reference_entries_by_category
+# --------------------------------------------------------------------------- #
+class ReferenceEntriesAdversarialTests(unittest.TestCase):
+    def test_non_dict_entry_is_skipped(self):
+        registry = {
+            "junk": "notadict",
+            "y": {"provider": "datetime", "category": "datetime", "description": "d"},
+        }
+        grouped = dr.reference_entries_by_category(registry)
+        self.assertEqual(grouped, {"datetime": [("y", "y", "d", True)]})
+
+    def test_category_defaults_to_provider(self):
+        registry = {"y": {"provider": "bcb", "description": "d"}}
+        grouped = dr.reference_entries_by_category(registry)
+        self.assertEqual(grouped, {"bcb": [("y", "y", "d", True)]})
+
+    def test_category_defaults_to_other_without_provider(self):
+        registry = {"y": {"description": "d"}}
+        grouped = dr.reference_entries_by_category(registry)
+        self.assertEqual(grouped, {"other": [("y", "y", "d", True)]})
+
+
+# --------------------------------------------------------------------------- #
+# Adversarial: validate_rename
+# --------------------------------------------------------------------------- #
+class ValidateRenameAdversarialTests(unittest.TestCase):
+    def setUp(self):
+        self.registry = {
+            "xhj": {"provider": "datetime"},
+            "xdolar": {"provider": "bcb", "method": "dolar"},
+        }
+        self.snippets = {
+            "email": "a@b.com",
+            "relatorio": {"__kind__": "rich_text", "text": "R"},
+            "_cpf_numbers": {"fulano": "123"},
+        }
+
+    def _errors(self, new_trigger):
+        return dr.validate_rename(self.registry, "xhj", new_trigger, self.snippets)[0]
+
+    def test_none_trigger_rejected_without_crash(self):
+        errors = self._errors(None)
+        self.assertTrue(errors)
+        self.assertIn("vazio", errors[0])
+
+    def test_non_string_trigger_rejected(self):
+        self.assertTrue(self._errors(5))
+
+    def test_tab_only_trigger_rejected(self):
+        self.assertTrue(self._errors("\t\t"))
+
+    def test_padded_trigger_is_stripped_then_collision_detected(self):
+        # " xdolar " strips to "xdolar", which collides with the other dynamic.
+        errors = self._errors(" xdolar ")
+        self.assertTrue(any("din" in e for e in errors))
+
+    def test_collision_with_rich_text_static_is_rejected(self):
+        # A rich-text dict snippet still counts as a static trigger name.
+        errors = self._errors("relatorio")
+        self.assertTrue(any("est" in e.lower() for e in errors))
+
+
+# --------------------------------------------------------------------------- #
+# Adversarial: composed_mapping_triggers
+# --------------------------------------------------------------------------- #
+class ComposedMappingTriggersTests(unittest.TestCase):
+    def test_builtin_cpf_prefix_composes_items(self):
+        composed = dr.composed_mapping_triggers(
+            {"_cpf_numbers": {"fulano": "1", "ciclano": "2"}}
+        )
+        self.assertEqual(composed, {"cpffulano", "cpfciclano"})
+
+    def test_custom_codes_prefix_excludes_reserved_key(self):
+        composed = dr.composed_mapping_triggers(
+            {"_custom_codes": {"__prefix__": "cc", "a": "1", "b": "2"}}
+        )
+        self.assertEqual(composed, {"cca", "ccb"})
+
+
+# --------------------------------------------------------------------------- #
+# Adversarial: is_enabled
+# --------------------------------------------------------------------------- #
+class IsEnabledTests(unittest.TestCase):
+    def test_default_true(self):
+        self.assertTrue(dr.is_enabled({}))
+
+    def test_explicit_false(self):
+        self.assertFalse(dr.is_enabled({"enabled": False}))
+
+    def test_zero_is_false(self):
+        self.assertFalse(dr.is_enabled({"enabled": 0}))
+
+    def test_empty_string_is_false(self):
+        self.assertFalse(dr.is_enabled({"enabled": ""}))
+
+    def test_nonempty_string_false_is_truthy(self):
+        # Footgun: the string "false" is truthy under bool().
+        self.assertTrue(dr.is_enabled({"enabled": "false"}))
 
 
 if __name__ == "__main__":

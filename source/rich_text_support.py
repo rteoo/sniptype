@@ -35,8 +35,12 @@ def extract_plain_text(value):
 
 
 def normalize_style_spans(spans, text_length=None):
+    if not isinstance(spans, (list, tuple)):
+        # A corrupt payload can carry any spans shape; a scalar must degrade
+        # to "no spans" like every other malformed value instead of raising.
+        spans = []
     normalized = []
-    for span in spans or []:
+    for span in spans:
         if not isinstance(span, dict):
             continue
         tag = span.get("tag")
@@ -117,6 +121,13 @@ def _escape_rtf_text(text):
             parts.append(r"\par " + "\n")
         elif 32 <= codepoint <= 126:
             parts.append(char)
+        elif codepoint > 0xFFFF:
+            # \uN? units are signed 16-bit, so astral chars must be written as
+            # their UTF-16 surrogate pair — one escape per unit (\uc1 gives each
+            # its own fallback char).
+            high, low = divmod(codepoint - 0x10000, 0x400)
+            parts.append(fr"\u{0xD800 + high - 65536}?")
+            parts.append(fr"\u{0xDC00 + low - 65536}?")
         else:
             signed = codepoint if codepoint < 32768 else codepoint - 65536
             parts.append(fr"\u{signed}?")
