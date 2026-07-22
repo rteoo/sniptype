@@ -263,9 +263,16 @@ def mac_rich_clipboard_script(payload):
     dependency-free — PyObjC's ``NSPasteboard`` would be the direct API but is a
     new runtime dependency for one call site.
     """
-    entries = [
-        f"«class utf8»:{_applescript_data('utf8', payload['text'].encode('utf-8'))}"
-    ]
+    entries = []
+    text = payload.get("text") or ""
+    if text:
+        # An empty «data utf8» literal is an AppleScript syntax error, and a
+        # rich snippet with empty text still carries html/rtf. Omitting the
+        # flavor keeps the record valid; macOS derives plain text from the
+        # others anyway.
+        entries.append(
+            f"«class utf8»:{_applescript_data('utf8', text.encode('utf-8'))}"
+        )
     html_fragment = payload.get("html")
     if html_fragment:
         document = _mac_html_document(html_fragment).encode("utf-8")
