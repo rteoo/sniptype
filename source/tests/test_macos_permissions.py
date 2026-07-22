@@ -295,5 +295,89 @@ class StartupWiringTests(unittest.TestCase):
         self.assertIs(app.icon, icon)
 
 
+class SecureInputProbeTests(unittest.TestCase):
+    """Secure Keyboard Entry: a gate that cannot be granted, only waited out."""
+
+    def test_off_macos_never_probes(self):
+        symbol = mock.Mock()
+        with mock.patch.object(mp, "IS_MAC", False), \
+                mock.patch.object(mp, "_framework_symbol", symbol):
+            self.assertFalse(mp.secure_input_enabled())
+        symbol.assert_not_called()
+
+    def test_a_missing_symbol_reports_not_secure(self):
+        # An old macOS without the Carbon symbol must not block every expansion.
+        with mock.patch.object(mp, "IS_MAC", True), \
+                mock.patch.object(mp, "_framework_symbol", return_value=None):
+            self.assertFalse(mp.secure_input_enabled())
+
+    def test_the_carbon_answer_is_returned_as_a_bool(self):
+        for answer, expected in ((1, True), (0, False)):
+            with self.subTest(answer=answer):
+                symbol = mock.Mock(return_value=answer)
+                with mock.patch.object(mp, "IS_MAC", True), \
+                        mock.patch.object(mp, "_framework_symbol", return_value=symbol):
+                    self.assertIs(expected, mp.secure_input_enabled())
+
+    def test_a_raising_probe_reports_not_secure(self):
+        symbol = mock.Mock(side_effect=OSError("boom"))
+        with mock.patch.object(mp, "IS_MAC", True), \
+                mock.patch.object(mp, "_framework_symbol", return_value=symbol):
+            self.assertFalse(mp.secure_input_enabled())
+
+    @unittest.skipUnless(mp.IS_MAC, "Carbon is macOS-only")
+    def test_the_real_symbol_resolves_on_this_host(self):
+        # The probe is worthless if the binding is wrong; this is the only part
+        # of it a test can exercise for real.
+        self.assertIsInstance(mp.secure_input_enabled(), bool)
+
+
+class SecureInputExpansionGateTests(unittest.TestCase):
+    """A trigger typed under secure input is left exactly as typed."""
+
+    def _app(self):
+        app = tx.TextExpander.__new__(tx.TextExpander)
+        app.logger = mock.Mock()
+        app.notify = mock.Mock()
+        app.task_runner = mock.Mock()
+        app.keyboard_controller = mock.Mock()
+        app.typed_text = "xhi"
+        app._erase_chars = mock.Mock()
+        return app
+
+    def test_secure_input_blocks_the_erase_and_the_expansion(self):
+        app = self._app()
+        with mock.patch.object(tx, "IS_MAC", True), \
+                mock.patch.object(tx.macos_permissions, "secure_input_enabled", return_value=True):
+            app._dispatch_expansion("xhi", 3)
+
+        # Nothing synthesized: the backspaces would be swallowed here but could
+        # land somewhere else, and a half-erased trigger is worse than none.
+        app._erase_chars.assert_not_called()
+        app.task_runner.start.assert_not_called()
+        app.notify.assert_called_once()
+        self.assertEqual("", app.typed_text)
+
+    def test_normal_input_expands_as_usual(self):
+        app = self._app()
+        with mock.patch.object(tx, "IS_MAC", True), \
+                mock.patch.object(tx.macos_permissions, "secure_input_enabled", return_value=False):
+            app._dispatch_expansion("xhi", 3)
+
+        app._erase_chars.assert_called_once_with(3)
+        app.task_runner.start.assert_called_once()
+        app.notify.assert_not_called()
+
+    def test_off_macos_the_gate_is_never_consulted(self):
+        app = self._app()
+        probe = mock.Mock()
+        with mock.patch.object(tx, "IS_MAC", False), \
+                mock.patch.object(tx.macos_permissions, "secure_input_enabled", probe):
+            app._dispatch_expansion("xhi", 3)
+
+        probe.assert_not_called()
+        app._erase_chars.assert_called_once_with(3)
+
+
 if __name__ == "__main__":
     unittest.main()
