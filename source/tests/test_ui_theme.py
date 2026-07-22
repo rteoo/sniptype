@@ -202,8 +202,8 @@ class WidgetOptionTests(unittest.TestCase):
             self.assertEqual(theme.entry_colors(), {})
             self.assertEqual(theme.text_colors(), {})
             self.assertEqual(theme.listbox_colors(), {})
-            self.assertEqual(theme.plain_button_colors(), {})
-            self.assertNotIn("selectcolor", theme.checkbutton_colors("#FFFFFF"))
+            self.assertEqual(theme.checkbutton_colors("#FFFFFF")["bg"], "#FFFFFF")
+            self.assertEqual(theme.button_colors()["bg"], "#E7ECF5")
 
     def test_added_foregrounds_resolve_to_each_platform_default(self):
         # `text_native` is for widgets the pre-change GUI left uncolored, so it
@@ -221,11 +221,33 @@ class WidgetOptionTests(unittest.TestCase):
             ui_theme.build_theme("windows", system="linux").text_native, "#1F2937"
         )
 
-    def test_checkbutton_keeps_its_indicator_native_off_macos(self):
-        mac = ui_theme.build_theme("dark", system="darwin").checkbutton_colors("#222")
-        self.assertEqual(mac["selectcolor"], mac and ui_theme.palette("dark")["field"])
-        self.assertEqual(mac["bg"], "#222")
-        self.assertEqual(mac["activebackground"], "#222")
+    def test_windows_keeps_its_button_widths_and_window_size(self):
+        theme = ui_theme.build_theme("windows", system="windows")
+        self.assertEqual(theme.button_width(12), 12)
+        self.assertEqual(theme.manager_window_size, ("960x660", 820, 540))
+        self.assertFalse(theme.stacked_toolbar_status)
+
+    def test_macos_sizes_buttons_to_their_text_and_widens_the_window(self):
+        # Aqua's bezel has a minimum width the flat Win32 button does not, so
+        # the tuned character widths overflow their pane and clip the last
+        # button in the row.
+        theme = ui_theme.build_theme("dark", system="darwin")
+        self.assertEqual(theme.button_width(12), 0)
+        geometry, min_width, _ = theme.manager_window_size
+        self.assertEqual(geometry, "1100x700")
+        self.assertGreater(min_width, 820)
+        self.assertTrue(theme.stacked_toolbar_status)
+
+    def test_macos_never_paints_a_natively_drawn_control(self):
+        # Aqua ignores -background on buttons and checkboxes but honours
+        # -foreground, so any color the app supplies can only turn the title
+        # invisible against the bezel Aqua draws anyway (macOS 15 / Tk 9.0).
+        theme = ui_theme.build_theme("dark", system="darwin")
+        self.assertEqual(theme.button_colors(), {})
+        self.assertEqual(theme.button_colors(accent=True), {})
+        self.assertEqual(theme.checkbutton_colors("#222"), {})
+        self.assertEqual(theme.toolbar_button_colors("#222"), {})
+        self.assertEqual(theme.glyph_button_colors("#222"), {})
 
     def test_entry_colors_pin_every_channel_aqua_would_theme(self):
         theme = ui_theme.build_theme("dark", system="darwin")
@@ -244,13 +266,18 @@ class WidgetOptionTests(unittest.TestCase):
 
     def test_button_colors_always_pair_a_foreground_with_a_background(self):
         for kind in ("windows", "light", "dark"):
-            theme = ui_theme.build_theme(kind)
+            theme = ui_theme.build_theme(kind, system="windows")
             for accent in (False, True):
                 colors = theme.button_colors(accent=accent)
                 self.assertEqual(
                     set(colors),
                     {"bg", "fg", "activebackground", "activeforeground"},
                 )
+
+    def test_toolbar_buttons_keep_the_shipped_windows_look(self):
+        colors = ui_theme.build_theme("windows", system="windows").toolbar_button_colors("#FFFFFF")
+        self.assertEqual(colors["bg"], "#FFFFFF")
+        self.assertEqual(colors["activebackground"], "#E6E9EF")
 
     def test_accent_button_keeps_the_shipped_windows_look(self):
         colors = ui_theme.build_theme("windows", system="windows").button_colors(accent=True)
@@ -318,6 +345,31 @@ class GuiSourceTests(unittest.TestCase):
         import re
         leaked = re.findall(r'"(Segoe[^"]*|Consolas|Arial|Helvetica)"', self._source())
         self.assertEqual(leaked, [])
+
+    def test_buttons_and_checkboxes_never_take_a_color_directly(self):
+        """Aqua draws these itself; their colors must come from the seam.
+
+        A literal ``fg=`` here is invisible on macOS rather than merely
+        off-palette: Aqua keeps its own light bezel whatever ``bg`` says, and
+        then honours the foreground, so the label vanishes into the bezel.
+        """
+        import ast
+        color_options = {
+            "bg", "fg", "background", "foreground", "activebackground",
+            "activeforeground", "selectcolor", "disabledforeground",
+        }
+        offenders = []
+        for node in ast.walk(ast.parse(self._source())):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if not (isinstance(func, ast.Attribute)
+                    and func.attr in ("Button", "Checkbutton")):
+                continue
+            for keyword in node.keywords:
+                if keyword.arg in color_options:
+                    offenders.append((node.lineno, func.attr, keyword.arg))
+        self.assertEqual(offenders, [])
 
     def test_the_windows_only_ttk_theme_is_no_longer_forced(self):
         self.assertNotIn('theme_use("vista")', self._source())

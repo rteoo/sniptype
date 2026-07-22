@@ -147,35 +147,86 @@ class Theme:
             "selectforeground": self.select_fg,
         }
 
-    def plain_button_colors(self):
-        """Foreground for buttons that keep the platform's native face.
-
-        Empty off macOS: Windows' own default already is the system button
-        text color, and overriding it is the one thing this change must not do.
-        Aqua leaves those buttons with Tk's literal ``Black`` default, which is
-        what puts black titles on a dark-mode button in the manager window.
-        """
-        if self.system != "darwin":
-            return {}
-        return {"fg": self.text_native, "activeforeground": self.text_native}
+    # Buttons and checkboxes are the widgets Aqua draws *itself*, and it draws
+    # them from the appearance rather than from what the app asks for. It
+    # ignores ``-background`` outright and keeps its own light bezel, but it
+    # does honour ``-foreground`` -- so a well-meant `fg=systemTextColor` puts
+    # white text on that light bezel and the button renders as a blank box
+    # (seen on macOS 15 / Tk 9.0). Every button color helper therefore answers
+    # nothing on macOS: the native control is already correct in both
+    # appearances, and the only way to break it is to paint on it.
 
     def checkbutton_colors(self, bg):
-        """Colors for a checkbox sitting on ``bg``.
-
-        ``selectcolor`` is macOS-only: Win32's default for the indicator is
-        already the system window color.
-        """
-        colors = {
+        """Colors for a checkbox sitting on ``bg``. Native on macOS."""
+        if self.system == "darwin":
+            return {}
+        return {
             "bg": bg,
             "fg": self.text_native,
             "activebackground": bg,
             "activeforeground": self.text_native,
         }
+
+    def toolbar_button_colors(self, bg):
+        """Colors for the flat glyph buttons in the formatting toolbar."""
         if self.system == "darwin":
-            colors["selectcolor"] = self.field
-        return colors
+            return {}
+        return {
+            "bg": bg,
+            "fg": self.text_native,
+            "activebackground": self.surface_hover,
+            "activeforeground": self.text_native,
+        }
+
+    def glyph_button_colors(self, bg):
+        """Colors for a small icon button sitting on ``bg`` (the ✎ rename)."""
+        if self.system == "darwin":
+            return {}
+        # No activeforeground: the shipped button did not set one, and adding
+        # it would change the pressed state on Windows.
+        return {
+            "bg": bg,
+            "fg": self.text_muted,
+            "activebackground": self.field_hover,
+        }
+
+    def button_width(self, chars):
+        """Fixed button width in characters, or 0 to let the button size itself.
+
+        The widths in the GUI were picked against flat Win32 buttons. Aqua's
+        native bezel is wider than the text it wraps, so the same numbers
+        overflow their pane there and clip the last button in a row (measured:
+        the five-button editor row needs 630px in a 433px pane). Natural
+        sizing costs Aqua nothing -- its minimum width is already generous --
+        and Windows keeps the tuned numbers.
+        """
+        return 0 if self.system == "darwin" else chars
+
+    @property
+    def manager_window_size(self):
+        """``(geometry, min_width, min_height)`` for the manager window.
+
+        macOS needs a wider default: Aqua's native buttons have a minimum
+        width the flat Win32 ones do not, so the editor pane that fits its
+        formatting toolbar in 433px on Windows needs ~490px here.
+        """
+        if self.system == "darwin":
+            return ("1100x700", 960, 560)
+        return ("960x660", 820, 540)
+
+    @property
+    def stacked_toolbar_status(self):
+        """True where the format status must sit below the toolbar, not beside it.
+
+        Nine native buttons already fill the editor pane on macOS; leaving the
+        status label on the same row pushes the last button off the edge.
+        """
+        return self.system == "darwin"
 
     def button_colors(self, accent=False):
+        """Colors for the app's tinted buttons. Native on macOS."""
+        if self.system == "darwin":
+            return {}
         if accent:
             return {
                 "bg": self.accent,

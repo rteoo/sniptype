@@ -768,8 +768,8 @@ class TextExpander:
                 result[0] = ticker or None
                 dialog.destroy()
 
-            tk.Button(buttons, text="Cancelar", width=12, command=on_cancel, **ui.plain_button_colors()).pack(side=tk.RIGHT, padx=(6, 0))
-            tk.Button(buttons, text="OK", width=12, command=on_ok, **ui.plain_button_colors()).pack(side=tk.RIGHT)
+            tk.Button(buttons, text="Cancelar", width=ui.button_width(12), command=on_cancel).pack(side=tk.RIGHT, padx=(6, 0))
+            tk.Button(buttons, text="OK", width=ui.button_width(12), command=on_ok).pack(side=tk.RIGHT)
 
             entry.bind("<Return>", on_ok)
             dialog.bind("<Escape>", on_cancel)
@@ -878,8 +878,8 @@ class TextExpander:
                 result["message"] = message_text
                 dialog.destroy()
 
-            btn_cancel = tk.Button(buttons, text="Cancelar", width=12, command=cancel_dialog, **ui.plain_button_colors())
-            btn_open = tk.Button(buttons, text="Abrir WhatsApp", width=14, command=submit_dialog, **ui.plain_button_colors())
+            btn_cancel = tk.Button(buttons, text="Cancelar", width=ui.button_width(12), command=cancel_dialog)
+            btn_open = tk.Button(buttons, text="Abrir WhatsApp", width=ui.button_width(14), command=submit_dialog)
             btn_cancel.pack(side=tk.LEFT, padx=(0, 6))
             btn_open.pack(side=tk.LEFT)
 
@@ -1487,8 +1487,9 @@ class TextExpander:
             ui = ui_theme.bind(tk_root)
             root = tk.Toplevel(tk_root)
             root.title("Txt Xpander - Gerenciador de Snippets")
-            root.geometry("960x660")
-            root.minsize(820, 540)
+            geometry, min_width, min_height = ui.manager_window_size
+            root.geometry(geometry)
+            root.minsize(min_width, min_height)
             root.resizable(True, True)
             root.configure(bg=ui.surface)
             self._set_window_icon(root)
@@ -1720,12 +1721,12 @@ class TextExpander:
 
         buttons = tk.Frame(main, bg=ui.surface)
         buttons.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(10, 0))
-        tk.Button(buttons, text="Backup agora", width=14, command=on_backup_now, **ui.plain_button_colors()).pack(side=tk.LEFT, padx=(0, 6))
-        tk.Button(buttons, text="Restaurar", width=12, command=on_restore, **ui.plain_button_colors()).pack(side=tk.LEFT, padx=6)
-        tk.Button(buttons, text="Exportar…", width=12, command=on_export, **ui.plain_button_colors()).pack(side=tk.LEFT, padx=6)
-        tk.Button(buttons, text="Importar…", width=12, command=on_import, **ui.plain_button_colors()).pack(side=tk.LEFT, padx=6)
-        tk.Button(buttons, text="Abrir pasta", width=12, command=self.open_data_folder, **ui.plain_button_colors()).pack(side=tk.LEFT, padx=6)
-        tk.Button(buttons, text="Atualizar", width=10, command=refresh_backups, **ui.plain_button_colors()).pack(side=tk.RIGHT)
+        tk.Button(buttons, text="Backup agora", width=ui.button_width(14), command=on_backup_now).pack(side=tk.LEFT, padx=(0, 6))
+        tk.Button(buttons, text="Restaurar", width=ui.button_width(12), command=on_restore).pack(side=tk.LEFT, padx=6)
+        tk.Button(buttons, text="Exportar…", width=ui.button_width(12), command=on_export).pack(side=tk.LEFT, padx=6)
+        tk.Button(buttons, text="Importar…", width=ui.button_width(12), command=on_import).pack(side=tk.LEFT, padx=6)
+        tk.Button(buttons, text="Abrir pasta", width=ui.button_width(12), command=self.open_data_folder).pack(side=tk.LEFT, padx=6)
+        tk.Button(buttons, text="Atualizar", width=ui.button_width(10), command=refresh_backups).pack(side=tk.RIGHT)
 
         refresh_backups()
 
@@ -1901,6 +1902,11 @@ class TextExpander:
         ui = ui_theme.theme()
         toolbar = tk.Frame(parent, bg=ui.card)
         toolbar.pack(fill=tk.X, pady=(0, 6))
+        # Where the buttons alone fill the row, the status gets its own line
+        # below rather than pushing the last button off the pane.
+        status_row = tk.Frame(parent, bg=ui.card) if ui.stacked_toolbar_status else toolbar
+        if status_row is not toolbar:
+            status_row.pack(fill=tk.X, pady=(0, 4))
 
         status_var = tk.StringVar(value="Formato: texto simples")
 
@@ -1953,18 +1959,15 @@ class TextExpander:
             button = tk.Button(
                 toolbar,
                 text=label,
-                width=width,
+                width=ui.button_width(width),
                 takefocus=0,
                 font=icon_fonts[font_key],
                 relief=tk.FLAT,
                 bd=0,
                 padx=0,
                 pady=0,
-                bg=toolbar_bg,
-                fg=ui.text_native,
-                activebackground=ui.surface_hover,
-                activeforeground=ui.text_native,
                 highlightthickness=0,
+                **ui.toolbar_button_colors(toolbar_bg),
                 cursor="hand2",
             )
 
@@ -2089,8 +2092,9 @@ class TextExpander:
         add_toolbar_button("%%cb", insert_clipboard_var, 4, 3, "Variável: colar clipboard (%%clipboard-paste%%)", "var")
         add_toolbar_button("%%?", insert_form_field, 4, 3, "Variável: campo de formulário (%%campo%%)", "var")
 
-        tk.Label(toolbar, textvariable=status_var, font=ui.font(8),
-                 bg=toolbar_bg, fg=ui.text_muted).pack(side=tk.RIGHT)
+        tk.Label(status_row, textvariable=status_var, font=ui.font(8),
+                 bg=toolbar_bg, fg=ui.text_muted).pack(
+                     side=tk.LEFT if status_row is not toolbar else tk.RIGHT)
 
         bind_shortcut("<Control-b>", "bold")
         bind_shortcut("<Control-i>", "italic")
@@ -2159,11 +2163,11 @@ class TextExpander:
 
         btn_frame = tk.Frame(frame_right, bg=ui.card)
         btn_frame.grid(row=5, column=0, sticky="e")
-        btn_new = tk.Button(btn_frame, text="Novo", width=10, **ui.plain_button_colors())
-        btn_save = tk.Button(btn_frame, text="Salvar", width=10, **ui.plain_button_colors())
-        btn_duplicate = tk.Button(btn_frame, text="Duplicar", width=10, **ui.plain_button_colors())
-        btn_rename = tk.Button(btn_frame, text="Renomear", width=10, **ui.plain_button_colors())
-        btn_delete = tk.Button(btn_frame, text="Excluir", width=10, **ui.plain_button_colors())
+        btn_new = tk.Button(btn_frame, text="Novo", width=ui.button_width(10))
+        btn_save = tk.Button(btn_frame, text="Salvar", width=ui.button_width(10))
+        btn_duplicate = tk.Button(btn_frame, text="Duplicar", width=ui.button_width(10))
+        btn_rename = tk.Button(btn_frame, text="Renomear", width=ui.button_width(10))
+        btn_delete = tk.Button(btn_frame, text="Excluir", width=ui.button_width(10))
         btn_new.pack(side=tk.LEFT, padx=(0, 6))
         btn_save.pack(side=tk.LEFT, padx=6)
         btn_duplicate.pack(side=tk.LEFT, padx=6)
@@ -2512,9 +2516,9 @@ class TextExpander:
 
         btn_frame = tk.Frame(frame_right, bg=ui.card)
         btn_frame.grid(row=5, column=0, sticky="e")
-        btn_new_map = tk.Button(btn_frame, text="Novo", width=12, **ui.plain_button_colors())
-        btn_save_map = tk.Button(btn_frame, text="Salvar", width=12, **ui.plain_button_colors())
-        btn_delete_map = tk.Button(btn_frame, text="Excluir", width=12, **ui.plain_button_colors())
+        btn_new_map = tk.Button(btn_frame, text="Novo", width=ui.button_width(12))
+        btn_save_map = tk.Button(btn_frame, text="Salvar", width=ui.button_width(12))
+        btn_delete_map = tk.Button(btn_frame, text="Excluir", width=ui.button_width(12))
         btn_new_map.pack(side=tk.LEFT, padx=(0, 6))
         btn_save_map.pack(side=tk.LEFT, padx=6)
         btn_delete_map.pack(side=tk.LEFT, padx=(6, 0))
@@ -2602,7 +2606,7 @@ class TextExpander:
                 self.notify_status(f"Tipo '{type_name}' criado.", key=f"mapping-type-create:{type_name}")
                 dialog.destroy()
 
-            tk.Button(body, text="Criar Tipo", command=save_new_type, width=15, **ui.plain_button_colors()).pack(anchor="e", pady=(14, 0))
+            tk.Button(body, text="Criar Tipo", command=save_new_type, width=ui.button_width(15)).pack(anchor="e", pady=(14, 0))
             center_dialog(dialog, root)
             entry_type_name.focus_set()
 
@@ -2638,8 +2642,8 @@ class TextExpander:
             refresh_mapping_list()
             self.notify_status(f"Tipo '{info.get('label', current_type)}' excluído.", key=f"mapping-type-delete:{current_type}")
 
-        tk.Button(btn_types_frame, text="Novo Tipo", command=add_new_type, **ui.plain_button_colors()).pack(fill=tk.X)
-        tk.Button(btn_types_frame, text="Excluir Tipo", command=delete_current_type, **ui.plain_button_colors()).pack(fill=tk.X, pady=(6, 0))
+        tk.Button(btn_types_frame, text="Novo Tipo", command=add_new_type).pack(fill=tk.X)
+        tk.Button(btn_types_frame, text="Excluir Tipo", command=delete_current_type).pack(fill=tk.X, pady=(6, 0))
 
         listbox_types.bind("<<ListboxSelect>>", on_type_select)
         self._bind_mousewheel(listbox_types, listbox_types)
@@ -2805,11 +2809,9 @@ class TextExpander:
                         font=ui.font(8),
                         bd=0,
                         relief=tk.FLAT,
-                        bg=ui.card,
-                        activebackground=ui.field_hover,
-                        fg=ui.text_muted,
                         cursor="hand2",
                         command=rename,
+                        **ui.glyph_button_colors(ui.card),
                     ).pack(side=tk.LEFT, padx=(0, 4))
                     tk.Label(row, text=desc, font=ui.font(9), bg=ui.card, fg=ui.text_native, anchor="w").pack(side=tk.LEFT, padx=(10, 0), fill=tk.X, expand=True)
             self._bind_mousewheel_descendants(inner, canvas)
@@ -3238,7 +3240,6 @@ class TextExpander:
                 panes,
                 text=f"Abrir {macos_permissions.PERMISSION_LABELS[name]}",
                 command=lambda permission=name: self._open_macos_settings_pane(permission),
-                **ui.plain_button_colors(),
             ).pack(side=tk.LEFT, padx=(0, 8))
 
         buttons = tk.Frame(container, bg=ui.surface)
@@ -3255,8 +3256,8 @@ class TextExpander:
                 name="macos-permissions-recheck",
             )
 
-        tk.Button(buttons, text="Fechar", width=12, command=on_close, **ui.plain_button_colors()).pack(side=tk.RIGHT, padx=(6, 0))
-        tk.Button(buttons, text="Verificar novamente", command=on_recheck, **ui.plain_button_colors()).pack(side=tk.RIGHT)
+        tk.Button(buttons, text="Fechar", width=ui.button_width(12), command=on_close).pack(side=tk.RIGHT, padx=(6, 0))
+        tk.Button(buttons, text="Verificar novamente", command=on_recheck).pack(side=tk.RIGHT)
 
         window.protocol("WM_DELETE_WINDOW", on_close)
         center_on_screen(window)
