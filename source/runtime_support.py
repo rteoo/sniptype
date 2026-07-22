@@ -8,6 +8,7 @@ from logging.handlers import RotatingFileHandler
 import json
 
 from clipboard_support import Clipboard
+from platform_support import default_insertion_timings
 from rich_text_support import extract_plain_text
 from snippet_utils import write_json_atomic
 
@@ -184,10 +185,19 @@ def normalize_clipboard_text(value):
 class TextInserter:
     """Insert snippets through the clipboard, with typed fallback."""
 
-    def __init__(self, keyboard_controller, logger=None, restore_delay=0.12, notify=None):
+    def __init__(self, keyboard_controller, logger=None, restore_delay=None,
+                 settle_delay=None, notify=None):
+        timings = default_insertion_timings()
         self.keyboard_controller = keyboard_controller
         self.logger = logger or AppLogger()
-        self.restore_delay = restore_delay
+        # settle_delay: clipboard write -> paste. restore_delay: paste -> restore.
+        # Per-OS defaults, overridable from settings.json; see platform_support.
+        self.settle_delay = (
+            timings["clipboard_settle_delay"] if settle_delay is None else settle_delay
+        )
+        self.restore_delay = (
+            timings["paste_restore_delay"] if restore_delay is None else restore_delay
+        )
         self.notify = notify
 
     def insert_text(self, value):
@@ -226,7 +236,7 @@ class TextInserter:
             if not Clipboard.set_content(value):
                 return False
 
-            time.sleep(0.05)
+            time.sleep(self.settle_delay)
             self._send_paste_shortcut()
             time.sleep(self.restore_delay)
 
