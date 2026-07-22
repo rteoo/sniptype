@@ -443,5 +443,39 @@ class TextInserterFallbackTests(unittest.TestCase):
         self.assertEqual(mock.call.release(Key.cmd), keyboard.mock_calls[-1])
 
 
+class TextInserterTimingTests(unittest.TestCase):
+    """The two paste delays come from platform_support, not from literals."""
+
+    def test_delays_default_to_the_running_platform(self):
+        import platform_support
+
+        defaults = platform_support.default_insertion_timings()
+        inserter = TextInserter(mock.Mock())
+        self.assertEqual(defaults["clipboard_settle_delay"], inserter.settle_delay)
+        self.assertEqual(defaults["paste_restore_delay"], inserter.restore_delay)
+
+    def test_paste_sleeps_the_configured_settle_then_restore_delay(self):
+        clipboard = mock.Mock()
+        clipboard.get_text.return_value = "orig"
+        clipboard.set_content.return_value = True
+        inserter = TextInserter(mock.Mock(), settle_delay=0.33, restore_delay=0.44)
+
+        with mock.patch.object(runtime_support, "Clipboard", clipboard), \
+                mock.patch.object(runtime_support.time, "sleep") as sleep, \
+                mock.patch.object(inserter, "_send_paste_shortcut") as paste, \
+                mock.patch.object(inserter, "_restore_clipboard"):
+            self.assertTrue(inserter.insert_text("olá"))
+
+        # Order is load-bearing: settle before the shortcut, restore delay after.
+        self.assertEqual([mock.call(0.33), mock.call(0.44)], sleep.mock_calls)
+        paste.assert_called_once_with()
+
+    def test_explicit_zero_delays_are_honored(self):
+        # None means "use the platform default"; 0 must stay 0.
+        inserter = TextInserter(mock.Mock(), settle_delay=0, restore_delay=0)
+        self.assertEqual(0, inserter.settle_delay)
+        self.assertEqual(0, inserter.restore_delay)
+
+
 if __name__ == "__main__":
     unittest.main()
