@@ -1303,8 +1303,7 @@ class TextExpander:
         try:
             if hasattr(key, 'char') and key.char:
                 self._handle_char(key.char)
-        except AttributeError:
-            if key == Key.enter:
+            elif key == Key.enter:
                 # ceiling: terminator mode does not gate on Enter (re-typing it could
                 # double-submit); Enter always just resets the buffer. Extend to Enter
                 # if a safe re-emit strategy is needed.
