@@ -31,14 +31,15 @@ if IS_MAC:
     # the process ("NSWindow should only be instantiated on the main thread!")
     # instead of raising, so this has to be decided *before* the probe below:
     # the probe would take the whole suite down with it rather than fail over.
-    # Moving the Tk root to the main thread is tracked as issue #24 (tray + Tk
-    # threading model on macOS); until then there is nothing here to exercise.
-    TK_SKIP_REASON = "macOS requires AppKit on the main thread; the Tk root runs on a worker thread"
+    # Issue #24 resolved this for the app by moving the root to the main thread
+    # there (``GuiThread`` main-thread mode); these smoke tests still drive the
+    # worker-thread mode, which macOS does not permit, so they stay skipped.
+    TK_SKIP_REASON = "macOS requires AppKit on the main thread; these tests drive the worker-thread root"
 else:
     try:
         import tkinter as tk
         from tkinter import ttk
-        _probe = GuiThread()
+        _probe = GuiThread(main_thread=False)
         _probe.ensure_started()
         _probe.stop()
         TK_AVAILABLE = True

@@ -3146,10 +3146,23 @@ class TextExpander:
         
         # Bring the shared Tk root up before the tray, so the first dialog does
         # not pay interpreter startup while the user waits on an expansion.
+        # Where Tk owns the main thread (macOS) this is also what creates the
+        # process's NSApplication, which the tray then has to be handed.
+        gui_started = False
         try:
-            self.gui.ensure_started()
+            if platform_support.tk_runs_on_main_thread():
+                gui_started = self.gui.adopt_main_thread()
+            else:
+                gui_started = self.gui.ensure_started()
         except Exception as e:
             self.logger.error(f"Falha ao iniciar a thread de GUI: {e}")
+
+        if platform_support.tk_runs_on_main_thread() and not gui_started:
+            # Windows can still run a tray with no dialogs, because pystray owns
+            # its own loop there. Here the Tk loop *is* the loop the tray rides,
+            # so without a root there is nothing left to start.
+            self.logger.error("Sem root do Tk na thread principal: a bandeja não tem loop para rodar.")
+            return
 
         self.task_runner.start(self.run_keyboard_listener, name="keyboard-listener")
 
@@ -3180,10 +3193,20 @@ class TextExpander:
             "text_expander",
             self.load_tray_icon(),
             "Text Expander",
-            menu
+            menu,
+            **platform_support.tray_icon_options()
         )
 
-        self.icon.run(setup=self.on_tray_ready)
+        if platform_support.tk_runs_on_main_thread():
+            # Two frameworks, one main thread: the tray attaches to the
+            # NSApplication the Tk root already created and rides the loop
+            # mainloop() drives, instead of starting a second one it cannot
+            # have. run_detached() returns immediately; mainloop() blocks here
+            # exactly as icon.run() does on Windows.
+            self.icon.run_detached(setup=self.on_tray_ready)
+            self.gui.run_mainloop()
+        else:
+            self.icon.run(setup=self.on_tray_ready)
 
 
 def set_dpi_awareness():
