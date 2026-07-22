@@ -39,6 +39,81 @@ def paste_modifier_is_cmd():
     return IS_MAC
 
 
+# ---------------------------------------------------------------------------
+# Insertion timings (clipboard paste and trigger erase)
+# ---------------------------------------------------------------------------
+
+# The paste path is snapshot -> set -> settle -> Cmd/Ctrl+V -> restore, and the
+# trigger erase types one backspace per character. All three delays were tuned
+# on Windows; macOS needs its own defaults because every clipboard operation is
+# a subprocess round-trip there rather than an in-process ctypes call.
+# See ``source/docs/macos-insertion.md`` for the measurements behind the values.
+_INSERTION_TIMING_DEFAULTS = {
+    "windows": {
+        "clipboard_settle_delay": 0.05,
+        "paste_restore_delay": 0.12,
+        "erase_key_delay": 0.01,
+    },
+    "darwin": {
+        # ``pbcopy``/``osascript`` only exit once NSPasteboard holds the payload,
+        # and the write itself already costs ~12 ms, so the Windows settle margin
+        # is pure added latency here (measured: readable with zero extra delay).
+        "clipboard_settle_delay": 0.02,
+        "paste_restore_delay": 0.12,
+        "erase_key_delay": 0.01,
+    },
+    "linux": {
+        # ``xclip``/``wl-copy`` fork a daemon that owns the selection, so the
+        # payload is not necessarily servable the instant the tool returns.
+        "clipboard_settle_delay": 0.05,
+        "paste_restore_delay": 0.12,
+        "erase_key_delay": 0.01,
+    },
+}
+
+INSERTION_TIMING_KEYS = tuple(_INSERTION_TIMING_DEFAULTS["windows"])
+
+# A delay is a human-scale pause, not a schedule. Anything past this is a typo
+# (seconds written as milliseconds) that would freeze the listener thread.
+_MAX_INSERTION_DELAY = 2.0
+
+
+def default_insertion_timings(system=None):
+    """Return this OS's insertion delays, in seconds."""
+    defaults = _INSERTION_TIMING_DEFAULTS.get(system or current_os())
+    return dict(defaults or _INSERTION_TIMING_DEFAULTS["linux"])
+
+
+def _valid_delay(value):
+    # bool is an int; a `true` in settings.json must not become a 1 second delay.
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    return 0 <= value <= _MAX_INSERTION_DELAY
+
+
+def insertion_timings(settings=None, system=None):
+    """Resolve the insertion delays, applying valid ``settings.json`` overrides.
+
+    Out-of-range or non-numeric overrides fall back to the platform default
+    instead of propagating into the keyboard hot path; call
+    :func:`invalid_timing_overrides` to report them.
+    """
+    timings = default_insertion_timings(system)
+    for key, value in (settings or {}).items():
+        if key in timings and _valid_delay(value):
+            timings[key] = float(value)
+    return timings
+
+
+def invalid_timing_overrides(settings=None):
+    """Return the timing keys present in ``settings`` whose value was rejected."""
+    return [
+        key
+        for key in INSERTION_TIMING_KEYS
+        if key in (settings or {}) and not _valid_delay(settings[key])
+    ]
+
+
 def tk_runs_on_main_thread():
     """True where the Tk root must live on the main thread rather than a worker.
 
