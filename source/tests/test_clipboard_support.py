@@ -359,6 +359,20 @@ class MacRichClipboardScriptTests(unittest.TestCase):
         self.assertIsNone(_flavor_bytes(script, "RTF "))
         self.assertEqual("simples", _flavor_bytes(script, "utf8").decode("utf-8"))
 
+    def test_empty_text_omits_the_utf8_flavor(self):
+        """An empty «data utf8» literal is an AppleScript syntax error, and a
+        rich snippet with empty text still carries html/rtf — so the whole rich
+        write would fail (and burn the once-per-session warning) over a payload
+        macOS can still render from the other flavors."""
+        script = clipboard_support.mac_rich_clipboard_script(
+            {"text": "", "html": "<div>x</div>", "rtf": r"{\rtf1 x}"}
+        )
+
+        self.assertNotIn("«data utf8»", script)
+        self.assertIsNone(_flavor_bytes(script, "utf8"))
+        self.assertIn("<div>x</div>", _flavor_bytes(script, "HTML").decode("utf-8"))
+        self.assertEqual(r"{\rtf1 x}", _flavor_bytes(script, "RTF ").decode("utf-8"))
+
     def test_payload_text_needs_no_applescript_quoting(self):
         """Hex literals are why quotes, backslashes and newlines are safe: the
         same payload written as an AppleScript string literal would break the
