@@ -48,6 +48,54 @@ class GuiSupportTests(unittest.TestCase):
         self.assertEqual(["gtw"], iter_filtered_mapping_items(mapping, "gate"))
 
 
+class FilterEdgeCaseTests(unittest.TestCase):
+    """Adversarial queries: whitespace, unicode/accents, regex metacharacters."""
+
+    def test_whitespace_only_query_behaves_like_an_empty_query(self):
+        snippets = {"xname": "Example User", "xemail": "a@b.com"}
+        self.assertEqual(snippets, filter_static_snippets(snippets, "   \t "))
+
+    def test_query_is_a_literal_substring_not_a_regex(self):
+        # A blind re.search would treat "(net)" as a group and ".*" as match-all;
+        # the filter must compare literally.
+        snippets = {"xa": "Total (net) due", "xb": "plain text"}
+        self.assertEqual({"xa": snippets["xa"]}, filter_static_snippets(snippets, "(net)"))
+        self.assertEqual({}, filter_static_snippets(snippets, ".*"))
+
+    def test_regex_metacharacter_query_does_not_raise(self):
+        # An unbalanced bracket would blow up re.compile; str.__contains__ is safe.
+        snippets = {"xa": "array[0] value"}
+        self.assertEqual({"xa": snippets["xa"]}, filter_static_snippets(snippets, "["))
+
+    def test_matching_is_case_insensitive_but_accent_sensitive(self):
+        snippets = {"xinsc": "Inscrição estadual", "xother": "Cadastro"}
+        # Case folds: an all-caps accented query still matches.
+        self.assertEqual({"xinsc": snippets["xinsc"]}, filter_static_snippets(snippets, "INSCRIÇÃO"))
+        # Accents are not folded: the de-accented spelling does not match.
+        self.assertEqual({}, filter_static_snippets(snippets, "inscricao"))
+
+    def test_unicode_key_match_is_case_insensitive(self):
+        snippets = {"xcafé": "espresso"}
+        self.assertEqual(snippets, filter_static_snippets(snippets, "CAFÉ"))
+
+    def test_mapping_filter_on_non_dict_returns_empty(self):
+        self.assertEqual([], iter_filtered_mapping_items(None, ""))
+        self.assertEqual([], iter_filtered_mapping_items("not a mapping", "x"))
+
+    def test_mapping_filter_matches_rich_text_plain_value(self):
+        mapping = {
+            "__prefix__": "c",
+            "a": {"__kind__": "rich_text", "text": "Contrato assinado", "spans": []},
+            "b": "outro",
+        }
+        self.assertEqual(["a"], iter_filtered_mapping_items(mapping, "assinado"))
+
+    def test_mapping_filter_query_is_literal_and_accent_sensitive(self):
+        mapping = {"__prefix__": "c", "opcao": "Opção válida", "outro": "texto"}
+        self.assertEqual(["opcao"], iter_filtered_mapping_items(mapping, "OPÇÃO"))
+        self.assertEqual([], iter_filtered_mapping_items(mapping, "opcao válida"))
+
+
 class SnippetRowValuesTests(unittest.TestCase):
     def test_plain_snippet_has_no_markers(self):
         self.assertEqual(("xname", "Example User", ""), snippet_row_values("xname", "Example User"))

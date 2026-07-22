@@ -98,6 +98,107 @@ class BackupSupportTests(unittest.TestCase):
         stale_now = os.path.getmtime(path) + bs.STARTUP_BACKUP_MAX_AGE_SECONDS + 60
         self.assertTrue(bs.should_backup_on_startup(self.backups, now=stale_now))
 
+    def test_should_backup_on_startup_boundary_is_inclusive(self):
+        # Age exactly equal to the window still triggers a backup (>=, not >).
+        path = bs.create_backup(self.snippets, self.backups, timestamp="20260101-000000")
+        exactly_now = os.path.getmtime(path) + bs.STARTUP_BACKUP_MAX_AGE_SECONDS
+        self.assertTrue(bs.should_backup_on_startup(self.backups, now=exactly_now))
+
+    # --- rotation boundary --------------------------------------------------
+
+    def _seed_backups(self, count):
+        """Create ``count`` distinct backups with strictly increasing mtimes."""
+        os.makedirs(self.backups, exist_ok=True)
+        for i in range(count):
+            path = os.path.join(self.backups, f"snippets-2026-{i:04d}.json")
+            self._write(path, str(i))
+            os.utime(path, (1000 + i, 1000 + i))
+
+    def test_prune_returns_empty_below_keep(self):
+        self._seed_backups(3)
+        self.assertEqual(bs.prune_backups(self.backups), [])  # default keep=30
+        self.assertEqual(len(bs.list_backups(self.backups)), 3)
+
+    def test_prune_at_exactly_default_keep_removes_nothing(self):
+        self._seed_backups(bs.DEFAULT_KEEP)  # exactly 30
+        removed = bs.prune_backups(self.backups)
+        self.assertEqual(removed, [])
+        self.assertEqual(len(bs.list_backups(self.backups)), bs.DEFAULT_KEEP)
+
+    def test_prune_one_above_default_keep_removes_oldest_only(self):
+        self._seed_backups(bs.DEFAULT_KEEP + 1)  # 31
+        removed = bs.prune_backups(self.backups)
+        self.assertEqual(len(removed), 1)
+        self.assertEqual(len(bs.list_backups(self.backups)), bs.DEFAULT_KEEP)
+        # The one removed is the oldest (lowest mtime, index 0000).
+        self.assertIn("snippets-2026-0000.json", removed[0])
+
+    # --- force + dedupe -----------------------------------------------------
+
+    def test_force_backup_writes_even_when_identical(self):
+        first = bs.create_backup(self.snippets, self.backups, timestamp="20260101-000000")
+        self.assertIsNotNone(first)
+        # Same content: the non-forced path would skip. force=True must not.
+        forced = bs.create_backup(
+            self.snippets, self.backups, timestamp="20260101-000001", force=True
+        )
+        self.assertIsNotNone(forced)
+        self.assertEqual(len(bs.list_backups(self.backups)), 2)
+
+    def test_create_backup_dedupes_multiple_same_second_collisions(self):
+        # Three saves in the same clock second, each with changed content.
+        for i in range(3):
+            self._write(self.snippets, f'{{"a": {i}}}')
+            created = bs.create_backup(self.snippets, self.backups, timestamp="20260101-000000")
+            self.assertIsNotNone(created)
+        names = sorted(os.path.basename(p) for p in bs.list_backups(self.backups))
+        self.assertEqual(
+            names,
+            [
+                "snippets-20260101-000000-1.json",
+                "snippets-20260101-000000-2.json",
+                "snippets-20260101-000000.json",
+            ],
+        )
+
+    def test_quarantine_dedupes_on_name_collision(self):
+        # Two corrupt files quarantined in the same second must both survive.
+        self._write(self.snippets, "corrupt-one")
+        first = bs.quarantine_corrupt_file(self.snippets, timestamp="20260101-000000")
+        self._write(self.snippets, "corrupt-two")
+        second = bs.quarantine_corrupt_file(self.snippets, timestamp="20260101-000000")
+        self.assertNotEqual(first, second)
+        self.assertEqual(self._read(first), "corrupt-one")
+        self.assertEqual(self._read(second), "corrupt-two")
+
+    # --- listing hygiene ----------------------------------------------------
+
+    def test_list_backups_excludes_non_backup_files(self):
+        os.makedirs(self.backups, exist_ok=True)
+        real = os.path.join(self.backups, "snippets-20260101-000000.json")
+        self._write(real, "{}")
+        # None of these file names match the "snippets-*.json" glob: a quarantine
+        # file (prefix "snippets." not "snippets-"), a wrong extension, an
+        # unrelated .json.
+        self._write(os.path.join(self.backups, "snippets.corrupt-20260101-000000.json"), "q")
+        self._write(os.path.join(self.backups, "snippets-20260101-000000.txt"), "t")
+        self._write(os.path.join(self.backups, "notes.json"), "{}")
+        listed = bs.list_backups(self.backups)
+        self.assertEqual([os.path.basename(p) for p in listed], ["snippets-20260101-000000.json"])
+
+    # --- age + timestamp helpers -------------------------------------------
+
+    def test_newest_backup_age_seconds(self):
+        self.assertIsNone(bs.newest_backup_age_seconds(self.backups))  # none yet
+        path = bs.create_backup(self.snippets, self.backups, timestamp="20260101-000000")
+        os.utime(path, (5000, 5000))
+        self.assertEqual(bs.newest_backup_age_seconds(self.backups, now=5060), 60)
+
+    def test_format_timestamp_shape_is_deterministic(self):
+        # Shape must be YYYYMMDD-HHMMSS regardless of the local timezone.
+        self.assertRegex(bs.format_timestamp(0), r"^\d{8}-\d{6}$")
+        self.assertRegex(bs.format_timestamp(), r"^\d{8}-\d{6}$")
+
 
 if __name__ == "__main__":
     unittest.main()
