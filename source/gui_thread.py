@@ -14,6 +14,17 @@ the GUI thread instead: the caller runs :meth:`adopt_main_thread` then
 marshaling contract is identical in both modes — only the thread the pump ticks
 on changes. See ``source/docs/macos-threading.md``.
 
+On macOS one more rule applies, and breaking it aborts the process rather
+than raising: **never call into Tcl/Tk from a Cocoa callback** — a tray menu
+action, an NSNotification observer, an NSTimer block. ``_tkinter`` keeps a
+single global ``tcl_tstate``, set while Python is inside a Tcl call and cleared
+by ``LEAVE_TCL``. A Cocoa callback runs while ``mainloop()`` is already inside
+``ENTER_TCL``, so a Tcl call made there clears that global with no
+``ENTER_PYTHON`` frame left to restore it, and the next Tcl→Python callback
+dies with ``Fatal Python error: PyEval_RestoreThread`` (issue #53). Cocoa
+callbacks may therefore only touch Python state — ``submit`` queues, the pump
+does the Tk work from inside the Tk loop where the invariant holds.
+
 The keyboard listener thread must never call into this module; dialog
 marshaling belongs to the expansion worker path only.
 """
@@ -44,6 +55,8 @@ class GuiThread:
         self._thread = None
         self._start_error = None
         self._stopping = False
+        # Set by the teardown so the pump stops draining into a destroyed root.
+        self._destroyed = False
         self._main_thread = (
             tk_runs_on_main_thread() if main_thread is None else bool(main_thread)
         )
@@ -170,13 +183,13 @@ class GuiThread:
             # the dialog lock, which would refuse every later dialog.
             self._fail_pending()
 
-    @staticmethod
-    def _teardown(root):
+    def _teardown(self, root):
         # destroy(), not quit(): mainloop exits when the window count hits
         # zero, which is deterministic. quit() relies on _tkinter's quit
         # flag, which proved unreliable once the process has had earlier
         # Tk interpreters (observed on 3.14: stop() hung until the join
         # timeout while the pump kept ticking).
+        self._destroyed = True
         root.destroy()
 
     def stop(self, timeout=5.0):
@@ -209,13 +222,13 @@ class GuiThread:
             # A tray menu callback lands here: on macOS pystray dispatches it
             # on the main thread, from inside the very loop ``mainloop()`` is
             # pumping. Destroying the interpreter mid-dispatch is not safe, so
-            # the teardown goes to the next tick; ``_loop`` fails the pending
+            # the teardown goes through the queue; ``_loop`` fails the pending
             # queue when it unwinds.
-            try:
-                self.root.after(0, self._teardown, self.root)
-            except Exception as exc:
-                self._log(f"Falha ao agendar o encerramento do root do Tk: {exc}")
-                self._fail_pending()
+            #
+            # The queue rather than a raw ``root.after``: this runs in a Cocoa
+            # frame, and scheduling a Tcl timer from there is itself the call
+            # that poisons ``tcl_tstate`` and aborts the loop (issue #53).
+            self._queue.put((self._teardown, None, None))
             return
 
         done = threading.Event()
@@ -268,9 +281,18 @@ class GuiThread:
         return box.get("value")
 
     def submit(self, func):
-        """Queue ``func(root)`` on the GUI thread without waiting for it."""
+        """Queue ``func(root)`` on the GUI thread without waiting for it.
+
+        Main-thread mode never runs it inline, even when the caller *is* the GUI
+        thread. There the caller is a tray menu callback — a Cocoa frame, not a
+        Tk one — and any Tcl call made from there poisons ``tcl_tstate`` for the
+        running ``mainloop``, aborting the process on its next timer (issue #53,
+        and the module docstring for the mechanism). Queuing costs one pump tick
+        and nothing is lost. ``call`` cannot do the same: its caller blocks on
+        the result, and on the GUI thread that would deadlock.
+        """
         self.ensure_started()
-        if threading.current_thread() is self._thread:
+        if threading.current_thread() is self._thread and not self._main_thread:
             func(self.root)
             return
         self._queue.put((func, None, None))
@@ -294,6 +316,11 @@ class GuiThread:
             except queue.Empty:
                 return
             self._invoke(item)
+            if self._destroyed:
+                # The teardown was one of the queued items. Anything behind it
+                # would run against a destroyed root; ``_loop`` fails those
+                # callers as it unwinds.
+                return
 
     def _invoke(self, item):
         func, box, done = item
