@@ -489,6 +489,68 @@ class MainThreadModeTkTests(unittest.TestCase):
         onto a pump they are themselves blocking."""
         self.assertEqual(self.gui.call(lambda _root: "inline", timeout=5), "inline")
 
+    def test_submit_from_the_gui_thread_queues_instead_of_running_inline(self):
+        """A tray callback lands on the GUI thread on macOS, from inside AppKit's
+        menu-tracking loop — building a window there aborts the process (#53)."""
+        order = []
+
+        def from_the_gui_thread():
+            self.gui.submit(lambda _root: order.append("queued work"))
+            order.append("submit returned")
+
+        self.gui.root.after(0, from_the_gui_thread)
+        self.gui.root.after(600, self.gui.stop)
+        self.gui.run_mainloop()
+        self.assertEqual(order, ["submit returned", "queued work"])
+
+    def test_a_paused_pump_holds_work_until_it_resumes(self):
+        ran = []
+
+        def pause_and_queue():
+            self.gui.pause_pump()
+            self.gui.submit(lambda _root: ran.append("after tracking"))
+
+        self.gui.root.after(0, pause_and_queue)
+        # Nothing may run while the pump is paused: this is the window in which
+        # a firing Tcl timer would call into Python with a NULL tcl_tstate.
+        self.gui.root.after(400, lambda: self.assertEqual(ran, []))
+        self.gui.root.after(500, self.gui.resume_pump)
+        self.gui.root.after(900, self.gui.stop)
+        self.gui.run_mainloop()
+        self.assertEqual(ran, ["after tracking"])
+
+    def test_resume_is_idempotent_and_a_second_pause_still_holds(self):
+        ran = []
+
+        def drive():
+            self.gui.resume_pump()  # never paused: must not stack timers
+            self.gui.pause_pump()
+            self.gui.pause_pump()
+            self.gui.submit(lambda _root: ran.append("work"))
+
+        self.gui.root.after(0, drive)
+        self.gui.root.after(400, lambda: self.assertEqual(ran, []))
+        self.gui.root.after(500, self.gui.resume_pump)
+        self.gui.root.after(900, self.gui.stop)
+        self.gui.run_mainloop()
+        self.assertEqual(ran, ["work"])
+
+    def test_stop_from_the_gui_thread_waits_for_the_pump_to_resume(self):
+        """quit_app() can be dispatched while tracking is still up: the teardown
+        must not fire from a Tcl timer inside AppKit's loop."""
+        seen = []
+
+        def quit_from_tracking():
+            self.gui.pause_pump()
+            self.gui.stop()
+            seen.append(self.gui.root is not None)
+
+        self.gui.root.after(0, quit_from_tracking)
+        self.gui.root.after(500, self.gui.resume_pump)
+        self.gui.run_mainloop()
+        self.assertEqual(seen, [True], "root was destroyed while the pump was paused")
+        self.assertIsNone(self.gui.root)
+
     def test_stop_from_a_worker_tears_the_root_down_and_ends_the_loop(self):
         holder = self._drive(lambda: "worker done")
         self.assertEqual(holder["result"], "worker done")
@@ -503,19 +565,24 @@ class MainThreadModeTkTests(unittest.TestCase):
         self.assertIsNone(self.gui.root)
 
     def test_stop_wakes_callers_whose_queued_work_will_never_run(self):
-        box = {}
-        done = threading.Event()
+        early_box, early_done = {}, threading.Event()
+        late_box, late_done = {}, threading.Event()
 
         def shutdown():
             # Queued from inside the loop: the pump drains synchronously on
             # entry, so an item put before run_mainloop would simply have run.
-            self.gui._queue.put((lambda _root: "never", box, done))
+            self.gui._queue.put((lambda _root: "in time", early_box, early_done))
             self.gui.stop()
+            self.gui._queue.put((lambda _root: "never", late_box, late_done))
 
         self.gui.root.after(0, shutdown)
         self.gui.run_mainloop()
-        self.assertTrue(done.is_set(), "stranded caller was never woken")
-        self.assertIsInstance(box.get("error"), RuntimeError)
+        # The teardown is queued, so work already in line still runs; only what
+        # lands behind it is stranded. Either way no caller is left blocked.
+        self.assertTrue(early_done.is_set(), "queued caller was never woken")
+        self.assertEqual(early_box.get("value"), "in time")
+        self.assertTrue(late_done.is_set(), "stranded caller was never woken")
+        self.assertIsInstance(late_box.get("error"), RuntimeError)
 
 
 def _raise(exc):
