@@ -12,6 +12,12 @@ real-host pass still has to confirm by hand.
 > Input Monitoring *and* Accessibility granted to the running process, which is
 > a TCC decision no script can make for itself. The manual matrix at the bottom
 > is the remaining work, and it needs a human at a granted Mac.
+>
+> Both grants have since been obtained on that host and the app's own probe
+> reports `Monitoramento de Entrada=granted, Acessibilidade=granted` — so the
+> setup is no longer the obstacle, only the typing. "Getting a Mac into a state
+> where the matrix can run" below is what that took; it is the part worth not
+> rediscovering.
 
 ## The sequence
 
@@ -103,10 +109,66 @@ secure input also blocks the listener, so the trigger is typically never
 detected in the first place. The gate covers the window where secure input turns
 on between detection and insertion.
 
+## Getting a Mac into a state where the matrix can run
+
+Four traps sit between a working checkout and a granted app, and every one of
+them fails *silently* — the app starts, the tray appears, and nothing expands.
+All four were hit on a real host; this is the order that works.
+
+**1. Launch the bundle through LaunchServices, never its binary directly.**
+Running `Txt Xpander.app/Contents/MacOS/Txt Xpander` from a shell makes macOS
+attribute TCC to the *responsible process* — the terminal — so the app reports
+both grants `denied` no matter what is ticked in System Settings. `open` gives
+the process the bundle's own identity. To point a launch at a throwaway library
+without losing that:
+
+```bash
+open --env TXT_XPANDER_HOME=/tmp/matrix-home ~/Applications/Txt\ Xpander.app
+```
+
+That is the only way to run the matrix against test snippets while the real
+`~/.txt_xpander` library stays untouched.
+
+**2. Install the bundle somewhere permanent before granting anything.** A grant
+is pinned to the bundle it was given to; granting a copy inside a git worktree
+or a temp dir means re-granting as soon as that path goes away. `~/Applications`
+is the per-user location and matches the Windows per-user install.
+
+**3. Sign with a stable identity, or every rebuild silently revokes the grants.**
+Under ad-hoc signing TCC pins the grant to the binary's cdhash, so a rebuild
+orphans the System Settings row: it keeps the app's name and icon, stays ticked,
+and matches nothing on disk. **Un-ticking and re-ticking does not fix it** — the
+row has to be selected and removed with `−`, then re-added with `+`. Any real
+code-signing identity avoids this entirely (see `build_release_macos.sh`).
+
+Note `codesign` cannot reach a private key from a non-interactive shell — it
+fails with `errSecInternalComponent` because there is no one to answer the
+keychain prompt. Run the build from an interactive terminal once and choose
+*Always Allow*; after that the partition list stops asking.
+
+**4. Automating the *typing* needs a grant of its own.** Driving the matrix from
+a script (System Events `keystroke`, or pynput) requires Accessibility for the
+terminal running it, which is a second, broader grant — it is system-wide
+keylogging for anything that terminal launches. Check it with:
+
+```bash
+osascript -e 'tell application "System Events" to return UI elements enabled'
+```
+
+`false` means synthesized keystrokes will be dropped. Typing the triggers by
+hand needs none of this and is the intended way to run the checklist below.
+
 ## Remaining manual matrix
 
 Run on a Mac with both Input Monitoring and Accessibility granted to the app
-(tray → permissions entry if either is missing; a grant needs an app restart).
+(tray → permissions entry if either is missing; a grant needs an app restart —
+the frameworks read TCC at process start). Confirm the grants landed by reading
+the app's own startup probe rather than trusting the System Settings checkbox,
+which can be a stale row:
+
+```bash
+grep "Permissões do macOS:" ~/.txt_xpander/logs/txt_xpander.log | tail -1
+```
 
 For each target — **TextEdit**, a **browser textarea** (Safari or Chrome),
 **Mail**, and a **chat app** (WhatsApp Web) — expand:
