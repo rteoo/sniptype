@@ -395,6 +395,24 @@ class MainThreadModeHeadlessTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             gui.run_mainloop()
 
+    def test_stop_from_the_gui_thread_never_schedules_a_tcl_timer(self):
+        """Issue #53: ``stop()`` runs in a Cocoa frame (the tray's *Sair*).
+
+        ``root.after`` there is a Tcl call from outside any ENTER_PYTHON frame,
+        which clears ``_tkinter``'s ``tcl_tstate`` and aborts the mainloop on its
+        next timer. The teardown must go on the queue instead.
+        """
+        gui = GuiThread(main_thread=True)
+        root = mock.Mock()
+        with mock.patch.object(gt.tk, "Tk", return_value=root):
+            gui.adopt_main_thread()
+
+        gui.stop()
+
+        root.after.assert_not_called()
+        queued = [item[0] for item in list(gui._queue.queue)]
+        self.assertIn(gui._teardown, queued)
+
     def test_failed_adopt_leaves_no_thread_designated(self):
         """A designated thread with no root would make call() run inline on None."""
         gui = GuiThread(main_thread=True)
@@ -490,8 +508,10 @@ class MainThreadModeTkTests(unittest.TestCase):
         self.assertEqual(self.gui.call(lambda _root: "inline", timeout=5), "inline")
 
     def test_submit_from_the_gui_thread_queues_instead_of_running_inline(self):
-        """A tray callback lands on the GUI thread on macOS, from inside AppKit's
-        menu-tracking loop — building a window there aborts the process (#53)."""
+        """The macOS rule (#53): a tray callback is a *Cocoa* frame, and any Tcl
+        call made there clears ``tcl_tstate`` for the running mainloop, aborting
+        the process on its next timer. Only Python state may be touched, so the
+        work has to leave the Cocoa frame and run from the pump."""
         order = []
 
         def from_the_gui_thread():
@@ -502,54 +522,6 @@ class MainThreadModeTkTests(unittest.TestCase):
         self.gui.root.after(600, self.gui.stop)
         self.gui.run_mainloop()
         self.assertEqual(order, ["submit returned", "queued work"])
-
-    def test_a_paused_pump_holds_work_until_it_resumes(self):
-        ran = []
-
-        def pause_and_queue():
-            self.gui.pause_pump()
-            self.gui.submit(lambda _root: ran.append("after tracking"))
-
-        self.gui.root.after(0, pause_and_queue)
-        # Nothing may run while the pump is paused: this is the window in which
-        # a firing Tcl timer would call into Python with a NULL tcl_tstate.
-        self.gui.root.after(400, lambda: self.assertEqual(ran, []))
-        self.gui.root.after(500, self.gui.resume_pump)
-        self.gui.root.after(900, self.gui.stop)
-        self.gui.run_mainloop()
-        self.assertEqual(ran, ["after tracking"])
-
-    def test_resume_is_idempotent_and_a_second_pause_still_holds(self):
-        ran = []
-
-        def drive():
-            self.gui.resume_pump()  # never paused: must not stack timers
-            self.gui.pause_pump()
-            self.gui.pause_pump()
-            self.gui.submit(lambda _root: ran.append("work"))
-
-        self.gui.root.after(0, drive)
-        self.gui.root.after(400, lambda: self.assertEqual(ran, []))
-        self.gui.root.after(500, self.gui.resume_pump)
-        self.gui.root.after(900, self.gui.stop)
-        self.gui.run_mainloop()
-        self.assertEqual(ran, ["work"])
-
-    def test_stop_from_the_gui_thread_waits_for_the_pump_to_resume(self):
-        """quit_app() can be dispatched while tracking is still up: the teardown
-        must not fire from a Tcl timer inside AppKit's loop."""
-        seen = []
-
-        def quit_from_tracking():
-            self.gui.pause_pump()
-            self.gui.stop()
-            seen.append(self.gui.root is not None)
-
-        self.gui.root.after(0, quit_from_tracking)
-        self.gui.root.after(500, self.gui.resume_pump)
-        self.gui.run_mainloop()
-        self.assertEqual(seen, [True], "root was destroyed while the pump was paused")
-        self.assertIsNone(self.gui.root)
 
     def test_stop_from_a_worker_tears_the_root_down_and_ends_the_loop(self):
         holder = self._drive(lambda: "worker done")
