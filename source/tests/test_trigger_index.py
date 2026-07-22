@@ -119,5 +119,101 @@ class SlowTriggerMetadataTests(unittest.TestCase):
         self.assertNotIn("xgreet", index["slow_triggers"])
 
 
+class MultiSuffixOrderingTests(unittest.TestCase):
+    def test_three_way_suffix_chain_matches_longest_available(self):
+        # "x" ⊂ "yx" ⊂ "zzyx": each buffer must resolve to the longest trigger
+        # that is actually a suffix of it, never a shorter shadow.
+        snippets = {"x": "1", "yx": "2", "zzyx": "3"}
+        index = compile_trigger_index(snippets, set())
+        self.assertEqual("zzyx", find_direct_trigger("azzyx", index))
+        self.assertEqual("yx", find_direct_trigger("ayx", index))
+        self.assertEqual("x", find_direct_trigger("ax", index))
+
+    def test_multiple_triggers_share_last_char_all_reachable(self):
+        snippets = {"cat": "c", "hat": "h", "splat": "s"}
+        index = compile_trigger_index(snippets, set())
+        # longest-first, ties keep source order (cat before hat).
+        self.assertEqual(("splat", "cat", "hat"), index["direct_by_last_char"]["t"])
+        self.assertEqual("cat", find_direct_trigger("wombat cat", index))
+        self.assertEqual("hat", find_direct_trigger("with a hat", index))
+        self.assertEqual("splat", find_direct_trigger("go splat", index))
+
+
+class BufferBoundaryTests(unittest.TestCase):
+    def test_trigger_longer_than_buffer_does_not_match(self):
+        index = compile_trigger_index({"abcdef": "x"}, set())
+        self.assertIsNone(find_direct_trigger("cdef", index))
+
+    def test_trigger_exactly_equal_to_buffer_matches(self):
+        index = compile_trigger_index({"abc": "x"}, set())
+        self.assertEqual("abc", find_direct_trigger("abc", index))
+
+    def test_empty_typed_text_never_matches(self):
+        index = compile_trigger_index({"abc": "x"}, set())
+        self.assertIsNone(find_direct_trigger("", index))
+        self.assertEqual((None, None), find_dynamic_trigger({"abc": "x"}, "", index))
+
+
+class UnicodeTriggerTests(unittest.TestCase):
+    def test_accented_trigger_orders_longest_first_and_matches(self):
+        snippets = {"café": "coffee", "xcafé": "big coffee"}
+        index = compile_trigger_index(snippets, set())
+        self.assertEqual(("xcafé", "café"), index["direct_by_last_char"]["é"])
+        self.assertEqual("xcafé", find_direct_trigger("zxcafé", index))
+        self.assertEqual("café", find_direct_trigger("zcafé", index))
+
+    def test_single_codepoint_emoji_trigger_matches(self):
+        snippets = {"x🎉": "party"}
+        index = compile_trigger_index(snippets, set())
+        self.assertEqual("x🎉", find_direct_trigger("hey x🎉", index))
+
+    def test_multi_codepoint_emoji_trigger_still_matches(self):
+        # A flag is two code points; the bucket keys on the final code point but
+        # endswith must still match the whole trigger string.
+        flag = "\U0001F1E7\U0001F1F7"  # regional-indicator B + R
+        trigger = "x" + flag
+        index = compile_trigger_index({trigger: "brasil"}, set())
+        self.assertEqual(trigger, find_direct_trigger("vai " + trigger, index))
+
+
+class DynamicTriggerEdgeTests(unittest.TestCase):
+    def setUp(self):
+        self.snippets = {"_cpf_numbers": {"fulano": "123", "empty": ""}}
+        self.index = compile_trigger_index(self.snippets, set())
+
+    def test_prefix_without_name_does_not_match(self):
+        self.assertEqual((None, None), find_dynamic_trigger(self.snippets, "xxcpf", self.index))
+
+    def test_rfind_picks_last_prefix_occurrence(self):
+        # The prefix appears twice; only the trailing one carries a real name.
+        trigger, value = find_dynamic_trigger(self.snippets, "cpfxcpffulano", self.index)
+        self.assertEqual("cpffulano", trigger)
+        self.assertEqual("123", value)
+
+    def test_empty_string_mapping_value_is_a_match_not_a_miss(self):
+        # value == "" must be treated as a resolved value, never as "no match".
+        trigger, value = find_dynamic_trigger(self.snippets, "cpfempty", self.index)
+        self.assertEqual("cpfempty", trigger)
+        self.assertEqual("", value)
+
+
+class EmptyKeyRegressionTests(unittest.TestCase):
+    """KNOWN DEFECT — kept as a failing regression marker (no source fix applied).
+
+    compile_trigger_index does ``last_char = trigger[-1]`` (trigger_index.py:52),
+    which raises ``IndexError`` on an empty-string trigger key. validate_static_snippets
+    passes ``{"": "x"}`` through unchanged, so a syntactically valid snippets.json
+    with an empty key reaches compile_trigger_index via refresh_runtime_indexes in
+    ``TextExpander.__init__`` and crashes app startup, uncaught by
+    recover_snippets_file (which only wraps the parse step). An empty key can never
+    be a meaningful trigger (``endswith("")`` is always true) and must be skipped
+    the way ``_``-prefixed keys already are.
+    """
+
+    def test_empty_string_trigger_key_does_not_crash_and_real_trigger_still_indexes(self):
+        index = compile_trigger_index({"": "x", "abc": "y"}, set())
+        self.assertEqual("abc", find_direct_trigger("zzabc", index))
+
+
 if __name__ == "__main__":
     unittest.main()
