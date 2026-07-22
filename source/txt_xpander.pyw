@@ -77,6 +77,7 @@ from app_paths import (
 from settings_support import load_settings
 from validation_support import validate_trigger
 import macos_permissions
+import ui_theme
 from platform_support import (
     APP_NAME,
     AUTOSTART_ABSENT,
@@ -725,37 +726,38 @@ class TextExpander:
         print(f"📊 Abrindo input para {prompt_title}...")
 
         def build(root):
+            ui = ui_theme.bind(root)
             result = [None]
 
             dialog = tk.Toplevel(root)
             dialog.title(prompt_title)
             dialog.resizable(False, False)
-            dialog.configure(bg="#F4F6FA")
+            dialog.configure(bg=ui.surface)
             dialog.attributes("-topmost", True)
             self._set_window_icon(dialog)
 
-            container = tk.Frame(dialog, bg="#F4F6FA", padx=18, pady=18)
+            container = tk.Frame(dialog, bg=ui.surface, padx=18, pady=18)
             container.pack(fill=tk.BOTH, expand=True)
 
             tk.Label(
                 container,
                 text="Digite o ticker:",
-                font=("Segoe UI", 10, "bold"),
-                bg="#F4F6FA",
-                fg="#1F2937",
+                font=ui.font(10, "bold"),
+                bg=ui.surface,
+                fg=ui.text,
             ).pack(anchor="w")
             tk.Label(
                 container,
                 text="Ex: PETR4, AAPL, MSFT",
-                font=("Segoe UI", 9),
-                bg="#F4F6FA",
-                fg="#5B6472",
+                font=ui.font(9),
+                bg=ui.surface,
+                fg=ui.text_muted,
             ).pack(anchor="w", pady=(2, 8))
 
-            entry = tk.Entry(container, font=("Segoe UI", 10), width=28)
+            entry = tk.Entry(container, font=ui.font(10), width=28, **ui.entry_colors())
             entry.pack(fill=tk.X, pady=(0, 12))
 
-            buttons = tk.Frame(container, bg="#F4F6FA")
+            buttons = tk.Frame(container, bg=ui.surface)
             buttons.pack(fill=tk.X)
 
             def on_cancel(_event=None):
@@ -766,8 +768,8 @@ class TextExpander:
                 result[0] = ticker or None
                 dialog.destroy()
 
-            tk.Button(buttons, text="Cancelar", width=12, command=on_cancel).pack(side=tk.RIGHT, padx=(6, 0))
-            tk.Button(buttons, text="OK", width=12, command=on_ok).pack(side=tk.RIGHT)
+            tk.Button(buttons, text="Cancelar", width=ui.button_width(12), command=on_cancel).pack(side=tk.RIGHT, padx=(6, 0))
+            tk.Button(buttons, text="OK", width=ui.button_width(12), command=on_ok).pack(side=tk.RIGHT)
 
             entry.bind("<Return>", on_ok)
             dialog.bind("<Escape>", on_cancel)
@@ -808,50 +810,51 @@ class TextExpander:
         this call blocks until the user submits or cancels.
         """
         def build(root):
+            ui = ui_theme.bind(root)
             result = {"phone": None, "message": None}
 
             dialog = tk.Toplevel(root)
             dialog.title("Abrir WhatsApp")
             dialog.resizable(False, False)
-            dialog.configure(bg="#F4F6FA")
+            dialog.configure(bg=ui.surface)
             dialog.attributes("-topmost", True)
             self._set_window_icon(dialog)
 
-            container = tk.Frame(dialog, bg="#F4F6FA", padx=18, pady=18)
+            container = tk.Frame(dialog, bg=ui.surface, padx=18, pady=18)
             container.pack(fill=tk.BOTH, expand=True)
             container.grid_columnconfigure(0, weight=1)
 
             tk.Label(
                 container,
                 text="Abrir conversa no WhatsApp",
-                font=("Segoe UI", 11, "bold"),
-                bg="#F4F6FA",
-                fg="#1F2937",
+                font=ui.font(11, "bold"),
+                bg=ui.surface,
+                fg=ui.text,
             ).grid(row=0, column=0, sticky="w")
 
             tk.Label(
                 container,
                 text="Informe o telefone com DDD ou código do país. Se faltar o país, será usado +55.",
-                font=("Segoe UI", 9),
-                bg="#F4F6FA",
-                fg="#5B6472",
+                font=ui.font(9),
+                bg=ui.surface,
+                fg=ui.text_muted,
                 wraplength=380,
                 justify=tk.LEFT,
             ).grid(row=1, column=0, sticky="w", pady=(6, 12))
 
-            tk.Label(container, text="Telefone", font=("Segoe UI", 9), bg="#F4F6FA").grid(row=2, column=0, sticky="w")
-            entry_phone = tk.Entry(container, font=("Segoe UI", 10), width=42)
+            tk.Label(container, text="Telefone", font=ui.font(9), bg=ui.surface, fg=ui.text_native).grid(row=2, column=0, sticky="w")
+            entry_phone = tk.Entry(container, font=ui.font(10), width=42, **ui.entry_colors())
             entry_phone.grid(row=3, column=0, sticky="ew", pady=(4, 10))
             if initial_phone:
                 entry_phone.insert(0, initial_phone)
 
-            tk.Label(container, text="Mensagem", font=("Segoe UI", 9), bg="#F4F6FA").grid(row=4, column=0, sticky="w")
-            text_message = tk.Text(container, font=("Segoe UI", 10), width=42, height=5)
+            tk.Label(container, text="Mensagem", font=ui.font(9), bg=ui.surface, fg=ui.text_native).grid(row=4, column=0, sticky="w")
+            text_message = tk.Text(container, font=ui.font(10), width=42, height=5, **ui.text_colors())
             text_message.grid(row=5, column=0, sticky="ew", pady=(4, 12))
             if initial_message:
                 text_message.insert("1.0", initial_message)
 
-            buttons = tk.Frame(container, bg="#F4F6FA")
+            buttons = tk.Frame(container, bg=ui.surface)
             buttons.grid(row=6, column=0, sticky="e")
 
             def cancel_dialog(_event=None):
@@ -875,8 +878,8 @@ class TextExpander:
                 result["message"] = message_text
                 dialog.destroy()
 
-            btn_cancel = tk.Button(buttons, text="Cancelar", width=12, command=cancel_dialog)
-            btn_open = tk.Button(buttons, text="Abrir WhatsApp", width=14, command=submit_dialog)
+            btn_cancel = tk.Button(buttons, text="Cancelar", width=ui.button_width(12), command=cancel_dialog)
+            btn_open = tk.Button(buttons, text="Abrir WhatsApp", width=ui.button_width(14), command=submit_dialog)
             btn_cancel.pack(side=tk.LEFT, padx=(0, 6))
             btn_open.pack(side=tk.LEFT)
 
@@ -1105,24 +1108,25 @@ class TextExpander:
         Returns {field_name: value} or None if the user cancels.
         """
         def build(root):
+            ui = ui_theme.bind(root)
             result = [None]
             entries = {}
 
             dialog = tk.Toplevel(root)
             dialog.title("Preencher campos")
             dialog.resizable(False, False)
-            dialog.configure(bg="#F4F6FA")
+            dialog.configure(bg=ui.surface)
             self._set_window_icon(dialog)
 
             tk.Label(
                 dialog,
                 text="Preencha os campos do snippet:",
-                font=("Segoe UI", 9, "bold"),
-                bg="#F4F6FA",
-                fg="#1F2937",
+                font=ui.font(9, "bold"),
+                bg=ui.surface,
+                fg=ui.text,
             ).pack(padx=20, pady=(16, 8), anchor="w")
 
-            frame = tk.Frame(dialog, bg="#F4F6FA")
+            frame = tk.Frame(dialog, bg=ui.surface)
             frame.pack(fill=tk.BOTH, padx=20, pady=(0, 8))
             frame.grid_columnconfigure(0, weight=1)
 
@@ -1132,24 +1136,25 @@ class TextExpander:
                 tk.Label(
                     frame,
                     text=label_text + ":",
-                    font=("Segoe UI", 9),
-                    bg="#F4F6FA",
-                    fg="#374151",
+                    font=ui.font(9),
+                    bg=ui.surface,
+                    fg=ui.text_strong,
                 ).grid(row=i * 2, column=0, sticky="w", pady=(6, 0))
                 entry = tk.Entry(
                     frame,
-                    font=("Segoe UI", 10),
+                    font=ui.font(10),
                     width=42,
                     relief=tk.FLAT,
                     highlightthickness=1,
-                    highlightbackground="#D7DEE8",
+                    highlightbackground=ui.border,
+                    **ui.entry_colors(),
                 )
                 entry.grid(row=i * 2 + 1, column=0, sticky="ew", pady=(2, 0))
                 entries[name] = entry
                 if first_entry is None:
                     first_entry = entry
 
-            btn_frame = tk.Frame(dialog, bg="#F4F6FA")
+            btn_frame = tk.Frame(dialog, bg=ui.surface)
             btn_frame.pack(fill=tk.X, padx=20, pady=(12, 16))
 
             def on_ok(_event=None):
@@ -1162,26 +1167,22 @@ class TextExpander:
             tk.Button(
                 btn_frame,
                 text="Cancelar",
-                font=("Segoe UI", 9),
+                font=ui.font(9),
                 width=10,
                 command=on_cancel,
                 relief=tk.FLAT,
-                bg="#E7ECF5",
-                activebackground="#D9E2F2",
                 cursor="hand2",
+                **ui.button_colors(),
             ).pack(side=tk.RIGHT, padx=(4, 0))
             tk.Button(
                 btn_frame,
                 text="OK",
-                font=("Segoe UI", 9),
+                font=ui.font(9),
                 width=10,
                 command=on_ok,
                 relief=tk.FLAT,
-                bg="#265CFF",
-                fg="white",
-                activebackground="#1a4fd4",
-                activeforeground="white",
                 cursor="hand2",
+                **ui.button_colors(accent=True),
             ).pack(side=tk.RIGHT)
 
             dialog.bind("<Return>", on_ok)
@@ -1481,47 +1482,50 @@ class TextExpander:
     def _build_manager_window(self, tk_root):
         """Construct the management window as a Toplevel of the shared root."""
         try:
+            # Re-resolved per window so reopening the manager picks up a system
+            # appearance the user changed while it was closed.
+            ui = ui_theme.bind(tk_root)
             root = tk.Toplevel(tk_root)
             root.title("Txt Xpander - Gerenciador de Snippets")
-            root.geometry("960x660")
-            root.minsize(820, 540)
+            geometry, min_width, min_height = ui.manager_window_size
+            root.geometry(geometry)
+            root.minsize(min_width, min_height)
             root.resizable(True, True)
-            root.configure(bg="#F4F6FA")
+            root.configure(bg=ui.surface)
             self._set_window_icon(root)
             self._configure_manager_styles(root)
 
             root.grid_columnconfigure(0, weight=1)
             root.grid_rowconfigure(1, weight=1)
 
-            header = tk.Frame(root, bg="#F4F6FA", padx=12, pady=10)
+            header = tk.Frame(root, bg=ui.surface, padx=12, pady=10)
             header.grid(row=0, column=0, sticky="ew")
             header.grid_columnconfigure(0, weight=1)
 
             tk.Label(
                 header,
                 text="Gerenciador de Snippets",
-                font=("Segoe UI", 12, "bold"),
-                bg="#F4F6FA",
-                fg="#1F2937",
+                font=ui.font(12, "bold"),
+                bg=ui.surface,
+                fg=ui.text,
             ).grid(row=0, column=0, sticky="w")
             tk.Label(
                 header,
                 text="Edite snippets, mapeamentos e consulte notificações recentes.",
-                font=("Segoe UI", 9),
-                bg="#F4F6FA",
-                fg="#5B6472",
+                font=ui.font(9),
+                bg=ui.surface,
+                fg=ui.text_muted,
             ).grid(row=1, column=0, sticky="w", pady=(2, 0))
 
             bell_button = tk.Button(
                 header,
                 text="🔔",
-                font=("Segoe UI Emoji", 12),
+                font=ui.emoji_font(12),
                 width=3,
                 relief=tk.FLAT,
                 bd=0,
-                bg="#E7ECF5",
-                activebackground="#D9E2F2",
                 cursor="hand2",
+                **ui.button_colors(),
                 command=lambda: self._open_notification_history(root),
             )
             bell_button.grid(row=0, column=1, rowspan=2, sticky="e")
@@ -1529,16 +1533,16 @@ class TextExpander:
             notebook = ttk.Notebook(root, style="Manager.TNotebook")
             notebook.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 12))
 
-            tab_static = tk.Frame(notebook, bg="#F4F6FA")
+            tab_static = tk.Frame(notebook, bg=ui.surface)
             notebook.add(tab_static, text="Snippets Estáticos")
 
-            tab_dynamic = tk.Frame(notebook, bg="#F4F6FA")
+            tab_dynamic = tk.Frame(notebook, bg=ui.surface)
             notebook.add(tab_dynamic, text="Mapeamentos Dinâmicos")
 
-            tab_builtin = tk.Frame(notebook, bg="#F4F6FA")
+            tab_builtin = tk.Frame(notebook, bg=ui.surface)
             notebook.add(tab_builtin, text="Snippets Dinâmicos")
 
-            tab_backups = tk.Frame(notebook, bg="#F4F6FA")
+            tab_backups = tk.Frame(notebook, bg=ui.surface)
             notebook.add(tab_backups, text="Backups")
 
             def tab_counter(tab, label):
@@ -1574,7 +1578,8 @@ class TextExpander:
 
     def _create_backups_tab(self, parent, root):
         """Backups tab: list backups and expose restore/export/import actions."""
-        main = tk.Frame(parent, bg="#F4F6FA", padx=14, pady=14)
+        ui = ui_theme.theme()
+        main = tk.Frame(parent, bg=ui.surface, padx=14, pady=14)
         main.pack(fill=tk.BOTH, expand=True)
         main.grid_columnconfigure(0, weight=1)
         main.grid_rowconfigure(2, weight=1)
@@ -1582,16 +1587,16 @@ class TextExpander:
         tk.Label(
             main,
             text="Backups da biblioteca",
-            font=("Segoe UI", 11, "bold"),
-            bg="#F4F6FA",
-            fg="#1F2937",
+            font=ui.font(11, "bold"),
+            bg=ui.surface,
+            fg=ui.text,
         ).grid(row=0, column=0, sticky="w")
         path_label = tk.Label(
             main,
             text=f"Pasta de dados: {self.data_dir}",
-            font=("Segoe UI", 8),
-            bg="#F4F6FA",
-            fg="#5B6472",
+            font=ui.font(8),
+            bg=ui.surface,
+            fg=ui.text_muted,
         )
         path_label.grid(row=1, column=0, sticky="w", pady=(2, 10))
 
@@ -1714,14 +1719,14 @@ class TextExpander:
             else:
                 messagebox.showerror("Backups", "Falha ao criar backup. Verifique os logs.", parent=root)
 
-        buttons = tk.Frame(main, bg="#F4F6FA")
+        buttons = tk.Frame(main, bg=ui.surface)
         buttons.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(10, 0))
-        tk.Button(buttons, text="Backup agora", width=14, command=on_backup_now).pack(side=tk.LEFT, padx=(0, 6))
-        tk.Button(buttons, text="Restaurar", width=12, command=on_restore).pack(side=tk.LEFT, padx=6)
-        tk.Button(buttons, text="Exportar…", width=12, command=on_export).pack(side=tk.LEFT, padx=6)
-        tk.Button(buttons, text="Importar…", width=12, command=on_import).pack(side=tk.LEFT, padx=6)
-        tk.Button(buttons, text="Abrir pasta", width=12, command=self.open_data_folder).pack(side=tk.LEFT, padx=6)
-        tk.Button(buttons, text="Atualizar", width=10, command=refresh_backups).pack(side=tk.RIGHT)
+        tk.Button(buttons, text="Backup agora", width=ui.button_width(14), command=on_backup_now).pack(side=tk.LEFT, padx=(0, 6))
+        tk.Button(buttons, text="Restaurar", width=ui.button_width(12), command=on_restore).pack(side=tk.LEFT, padx=6)
+        tk.Button(buttons, text="Exportar…", width=ui.button_width(12), command=on_export).pack(side=tk.LEFT, padx=6)
+        tk.Button(buttons, text="Importar…", width=ui.button_width(12), command=on_import).pack(side=tk.LEFT, padx=6)
+        tk.Button(buttons, text="Abrir pasta", width=ui.button_width(12), command=self.open_data_folder).pack(side=tk.LEFT, padx=6)
+        tk.Button(buttons, text="Atualizar", width=ui.button_width(10), command=refresh_backups).pack(side=tk.RIGHT)
 
         refresh_backups()
 
@@ -1735,28 +1740,33 @@ class TextExpander:
             pass
 
     def _configure_manager_styles(self, root):
+        ui = ui_theme.theme()
         style = ttk.Style(root)
-        try:
-            style.theme_use("vista")
-        except Exception:
-            pass
-        style.configure("Manager.TNotebook", background="#F4F6FA", borderwidth=0)
-        style.configure("Manager.TNotebook.Tab", padding=(14, 8), font=("Segoe UI", 9))
-        style.map(
-            "Manager.TNotebook.Tab",
-            background=[("selected", "#FFFFFF"), ("!selected", "#E7ECF5")],
-            foreground=[("selected", "#1F2937"), ("!selected", "#2F3A4A")],
-        )
+        # "vista" only exists on Windows; elsewhere this picked whatever theme
+        # happened to be active and then painted Windows colors over it.
+        theme_name = ui_theme.apply_ttk_theme(style)
+
+        style.configure("Manager.TNotebook", background=ui.surface, borderwidth=0)
+        style.configure("Manager.TNotebook.Tab", padding=(14, 8), font=ui.font(9))
+        if theme_name != "aqua":
+            # Aqua draws the tab strip natively and already follows the system
+            # appearance; overriding its colors is what made the labels
+            # unreadable in dark mode.
+            style.map(
+                "Manager.TNotebook.Tab",
+                background=[("selected", ui.card), ("!selected", ui.surface_alt)],
+                foreground=[("selected", ui.text), ("!selected", ui.text_strong)],
+            )
         style.configure(
             "Manager.Treeview",
-            background="#FFFFFF",
-            fieldbackground="#FFFFFF",
-            foreground="#1F2937",
-            font=("Segoe UI", 10),
+            background=ui.card,
+            fieldbackground=ui.card,
+            foreground=ui.text,
+            font=ui.font(10),
             borderwidth=0,
             rowheight=22,
         )
-        style.configure("Manager.Treeview.Heading", font=("Segoe UI", 9), padding=(6, 4))
+        style.configure("Manager.Treeview.Heading", font=ui.font(9), padding=(6, 4))
         style.layout("Manager.Treeview", style.layout("Treeview"))
 
     def _create_snippet_tree(self, shell, trigger_heading="Trigger",
@@ -1830,15 +1840,16 @@ class TextExpander:
             self._bind_mousewheel_descendants(child, target)
 
     def _open_notification_history(self, root):
+        ui = ui_theme.theme()
         history_window = tk.Toplevel(root)
         history_window.title("Histórico de Notificações")
         history_window.geometry("680x360")
         history_window.minsize(560, 280)
-        history_window.configure(bg="#F4F6FA")
+        history_window.configure(bg=ui.surface)
         history_window.transient(root)
         self._set_window_icon(history_window)
 
-        outer = tk.Frame(history_window, bg="#F4F6FA", padx=14, pady=14)
+        outer = tk.Frame(history_window, bg=ui.surface, padx=14, pady=14)
         outer.pack(fill=tk.BOTH, expand=True)
         outer.grid_columnconfigure(0, weight=1)
         outer.grid_rowconfigure(1, weight=1)
@@ -1846,12 +1857,12 @@ class TextExpander:
         tk.Label(
             outer,
             text="Últimas notificações",
-            font=("Segoe UI", 11, "bold"),
-            bg="#F4F6FA",
-            fg="#1F2937",
+            font=ui.font(11, "bold"),
+            bg=ui.surface,
+            fg=ui.text,
         ).grid(row=0, column=0, sticky="w")
 
-        frame = tk.Frame(outer, bg="#FFFFFF", highlightbackground="#D7DEE8", highlightthickness=1)
+        frame = tk.Frame(outer, bg=ui.card, highlightbackground=ui.border, highlightthickness=1)
         frame.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
         frame.grid_columnconfigure(0, weight=1)
         frame.grid_rowconfigure(0, weight=1)
@@ -1888,8 +1899,14 @@ class TextExpander:
         """Add basic rich-text controls above a Tk text editor."""
         configure_rich_text_widget(text_widget)
 
-        toolbar = tk.Frame(parent)
+        ui = ui_theme.theme()
+        toolbar = tk.Frame(parent, bg=ui.card)
         toolbar.pack(fill=tk.X, pady=(0, 6))
+        # Where the buttons alone fill the row, the status gets its own line
+        # below rather than pushing the last button off the pane.
+        status_row = tk.Frame(parent, bg=ui.card) if ui.stacked_toolbar_status else toolbar
+        if status_row is not toolbar:
+            status_row.pack(fill=tk.X, pady=(0, 4))
 
         status_var = tk.StringVar(value="Formato: texto simples")
 
@@ -1930,11 +1947,11 @@ class TextExpander:
         icon_fonts["bold"].configure(weight="bold")
         icon_fonts["italic"].configure(slant="italic")
         icon_fonts["underline"].configure(underline=1)
-        icon_fonts["code"].configure(family="Consolas", weight="bold", size=max(9, button_base_font.cget("size") - 1))
+        icon_fonts["code"].configure(family=ui.mono_family, weight="bold", size=max(9, button_base_font.cget("size") - 1))
         icon_fonts["strike"].configure(overstrike=1)
-        icon_fonts["clear"].configure(family="Segoe UI Symbol", size=max(10, button_base_font.cget("size")))
+        icon_fonts["clear"].configure(family=ui.symbol_family, size=max(10, button_base_font.cget("size")))
         icon_fonts["var"] = button_base_font.copy()
-        icon_fonts["var"].configure(family="Consolas", size=max(8, button_base_font.cget("size") - 1))
+        icon_fonts["var"].configure(family=ui.mono_family, size=max(8, button_base_font.cget("size") - 1))
 
         toolbar_bg = toolbar.cget("bg")
 
@@ -1942,16 +1959,15 @@ class TextExpander:
             button = tk.Button(
                 toolbar,
                 text=label,
-                width=width,
+                width=ui.button_width(width),
                 takefocus=0,
                 font=icon_fonts[font_key],
                 relief=tk.FLAT,
                 bd=0,
                 padx=0,
                 pady=0,
-                bg=toolbar_bg,
-                activebackground="#E6E9EF",
                 highlightthickness=0,
+                **ui.toolbar_button_colors(toolbar_bg),
                 cursor="hand2",
             )
 
@@ -1973,7 +1989,7 @@ class TextExpander:
         add_toolbar_button("⌫", clear_styles_handler, 2, 3, "Formato: limpar estilos", "clear")
 
         # Separator before variable buttons
-        tk.Frame(toolbar, width=1, bg="#C8CDD6").pack(side=tk.LEFT, padx=(8, 6), fill=tk.Y, pady=2)
+        tk.Frame(toolbar, width=1, bg=ui.divider).pack(side=tk.LEFT, padx=(8, 6), fill=tk.Y, pady=2)
 
         def _insert_variable_text(name):
             """Insert %%name%% at the cursor (or replace current selection)."""
@@ -1997,19 +2013,23 @@ class TextExpander:
             picker.transient(parent_win)
             picker.grab_set()
 
+            picker.configure(bg=ui.surface)
+
             search_var = tk.StringVar()
             tk.Entry(
-                picker, textvariable=search_var, font=("Segoe UI", 10),
-                relief=tk.FLAT, highlightthickness=1, highlightbackground="#D7DEE8",
+                picker, textvariable=search_var, font=ui.font(10),
+                relief=tk.FLAT, highlightthickness=1, highlightbackground=ui.border,
+                **ui.entry_colors(),
             ).pack(fill=tk.X, padx=8, pady=8)
 
-            lf = tk.Frame(picker)
+            lf = tk.Frame(picker, bg=ui.surface)
             lf.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
             lf.grid_columnconfigure(0, weight=1)
             lf.grid_rowconfigure(0, weight=1)
 
-            listbox = tk.Listbox(lf, font=("Segoe UI", 10), selectmode=tk.SINGLE,
-                                 relief=tk.FLAT, borderwidth=0, activestyle="none")
+            listbox = tk.Listbox(lf, font=ui.font(10), selectmode=tk.SINGLE,
+                                 relief=tk.FLAT, borderwidth=0, activestyle="none",
+                                 **ui.listbox_colors())
             scrollbar = tk.Scrollbar(lf, orient=tk.VERTICAL, command=listbox.yview)
             listbox.config(yscrollcommand=scrollbar.set)
             listbox.grid(row=0, column=0, sticky="nsew")
@@ -2041,10 +2061,8 @@ class TextExpander:
             listbox.bind("<Double-Button-1>", confirm)
             listbox.bind("<Return>", confirm)
             tk.Button(picker, text="Inserir", command=confirm,
-                      font=("Segoe UI", 9), relief=tk.FLAT,
-                      bg="#265CFF", fg="white",
-                      activebackground="#1a4fd4", activeforeground="white",
-                      cursor="hand2").pack(pady=(0, 8))
+                      font=ui.font(9), relief=tk.FLAT, cursor="hand2",
+                      **ui.button_colors(accent=True)).pack(pady=(0, 8))
 
             center_dialog(picker, parent_win)
             picker.focus_set()
@@ -2074,7 +2092,9 @@ class TextExpander:
         add_toolbar_button("%%cb", insert_clipboard_var, 4, 3, "Variável: colar clipboard (%%clipboard-paste%%)", "var")
         add_toolbar_button("%%?", insert_form_field, 4, 3, "Variável: campo de formulário (%%campo%%)", "var")
 
-        tk.Label(toolbar, textvariable=status_var, font=("Arial", 8), fg="#555").pack(side=tk.RIGHT)
+        tk.Label(status_row, textvariable=status_var, font=ui.font(8),
+                 bg=toolbar_bg, fg=ui.text_muted).pack(
+                     side=tk.LEFT if status_row is not toolbar else tk.RIGHT)
 
         bind_shortcut("<Control-b>", "bold")
         bind_shortcut("<Control-i>", "italic")
@@ -2091,62 +2111,63 @@ class TextExpander:
         ``set_count`` receives the visible snippet count whenever the list is
         rebuilt, so the notebook tab title can show it.
         """
+        ui = ui_theme.theme()
 
-        main = tk.Frame(parent, bg="#F4F6FA", padx=14, pady=14)
+        main = tk.Frame(parent, bg=ui.surface, padx=14, pady=14)
         main.pack(fill=tk.BOTH, expand=True)
         main.grid_columnconfigure(1, weight=1)
         main.grid_rowconfigure(0, weight=1)
 
-        frame_left = tk.LabelFrame(main, text="Biblioteca de snippets", font=("Segoe UI", 9, "bold"), bg="#FFFFFF", padx=12, pady=12)
+        frame_left = tk.LabelFrame(main, text="Biblioteca de snippets", font=ui.font(9, "bold"), bg=ui.card, fg=ui.text_native, padx=12, pady=12)
         frame_left.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
         frame_left.grid_columnconfigure(0, weight=1)
         frame_left.grid_rowconfigure(2, weight=1)
 
         search_var = tk.StringVar()
-        tk.Label(frame_left, text="Buscar", font=("Segoe UI", 9), bg="#FFFFFF").grid(row=0, column=0, sticky="w")
-        search_entry = tk.Entry(frame_left, textvariable=search_var, font=("Segoe UI", 9), relief=tk.FLAT, highlightthickness=1, highlightbackground="#D7DEE8")
+        tk.Label(frame_left, text="Buscar", font=ui.font(9), bg=ui.card, fg=ui.text_native).grid(row=0, column=0, sticky="w")
+        search_entry = tk.Entry(frame_left, textvariable=search_var, font=ui.font(9), relief=tk.FLAT, highlightthickness=1, highlightbackground=ui.border, **ui.entry_colors())
         search_entry.grid(row=1, column=0, sticky="ew", pady=(4, 10))
 
-        listbox_shell = tk.Frame(frame_left, bg="#FFFFFF", highlightbackground="#D7DEE8", highlightthickness=1)
+        listbox_shell = tk.Frame(frame_left, bg=ui.card, highlightbackground=ui.border, highlightthickness=1)
         listbox_shell.grid(row=2, column=0, sticky="nsew")
         listbox_shell.grid_columnconfigure(0, weight=1)
         listbox_shell.grid_rowconfigure(0, weight=1)
 
         tree = self._create_snippet_tree(listbox_shell, trigger_heading="Trigger")
 
-        frame_right = tk.LabelFrame(main, text="Editor de snippet", font=("Segoe UI", 9, "bold"), bg="#FFFFFF", padx=12, pady=12)
+        frame_right = tk.LabelFrame(main, text="Editor de snippet", font=ui.font(9, "bold"), bg=ui.card, fg=ui.text_native, padx=12, pady=12)
         frame_right.grid(row=0, column=1, sticky="nsew")
         frame_right.grid_columnconfigure(0, weight=1)
         frame_right.grid_rowconfigure(3, weight=1)
 
-        tk.Label(frame_right, text="Trigger", font=("Segoe UI", 9), bg="#FFFFFF").grid(row=0, column=0, sticky="w")
-        entry_trigger = tk.Entry(frame_right, font=("Segoe UI", 10), relief=tk.FLAT, highlightthickness=1, highlightbackground="#D7DEE8")
+        tk.Label(frame_right, text="Trigger", font=ui.font(9), bg=ui.card, fg=ui.text_native).grid(row=0, column=0, sticky="w")
+        entry_trigger = tk.Entry(frame_right, font=ui.font(10), relief=tk.FLAT, highlightthickness=1, highlightbackground=ui.border, **ui.entry_colors())
         entry_trigger.grid(row=1, column=0, sticky="ew", pady=(4, 10))
 
-        tk.Label(frame_right, text="Valor do snippet", font=("Segoe UI", 9), bg="#FFFFFF").grid(row=2, column=0, sticky="w")
-        editor_shell = tk.Frame(frame_right, bg="#FFFFFF")
+        tk.Label(frame_right, text="Valor do snippet", font=ui.font(9), bg=ui.card, fg=ui.text_native).grid(row=2, column=0, sticky="w")
+        editor_shell = tk.Frame(frame_right, bg=ui.card)
         editor_shell.grid(row=3, column=0, sticky="nsew")
         editor_shell.grid_columnconfigure(0, weight=1)
         editor_shell.grid_rowconfigure(1, weight=1)
 
-        text_value = tk.Text(editor_shell, wrap=tk.WORD, font=("Segoe UI", 10), relief=tk.FLAT, highlightthickness=1, highlightbackground="#D7DEE8")
+        text_value = tk.Text(editor_shell, wrap=tk.WORD, font=ui.font(10), relief=tk.FLAT, highlightthickness=1, highlightbackground=ui.border, **ui.text_colors())
         update_format_status = self._create_formatting_toolbar(editor_shell, text_value)
         text_value.pack(fill=tk.BOTH, expand=True, pady=(0, 6))
         tk.Label(
             frame_right,
             text="Texto simples continua funcionando igual. Formatação é opcional.",
-            font=("Segoe UI", 8),
-            fg="#5B6472",
-            bg="#FFFFFF",
+            font=ui.font(8),
+            fg=ui.text_muted,
+            bg=ui.card,
         ).grid(row=4, column=0, sticky="w", pady=(2, 10))
 
-        btn_frame = tk.Frame(frame_right, bg="#FFFFFF")
+        btn_frame = tk.Frame(frame_right, bg=ui.card)
         btn_frame.grid(row=5, column=0, sticky="e")
-        btn_new = tk.Button(btn_frame, text="Novo", width=10)
-        btn_save = tk.Button(btn_frame, text="Salvar", width=10)
-        btn_duplicate = tk.Button(btn_frame, text="Duplicar", width=10)
-        btn_rename = tk.Button(btn_frame, text="Renomear", width=10)
-        btn_delete = tk.Button(btn_frame, text="Excluir", width=10)
+        btn_new = tk.Button(btn_frame, text="Novo", width=ui.button_width(10))
+        btn_save = tk.Button(btn_frame, text="Salvar", width=ui.button_width(10))
+        btn_duplicate = tk.Button(btn_frame, text="Duplicar", width=ui.button_width(10))
+        btn_rename = tk.Button(btn_frame, text="Renomear", width=ui.button_width(10))
+        btn_delete = tk.Button(btn_frame, text="Excluir", width=ui.button_width(10))
         btn_new.pack(side=tk.LEFT, padx=(0, 6))
         btn_save.pack(side=tk.LEFT, padx=6)
         btn_duplicate.pack(side=tk.LEFT, padx=6)
@@ -2338,8 +2359,9 @@ class TextExpander:
         ``set_count`` receives the visible item count of the selected mapping
         type whenever the list is rebuilt.
         """
+        ui = ui_theme.theme()
 
-        main = tk.Frame(parent, bg="#F4F6FA", padx=14, pady=14)
+        main = tk.Frame(parent, bg=ui.surface, padx=14, pady=14)
         main.pack(fill=tk.BOTH, expand=True)
         main.grid_columnconfigure(0, weight=1)
         main.grid_rowconfigure(2, weight=1)
@@ -2409,22 +2431,22 @@ class TextExpander:
                 self.snippets[current_type] = mapping
             return mapping
 
-        lbl_example = tk.Label(main, text="", font=("Segoe UI", 8), fg="#5B6472", bg="#F4F6FA")
+        lbl_example = tk.Label(main, text="", font=ui.font(8), fg=ui.text_muted, bg=ui.surface)
         lbl_example.grid(row=1, column=0, sticky="w", pady=(0, 10))
 
-        content = tk.Frame(main, bg="#F4F6FA")
+        content = tk.Frame(main, bg=ui.surface)
         content.grid(row=2, column=0, sticky="nsew")
         content.grid_columnconfigure(2, weight=1)
         content.grid_rowconfigure(0, weight=1)
 
         # Types live in a scrollable vertical list so any number of custom
         # mapping types stays reachable (a horizontal row clipped them).
-        frame_types = tk.LabelFrame(content, text="Tipos", font=("Segoe UI", 9, "bold"), bg="#FFFFFF", padx=12, pady=12)
+        frame_types = tk.LabelFrame(content, text="Tipos", font=ui.font(9, "bold"), bg=ui.card, fg=ui.text_native, padx=12, pady=12)
         frame_types.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
         frame_types.grid_columnconfigure(0, weight=1)
         frame_types.grid_rowconfigure(0, weight=1)
 
-        types_list_frame = tk.Frame(frame_types, bg="#FFFFFF", highlightbackground="#D7DEE8", highlightthickness=1)
+        types_list_frame = tk.Frame(frame_types, bg=ui.card, highlightbackground=ui.border, highlightthickness=1)
         types_list_frame.grid(row=0, column=0, sticky="nsew")
         types_list_frame.grid_columnconfigure(0, weight=1)
         types_list_frame.grid_rowconfigure(0, weight=1)
@@ -2432,31 +2454,32 @@ class TextExpander:
         type_keys = []
         listbox_types = tk.Listbox(
             types_list_frame,
-            font=("Segoe UI", 10),
+            font=ui.font(10),
             relief=tk.FLAT,
             borderwidth=0,
             activestyle="none",
             width=16,
             exportselection=False,
+            **ui.listbox_colors(),
         )
         scrollbar_types = tk.Scrollbar(types_list_frame, orient=tk.VERTICAL, command=listbox_types.yview)
         listbox_types.config(yscrollcommand=scrollbar_types.set)
         listbox_types.grid(row=0, column=0, sticky="nsew")
         scrollbar_types.grid(row=0, column=1, sticky="ns")
 
-        btn_types_frame = tk.Frame(frame_types, bg="#FFFFFF")
+        btn_types_frame = tk.Frame(frame_types, bg=ui.card)
         btn_types_frame.grid(row=1, column=0, sticky="ew", pady=(8, 0))
 
-        frame_left = tk.LabelFrame(content, text="Itens do mapeamento", font=("Segoe UI", 9, "bold"), bg="#FFFFFF", padx=12, pady=12)
+        frame_left = tk.LabelFrame(content, text="Itens do mapeamento", font=ui.font(9, "bold"), bg=ui.card, fg=ui.text_native, padx=12, pady=12)
         frame_left.grid(row=0, column=1, sticky="nsew", padx=(0, 12))
         frame_left.grid_columnconfigure(0, weight=1)
         frame_left.grid_rowconfigure(2, weight=1)
 
         map_search_var = tk.StringVar()
-        tk.Label(frame_left, text="Buscar", font=("Segoe UI", 9), bg="#FFFFFF").grid(row=0, column=0, sticky="w")
-        tk.Entry(frame_left, textvariable=map_search_var, font=("Segoe UI", 9), relief=tk.FLAT, highlightthickness=1, highlightbackground="#D7DEE8").grid(row=1, column=0, sticky="ew", pady=(4, 10))
+        tk.Label(frame_left, text="Buscar", font=ui.font(9), bg=ui.card, fg=ui.text_native).grid(row=0, column=0, sticky="w")
+        tk.Entry(frame_left, textvariable=map_search_var, font=ui.font(9), relief=tk.FLAT, highlightthickness=1, highlightbackground=ui.border, **ui.entry_colors()).grid(row=1, column=0, sticky="ew", pady=(4, 10))
 
-        listbox_frame = tk.Frame(frame_left, bg="#FFFFFF", highlightbackground="#D7DEE8", highlightthickness=1)
+        listbox_frame = tk.Frame(frame_left, bg=ui.card, highlightbackground=ui.border, highlightthickness=1)
         listbox_frame.grid(row=2, column=0, sticky="nsew")
         listbox_frame.grid_columnconfigure(0, weight=1)
         listbox_frame.grid_rowconfigure(0, weight=1)
@@ -2465,37 +2488,37 @@ class TextExpander:
             listbox_frame, trigger_heading="Identificador",
             trigger_width=88, preview_width=118)
 
-        frame_right = tk.LabelFrame(content, text="Editor do item", font=("Segoe UI", 9, "bold"), bg="#FFFFFF", padx=12, pady=12)
+        frame_right = tk.LabelFrame(content, text="Editor do item", font=ui.font(9, "bold"), bg=ui.card, fg=ui.text_native, padx=12, pady=12)
         frame_right.grid(row=0, column=2, sticky="nsew")
         frame_right.grid_columnconfigure(0, weight=1)
         frame_right.grid_rowconfigure(3, weight=1)
 
-        tk.Label(frame_right, text="Identificador", font=("Segoe UI", 9), bg="#FFFFFF").grid(row=0, column=0, sticky="w")
-        entry_name = tk.Entry(frame_right, font=("Segoe UI", 10), relief=tk.FLAT, highlightthickness=1, highlightbackground="#D7DEE8")
+        tk.Label(frame_right, text="Identificador", font=ui.font(9), bg=ui.card, fg=ui.text_native).grid(row=0, column=0, sticky="w")
+        entry_name = tk.Entry(frame_right, font=ui.font(10), relief=tk.FLAT, highlightthickness=1, highlightbackground=ui.border, **ui.entry_colors())
         entry_name.grid(row=1, column=0, sticky="ew", pady=(4, 10))
 
-        tk.Label(frame_right, text="Valor", font=("Segoe UI", 9), bg="#FFFFFF").grid(row=2, column=0, sticky="w")
-        editor_shell = tk.Frame(frame_right, bg="#FFFFFF")
+        tk.Label(frame_right, text="Valor", font=ui.font(9), bg=ui.card, fg=ui.text_native).grid(row=2, column=0, sticky="w")
+        editor_shell = tk.Frame(frame_right, bg=ui.card)
         editor_shell.grid(row=3, column=0, sticky="nsew")
         editor_shell.grid_columnconfigure(0, weight=1)
         editor_shell.grid_rowconfigure(1, weight=1)
 
-        text_value = tk.Text(editor_shell, wrap=tk.WORD, font=("Segoe UI", 10), relief=tk.FLAT, highlightthickness=1, highlightbackground="#D7DEE8")
+        text_value = tk.Text(editor_shell, wrap=tk.WORD, font=ui.font(10), relief=tk.FLAT, highlightthickness=1, highlightbackground=ui.border, **ui.text_colors())
         update_format_status = self._create_formatting_toolbar(editor_shell, text_value)
         text_value.pack(fill=tk.BOTH, expand=True, pady=(0, 6))
         tk.Label(
             frame_right,
             text="Mapeamentos também aceitam formatação opcional.",
-            font=("Segoe UI", 8),
-            fg="#5B6472",
-            bg="#FFFFFF",
+            font=ui.font(8),
+            fg=ui.text_muted,
+            bg=ui.card,
         ).grid(row=4, column=0, sticky="w", pady=(2, 10))
 
-        btn_frame = tk.Frame(frame_right, bg="#FFFFFF")
+        btn_frame = tk.Frame(frame_right, bg=ui.card)
         btn_frame.grid(row=5, column=0, sticky="e")
-        btn_new_map = tk.Button(btn_frame, text="Novo", width=12)
-        btn_save_map = tk.Button(btn_frame, text="Salvar", width=12)
-        btn_delete_map = tk.Button(btn_frame, text="Excluir", width=12)
+        btn_new_map = tk.Button(btn_frame, text="Novo", width=ui.button_width(12))
+        btn_save_map = tk.Button(btn_frame, text="Salvar", width=ui.button_width(12))
+        btn_delete_map = tk.Button(btn_frame, text="Excluir", width=ui.button_width(12))
         btn_new_map.pack(side=tk.LEFT, padx=(0, 6))
         btn_save_map.pack(side=tk.LEFT, padx=6)
         btn_delete_map.pack(side=tk.LEFT, padx=(6, 0))
@@ -2537,19 +2560,19 @@ class TextExpander:
             dialog.resizable(False, False)
             dialog.transient(root)
             dialog.grab_set()
-            dialog.configure(bg="#F4F6FA")
+            dialog.configure(bg=ui.surface)
             self._set_window_icon(dialog)
 
-            body = tk.Frame(dialog, bg="#F4F6FA", padx=18, pady=18)
+            body = tk.Frame(dialog, bg=ui.surface, padx=18, pady=18)
             body.pack(fill=tk.BOTH, expand=True)
-            tk.Label(body, text="Criar novo tipo de mapeamento dinâmico", font=("Segoe UI", 10, "bold"), bg="#F4F6FA").pack(anchor="w")
-            tk.Label(body, text="Nome do tipo", font=("Segoe UI", 9), bg="#F4F6FA").pack(anchor="w", pady=(12, 0))
-            entry_type_name = tk.Entry(body, font=("Segoe UI", 10))
+            tk.Label(body, text="Criar novo tipo de mapeamento dinâmico", font=ui.font(10, "bold"), bg=ui.surface, fg=ui.text_native).pack(anchor="w")
+            tk.Label(body, text="Nome do tipo", font=ui.font(9), bg=ui.surface, fg=ui.text_native).pack(anchor="w", pady=(12, 0))
+            entry_type_name = tk.Entry(body, font=ui.font(10), **ui.entry_colors())
             entry_type_name.pack(fill=tk.X, pady=(4, 8))
-            tk.Label(body, text="Prefixo usado no trigger", font=("Segoe UI", 9), bg="#F4F6FA").pack(anchor="w")
-            entry_prefix = tk.Entry(body, font=("Segoe UI", 10))
+            tk.Label(body, text="Prefixo usado no trigger", font=ui.font(9), bg=ui.surface, fg=ui.text_native).pack(anchor="w")
+            entry_prefix = tk.Entry(body, font=ui.font(10), **ui.entry_colors())
             entry_prefix.pack(fill=tk.X, pady=(4, 8))
-            tk.Label(body, text="Ex.: tipo 'email' + prefixo 'mail' -> mailtrabalho", font=("Segoe UI", 8), fg="#5B6472", bg="#F4F6FA").pack(anchor="w")
+            tk.Label(body, text="Ex.: tipo 'email' + prefixo 'mail' -> mailtrabalho", font=ui.font(8), fg=ui.text_muted, bg=ui.surface).pack(anchor="w")
 
             def save_new_type():
                 type_name = entry_type_name.get().strip().lower()
@@ -2583,7 +2606,7 @@ class TextExpander:
                 self.notify_status(f"Tipo '{type_name}' criado.", key=f"mapping-type-create:{type_name}")
                 dialog.destroy()
 
-            tk.Button(body, text="Criar Tipo", command=save_new_type, width=15).pack(anchor="e", pady=(14, 0))
+            tk.Button(body, text="Criar Tipo", command=save_new_type, width=ui.button_width(15)).pack(anchor="e", pady=(14, 0))
             center_dialog(dialog, root)
             entry_type_name.focus_set()
 
@@ -2731,24 +2754,25 @@ class TextExpander:
         self._register_manager_refresher(refresh_all_mappings)
 
     def _create_reference_tab(self, parent, root, section_title, subtitle, sections, footer_text):
-        main = tk.Frame(parent, bg="#F4F6FA", padx=14, pady=14)
+        ui = ui_theme.theme()
+        main = tk.Frame(parent, bg=ui.surface, padx=14, pady=14)
         main.pack(fill=tk.BOTH, expand=True)
         main.grid_columnconfigure(0, weight=1)
         main.grid_rowconfigure(1, weight=1)
 
-        header_card = tk.Frame(main, bg="#FFFFFF", highlightbackground="#D7DEE8", highlightthickness=1, padx=14, pady=12)
+        header_card = tk.Frame(main, bg=ui.card, highlightbackground=ui.border, highlightthickness=1, padx=14, pady=12)
         header_card.grid(row=0, column=0, sticky="ew", pady=(0, 12))
-        tk.Label(header_card, text=section_title, font=("Segoe UI", 11, "bold"), bg="#FFFFFF", fg="#1F2937").pack(anchor="w")
-        tk.Label(header_card, text=subtitle, font=("Segoe UI", 9), bg="#FFFFFF", fg="#5B6472").pack(anchor="w", pady=(4, 0))
+        tk.Label(header_card, text=section_title, font=ui.font(11, "bold"), bg=ui.card, fg=ui.text).pack(anchor="w")
+        tk.Label(header_card, text=subtitle, font=ui.font(9), bg=ui.card, fg=ui.text_muted).pack(anchor="w", pady=(4, 0))
 
-        content = tk.Frame(main, bg="#FFFFFF", highlightbackground="#D7DEE8", highlightthickness=1)
+        content = tk.Frame(main, bg=ui.card, highlightbackground=ui.border, highlightthickness=1)
         content.grid(row=1, column=0, sticky="nsew")
         content.grid_columnconfigure(0, weight=1)
         content.grid_rowconfigure(0, weight=1)
 
-        canvas = tk.Canvas(content, bg="#FFFFFF", highlightthickness=0)
+        canvas = tk.Canvas(content, bg=ui.card, highlightthickness=0)
         scrollbar = ttk.Scrollbar(content, orient=tk.VERTICAL, command=canvas.yview)
-        inner = tk.Frame(canvas, bg="#FFFFFF", padx=12, pady=12)
+        inner = tk.Frame(canvas, bg=ui.card, padx=12, pady=12)
         inner.bind("<Configure>", lambda event: canvas.configure(scrollregion=canvas.bbox("all")))
         canvas_window = canvas.create_window((0, 0), window=inner, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
@@ -2762,42 +2786,39 @@ class TextExpander:
             grouped = reference_entries_by_category(self.dynamic_registry)
             for title, category_key in sections:
                 entries = grouped.get(category_key, [])
-                section = tk.LabelFrame(inner, text=title, font=("Segoe UI", 9, "bold"), bg="#FFFFFF", padx=12, pady=12)
+                section = tk.LabelFrame(inner, text=title, font=ui.font(9, "bold"), bg=ui.card, fg=ui.text_native, padx=12, pady=12)
                 section.pack(fill=tk.X, expand=True, pady=(0, 12))
                 for key, trigger, desc, enabled in entries:
-                    row = tk.Frame(section, bg="#FFFFFF")
+                    row = tk.Frame(section, bg=ui.card)
                     row.pack(fill=tk.X, pady=2)
                     var = tk.BooleanVar(value=enabled)
                     # The checkbox writes by stable key, not by the (renameable) trigger.
                     tk.Checkbutton(
                         row,
                         variable=var,
-                        bg="#FFFFFF",
-                        activebackground="#FFFFFF",
                         command=lambda k=key, v=var: self._on_registry_checkbox(k, v),
+                        **ui.checkbutton_colors(ui.card),
                     ).pack(side=tk.LEFT)
-                    trigger_label = tk.Label(row, text=trigger, font=("Consolas", 10, "bold"), fg="#2D5BD1", bg="#FFFFFF", width=12, anchor="w")
+                    trigger_label = tk.Label(row, text=trigger, font=ui.mono_font(10, "bold"), fg=ui.link, bg=ui.card, width=12, anchor="w")
                     trigger_label.pack(side=tk.LEFT)
                     rename = lambda event=None, k=key, t=trigger: self._rename_registry_entry_dialog(root, k, t, populate)
                     trigger_label.bind("<Double-Button-1>", rename)
                     tk.Button(
                         row,
                         text="✎",
-                        font=("Segoe UI", 8),
+                        font=ui.font(8),
                         bd=0,
                         relief=tk.FLAT,
-                        bg="#FFFFFF",
-                        activebackground="#E8EEF9",
-                        fg="#5B6472",
                         cursor="hand2",
                         command=rename,
+                        **ui.glyph_button_colors(ui.card),
                     ).pack(side=tk.LEFT, padx=(0, 4))
-                    tk.Label(row, text=desc, font=("Segoe UI", 9), bg="#FFFFFF", anchor="w").pack(side=tk.LEFT, padx=(10, 0), fill=tk.X, expand=True)
+                    tk.Label(row, text=desc, font=ui.font(9), bg=ui.card, fg=ui.text_native, anchor="w").pack(side=tk.LEFT, padx=(10, 0), fill=tk.X, expand=True)
             self._bind_mousewheel_descendants(inner, canvas)
 
         populate()
 
-        tk.Label(main, text=footer_text, font=("Segoe UI", 8), fg="#5B6472", bg="#F4F6FA").grid(row=2, column=0, sticky="w", pady=(10, 0))
+        tk.Label(main, text=footer_text, font=ui.font(8), fg=ui.text_muted, bg=ui.surface).grid(row=2, column=0, sticky="w", pady=(10, 0))
 
         self._bind_mousewheel(canvas, canvas)
 
@@ -3170,33 +3191,34 @@ class TextExpander:
             window.focus_force()
             return
 
+        ui = ui_theme.bind(tk_root)
         status = dict(self._macos_permission_status)
         window = tk.Toplevel(tk_root)
         self.macos_permission_window = window
         window.title("Permissões do macOS")
         window.resizable(False, False)
-        window.configure(bg="#F4F6FA")
+        window.configure(bg=ui.surface)
         window.attributes("-topmost", True)
         self._set_window_icon(window)
 
-        container = tk.Frame(window, bg="#F4F6FA", padx=18, pady=18)
+        container = tk.Frame(window, bg=ui.surface, padx=18, pady=18)
         container.pack(fill=tk.BOTH, expand=True)
 
         tk.Label(
             container,
             text="Permissões necessárias",
-            font=("Helvetica", 13, "bold"),
-            bg="#F4F6FA",
-            fg="#1F2937",
+            font=ui.font(12, "bold"),
+            bg=ui.surface,
+            fg=ui.text,
         ).pack(anchor="w")
 
         body = tk.Label(
             container,
             text=macos_permissions.build_prompt_message(status),
             justify=tk.LEFT,
-            font=("Helvetica", 11),
-            bg="#F4F6FA",
-            fg="#1F2937",
+            font=ui.font(10),
+            bg=ui.surface,
+            fg=ui.text,
         )
         body.pack(anchor="w", pady=(8, 12))
 
@@ -3205,13 +3227,13 @@ class TextExpander:
             text="",
             justify=tk.LEFT,
             wraplength=420,
-            font=("Helvetica", 11),
-            bg="#F4F6FA",
-            fg="#B45309",
+            font=ui.font(10),
+            bg=ui.surface,
+            fg=ui.warning,
         )
         feedback.pack(anchor="w", pady=(0, 10))
 
-        panes = tk.Frame(container, bg="#F4F6FA")
+        panes = tk.Frame(container, bg=ui.surface)
         panes.pack(fill=tk.X)
         for name in macos_permissions.denied_permissions(status):
             tk.Button(
@@ -3220,7 +3242,7 @@ class TextExpander:
                 command=lambda permission=name: self._open_macos_settings_pane(permission),
             ).pack(side=tk.LEFT, padx=(0, 8))
 
-        buttons = tk.Frame(container, bg="#F4F6FA")
+        buttons = tk.Frame(container, bg=ui.surface)
         buttons.pack(fill=tk.X, pady=(14, 0))
 
         def on_close():
@@ -3228,13 +3250,13 @@ class TextExpander:
             window.destroy()
 
         def on_recheck():
-            feedback.config(text="Verificando…", fg="#5B6472")
+            feedback.config(text="Verificando…", fg=ui.text_muted)
             self.task_runner.start(
                 lambda: self._recheck_macos_permissions(status, window, feedback),
                 name="macos-permissions-recheck",
             )
 
-        tk.Button(buttons, text="Fechar", width=12, command=on_close).pack(side=tk.RIGHT, padx=(6, 0))
+        tk.Button(buttons, text="Fechar", width=ui.button_width(12), command=on_close).pack(side=tk.RIGHT, padx=(6, 0))
         tk.Button(buttons, text="Verificar novamente", command=on_recheck).pack(side=tk.RIGHT)
 
         window.protocol("WM_DELETE_WINDOW", on_close)
@@ -3261,11 +3283,13 @@ class TextExpander:
         A grant never reactivates this process — the frameworks read TCC at
         startup — so the only truthful success message asks for a restart.
         """
+        # Attribute reads on the cached theme only; safe off the GUI thread.
+        ui = ui_theme.theme()
         try:
             current = macos_permissions.check_permissions()
         except Exception as e:
             self.logger.warning(f"Falha ao reverificar permissões do macOS: {e}")
-            self._update_permission_feedback(window, feedback, "Não foi possível verificar agora.", "#B45309")
+            self._update_permission_feedback(window, feedback, "Não foi possível verificar agora.", ui.warning)
             return
 
         self._macos_permission_status = current
@@ -3275,7 +3299,7 @@ class TextExpander:
             f"{macos_permissions.describe_status(current)}"
         )
         self.refresh_tray_menu()
-        color = "#166534" if state == macos_permissions.RECHECK_RESOLVED else "#B45309"
+        color = ui.success if state == macos_permissions.RECHECK_RESOLVED else ui.warning
         self._update_permission_feedback(window, feedback, message, color)
 
     def _update_permission_feedback(self, window, feedback, message, color):

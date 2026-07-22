@@ -2,6 +2,8 @@ import html
 import tkinter as tk
 from tkinter import font as tkfont
 
+from ui_theme import mono_family
+
 
 RICH_TEXT_KIND = "rich_text"
 STYLE_BITS = {
@@ -13,7 +15,9 @@ STYLE_BITS = {
 }
 STYLE_ORDER = ("bold", "italic", "underline", "code", "strike")
 MAX_STYLE_MASK = sum(STYLE_BITS.values())
-CODE_FONT_FAMILY = "Consolas"
+# Per-OS: "Consolas" on Windows (unchanged), Menlo on macOS. A Windows-only
+# family silently substitutes elsewhere and changes the code span's metrics.
+CODE_FONT_FAMILY = mono_family()
 RTF_DEFAULT_FONT = "Arial"
 RTF_CODE_FONT = "Consolas"
 
