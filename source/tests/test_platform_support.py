@@ -537,6 +537,20 @@ class AutostartCommandTests(unittest.TestCase):
                 mock.patch.object(ps.sys, "executable", r"C:\App\Txt Xpander.exe"):
             self.assertEqual(ps.default_autostart_command(), [r"C:\App\Txt Xpander.exe"])
 
+    def test_macos_bundle_points_inside_the_app(self):
+        """The LaunchAgent runs the bundle's binary, not ``open -a``.
+
+        Verified against a real PyInstaller ``.app``: ``sys.executable`` is
+        ``…/Txt Xpander.app/Contents/MacOS/Txt Xpander``, launchd starts it,
+        and the process still resolves as the bundle (Info.plist honored, so
+        ``LSUIElement`` applies and TCC attributes the grants to the bundle).
+        ``open -a`` would hand launchd a wrapper that exits immediately.
+        """
+        binary = "/Applications/Txt Xpander.app/Contents/MacOS/Txt Xpander"
+        with mock.patch.object(ps.sys, "frozen", True, create=True), \
+                mock.patch.object(ps.sys, "executable", binary):
+            self.assertEqual(ps.default_autostart_command(), [binary])
+
     def test_source_checkout_points_at_the_launcher(self):
         with mock.patch.object(ps.sys, "frozen", False, create=True):
             argv = ps.default_autostart_command()

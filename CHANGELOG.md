@@ -4,6 +4,10 @@ All notable changes to Txt Xpander are documented here. The format is based on [
 
 ## [Unreleased]
 
+### Added
+
+- **macOS build**: `build_release_macos.sh` produces `dist/Txt Xpander.app`, a menu-bar-only bundle (`LSUIElement`, no Dock icon) with the icon converted to `.icns` at build time. The tray autostart toggle writes a LaunchAgent pointing at the bundle's binary, verified with `launchctl`. Build, Gatekeeper and permission steps — including that rebuilding invalidates the app's Input Monitoring/Accessibility grants — are documented in the README.
+
 ## [3.2.1] — 2026-07-21
 
 ### Fixed

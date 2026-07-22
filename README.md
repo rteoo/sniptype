@@ -4,7 +4,7 @@ Txt Xpander is a Windows text expander with a system tray app, snippet manager G
 
 ## Project Layout
 
-- [`dist\Txt Xpander\`](dist/Txt%20Xpander): packaged app folder to run or ship.
+- [`dist\Txt Xpander\`](dist/Txt%20Xpander): packaged app folder to run or ship (`dist/Txt Xpander.app` on macOS — see [Build on macOS](#build-on-macos)).
 - [`source\`](source): editable Python source, assets, launcher, tests, and docs.
 - [`source\docs\`](source/docs): planning notes, plus [`audit-report.md`](source/docs/audit-report.md) (full code audit) and [`improvement-plan.md`](source/docs/improvement-plan.md) (phased roadmap).
 
@@ -83,6 +83,27 @@ python -m PyInstaller --noconfirm --clean --windowed --onedir --name "Txt Xpande
 ```
 
 This produces the shipping folder in [`dist\Txt Xpander\`](dist/Txt%20Xpander).
+
+### Build on macOS
+
+[`build_release_macos.sh`](build_release_macos.sh) is the macOS counterpart. It builds `dist/Txt Xpander.app` — a **menu-bar-only** bundle (`LSUIElement`, so no Dock icon and no app menu), with the `.icns` generated from the shipped `.ico` at build time:
+
+```bash
+python3 -m pip install -r source/requirements.txt pyinstaller
+./build_release_macos.sh
+```
+
+Use `PYTHON=/path/to/venv/bin/python ./build_release_macos.sh` to build with a specific interpreter, and `CODESIGN_IDENTITY="Developer ID Application: …"` to sign with a real identity instead of ad-hoc.
+
+Like the Windows script it stages into a temp folder and swaps `dist` only on success, and it refuses to run while the app is running. It deliberately does **not** port the Windows-only steps: there is no Startup shortcut to offer (macOS autostart is the LaunchAgent the tray toggle writes) and no packaged `snippets.json` to preserve (user data lives in `~/.txt_xpander`).
+
+First launch, Gatekeeper and permissions:
+
+1. The bundle is **ad-hoc signed**, so a double-click is blocked. Right-click the app → **Open** once, or run `xattr -dr com.apple.quarantine "dist/Txt Xpander.app"`.
+2. Grant **Input Monitoring** and **Accessibility** in *System Settings → Privacy & Security* — pynput cannot see keystrokes without them, and the app logs `This process is not trusted!` until they are granted.
+3. **TCC grants are tied to the bundle's identity.** Rebuilding or re-signing produces a new signature, macOS drops the old grants, and you have to approve the app again — worth knowing before iterating on a build. Removing the stale entry from the permission list and re-adding the rebuilt app is the usual fix.
+
+Autostart: tick **Iniciar com o sistema** in the menu-bar menu. Inside a bundle `sys.executable` is `Txt Xpander.app/Contents/MacOS/Txt Xpander`, so the LaunchAgent (`~/Library/LaunchAgents/com.txt-xpander.plist`, `RunAtLoad`) runs that path directly — no `open -a` wrapper needed; launchd starting it that way still gets the bundle's Info.plist and identity. Verified by loading the generated plist with `launchctl bootstrap gui/$UID`; survival across a real reboot has not been tested.
 
 ## Build The Installer (Setup.exe)
 
