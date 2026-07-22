@@ -157,5 +157,167 @@ class SnippetUtilsTests(unittest.TestCase):
         self.assertEqual(len("clwverylongidentifier"), calculate_max_trigger_length_with_mappings(snippets))
 
 
+class ValidateStaticSnippetsRejectionTests(unittest.TestCase):
+    def test_rejects_non_dict_roots(self):
+        for bad in (["a"], "string", 42, 3.14, None, True):
+            self.assertIsNone(validate_static_snippets(bad), repr(bad))
+
+    def test_accepts_empty_dict(self):
+        self.assertEqual({}, validate_static_snippets({}))
+
+
+class CheckDynamicPatternEdgeTests(unittest.TestCase):
+    def setUp(self):
+        self.snippets = {
+            "_cpf_numbers": {"fulano": "123.456.789-00"},
+            "_openclaw_codes": {"__prefix__": "clw", "gtw": "restart"},
+        }
+
+    def test_text_equal_to_prefix_returns_none(self):
+        value, length = check_dynamic_pattern(self.snippets, "cpf")
+        self.assertIsNone(value)
+        self.assertEqual(0, length)
+
+    def test_unknown_prefix_returns_none(self):
+        value, length = check_dynamic_pattern(self.snippets, "zzznope")
+        self.assertIsNone(value)
+        self.assertEqual(0, length)
+
+    def test_mapping_container_that_is_not_a_dict_is_ignored(self):
+        # A garbage mapping value must not crash resolution.
+        value, _ = check_dynamic_pattern({"_cpf_numbers": "notadict"}, "cpffulano")
+        self.assertIsNone(value)
+
+    def test_dunder_prefix_renames_the_typed_prefix(self):
+        value, length = check_dynamic_pattern(self.snippets, "clwgtw")
+        self.assertEqual("restart", value)
+        self.assertEqual(len("clwgtw"), length)
+
+
+class GetDynamicPrefixesEdgeTests(unittest.TestCase):
+    def test_absent_builtin_is_not_registered(self):
+        self.assertEqual({}, get_dynamic_prefixes({"xname": "value"}))
+
+    def test_underscore_key_not_ending_in_numbers_or_codes_is_ignored(self):
+        self.assertEqual({}, get_dynamic_prefixes({"_internal_flag": True}))
+
+    def test_dunder_prefix_overrides_the_derived_name(self):
+        prefixes = get_dynamic_prefixes({"_openclaw_codes": {"__prefix__": "clw"}})
+        self.assertEqual("_openclaw_codes", prefixes["clw"])
+        self.assertNotIn("openclaw", prefixes)
+
+    def test_non_dict_mapping_still_registers_a_prefix_but_resolves_to_nothing(self):
+        prefixes = get_dynamic_prefixes({"_bad_numbers": "notadict"})
+        self.assertEqual("_bad_numbers", prefixes["bad"])
+        # resolution against the bogus container yields no value (no crash).
+        self.assertIsNone(check_dynamic_pattern({"_bad_numbers": "notadict"}, "badx", prefixes)[0])
+
+
+class MergeAndShadowRoundTripTests(unittest.TestCase):
+    def test_full_save_round_trip_keeps_shadow_and_strips_all_callables(self):
+        static = {"xhj": "important", "xname": "Example User", "_cpf_numbers": {"fulano": "1"}}
+        dynamic = {"xhj": lambda: "date", "xdolar": lambda: "R$5"}
+
+        merged = merge_snippets(static, dynamic)
+        preserved = find_shadowed_statics(static, dynamic)
+        saveable = build_saveable_snippets(merged, preserved)
+
+        self.assertEqual("important", saveable["xhj"])          # shadowed static survives
+        self.assertEqual("Example User", saveable["xname"])
+        self.assertEqual({"fulano": "1"}, saveable["_cpf_numbers"])  # mapping container kept
+        self.assertNotIn("xdolar", saveable)                    # runtime-only callable dropped
+        self.assertFalse(any(callable(v) for v in saveable.values()))
+
+    def test_merge_does_not_mutate_its_inputs(self):
+        static = {"a": "1"}
+        dynamic = {"b": "2"}
+        merge_snippets(static, dynamic)
+        self.assertEqual({"a": "1"}, static)
+        self.assertEqual({"b": "2"}, dynamic)
+
+    def test_find_shadowed_statics_excludes_a_callable_static(self):
+        # Defensive: a static value that is itself callable is never "preserved".
+        self.assertEqual({}, find_shadowed_statics({"x": lambda: 1}, {"x": lambda: 2}))
+
+    def test_build_saveable_preserved_does_not_override_live_value(self):
+        saveable = build_saveable_snippets({"xhj": "editado"}, {"xhj": "antigo"})
+        self.assertEqual({"xhj": "editado"}, saveable)
+
+
+class CalculateMaxTriggerLengthEdgeTests(unittest.TestCase):
+    def test_empty_snippets_use_fallback(self):
+        self.assertEqual(20, calculate_max_trigger_length({}))
+        self.assertEqual(20, calculate_max_trigger_length_with_mappings({}))
+
+    def test_with_mappings_ignores_non_dict_mapping_values(self):
+        snippets = {"x": "y", "_cpf_numbers": "notadict"}
+        # Must not crash; the mapping key itself is the longest counted trigger.
+        self.assertEqual(
+            len("_cpf_numbers"),
+            calculate_max_trigger_length_with_mappings(snippets),
+        )
+
+
+class WriteJsonAtomicFailureTests(unittest.TestCase):
+    """The atomic write must never clobber the existing file or leak temp files."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.temp_root = Path(__file__).resolve().parent / "tmp"
+        cls.temp_root.mkdir(exist_ok=True)
+
+    def tearDown(self):
+        for pattern in ("atomic-fail-*.json", "atomic-fail-*.json.*", "atomic-fail-*.tmp"):
+            for path in self.temp_root.glob(pattern):
+                try:
+                    path.unlink()
+                except FileNotFoundError:
+                    pass
+
+    def path(self, name):
+        return self.temp_root / f"atomic-fail-{name}.json"
+
+    def test_non_serializable_data_raises_and_leaves_existing_file_intact(self):
+        target = self.path("existing")
+        target.write_text('{"keep": true}', encoding="utf-8")
+
+        with self.assertRaises(TypeError):
+            write_json_atomic(str(target), {"bad": {1, 2, 3}})  # set is not JSON-serializable
+
+        self.assertEqual({"keep": True}, json.loads(target.read_text(encoding="utf-8")))
+        self.assertEqual([], list(self.temp_root.glob("atomic-fail-existing.json.*")))
+
+    def test_failed_write_to_fresh_path_creates_no_file(self):
+        target = self.path("fresh")
+        with self.assertRaises(TypeError):
+            write_json_atomic(str(target), {"f": lambda: 1})
+        self.assertFalse(target.exists())
+
+    def test_round_trips_unicode_with_ensure_ascii_false(self):
+        target = self.path("unicode")
+        write_json_atomic(str(target), {"emoji": "🎉", "accent": "café"})
+        self.assertEqual({"emoji": "🎉", "accent": "café"}, load_json_file(str(target)))
+
+
+class LoadJsonFileTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.temp_root = Path(__file__).resolve().parent / "tmp"
+        cls.temp_root.mkdir(exist_ok=True)
+
+    def tearDown(self):
+        for path in self.temp_root.glob("load-json-*.json"):
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+
+    def test_invalid_json_raises(self):
+        path = self.temp_root / "load-json-invalid.json"
+        path.write_text("{not valid", encoding="utf-8")
+        with self.assertRaises(json.JSONDecodeError):
+            load_json_file(str(path))
+
+
 if __name__ == "__main__":
     unittest.main()
