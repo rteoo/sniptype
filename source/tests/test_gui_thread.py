@@ -2,7 +2,10 @@
 
 ``gui_thread.py`` owns the process's only ``tk.Tk()`` root on a dedicated
 thread; worker threads reach it only through ``call`` (blocking, returns the
-result, re-raises errors) and ``submit`` (fire-and-forget). These tests hammer
+result, re-raises errors) and ``submit`` (fire-and-forget). That thread is a
+spawned one on Windows and the main thread on macOS (issue #24) — every class
+here pins its mode explicitly rather than inheriting the host's default, so the
+same expectations are asserted wherever the suite runs. These tests hammer
 the marshaling contract adversarially: concurrent callers must not cross wires,
 a raising callable must re-raise in the *caller* with a usable traceback, a
 raising ``submit`` must not kill the pump, and every after-shutdown path must be
@@ -11,12 +14,15 @@ a defined refusal rather than a deadlock.
 Determinism rules (mirrors the suite): thread coordination uses
 ``threading.Event``/``join`` with timeouts, never bare sleeps, and every GUI
 thread is torn down in ``tearDown`` so a wedged test fails the runner instead of
-hanging it. The real-Tk classes are skipped where no display is available and on
-macOS, where the worker-thread root is not something AppKit permits (issue #24),
-exactly as ``test_manager_gui_smoke`` decides it.
+hanging it. The worker-mode real-Tk classes are skipped where no display is
+available and on macOS, where the worker-thread root is not something AppKit
+permits (issue #24), exactly as ``test_manager_gui_smoke`` decides it. The
+main-thread-mode real-Tk class runs anywhere a display exists, macOS included —
+a root on the main thread is legal on every platform.
 """
 
 import os
+import subprocess
 import sys
 import threading
 import traceback
@@ -37,12 +43,29 @@ if IS_MAC:
     TK_SKIP_REASON = "macOS requires AppKit on the main thread; the Tk root runs on a worker thread"
 else:
     try:
-        _probe = GuiThread()
+        _probe = GuiThread(main_thread=False)
         _probe.ensure_started()
         _probe.stop()
         TK_AVAILABLE = True
     except Exception:
         pass
+
+
+# Probed out of process on purpose. GuiThread cannot probe this mode in-process
+# (main-thread mode has no loop running yet, so its stop() would have nothing to
+# drain the teardown), and a raw throwaway root cannot either: on macOS Tk 9.0.3
+# a root created and destroyed outside any mainloop leaves the Aqua interpreter
+# in a state where a *later* root destroyed from inside an ``after`` callback
+# traps the process (SIGTRAP, no Python traceback). The app only ever builds one
+# root, so this is a test-harness hazard rather than an app bug — the subprocess
+# keeps it out of the runner entirely.
+MAIN_TK_AVAILABLE = (
+    subprocess.run(
+        [sys.executable, "-c", "import tkinter; tkinter.Tk().destroy()"],
+        capture_output=True,
+    ).returncode
+    == 0
+)
 
 
 def run_in_daemon(target, timeout=5.0):
@@ -69,7 +92,7 @@ def run_in_daemon(target, timeout=5.0):
 @unittest.skipUnless(TK_AVAILABLE, TK_SKIP_REASON)
 class GuiThreadCallTests(unittest.TestCase):
     def setUp(self):
-        self.gui = GuiThread()
+        self.gui = GuiThread(main_thread=False)
         self.gui.ensure_started()
         # Events a test uses to occupy the single GUI thread; always released in
         # tearDown so a blocked pump can drain the teardown sentinel and join.
@@ -194,7 +217,7 @@ class GuiThreadCallTests(unittest.TestCase):
 
     def test_submit_error_is_logged_when_a_logger_is_present(self):
         logger = mock.Mock()
-        gui = GuiThread(logger=logger)
+        gui = GuiThread(logger=logger, main_thread=False)
         gui.ensure_started()
         self.addCleanup(gui.stop)
 
@@ -230,7 +253,7 @@ class GuiThreadCallTests(unittest.TestCase):
 @unittest.skipUnless(TK_AVAILABLE, TK_SKIP_REASON)
 class GuiThreadShutdownTests(unittest.TestCase):
     def setUp(self):
-        self.gui = GuiThread()
+        self.gui = GuiThread(main_thread=False)
         self.gui.ensure_started()
 
     def tearDown(self):
@@ -257,7 +280,7 @@ class GuiThreadShutdownTests(unittest.TestCase):
         """A GUI loop that dies without stop() must also wake queued callers: a
         stranded one blocks forever in ``call(timeout=None)`` while holding the
         dialog lock, refusing every later dialog."""
-        gui = GuiThread(logger=mock.Mock())
+        gui = GuiThread(logger=mock.Mock(), main_thread=False)
         box = {}
         done = threading.Event()
         gui._queue.put((lambda _root: "never runs", box, done))
@@ -287,7 +310,7 @@ class GuiThreadHeadlessTests(unittest.TestCase):
     """Paths that never need a real display, so they run even on headless CI."""
 
     def test_start_error_is_reraised_and_thread_dies(self):
-        gui = GuiThread()
+        gui = GuiThread(main_thread=False)
         self.addCleanup(gui.stop)
         with mock.patch.object(gt.tk, "Tk", side_effect=RuntimeError("no display")):
             with self.assertRaises(RuntimeError) as ctx:
@@ -302,7 +325,7 @@ class GuiThreadHeadlessTests(unittest.TestCase):
     def test_calls_are_refused_once_shutting_down_without_a_root(self):
         """stop() before any start sets the shutdown flag; later call/submit must
         refuse promptly (no Tk ever created), not hang."""
-        gui = GuiThread()
+        gui = GuiThread(main_thread=False)
         gui.stop()  # no thread yet: just flips _stopping and drains
 
         call_thread, call_holder = run_in_daemon(lambda: gui.call(lambda _root: "x", timeout=5))
@@ -315,13 +338,188 @@ class GuiThreadHeadlessTests(unittest.TestCase):
         self.assertFalse(gui.running)
 
     def test_stop_with_no_thread_wakes_a_manually_queued_caller(self):
-        gui = GuiThread()
+        gui = GuiThread(main_thread=False)
         box = {}
         done = threading.Event()
         gui._queue.put((lambda _root: "never", box, done))
         gui.stop()
         self.assertTrue(done.is_set())
         self.assertIsInstance(box.get("error"), RuntimeError)
+
+
+class MainThreadModeHeadlessTests(unittest.TestCase):
+    """Main-thread mode guard rails, asserted without ever creating a root."""
+
+    def test_mode_follows_the_platform_by_default(self):
+        with mock.patch.object(gt, "tk_runs_on_main_thread", return_value=True):
+            self.assertTrue(GuiThread()._main_thread)
+        with mock.patch.object(gt, "tk_runs_on_main_thread", return_value=False):
+            self.assertFalse(GuiThread()._main_thread)
+
+    def test_worker_ensure_started_refuses_instead_of_spawning_a_thread(self):
+        """The whole point of the mode: a worker must never conjure a root.
+
+        Spawning one here would put Tk off the main thread on macOS, which is
+        the configuration AppKit aborts the process over.
+        """
+        gui = GuiThread(main_thread=True)
+        thread, holder = run_in_daemon(gui.ensure_started)
+
+        self.assertFalse(thread.is_alive(), "ensure_started deadlocked")
+        self.assertIsInstance(holder.get("error"), RuntimeError)
+        self.assertIn("main thread", str(holder["error"]))
+        self.assertIsNone(gui._thread, "a GUI thread was spawned in main-thread mode")
+        self.assertIsNone(gui.root)
+
+    def test_call_from_a_worker_refuses_before_the_root_is_adopted(self):
+        gui = GuiThread(main_thread=True)
+        thread, holder = run_in_daemon(lambda: gui.call(lambda _root: "x", timeout=5))
+        self.assertFalse(thread.is_alive(), "call deadlocked")
+        self.assertIsInstance(holder.get("error"), RuntimeError)
+
+    def test_adopt_from_a_worker_thread_is_refused(self):
+        gui = GuiThread(main_thread=True)
+        thread, holder = run_in_daemon(gui.adopt_main_thread)
+        self.assertFalse(thread.is_alive())
+        self.assertIsInstance(holder.get("error"), RuntimeError)
+
+    def test_adopt_and_run_mainloop_require_the_mode(self):
+        gui = GuiThread(main_thread=False)
+        with self.assertRaises(RuntimeError):
+            gui.adopt_main_thread()
+        with self.assertRaises(RuntimeError):
+            gui.run_mainloop()
+
+    def test_run_mainloop_refuses_without_an_adopted_root(self):
+        gui = GuiThread(main_thread=True)
+        with self.assertRaises(RuntimeError):
+            gui.run_mainloop()
+
+    def test_failed_adopt_leaves_no_thread_designated(self):
+        """A designated thread with no root would make call() run inline on None."""
+        gui = GuiThread(main_thread=True)
+        with mock.patch.object(gt.tk, "Tk", side_effect=RuntimeError("no display")):
+            with self.assertRaises(RuntimeError):
+                gui.adopt_main_thread()
+        self.assertIsNone(gui._thread)
+        self.assertFalse(gui.running)
+
+
+@unittest.skipUnless(MAIN_TK_AVAILABLE, "Tk display not available")
+class MainThreadModeTkTests(unittest.TestCase):
+    """Main-thread mode against a real root — the macOS model, portable to run.
+
+    Every test drives the loop the way the app does: adopt on the main thread,
+    let a worker marshal in, and enter ``run_mainloop`` (which the worker ends).
+    A watchdog ``after`` closes the root regardless, so a broken pump fails the
+    test instead of hanging the runner.
+    """
+
+    def setUp(self):
+        self.gui = GuiThread(main_thread=True)
+        self.gui.adopt_main_thread()
+        self.gui.root.after(8000, self.gui.root.destroy)  # watchdog
+
+    def tearDown(self):
+        if self.gui.root is not None:
+            try:
+                self.gui.root.destroy()
+            except Exception:
+                pass
+            self.gui.root = None
+
+    def _drive(self, worker):
+        """Run ``worker`` in a daemon thread while the main thread pumps."""
+        holder = {}
+
+        def runner():
+            try:
+                holder["result"] = worker()
+            except BaseException as exc:  # noqa: BLE001 - record what a caller sees
+                holder["error"] = exc
+            finally:
+                self.gui.stop()
+
+        thread = threading.Thread(target=runner, daemon=True)
+        thread.start()
+        self.gui.run_mainloop()
+        thread.join(5)
+        self.assertFalse(thread.is_alive(), "worker never finished")
+        return holder
+
+    def test_adopts_the_main_thread_as_the_gui_thread(self):
+        self.assertIs(self.gui._thread, threading.main_thread())
+        self.assertTrue(self.gui.running)
+
+    def test_worker_call_runs_on_the_main_thread_and_returns_the_value(self):
+        holder = self._drive(
+            lambda: self.gui.call(
+                lambda root: (threading.current_thread(), root.winfo_class()), timeout=10
+            )
+        )
+        self.assertNotIn("error", holder)
+        ran_on, widget_class = holder["result"]
+        self.assertIs(ran_on, threading.main_thread())
+        self.assertEqual(widget_class, "Tk")
+
+    def test_worker_call_reraises_in_the_caller(self):
+        def worker():
+            with self.assertRaises(ValueError):
+                self.gui.call(lambda _root: _raise(ValueError("boom")), timeout=10)
+            return "raised"
+
+        self.assertEqual(self._drive(worker)["result"], "raised")
+
+    def test_submit_is_fire_and_forget_and_a_raiser_does_not_kill_the_pump(self):
+        seen = []
+        done = threading.Event()
+
+        def worker():
+            self.gui.submit(lambda _root: _raise(RuntimeError("submit boom")))
+            self.gui.submit(lambda _root: (seen.append(threading.current_thread()), done.set()))
+            self.assertTrue(done.wait(5), "pump died on the raising submit")
+            return "ok"
+
+        self.gui._logger = mock.Mock()
+        self.assertEqual(self._drive(worker)["result"], "ok")
+        self.assertEqual(seen, [threading.main_thread()])
+
+    def test_call_from_the_gui_thread_itself_runs_inline(self):
+        """Tray callbacks land on the main thread on macOS; they must not queue
+        onto a pump they are themselves blocking."""
+        self.assertEqual(self.gui.call(lambda _root: "inline", timeout=5), "inline")
+
+    def test_stop_from_a_worker_tears_the_root_down_and_ends_the_loop(self):
+        holder = self._drive(lambda: "worker done")
+        self.assertEqual(holder["result"], "worker done")
+        self.assertIsNone(self.gui.root)
+        self.assertFalse(self.gui.running, "main thread liveness reported a dead root as running")
+
+    def test_stop_from_the_gui_thread_defers_the_teardown_to_the_next_tick(self):
+        """quit_app() runs inside the loop on macOS: destroying there would tear
+        the interpreter down mid-dispatch."""
+        self.gui.root.after(0, self.gui.stop)
+        self.gui.run_mainloop()
+        self.assertIsNone(self.gui.root)
+
+    def test_stop_wakes_callers_whose_queued_work_will_never_run(self):
+        box = {}
+        done = threading.Event()
+
+        def shutdown():
+            # Queued from inside the loop: the pump drains synchronously on
+            # entry, so an item put before run_mainloop would simply have run.
+            self.gui._queue.put((lambda _root: "never", box, done))
+            self.gui.stop()
+
+        self.gui.root.after(0, shutdown)
+        self.gui.run_mainloop()
+        self.assertTrue(done.is_set(), "stranded caller was never woken")
+        self.assertIsInstance(box.get("error"), RuntimeError)
+
+
+def _raise(exc):
+    raise exc
 
 
 if __name__ == "__main__":
