@@ -286,7 +286,10 @@ class PosixRichTextDowngradeTests(unittest.TestCase):
         }
         completed = subprocess.CompletedProcess(["xclip"], 0, b"", b"")
 
-        with mock.patch.object(clipboard_support.subprocess, "run", return_value=completed) as run, \
+        # IS_MAC is re-read on every rich paste (that is what routes macOS to
+        # osascript), so the "not a Mac" state has to hold for the call too.
+        with mock.patch.object(clipboard_support, "IS_MAC", False), \
+                mock.patch.object(clipboard_support.subprocess, "run", return_value=completed) as run, \
                 self.assertLogs(clipboard_support._LOGGER, level=logging.INFO) as logs:
             self.assertTrue(clipboard.set_content(rich_value))
 
@@ -295,9 +298,222 @@ class PosixRichTextDowngradeTests(unittest.TestCase):
 
         # The downgrade is logged once per session, not once per paste — a
         # daily-use rich snippet would otherwise flood the log.
-        with mock.patch.object(clipboard_support.subprocess, "run", return_value=completed), \
+        with mock.patch.object(clipboard_support, "IS_MAC", False), \
+                mock.patch.object(clipboard_support.subprocess, "run", return_value=completed), \
                 self.assertNoLogs(clipboard_support._LOGGER, level=logging.INFO):
             self.assertTrue(clipboard.set_content(rich_value))
+
+
+@contextlib.contextmanager
+def _mac_desktop(*available):
+    """Pretend to be a macOS host where only ``available`` tools are installed."""
+    with mock.patch.object(clipboard_support, "IS_MAC", True), \
+            mock.patch.object(clipboard_support.shutil, "which", _which(*available)):
+        yield
+
+
+def _make_mac_clipboard(*available):
+    with _mac_desktop(*available):
+        return PosixClipboard({})
+
+
+def _flavor_bytes(script, type_code):
+    """Return the bytes carried by the ``«data <type_code>...»`` literal."""
+    match = re.search(f"«data {re.escape(type_code)}([0-9A-F]*)»", script)
+    return None if match is None else bytes.fromhex(match.group(1))
+
+
+_MAC_RICH_VALUE = {
+    "__kind__": "rich_text",
+    "text": "expansão\nde ação",
+    "spans": [{"tag": "bold", "start": 0, "end": 8}],
+    "html": "<div><strong>expansão</strong><br>de ação</div>",
+    "rtf": r"{\rtf1\ansi \b expans\u227?o\b0 \par de a\u231?\u227?o}",
+}
+
+
+class MacRichClipboardScriptTests(unittest.TestCase):
+    def test_script_carries_every_flavor_as_hex(self):
+        script = clipboard_support.mac_rich_clipboard_script(
+            {"text": "expansão", "html": "<div>a</div>", "rtf": r"{\rtf1 a}"}
+        )
+
+        self.assertTrue(script.startswith("set the clipboard to {"))
+        self.assertEqual("expansão", _flavor_bytes(script, "utf8").decode("utf-8"))
+        self.assertIn("<div>a</div>", _flavor_bytes(script, "HTML").decode("utf-8"))
+        self.assertEqual(r"{\rtf1 a}", _flavor_bytes(script, "RTF ").decode("utf-8"))
+
+    def test_html_flavor_declares_utf8_so_accents_survive(self):
+        script = clipboard_support.mac_rich_clipboard_script(
+            {"text": "ação", "html": "<div><strong>ação</strong></div>"}
+        )
+        document = _flavor_bytes(script, "HTML").decode("utf-8")
+
+        self.assertIn('<meta charset="utf-8">', document)
+        self.assertIn("<strong>ação</strong>", document)
+
+    def test_absent_flavors_are_omitted(self):
+        script = clipboard_support.mac_rich_clipboard_script({"text": "simples"})
+
+        self.assertIsNone(_flavor_bytes(script, "HTML"))
+        self.assertIsNone(_flavor_bytes(script, "RTF "))
+        self.assertEqual("simples", _flavor_bytes(script, "utf8").decode("utf-8"))
+
+    def test_empty_text_omits_the_utf8_flavor(self):
+        """An empty «data utf8» literal is an AppleScript syntax error, and a
+        rich snippet with empty text still carries html/rtf — so the whole rich
+        write would fail (and burn the once-per-session warning) over a payload
+        macOS can still render from the other flavors."""
+        script = clipboard_support.mac_rich_clipboard_script(
+            {"text": "", "html": "<div>x</div>", "rtf": r"{\rtf1 x}"}
+        )
+
+        self.assertNotIn("«data utf8»", script)
+        self.assertIsNone(_flavor_bytes(script, "utf8"))
+        self.assertIn("<div>x</div>", _flavor_bytes(script, "HTML").decode("utf-8"))
+        self.assertEqual(r"{\rtf1 x}", _flavor_bytes(script, "RTF ").decode("utf-8"))
+
+    def test_payload_text_needs_no_applescript_quoting(self):
+        """Hex literals are why quotes, backslashes and newlines are safe: the
+        same payload written as an AppleScript string literal would break the
+        script (or, worse, inject into it)."""
+        hostile = 'aspas " barra \\ e "quebra"\nde linha'
+        script = clipboard_support.mac_rich_clipboard_script(
+            {"text": hostile, "html": "<div>x</div>"}
+        )
+
+        self.assertNotIn('"', script)
+        self.assertNotIn("\n", script)
+        self.assertEqual(hostile, _flavor_bytes(script, "utf8").decode("utf-8"))
+
+
+class MacRichClipboardWriteTests(unittest.TestCase):
+    def test_rich_text_goes_through_osascript_not_pbcopy(self):
+        clipboard = _make_mac_clipboard("pbcopy", "pbpaste", "osascript")
+        completed = subprocess.CompletedProcess(["osascript"], 0, b"", b"")
+
+        with _mac_desktop("pbcopy", "pbpaste", "osascript"), \
+                mock.patch.object(clipboard_support.subprocess, "run", return_value=completed) as run:
+            self.assertTrue(clipboard.set_content(_MAC_RICH_VALUE))
+
+        run.assert_called_once()
+        self.assertEqual(["osascript", "-"], run.call_args.args[0])
+        script = run.call_args.kwargs["input"].decode("utf-8")
+        self.assertEqual(
+            _MAC_RICH_VALUE["text"], _flavor_bytes(script, "utf8").decode("utf-8")
+        )
+        self.assertIn(
+            _MAC_RICH_VALUE["html"], _flavor_bytes(script, "HTML").decode("utf-8")
+        )
+        self.assertEqual(
+            _MAC_RICH_VALUE["rtf"], _flavor_bytes(script, "RTF ").decode("utf-8")
+        )
+
+    def test_rich_write_never_captures_stdout(self):
+        """Same guarantee as the plain copy path. osascript's stderr *is* read —
+        it exits instead of forking a selection-owning daemon, and the
+        AppleScript error is the only diagnostic a failed pasteboard write has."""
+        clipboard = _make_mac_clipboard("pbcopy", "pbpaste", "osascript")
+        completed = subprocess.CompletedProcess(["osascript"], 0, b"", b"")
+
+        with _mac_desktop("pbcopy", "pbpaste", "osascript"), \
+                mock.patch.object(clipboard_support.subprocess, "run", return_value=completed) as run:
+            clipboard.set_content(_MAC_RICH_VALUE)
+
+        kwargs = run.call_args.kwargs
+        self.assertNotIn("capture_output", kwargs)
+        self.assertIs(subprocess.DEVNULL, kwargs["stdout"])
+        self.assertEqual(clipboard_support._POSIX_TIMEOUT, kwargs["timeout"])
+
+    def test_plain_text_still_uses_pbcopy(self):
+        clipboard = _make_mac_clipboard("pbcopy", "pbpaste", "osascript")
+        completed = subprocess.CompletedProcess(["pbcopy"], 0, b"", b"")
+
+        with _mac_desktop("pbcopy", "pbpaste", "osascript"), \
+                mock.patch.object(clipboard_support.subprocess, "run", return_value=completed) as run:
+            self.assertTrue(clipboard.set_content("olá mundo"))
+
+        self.assertEqual(["pbcopy"], run.call_args.args[0])
+        self.assertEqual("olá mundo".encode("utf-8"), run.call_args.kwargs["input"])
+
+    def test_failing_osascript_falls_back_to_plain_text(self):
+        clipboard = _make_mac_clipboard("pbcopy", "pbpaste", "osascript")
+
+        def fake_run(argv, **kwargs):
+            if argv[0] == "osascript":
+                return subprocess.CompletedProcess(argv, 1, b"", b"syntax error")
+            return subprocess.CompletedProcess(argv, 0, b"", b"")
+
+        with _mac_desktop("pbcopy", "pbpaste", "osascript"), \
+                mock.patch.object(clipboard_support.subprocess, "run", side_effect=fake_run) as run, \
+                self.assertLogs(clipboard_support._LOGGER, level=logging.WARNING) as logs:
+            self.assertTrue(clipboard.set_content(_MAC_RICH_VALUE))
+
+        self.assertTrue(any("syntax error" in line for line in logs.output))
+        self.assertEqual(["pbcopy"], run.call_args.args[0])
+        self.assertEqual(
+            _MAC_RICH_VALUE["text"].encode("utf-8"), run.call_args.kwargs["input"]
+        )
+
+    def test_crashing_osascript_falls_back_to_plain_text(self):
+        clipboard = _make_mac_clipboard("pbcopy", "pbpaste", "osascript")
+
+        def fake_run(argv, **kwargs):
+            if argv[0] == "osascript":
+                raise subprocess.TimeoutExpired(argv, clipboard_support._POSIX_TIMEOUT)
+            return subprocess.CompletedProcess(argv, 0, b"", b"")
+
+        with _mac_desktop("pbcopy", "pbpaste", "osascript"), \
+                mock.patch.object(clipboard_support.subprocess, "run", side_effect=fake_run) as run, \
+                self.assertLogs(clipboard_support._LOGGER, level=logging.WARNING):
+            self.assertTrue(clipboard.set_content(_MAC_RICH_VALUE))
+
+        self.assertEqual(["pbcopy"], run.call_args.args[0])
+
+    def test_rich_failure_is_logged_once_per_session(self):
+        clipboard = _make_mac_clipboard("pbcopy", "pbpaste", "osascript")
+
+        def fake_run(argv, **kwargs):
+            if argv[0] == "osascript":
+                return subprocess.CompletedProcess(argv, 1, b"", b"boom")
+            return subprocess.CompletedProcess(argv, 0, b"", b"")
+
+        with _mac_desktop("pbcopy", "pbpaste", "osascript"), \
+                mock.patch.object(clipboard_support.subprocess, "run", fake_run), \
+                self.assertLogs(clipboard_support._LOGGER, level=logging.WARNING):
+            clipboard.set_content(_MAC_RICH_VALUE)
+
+        with _mac_desktop("pbcopy", "pbpaste", "osascript"), \
+                mock.patch.object(clipboard_support.subprocess, "run", fake_run), \
+                self.assertNoLogs(clipboard_support._LOGGER, level=logging.WARNING):
+            self.assertTrue(clipboard.set_content(_MAC_RICH_VALUE))
+
+    def test_mac_without_osascript_downgrades_like_linux(self):
+        clipboard = _make_mac_clipboard("pbcopy", "pbpaste")
+        completed = subprocess.CompletedProcess(["pbcopy"], 0, b"", b"")
+
+        with _mac_desktop("pbcopy", "pbpaste"), \
+                mock.patch.object(clipboard_support.subprocess, "run", return_value=completed) as run, \
+                self.assertLogs(clipboard_support._LOGGER, level=logging.INFO) as logs:
+            self.assertTrue(clipboard.set_content(_MAC_RICH_VALUE))
+
+        self.assertTrue(any("texto simples" in line for line in logs.output))
+        self.assertEqual(["pbcopy"], run.call_args.args[0])
+
+    def test_osascript_installed_later_is_picked_up_without_a_restart(self):
+        clipboard = _make_mac_clipboard("pbcopy", "pbpaste")
+        completed = subprocess.CompletedProcess(["pbcopy"], 0, b"", b"")
+
+        with _mac_desktop("pbcopy", "pbpaste"), \
+                mock.patch.object(clipboard_support.subprocess, "run", return_value=completed) as run, \
+                self.assertLogs(clipboard_support._LOGGER, level=logging.INFO):
+            clipboard.set_content(_MAC_RICH_VALUE)
+        self.assertEqual(["pbcopy"], run.call_args.args[0])
+
+        with _mac_desktop("pbcopy", "pbpaste", "osascript"), \
+                mock.patch.object(clipboard_support.subprocess, "run", return_value=completed) as run:
+            self.assertTrue(clipboard.set_content(_MAC_RICH_VALUE))
+        self.assertEqual(["osascript", "-"], run.call_args.args[0])
 
 
 @contextlib.contextmanager
