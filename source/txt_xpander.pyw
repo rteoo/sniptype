@@ -1,6 +1,7 @@
 """
 Txt Xpander - Windows system tray snippet expander.
-Version: 3.2.1
+Version: 3.3.0
+Channel: beta
 
 IMPORTANT: This program captures keyboard input only to expand text
 snippets (shortcuts), similar to TextExpander. It does not store,
@@ -136,21 +137,39 @@ import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog, filedialog, font as tkfont
 
 
-def _read_app_version():
-    """Read the app version from this module's docstring.
+def _read_release_metadata():
+    """Read the app version and release channel from this module's docstring.
 
     Derived rather than duplicated: the docstring and installer/txt_xpander.iss are
-    the two hand-maintained places today, and a third constant would be a third
-    place to forget. Returns None if the line is missing — the sync bundle's
-    ``generator.version`` is nullable by design.
+    the two hand-maintained places today, and more constants would be more places
+    to forget. The version remains nullable because the sync bundle's
+    ``generator.version`` permits that; an absent channel is treated as stable so
+    builds from older source trees keep their historical display.
     """
+    metadata = {}
     for line in (__doc__ or "").splitlines():
-        if line.startswith("Version:"):
-            return line.split(":", 1)[1].strip() or None
-    return None
+        key, separator, value = line.partition(":")
+        if separator and key in {"Version", "Channel"}:
+            metadata[key.lower()] = value.strip() or None
+    channel = metadata.get("channel") or "stable"
+    if channel not in {"stable", "beta"}:
+        raise ValueError(f"Unsupported release channel: {channel}")
+    return metadata.get("version"), channel
 
 
-APP_VERSION = _read_app_version()
+APP_VERSION, RELEASE_CHANNEL = _read_release_metadata()
+
+
+def format_app_version(version, channel="stable"):
+    """Return the user-visible app name, version and non-stable channel."""
+    if version:
+        channel_suffix = f" {channel}" if channel and channel != "stable" else ""
+        return f"{APP_NAME} v{version}{channel_suffix}"
+    return f"{APP_NAME} — versão desconhecida"
+
+
+APP_DISPLAY_NAME = format_app_version(APP_VERSION, RELEASE_CHANNEL)
+
 
 APP_MUTEX_NAME = r"Local\TxtXpanderSingleton"
 APP_MUTEX_HANDLE = None
@@ -1552,7 +1571,7 @@ class TextExpander:
             # appearance the user changed while it was closed.
             ui = ui_theme.bind(tk_root)
             root = tk.Toplevel(tk_root)
-            root.title("Txt Xpander - Gerenciador de Snippets")
+            root.title(f"{APP_DISPLAY_NAME} - Gerenciador de Snippets")
             geometry, min_width, min_height = ui.manager_window_size
             root.geometry(geometry)
             root.minsize(min_width, min_height)
@@ -3586,6 +3605,11 @@ class TextExpander:
                 checked=self.autostart_is_enabled,
             ),
             pystray.Menu.SEPARATOR,
+            pystray.MenuItem(
+                APP_DISPLAY_NAME,
+                lambda icon, item: None,
+                enabled=False,
+            ),
             pystray.MenuItem("Sair", self.quit_app)
         )
 
@@ -3593,7 +3617,7 @@ class TextExpander:
         self.icon = pystray.Icon(
             "text_expander",
             self.load_tray_icon(),
-            "Text Expander",
+            APP_DISPLAY_NAME,
             menu,
             **platform_support.tray_icon_options()
         )

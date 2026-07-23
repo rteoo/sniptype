@@ -30,6 +30,19 @@ DIST_ROOT="$REPO_DIR/dist"
 TARGET_APP="$DIST_ROOT/$APP_NAME.app"
 PREVIOUS_APP="$DIST_ROOT/$APP_NAME.app.previous"
 PYTHON="${PYTHON:-python3}"
+APP_VERSION="$(sed -n '/^Version:[[:space:]]*/ { s/^Version:[[:space:]]*//; p; q; }' \
+    "$REPO_DIR/source/txt_xpander.pyw")"
+RELEASE_CHANNEL="$(sed -n '/^Channel:[[:space:]]*/ { s/^Channel:[[:space:]]*//; p; q; }' \
+    "$REPO_DIR/source/txt_xpander.pyw")"
+
+if [[ ! "$APP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "Invalid or missing app version in source/txt_xpander.pyw: '$APP_VERSION'" >&2
+    exit 1
+fi
+if [[ "$RELEASE_CHANNEL" != "stable" && "$RELEASE_CHANNEL" != "beta" ]]; then
+    echo "Invalid or missing release channel in source/txt_xpander.pyw: '$RELEASE_CHANNEL'" >&2
+    exit 1
+fi
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
     echo "This script builds the macOS bundle and only runs on macOS." >&2
@@ -71,7 +84,7 @@ done
 iconutil -c icns "$ICONSET" -o "$ICNS"
 
 # --- Package --------------------------------------------------------------
-echo "Packaging $APP_NAME.app ..."
+echo "Packaging $APP_NAME $APP_VERSION ($RELEASE_CHANNEL) ..."
 "$PYTHON" -m PyInstaller --noconfirm --clean --windowed --onedir \
     --distpath "$STAGING_ROOT" \
     --workpath "$WORK_ROOT/build" \
@@ -95,6 +108,18 @@ fi
 # which breaks the seal PyInstaller put on the bundle, hence the re-sign below.
 plutil -replace LSUIElement -bool true "$STAGED_APP/Contents/Info.plist" 2>/dev/null \
     || plutil -insert LSUIElement -bool true "$STAGED_APP/Contents/Info.plist"
+plutil -replace CFBundleShortVersionString -string "$APP_VERSION" \
+    "$STAGED_APP/Contents/Info.plist" 2>/dev/null \
+    || plutil -insert CFBundleShortVersionString -string "$APP_VERSION" \
+        "$STAGED_APP/Contents/Info.plist"
+plutil -replace CFBundleVersion -string "$APP_VERSION" \
+    "$STAGED_APP/Contents/Info.plist" 2>/dev/null \
+    || plutil -insert CFBundleVersion -string "$APP_VERSION" \
+        "$STAGED_APP/Contents/Info.plist"
+plutil -replace TxtXpanderReleaseChannel -string "$RELEASE_CHANNEL" \
+    "$STAGED_APP/Contents/Info.plist" 2>/dev/null \
+    || plutil -insert TxtXpanderReleaseChannel -string "$RELEASE_CHANNEL" \
+        "$STAGED_APP/Contents/Info.plist"
 
 SIGN_IDENTITY="${CODESIGN_IDENTITY:-}"
 if [[ -z "$SIGN_IDENTITY" ]] \

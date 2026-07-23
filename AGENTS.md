@@ -57,7 +57,16 @@ build_release.bat      # produce dist\Txt Xpander first
 build_installer.bat    # compile installer\Output\TxtXpanderSetup-<version>.exe
 ```
 
-`build_installer.bat` requires the Inno Setup 6 compiler (`ISCC.exe`) and compiles `installer\txt_xpander.iss`: a per-user install to `%LOCALAPPDATA%\Programs\Txt Xpander` (no admin), Start Menu/Desktop/Startup shortcuts, and a proper uninstaller that leaves `~/.txt_xpander` user data intact. Bump `MyAppVersion` in the `.iss` alongside the app version.
+`build_installer.bat` requires the Inno Setup 6 compiler (`ISCC.exe`) and compiles `installer\txt_xpander.iss`: a per-user install to `%LOCALAPPDATA%\Programs\Txt Xpander` (no admin), Start Menu/Desktop/Startup shortcuts, and a proper uninstaller that leaves `~/.txt_xpander` user data intact. Bump `MyAppVersion` and `MyAppChannel` in the `.iss` alongside the app release metadata.
+
+Release channels are explicit. The published stable channel remains the latest
+plain `vMAJOR.MINOR.PATCH` tag (`v3.2.1` until the beta is promoted); current
+source is `3.3.0` on the `beta` channel. The app docstring owns `Version:` and
+`Channel:` for the running build, and `installer\txt_xpander.iss` mirrors both
+as `MyAppVersion` and `MyAppChannel`. Beta installers are named
+`TxtXpanderSetup-<version>-beta.exe`; beta tags use
+`vMAJOR.MINOR.PATCH-beta.N`. Do not promote beta to stable until the supported-OS
+test matrix and packaged desktop smoke tests pass.
 
 The build script backs up and restores the packaged `snippets.json`, stages the PyInstaller output, swaps `dist\Txt Xpander`, and can update the Windows Startup shortcut.
 
