@@ -97,10 +97,26 @@ def _safe_load(path, logger, label):
     return data if isinstance(data, dict) else {}
 
 
-def _datetime_provider(trigger, entry, context):
+DEFAULT_DATE_FORMAT = "%d/%m/%Y"
+
+
+def datetime_render_spec(entry):
+    """Resolve a datetime entry to ``("extenso", None)`` or ``("format", fmt)``.
+
+    Single source of truth for the datetime default format and the
+    extenso-wins-over-format precedence. Pure: reads only ``entry`` (never a
+    ``context``), so ``sync_export`` can consume it on the bundle's pure path
+    without breaking ``build_bundle``'s no-provider-invoked guarantee.
+    """
     if entry.get("method") == "extenso":
+        return ("extenso", None)
+    return ("format", entry.get("format", DEFAULT_DATE_FORMAT))
+
+
+def _datetime_provider(trigger, entry, context):
+    kind, fmt = datetime_render_spec(entry)
+    if kind == "extenso":
         return context.data_extenso
-    fmt = entry.get("format", "%d/%m/%Y")
     return lambda fmt=fmt: time.strftime(fmt)
 
 
