@@ -1243,6 +1243,51 @@ class TextExpander:
         self.max_trigger_length = calculate_max_trigger_length_with_mappings(self.snippets) + TRIGGER_BUFFER_MARGIN
         self.rebuild_trigger_index()
 
+    def _store_static_snippet(self, trigger, value):
+        """Apply a static-editor save to the in-memory maps.
+
+        When a dynamic trigger owns the name the callable stays in the merged
+        map and the static value is only recorded in ``shadowed_static_snippets``
+        so it still reaches disk (via ``build_saveable_snippets``). Overwriting
+        ``self.snippets[trigger]`` with the string would make the rebuilt trigger
+        index expand the static for the rest of the session, contradicting the
+        "the dynamic snippet is what expands" invariant that a reload restores.
+        Otherwise the static value goes straight into the merged map.
+        """
+        if callable(self.snippets.get(trigger)):
+            self.shadowed_static_snippets[trigger] = value
+        else:
+            self.snippets[trigger] = value
+
+    def _delete_static_snippet(self, trigger, confirm):
+        """Delete a static snippet by trigger, guarding shadowed dynamics.
+
+        ``confirm`` is called (returning a bool) only once the delete is
+        eligible. Returns one of ``"missing"``, ``"dynamic"`` (a dynamic trigger
+        owns the name — refused so the preserved static is not lost, and the
+        caller directs the user to the Snippets Dinâmicos tab), ``"cancelled"``,
+        ``"error"`` (save failed, in-memory state rolled back) or ``"ok"``.
+        """
+        if trigger not in self.snippets:
+            return "missing"
+        if callable(self.snippets[trigger]):
+            return "dynamic"
+        if not confirm():
+            return "cancelled"
+        value = self.snippets[trigger]
+        del self.snippets[trigger]
+        # An explicit delete must win over the shadow safety net, or the
+        # preserved value would be written back on the next save.
+        shadowed = self.shadowed_static_snippets.pop(trigger, None)
+        if not self.save_snippets(self.snippets):
+            # Roll back the in-memory delete on failure.
+            self.snippets[trigger] = value
+            if shadowed is not None:
+                self.shadowed_static_snippets[trigger] = shadowed
+            return "error"
+        self.refresh_runtime_indexes()
+        return "ok"
+
     def notify(self, message: str, title: str = "Text Expander", key: str = None, cooldown_seconds: float = 0, kind: str = "info"):
         """Send a tray notification when the icon is available, with optional cooldown."""
         if not self.icon:
@@ -2236,12 +2281,10 @@ class TextExpander:
                 ):
                     return
 
-            # Saving over a dynamic trigger replaces the callable in memory, so
-            # the static value only survives the next reload+save if it is
-            # tracked as shadowed here.
-            if callable(self.snippets.get(trigger)) or trigger in self.shadowed_static_snippets:
-                self.shadowed_static_snippets[trigger] = value
-            self.snippets[trigger] = value
+            # Saving over a live dynamic trigger records the static for disk but
+            # leaves the callable in the merged map, so the trigger keeps
+            # expanding as the dynamic snippet this session (see helper).
+            self._store_static_snippet(trigger, value)
             if not self.save_snippets(self.snippets):
                 messagebox.showerror(
                     "Erro ao salvar",
@@ -2260,25 +2303,32 @@ class TextExpander:
                 messagebox.showwarning("Aviso", "Selecione um snippet.")
                 return
 
-            if trigger in self.snippets and messagebox.askyesno("Confirmar", f"Excluir '{trigger}'?"):
-                del self.snippets[trigger]
-                # An explicit delete must win over the shadow safety net, or the
-                # preserved value would be written back on the next save.
-                shadowed = self.shadowed_static_snippets.pop(trigger, None)
-                if not self.save_snippets(self.snippets):
-                    if shadowed is not None:
-                        self.shadowed_static_snippets[trigger] = shadowed
-                    messagebox.showerror(
-                        "Erro ao salvar",
-                        "Não foi possível gravar snippets.json. Verifique os logs; a exclusão pode não ter sido salva.",
-                    )
-                    return
-                self.refresh_runtime_indexes()
-                entry_trigger.delete(0, tk.END)
-                load_value_into_text_widget(text_value, "")
-                update_format_status()
-                refresh_listbox()
-                self.notify_status(f"Snippet '{trigger}' excluído.", key=f"delete-static:{trigger}")
+            result = self._delete_static_snippet(
+                trigger,
+                lambda: messagebox.askyesno("Confirmar", f"Excluir '{trigger}'?"),
+            )
+            if result == "dynamic":
+                # A dynamic trigger owns the name; the free-text box let the user
+                # type it. Deleting would discard the shadowed static from disk,
+                # so refuse and point at the tab that manages the dynamic entry.
+                messagebox.showwarning(
+                    "Aviso",
+                    f"'{trigger}' é um snippet dinâmico. Gerencie-o na aba Snippets Dinâmicos.",
+                )
+                return
+            if result == "error":
+                messagebox.showerror(
+                    "Erro ao salvar",
+                    "Não foi possível gravar snippets.json. Verifique os logs; a exclusão pode não ter sido salva.",
+                )
+                return
+            if result != "ok":
+                return
+            entry_trigger.delete(0, tk.END)
+            load_value_into_text_widget(text_value, "")
+            update_format_status()
+            refresh_listbox()
+            self.notify_status(f"Snippet '{trigger}' excluído.", key=f"delete-static:{trigger}")
 
         def on_duplicate():
             value = serialize_text_widget_content(text_value)
