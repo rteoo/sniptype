@@ -3,6 +3,20 @@ from snippet_utils import check_dynamic_pattern, get_dynamic_prefixes
 from variable_support import find_variable_names, has_form_variables
 
 
+def _is_indexable_trigger(trigger):
+    """Whether a snippets-dict key is a real, indexable trigger.
+
+    An empty key would suffix-match every keystroke (``endswith("")`` is always
+    true) and has no last character to bucket by; an ``_``-prefixed key names a
+    mapping container, not a trigger. Both are excluded from every index set so
+    the direct index and the metadata helpers never disagree about what "" is.
+    Callable handling is intentionally left to each caller: the direct-index
+    loop indexes keys regardless of value, while the metadata helpers skip
+    callables.
+    """
+    return bool(trigger) and not trigger.startswith("_")
+
+
 def _compute_form_triggers(snippets, prefixes=None):
     """Return the set of direct triggers whose value needs a form-fill dialog.
 
@@ -11,7 +25,7 @@ def _compute_form_triggers(snippets, prefixes=None):
     """
     form_triggers = set()
     for trigger, value in snippets.items():
-        if trigger.startswith("_") or callable(value):
+        if not _is_indexable_trigger(trigger) or callable(value):
             continue
         if has_form_variables(extract_plain_text(value), snippets, prefixes):
             form_triggers.add(trigger)
@@ -26,7 +40,7 @@ def _compute_slow_ref_triggers(snippets, slow_snippets):
     """
     slow_ref_triggers = set()
     for trigger, value in snippets.items():
-        if trigger.startswith("_") or callable(value):
+        if not _is_indexable_trigger(trigger) or callable(value):
             continue
         if any(name in slow_snippets for name in find_variable_names(extract_plain_text(value))):
             slow_ref_triggers.add(trigger)
@@ -46,8 +60,8 @@ def compile_trigger_index(snippets, slow_snippets):
 
     for trigger in snippets.keys():
         # An empty key has no last char (crash below) and would suffix-match
-        # every keystroke — never index it.
-        if not trigger or trigger.startswith("_"):
+        # every keystroke; an ``_``-prefixed key is a mapping container.
+        if not _is_indexable_trigger(trigger):
             continue
 
         direct_triggers.append(trigger)
