@@ -122,6 +122,71 @@ class ShadowedStaticSnippetTests(unittest.TestCase):
         self.assertEqual("meu texto importante", self._on_disk()["xhi"])
 
 
+class StaticEditorGuardTests(unittest.TestCase):
+    """The static editor's free-text trigger box lets a user type a name a
+    dynamic trigger owns. Two paths there must not lose the shadowed static.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        resources = write_bundled_registry(
+            {"xhi": {"provider": "datetime", "category": "datetime", "format": "%Y-%m-%d"}}
+        )
+        self.app = make_expander(
+            self.tmp, '{"xhi": "meu texto importante", "xname": "Example User"}', resource_dir=resources
+        )
+
+    def _on_disk(self):
+        with open(self.app.snippets_file, encoding="utf-8") as handle:
+            return json.load(handle)
+
+    # BUG 2: saving over a live dynamic trigger.
+    def test_save_over_dynamic_records_shadow_but_keeps_the_callable(self):
+        self.assertTrue(callable(self.app.snippets["xhi"]))
+        self.app._store_static_snippet("xhi", "novo valor")
+        # The callable stays in the merged map so the runtime index keeps
+        # routing the trigger to the dynamic snippet (a restart would too).
+        self.assertTrue(callable(self.app.snippets["xhi"]))
+        self.assertEqual("novo valor", self.app.shadowed_static_snippets["xhi"])
+        # The new static value still reaches disk...
+        self.assertTrue(self.app.save_snippets(self.app.snippets))
+        self.assertEqual("novo valor", self._on_disk()["xhi"])
+        # ...and the rebuilt index still routes the trigger to the callable.
+        self.app.refresh_runtime_indexes()
+        self.assertTrue(callable(self.app.snippets["xhi"]))
+
+    def test_save_of_a_plain_static_goes_into_the_merged_map(self):
+        self.app._store_static_snippet("xnew", "valor")
+        self.assertEqual("valor", self.app.snippets["xnew"])
+        self.assertNotIn("xnew", self.app.shadowed_static_snippets)
+
+    # BUG 1: deleting a shadowed trigger from the static editor.
+    def test_delete_of_a_dynamic_trigger_is_refused_and_saves_nothing(self):
+        confirm = mock.Mock(return_value=True)
+        with mock.patch.object(self.app, "save_snippets") as save:
+            result = self.app._delete_static_snippet("xhi", confirm)
+        self.assertEqual("dynamic", result)
+        confirm.assert_not_called()
+        save.assert_not_called()
+        # The preserved static and the dynamic callable both survive intact.
+        self.assertEqual("meu texto importante", self.app.shadowed_static_snippets["xhi"])
+        self.assertTrue(callable(self.app.snippets["xhi"]))
+
+    def test_delete_of_a_plain_static_still_works(self):
+        confirm = mock.Mock(return_value=True)
+        result = self.app._delete_static_snippet("xname", confirm)
+        self.assertEqual("ok", result)
+        confirm.assert_called_once()
+        self.assertNotIn("xname", self.app.snippets)
+        self.assertNotIn("xname", self._on_disk())
+
+    def test_delete_asks_only_when_eligible(self):
+        confirm = mock.Mock(return_value=False)
+        self.assertEqual("cancelled", self.app._delete_static_snippet("xname", confirm))
+        confirm.assert_called_once()
+        self.assertIn("xname", self.app.snippets)
+
+
 class DynamicToggleCollisionTests(unittest.TestCase):
     """Enabling a dynamic trigger over a static name needs the same guard as a rename."""
 
