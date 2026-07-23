@@ -247,6 +247,65 @@ class DynamicToggleCollisionTests(unittest.TestCase):
         var.set.assert_called_once_with(False)
 
 
+class DynamicToggleMappingCollisionTests(unittest.TestCase):
+    """A mapping-composed trigger (``cpffulano``) is not a direct snippets key.
+
+    It resolves through the ``_cpf_numbers`` container, so the confirmation
+    helper's direct lookup misses it. Enabling a dynamic entry whose effective
+    trigger equals such a composed trigger must still prompt, because it silently
+    changes what the user's typing expands to.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        resources = write_bundled_registry(
+            {
+                "xcpf": {
+                    "provider": "datetime",
+                    "category": "datetime",
+                    "format": "%Y-%m-%d",
+                    "trigger": "cpffulano",
+                    "enabled": False,
+                },
+                "xfree": {"provider": "datetime", "category": "datetime", "format": "%Y"},
+            }
+        )
+        self.app = make_expander(
+            self.tmp, '{"_cpf_numbers": {"fulano": "123.456.789-00"}}', resource_dir=resources
+        )
+
+    def _override(self):
+        if not os.path.exists(self.app.dynamic_registry_file):
+            return {}
+        with open(self.app.dynamic_registry_file, encoding="utf-8") as handle:
+            return json.load(handle)
+
+    def test_enabling_over_a_mapping_trigger_asks_and_a_refusal_changes_nothing(self):
+        with mock.patch.object(tx.messagebox, "askyesno", return_value=False) as ask:
+            self.assertFalse(self.app._toggle_registry_entry("xcpf", True))
+        ask.assert_called_once()
+        self.assertEqual({}, self._override())
+        # The mapped value is untouched — the container was never a collision key.
+        self.assertEqual(
+            {"fulano": "123.456.789-00"}, self.app.snippets["_cpf_numbers"]
+        )
+
+    def test_enabling_over_a_mapping_trigger_proceeds_when_confirmed(self):
+        with mock.patch.object(tx.messagebox, "askyesno", return_value=True):
+            self.assertTrue(self.app._toggle_registry_entry("xcpf", True))
+        self.assertTrue(self._override()["xcpf"]["enabled"])
+        # The mapping container survives the toggle's reload/save cycle intact.
+        self.assertEqual(
+            {"fulano": "123.456.789-00"}, self.app.snippets["_cpf_numbers"]
+        )
+
+    def test_enabling_without_a_mapping_collision_does_not_prompt(self):
+        self.app._toggle_registry_entry("xfree", False)
+        with mock.patch.object(tx.messagebox, "askyesno") as ask:
+            self.assertTrue(self.app._toggle_registry_entry("xfree", True))
+        ask.assert_not_called()
+
+
 class BackupRestoreImportTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
