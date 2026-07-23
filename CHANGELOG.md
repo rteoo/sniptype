@@ -4,13 +4,40 @@ All notable changes to Txt Xpander are documented here. The format is based on [
 
 ## [Unreleased]
 
-### Fixed
+## [3.3.0-beta] — 2026-07-23
 
-- **macOS: using the menu-bar menu no longer kills the app**: clicking the tray icon made AppKit run a nested menu-tracking loop on the main thread, where a Tk timer fired into Python with no valid thread state and aborted the process (`PyEval_RestoreThread`, "Txt Xpander quit unexpectedly"). Opening the menu, opening the snippet manager and quitting all work now. Windows behaviour is unchanged.
+This is the beta channel for the next feature release. The stable channel
+remains `v3.2.1` until the full cross-platform test matrix and desktop smoke
+tests pass.
 
 ### Added
 
-- **macOS build**: `build_release_macos.sh` produces `dist/Txt Xpander.app`, a menu-bar-only bundle (`LSUIElement` plus an accessory activation policy applied after Tk starts, since Tk otherwise forces the app into the Dock) with the icon converted to `.icns` at build time. The tray autostart toggle writes a LaunchAgent pointing at the bundle's binary, verified with `launchctl`. Build, Gatekeeper and permission steps — including that rebuilding invalidates the app's Input Monitoring/Accessibility grants — are documented in the README.
+- **Explicit stable and beta channels**: the app now identifies the running version and non-stable channel in the tray tooltip, tray menu and manager title. Windows beta installers include `-beta` in the filename and installed-app display name; macOS bundles carry the version and channel in `Info.plist`.
+- **macOS build**: `build_release_macos.sh` produces `dist/Txt Xpander.app`, a menu-bar-only bundle (`LSUIElement` plus an accessory activation policy applied after Tk starts, since Tk otherwise forces the app into the Dock) with the icon converted to `.icns` at build time. The tray autostart toggle writes a LaunchAgent pointing at the bundle's binary.
+- **macOS permission onboarding**: the app checks Input Monitoring and Accessibility at startup, links to the correct System Settings panes and requires a restart after grants change rather than claiming a refused listener recovered in-process.
+- **macOS rich-text clipboard support**: rich snippets write plain text, HTML and RTF through an injection-safe AppleScript pasteboard record, with a logged plain-text fallback.
+- **Mobile sync export**: the optional `sync_export_dir` setting compiles the static library and dynamic registry into a deterministic, versioned mobile bundle without invoking dynamic providers.
+
+### Changed
+
+- **macOS owns Tk on the main thread**: the tray attaches to Tk's `NSApplication` and runs detached, while the shared GUI marshaling contract remains the same as Windows.
+- **macOS manager UI**: the manager follows light/dark appearance, uses native Aqua controls and avoids clipped toolbar and action rows.
+- **Cross-platform CI definition**: the unit suite is configured for Windows, macOS and Linux on Python 3.12 and 3.14. Hosted runs remain a stable-promotion requirement; a beta may be prepared locally when hosted runners are unavailable.
+- **Per-OS insertion timing**: clipboard settle, paste restore and erase delays use measured platform defaults with bounded settings overrides.
+
+### Fixed
+
+- **macOS: using the menu-bar menu no longer kills the app**: clicking the tray icon made AppKit run a nested menu-tracking loop on the main thread, where a Tk timer fired into Python with no valid thread state and aborted the process (`PyEval_RestoreThread`, "Txt Xpander quit unexpectedly"). Opening the menu, opening the snippet manager and quitting all work now. Windows behaviour is unchanged.
+- Secure Keyboard Entry is checked before a trigger is erased and outside the listener hot path, so password fields keep the original typed text without adding per-keystroke framework calls.
+- Static snippets and composed mapping triggers are preserved or confirmed before a dynamic trigger shadows them; editor delete/overwrite paths no longer discard a shadowed static value.
+- Empty trigger keys are excluded consistently from every compiled index set.
+- A corrupt per-user dynamic-registry entry no longer replaces a valid bundled entry.
+- Rich-text RTF generation now handles astral Unicode characters and malformed scalar span payloads safely.
+
+### Technical
+
+- The macOS startup-order test now mocks the Dock activation-policy call and asserts the complete startup sequence without reaching live AppKit from the unit runner.
+- Build, Gatekeeper, signing and permission steps — including that rebuilding under ad-hoc signing invalidates Input Monitoring/Accessibility grants — are documented in the README.
 
 ## [3.2.1] — 2026-07-21
 
@@ -264,6 +291,7 @@ behavioral change and warrants a major version bump.
 
 ## Versioning Strategy
 
-- **2.x**: Stable feature releases (snippets, variables, formatting, WhatsApp actions)
-- **Patch versions** (e.g., 2.7.1): Bug fixes and minor improvements
-- **Pre-release tags** (if used): `-alpha`, `-beta` suffixes for testing versions
+- **Stable channel**: the latest `vMAJOR.MINOR.PATCH` tag and non-prerelease artifact; currently `v3.2.1`.
+- **Beta channel**: the next product version with an explicit `beta` channel label; currently `3.3.0 beta`.
+- **Beta tags**: use `vMAJOR.MINOR.PATCH-beta.N` and mark the corresponding GitHub Release as a prerelease.
+- **Promotion**: beta becomes stable only after the full supported-OS test matrix and packaged desktop smoke tests pass. Promotion removes the channel suffix without changing the tested product version.
