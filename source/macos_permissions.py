@@ -65,6 +65,14 @@ PERMISSION_REASONS = {
 _REQUEST_TYPE_LISTEN_EVENT = 0
 _ACCESS_TYPE_BY_CODE = {0: GRANTED, 1: DENIED, 2: UNKNOWN}
 
+# Resolved framework symbols, keyed by ``(framework, symbol)``. Only successful
+# resolutions are cached: ``secure_input_enabled`` runs per detected trigger on
+# the keyboard listener thread, and ``find_library`` + ``LoadLibrary`` per call
+# is real cost there, but a failed resolution must stay retryable (the caller's
+# documented answer to a missing symbol is "not secure / unknown", never a
+# permanent one). Tests that exercise ``_framework_symbol`` directly clear it.
+_SYMBOL_CACHE = {}
+
 
 def _framework_symbol(framework, symbol):
     """Return a callable for ``symbol`` in ``framework``, or None if unavailable.
@@ -72,14 +80,26 @@ def _framework_symbol(framework, symbol):
     Resolution failures are a legitimate answer here (an older macOS without
     ``IOHIDCheckAccess``, a stripped runtime): the caller reports ``unknown``
     and the app stays quiet rather than nagging about a state it cannot read.
+
+    A successful lookup is memoized so the per-keystroke secure-input probe does
+    not re-run ``find_library``/``LoadLibrary`` every time; the live C call the
+    callers make on the returned symbol is never cached, so the probe stays
+    fresh. Failures are not cached, preserving retry.
     """
+    key = (framework, symbol)
+    cached = _SYMBOL_CACHE.get(key)
+    if cached is not None:
+        return cached
     try:
         path = ctypes.util.find_library(framework)
         if not path:
             return None
-        return getattr(ctypes.cdll.LoadLibrary(path), symbol, None)
+        resolved = getattr(ctypes.cdll.LoadLibrary(path), symbol, None)
     except (OSError, AttributeError):
         return None
+    if resolved is not None:
+        _SYMBOL_CACHE[key] = resolved
+    return resolved
 
 
 def check_input_monitoring():

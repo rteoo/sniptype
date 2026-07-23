@@ -332,6 +332,41 @@ class SecureInputProbeTests(unittest.TestCase):
         self.assertIsInstance(mp.secure_input_enabled(), bool)
 
 
+class SymbolResolutionCacheTests(unittest.TestCase):
+    """secure_input_enabled() runs per detected trigger on the listener thread;
+    the framework symbol is resolved once, the C probe stays live (PR #52)."""
+
+    def setUp(self):
+        mp._SYMBOL_CACHE.clear()
+
+    def tearDown(self):
+        mp._SYMBOL_CACHE.clear()
+
+    def test_resolution_is_cached_but_the_probe_runs_every_call(self):
+        probe = mock.Mock(return_value=0)  # 0 == not secure
+        lib = mock.Mock(IsSecureEventInputEnabled=probe)
+        with mock.patch.object(mp, "IS_MAC", True), \
+                mock.patch.object(mp.ctypes.util, "find_library", return_value="/Carbon") as find, \
+                mock.patch.object(mp.ctypes.cdll, "LoadLibrary", return_value=lib) as load:
+            for _ in range(5):
+                self.assertFalse(mp.secure_input_enabled())
+        # The expensive resolution (find_library + LoadLibrary) happens once...
+        self.assertEqual(find.call_count, 1)
+        self.assertEqual(load.call_count, 1)
+        # ...but the live IsSecureEventInputEnabled() call must run every time, or
+        # the probe would go stale and report a frozen secure-input state.
+        self.assertEqual(probe.call_count, 5)
+
+    def test_a_failed_resolution_is_retried_not_cached(self):
+        # A missing library must stay retryable: the documented answer to an
+        # unresolved symbol is "not secure / unknown", never a permanent one.
+        with mock.patch.object(mp.ctypes.util, "find_library", return_value=None) as find:
+            self.assertIsNone(mp._framework_symbol("IOKit", "IOHIDCheckAccess"))
+            self.assertIsNone(mp._framework_symbol("IOKit", "IOHIDCheckAccess"))
+        self.assertEqual(find.call_count, 2)
+        self.assertEqual(mp._SYMBOL_CACHE, {})
+
+
 class SecureInputExpansionGateTests(unittest.TestCase):
     """A trigger typed under secure input is left exactly as typed."""
 
@@ -354,9 +389,19 @@ class SecureInputExpansionGateTests(unittest.TestCase):
         # Nothing synthesized: the backspaces would be swallowed here but could
         # land somewhere else, and a half-erased trigger is worse than none.
         app._erase_chars.assert_not_called()
-        app.task_runner.start.assert_not_called()
-        app.notify.assert_called_once()
         self.assertEqual("", app.typed_text)
+
+        # The expansion is not dispatched; the only background work scheduled is
+        # the notification, which is deferred off the listener thread (notify()
+        # writes to disk and calls the tray) rather than run inline.
+        app.task_runner.start.assert_called_once()
+        args, kwargs = app.task_runner.start.call_args
+        self.assertIs(args[0], app.notify)
+        self.assertIsNot(args[0], app._run_expansion)
+        self.assertEqual(kwargs.get("name"), "secure-input-notify")
+        self.assertEqual(kwargs.get("key"), "secure-input")
+        # Not called inline on the listener thread.
+        app.notify.assert_not_called()
 
     def test_normal_input_expands_as_usual(self):
         app = self._app()
@@ -377,6 +422,100 @@ class SecureInputExpansionGateTests(unittest.TestCase):
 
         probe.assert_not_called()
         app._erase_chars.assert_called_once_with(3)
+
+
+class SecureInputNotifyDeferralTests(unittest.TestCase):
+    """The secure-input gate runs on the keyboard listener thread; its
+    notification (history JSON write + tray call) must be deferred (PR #52)."""
+
+    def _app(self):
+        app = tx.TextExpander.__new__(tx.TextExpander)
+        app.logger = mock.Mock()
+        app.task_runner = mock.Mock()
+        app.icon = mock.Mock()
+        app._notification_lock = threading.Lock()
+        app.notification_timestamps = {}
+        app.notification_history = []
+        app.notification_history_file = "unused.json"
+        return app
+
+    def test_no_disk_write_runs_on_the_listener_thread(self):
+        app = self._app()
+        with mock.patch.object(tx, "IS_MAC", True), \
+                mock.patch.object(tx.macos_permissions, "secure_input_enabled", return_value=True), \
+                mock.patch.object(tx, "save_notification_history") as save:
+            blocked = app._secure_input_blocks_expansion()
+
+        self.assertTrue(blocked)
+        # The JSON write never runs inline on the listener thread; notify() is
+        # handed to the task runner, which does the I/O on a worker.
+        save.assert_not_called()
+        app.task_runner.start.assert_called_once()
+        deferred = app.task_runner.start.call_args.args[0]
+        # A bound method is re-created on each attribute access, so compare by
+        # value (same function, same instance) rather than identity.
+        self.assertEqual(deferred, app.notify)
+        self.assertEqual(deferred.__func__, tx.TextExpander.notify)
+
+
+class NotifySerializationTests(unittest.TestCase):
+    """notify()'s cooldown check and history append are shared state touched by
+    the listener and worker threads at once; a lock keeps them atomic (PR #52)."""
+
+    def _app(self):
+        app = tx.TextExpander.__new__(tx.TextExpander)
+        app.logger = mock.Mock()
+        app.icon = mock.Mock()
+        app._notification_lock = threading.Lock()
+        app.notification_timestamps = {}
+        app.notification_history = []
+        app.notification_history_file = "unused.json"
+        return app
+
+    def test_notify_serializes_its_state_mutation_on_the_lock(self):
+        """While another thread holds ``_notification_lock``, notify() must not
+        touch the shared timestamps/history — proving the cooldown check and the
+        append happen under the lock. A pure-timing race is unreliable here: the
+        critical section is a handful of bytecodes, shorter than CPython's thread
+        switch interval, so it stays effectively atomic unless something blocks
+        inside it. Holding the lock is that block, and it is deterministic."""
+        app = self._app()
+        started = threading.Event()
+        finished = threading.Event()
+
+        def worker():
+            started.set()
+            with mock.patch.object(tx, "save_notification_history"):
+                app.notify("segura", key="secure-input", cooldown_seconds=0)
+            finished.set()
+
+        app._notification_lock.acquire()
+        thread = threading.Thread(target=worker)
+        try:
+            thread.start()
+            self.assertTrue(started.wait(1))
+            # notify() is blocked on the lock we hold: no state mutation yet.
+            self.assertFalse(finished.wait(0.2))
+            self.assertEqual(app.notification_history, [])
+            self.assertEqual(app.notification_timestamps, {})
+            self.assertEqual(app.icon.notify.call_count, 0)
+        finally:
+            app._notification_lock.release()
+
+        thread.join(1)
+        self.assertTrue(finished.is_set())
+        self.assertEqual(len(app.notification_history), 1)
+        self.assertEqual(app.icon.notify.call_count, 1)
+
+    def test_a_second_trigger_in_the_cooldown_window_records_once(self):
+        app = self._app()
+        with mock.patch.object(tx, "save_notification_history"):
+            first = app.notify("segura", key="secure-input", cooldown_seconds=60)
+            second = app.notify("segura", key="secure-input", cooldown_seconds=60)
+        self.assertTrue(first)
+        self.assertFalse(second)
+        self.assertEqual(len(app.notification_history), 1)
+        self.assertEqual(app.icon.notify.call_count, 1)
 
 
 if __name__ == "__main__":
