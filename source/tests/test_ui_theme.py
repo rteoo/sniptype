@@ -36,6 +36,7 @@ SHIPPED_WINDOWS_COLORS = {
     "link": "#2D5BD1",
     "warning": "#B45309",
     "success": "#166534",
+    "tab_unselected_fg": "#2F3A4A",
 }
 
 
@@ -284,6 +285,44 @@ class WidgetOptionTests(unittest.TestCase):
         self.assertEqual(colors["bg"], "#265CFF")
         self.assertEqual(colors["fg"], "#FFFFFF")
         self.assertEqual(colors["activebackground"], "#1a4fd4")
+
+    def test_toolbar_frame_stays_uncolored_off_macos(self):
+        # The shipped toolbar was an uncolored tk.Frame on SystemButtonFace;
+        # painting it card-white was the regression (white-on-white buttons).
+        for system in ("windows", "linux"):
+            theme = ui_theme.build_theme("windows", system=system)
+            self.assertEqual(theme.toolbar_frame_colors(), {})
+
+    def test_toolbar_frame_keeps_the_card_surface_on_macos(self):
+        theme = ui_theme.build_theme("dark", system="darwin")
+        self.assertEqual(theme.toolbar_frame_colors(), {"bg": theme.card})
+
+    def test_status_label_keeps_the_shipped_windows_font_and_grey(self):
+        for system in ("windows", "linux"):
+            options = ui_theme.build_theme("windows", system=system).status_label_options()
+            self.assertEqual(options["font"], ("Arial", 8))
+            self.assertEqual(options["fg"], "#555")
+
+    def test_status_label_uses_the_body_face_and_muted_grey_on_macos(self):
+        theme = ui_theme.build_theme("dark", system="darwin")
+        options = theme.status_label_options()
+        self.assertEqual(options["font"], theme.font(8))
+        self.assertEqual(options["fg"], theme.text_muted)
+
+    def test_unselected_tab_foreground_keeps_its_shipped_windows_value(self):
+        for system in ("windows", "linux"):
+            self.assertEqual(
+                ui_theme.build_theme("windows", system=system).tab_unselected_fg,
+                "#2F3A4A",
+            )
+
+    def test_unselected_tab_foreground_follows_the_appearance_on_macos(self):
+        # The selected tab keeps `text`; the unselected one tracks the system
+        # text color exactly as PR56 shipped it (via text_strong).
+        for kind in ("light", "dark"):
+            theme = ui_theme.build_theme(kind, system="darwin")
+            self.assertEqual(theme.tab_unselected_fg, "systemTextColor")
+            self.assertEqual(theme.tab_unselected_fg, theme.text_strong)
 
 
 class TtkThemeSelectionTests(unittest.TestCase):
