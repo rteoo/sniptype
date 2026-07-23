@@ -1755,7 +1755,7 @@ class TextExpander:
             style.map(
                 "Manager.TNotebook.Tab",
                 background=[("selected", ui.card), ("!selected", ui.surface_alt)],
-                foreground=[("selected", ui.text), ("!selected", ui.text_strong)],
+                foreground=[("selected", ui.text), ("!selected", ui.tab_unselected_fg)],
             )
         style.configure(
             "Manager.Treeview",
@@ -1900,11 +1900,11 @@ class TextExpander:
         configure_rich_text_widget(text_widget)
 
         ui = ui_theme.theme()
-        toolbar = tk.Frame(parent, bg=ui.card)
+        toolbar = tk.Frame(parent, **ui.toolbar_frame_colors())
         toolbar.pack(fill=tk.X, pady=(0, 6))
         # Where the buttons alone fill the row, the status gets its own line
         # below rather than pushing the last button off the pane.
-        status_row = tk.Frame(parent, bg=ui.card) if ui.stacked_toolbar_status else toolbar
+        status_row = tk.Frame(parent, **ui.toolbar_frame_colors()) if ui.stacked_toolbar_status else toolbar
         if status_row is not toolbar:
             status_row.pack(fill=tk.X, pady=(0, 4))
 
@@ -2092,8 +2092,8 @@ class TextExpander:
         add_toolbar_button("%%cb", insert_clipboard_var, 4, 3, "Variável: colar clipboard (%%clipboard-paste%%)", "var")
         add_toolbar_button("%%?", insert_form_field, 4, 3, "Variável: campo de formulário (%%campo%%)", "var")
 
-        tk.Label(status_row, textvariable=status_var, font=ui.font(8),
-                 bg=toolbar_bg, fg=ui.text_muted).pack(
+        tk.Label(status_row, textvariable=status_var, bg=toolbar_bg,
+                 **ui.status_label_options()).pack(
                      side=tk.LEFT if status_row is not toolbar else tk.RIGHT)
 
         bind_shortcut("<Control-b>", "bold")
