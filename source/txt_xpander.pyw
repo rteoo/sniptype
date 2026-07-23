@@ -234,6 +234,11 @@ class TextExpander:
         # PowerShell round-trip on Windows and pystray re-evaluates `checked=`
         # on every menu render, so the menu only ever reads this.
         self._autostart_state = AUTOSTART_ABSENT
+        # Serializes the cooldown check and history read-modify-write in notify():
+        # it is called from the listener thread (secure-input, listener errors)
+        # and worker threads at once. Held only around in-memory state, never
+        # across the disk write or any GUI call, so it cannot deadlock or stall.
+        self._notification_lock = threading.Lock()
         self.notification_timestamps = {}
         self.notification_history = []
         self.pending_notifications = []
@@ -1244,29 +1249,38 @@ class TextExpander:
         self.rebuild_trigger_index()
 
     def notify(self, message: str, title: str = "Text Expander", key: str = None, cooldown_seconds: float = 0, kind: str = "info"):
-        """Send a tray notification when the icon is available, with optional cooldown."""
+        """Send a tray notification when the icon is available, with optional cooldown.
+
+        The cooldown check and the history append are done under
+        ``_notification_lock`` so concurrent callers (listener + workers) cannot
+        lose an update or both pass the same cooldown window. The disk write and
+        the tray call run outside the lock, against a snapshot taken inside it,
+        so the lock is never held across I/O.
+        """
         if not self.icon:
             return False
 
-        if key:
-            now = time.time()
-            last_sent = self.notification_timestamps.get(key, 0)
-            if (now - last_sent) < cooldown_seconds:
-                return False
-            self.notification_timestamps[key] = now
-
         text = truncate_notification_text(message)
-        self.notification_history.append(
-            {
-                "time": time.strftime("%H:%M:%S"),
-                "title": title,
-                "message": text,
-                "kind": kind,
-            }
-        )
-        if len(self.notification_history) > NOTIFICATION_HISTORY_LIMIT:
-            self.notification_history = self.notification_history[-NOTIFICATION_HISTORY_LIMIT:]
-        save_notification_history(self.notification_history_file, self.notification_history)
+        entry = {
+            "time": time.strftime("%H:%M:%S"),
+            "title": title,
+            "message": text,
+            "kind": kind,
+        }
+
+        with self._notification_lock:
+            if key:
+                now = time.time()
+                last_sent = self.notification_timestamps.get(key, 0)
+                if (now - last_sent) < cooldown_seconds:
+                    return False
+                self.notification_timestamps[key] = now
+            self.notification_history.append(entry)
+            if len(self.notification_history) > NOTIFICATION_HISTORY_LIMIT:
+                self.notification_history = self.notification_history[-NOTIFICATION_HISTORY_LIMIT:]
+            history_snapshot = list(self.notification_history)
+
+        save_notification_history(self.notification_history_file, history_snapshot)
 
         try:
             self.icon.notify(text, title)
@@ -1400,10 +1414,17 @@ class TextExpander:
         if not IS_MAC or not macos_permissions.secure_input_enabled():
             return False
         self.logger.info(macos_permissions.SECURE_INPUT_MESSAGE)
-        self.notify(
+        # Notify off the listener thread: notify() writes the history JSON to
+        # disk and calls into the tray, neither of which may run on the keyboard
+        # listener (it must stay fast and unkillable). The 60s cooldown is
+        # enforced inside notify() under its lock, so racing triggers that each
+        # spawn a worker still produce exactly one notification.
+        self.task_runner.start(
+            self.notify,
             macos_permissions.SECURE_INPUT_MESSAGE,
             key="secure-input",
             cooldown_seconds=60,
+            name="secure-input-notify",
         )
         return True
 
