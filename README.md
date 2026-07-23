@@ -2,6 +2,13 @@
 
 Txt Xpander is a Windows text expander with a system tray app, snippet manager GUI, dynamic snippets, formatted text support, WhatsApp quick-link automation, and a packaged standalone build.
 
+## Release Channels
+
+- **Stable — `v3.2.1`**: the current production release. Stable tags use `vMAJOR.MINOR.PATCH` with no suffix.
+- **Beta — `3.3.0 beta`**: the current release candidate. The running app shows the beta label in its tray tooltip, tray menu and manager title. Windows produces `TxtXpanderSetup-3.3.0-beta.exe`; the macOS bundle records version `3.3.0` and channel `beta` in `Info.plist`.
+
+Beta tags use `vMAJOR.MINOR.PATCH-beta.N` and the corresponding GitHub Release must be marked as a prerelease. Beta and stable builds share the same data directory and installer identity, so an upgrade preserves `~/.txt_xpander`; do not run both channels simultaneously. Promote a beta to stable only after the full supported-OS test matrix and packaged desktop smoke tests pass.
+
 ## Project Layout
 
 - [`dist\Txt Xpander\`](dist/Txt%20Xpander): packaged app folder to run or ship (`dist/Txt Xpander.app` on macOS — see [Build on macOS](#build-on-macos)).
@@ -44,7 +51,7 @@ macOS gives Tk and AppKit a single main thread between them, which is the one pl
 
 Clipboard access is factored the same way, behind [`source/clipboard_support.py`](source/clipboard_support.py): Windows keeps the ctypes user32/kernel32 backend (text, HTML and RTF), while macOS uses `pbcopy`/`pbpaste` and Linux uses `wl-copy`/`wl-paste` under Wayland, falling back to `xclip` then `xsel`. The Win32 bindings now load only on Windows, so the app imports cleanly on macOS/Linux. Rich text works on macOS too — `pbcopy` cannot carry HTML, so a rich payload is written by piping an AppleScript pasteboard record through `osascript`, falling back to plain text if that fails. Linux is still plain-text only (rich snippets paste as their plain text and log the downgrade), and a desktop with none of those tools installed logs a warning rather than failing hard.
 
-CI runs the unit suite on `windows-latest`, `macos-latest` and `ubuntu-latest` (Python 3.12 and 3.14) on every pull request, so the POSIX branches of the clipboard, autostart and single-instance code are exercised on real macOS and Linux hosts rather than only under mocks. Linux runs under `xvfb-run`: pynput and pystray both bind to Xorg at import time and raise without a display.
+CI is configured to run the unit suite on `windows-latest`, `macos-latest` and `ubuntu-latest` (Python 3.12 and 3.14) on every pull request, so the POSIX branches of the clipboard, autostart and single-instance code are exercised on real macOS and Linux hosts rather than only under mocks. Linux runs under `xvfb-run`: pynput and pystray both bind to Xorg at import time and raise without a display. When hosted runners are unavailable, a beta may be prepared from local evidence, but it is not promoted to stable until this matrix or equivalent physical hosts pass.
 
 On macOS the app also has to ask for permission before it can work at all: **Input Monitoring** for the global listener and **Accessibility** for the synthesized Cmd+V. pynput reports neither — an untrusted listener starts, stays alive and simply never delivers a key — so [`source/macos_permissions.py`](source/macos_permissions.py) probes both directly (`IOHIDCheckAccess` and `AXIsProcessTrusted`) at startup. When one is missing the app logs it, notifies from the tray, keeps a `⚠ Permissões do macOS` entry in the menu and opens a window that deep-links the exact System Settings pane. A re-check button confirms the grant and asks for a restart rather than pretending a refused listener came back to life. Nothing here runs off macOS.
 
@@ -138,7 +145,7 @@ One-time prerequisite: install **Inno Setup 6** (free).
 
 ```powershell
 build_release.bat      REM 1) package the app into dist\Txt Xpander
-build_installer.bat    REM 2) compile installer\Output\TxtXpanderSetup-<version>.exe
+build_installer.bat    REM 2) compile installer\Output\TxtXpanderSetup-<version>-<channel>.exe
 ```
 
 `build_installer.bat` finds the Inno Setup compiler (`ISCC.exe`) automatically and compiles [`installer\txt_xpander.iss`](installer/txt_xpander.iss).

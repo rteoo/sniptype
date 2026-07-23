@@ -12,6 +12,7 @@ import os
 import sys
 import threading
 import unittest
+from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -69,6 +70,25 @@ class RunStartupTests(unittest.TestCase):
         icon.run.assert_called_once_with(setup=app.on_tray_ready)
         icon.run_detached.assert_not_called()
         self.assertEqual(icon_cls.call_args.kwargs, {})
+
+    def test_tray_menu_and_tooltip_show_the_running_version(self):
+        menu = object()
+        with mock.patch.object(tx.pystray, "Menu", return_value=menu) as menu_cls, \
+                mock.patch.object(
+                    tx.pystray, "MenuItem", side_effect=lambda *args, **kwargs: object()
+                ) as menu_item:
+            _app, _icon, icon_cls = self._run(main_thread=False)
+
+        display_name = tx.APP_DISPLAY_NAME
+        self.assertEqual(icon_cls.call_args.args[2], display_name)
+        self.assertIs(icon_cls.call_args.args[3], menu)
+        menu_cls.assert_called_once()
+
+        version_item = next(
+            call for call in menu_item.call_args_list
+            if call.args and call.args[0] == display_name
+        )
+        self.assertFalse(version_item.kwargs["enabled"])
 
     def test_macos_gives_tk_the_main_thread_and_runs_the_tray_detached(self):
         shared = object()
@@ -148,11 +168,16 @@ class RunStartupTests(unittest.TestCase):
                 ), \
                 mock.patch.object(
                     tx.platform_support,
+                    "hide_dock_icon",
+                    side_effect=lambda: order.append("dock") or True,
+                ), \
+                mock.patch.object(
+                    tx.platform_support,
                     "tray_icon_options",
                     side_effect=lambda: order.append("nsapp") or {},
                 ):
             app.run()
-        self.assertEqual(order, ["root", "nsapp"])
+        self.assertEqual(order, ["root", "dock", "nsapp"])
 
     def test_a_failed_gui_start_still_raises_a_windows_tray(self):
         """pystray owns its own loop there, so a dialog-less tray still works."""
@@ -185,6 +210,52 @@ class RunStartupTests(unittest.TestCase):
         # Reading sharedApplication() with no root would mint a bare
         # NSApplication nobody runs; the early return must precede it.
         options.assert_not_called()
+
+
+class AppVersionFormattingTests(unittest.TestCase):
+    def test_stable_version_has_no_channel_suffix(self):
+        self.assertEqual(
+            tx.format_app_version("3.2.1", "stable"),
+            "Txt Xpander v3.2.1",
+        )
+
+    def test_beta_version_has_an_explicit_channel_suffix(self):
+        self.assertEqual(
+            tx.format_app_version("3.3.0", "beta"),
+            "Txt Xpander v3.3.0 beta",
+        )
+
+    def test_running_build_is_the_3_3_0_beta(self):
+        self.assertEqual(tx.APP_VERSION, "3.3.0")
+        self.assertEqual(tx.RELEASE_CHANNEL, "beta")
+        self.assertEqual(tx.APP_DISPLAY_NAME, "Txt Xpander v3.3.0 beta")
+
+    def test_older_source_without_a_channel_is_treated_as_stable(self):
+        with mock.patch.object(tx, "__doc__", "Version: 9.8.7"):
+            self.assertEqual(tx._read_release_metadata(), ("9.8.7", "stable"))
+
+    def test_unknown_release_channel_fails_loudly(self):
+        with mock.patch.object(tx, "__doc__", "Version: 9.8.7\nChannel: nightly"):
+            with self.assertRaisesRegex(ValueError, "Unsupported release channel"):
+                tx._read_release_metadata()
+
+    def test_missing_version_has_a_clear_fallback(self):
+        self.assertEqual(
+            tx.format_app_version(None),
+            "Txt Xpander — versão desconhecida",
+        )
+
+    def test_windows_installer_matches_the_beta_metadata(self):
+        repo_root = Path(__file__).resolve().parents[2]
+        installer = (repo_root / "installer" / "txt_xpander.iss").read_text(
+            encoding="utf-8-sig"
+        )
+        self.assertIn('#define MyAppVersion "3.3.0"', installer)
+        self.assertIn('#define MyAppChannel "beta"', installer)
+        self.assertIn(
+            "OutputBaseFilename=TxtXpanderSetup-{#MyAppVersion}-{#MyAppChannel}",
+            installer,
+        )
 
 
 if __name__ == "__main__":

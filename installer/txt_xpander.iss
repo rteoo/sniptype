@@ -7,7 +7,8 @@
 ; on uninstall — the installer only manages the program files under {app}.
 
 #define MyAppName "Txt Xpander"
-#define MyAppVersion "3.2.1"
+#define MyAppVersion "3.3.0"
+#define MyAppChannel "beta"
 #define MyAppPublisher "Project Contributors"
 #define MyAppExeName "Txt Xpander.exe"
 #define MyAppIcon "..\source\txt_xpander.ico"
@@ -18,6 +19,7 @@
 AppId={{B2D4F6A8-1C3E-4A5B-8D9F-0E1A2B3C4D5E}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
+AppVerName={#MyAppName} {#MyAppVersion} {#MyAppChannel}
 AppPublisher={#MyAppPublisher}
 DefaultDirName={localappdata}\Programs\{#MyAppName}
 DefaultGroupName={#MyAppName}
@@ -26,12 +28,12 @@ DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 OutputDir=Output
-OutputBaseFilename=TxtXpanderSetup-{#MyAppVersion}
+OutputBaseFilename=TxtXpanderSetup-{#MyAppVersion}-{#MyAppChannel}
 Compression=lzma2
 SolidCompression=yes
 SetupIconFile={#MyAppIcon}
 UninstallDisplayIcon={app}\{#MyAppExeName}
-UninstallDisplayName={#MyAppName}
+UninstallDisplayName={#MyAppName} {#MyAppVersion} {#MyAppChannel}
 WizardStyle=modern
 ; Detect a running instance (matches the app's Local\TxtXpanderSingleton mutex)
 ; so install/uninstall can ask the user to close it first.

@@ -348,6 +348,10 @@ class ManagerGuiSmokeTests(unittest.TestCase):
         self.app.gui.call(self.app._show_manager_window, timeout=30)
         first = self.app.manager_window
         self.assertIsNotNone(first)
+        self.assertEqual(
+            first.title(),
+            f"{tx.APP_DISPLAY_NAME} - Gerenciador de Snippets",
+        )
 
         self.app.gui.call(self.app._show_manager_window, timeout=30)
         self.assertIs(self.app.manager_window, first, "second open should reuse the window")
