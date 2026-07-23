@@ -397,6 +397,46 @@ class AcceptSetTests(unittest.TestCase):
         self.assertEqual(row["trigger"], "data")
 
 
+class ProviderAllowlistCouplingTests(unittest.TestCase):
+    """Finding 1: the export accept set's provider gate is derived from
+    dynamic_registry.PROVIDERS, not a hand-copied tuple, so registering a fifth
+    provider can never silently drop its triggers from the bundle."""
+
+    def test_every_registered_provider_is_admitted(self):
+        from dynamic_registry import PROVIDERS
+
+        valid = {
+            "datetime": {"provider": "datetime"},
+            "bcb": {"provider": "bcb", "method": "dolar"},
+            "stock": {"provider": "stock", "method": "cotacao"},
+            "whatsapp": {"provider": "whatsapp", "mode": "open"},
+        }
+        for name in PROVIDERS:
+            entry = valid.get(name, {"provider": name})
+            ok, reason = se._provider_binds(entry)
+            self.assertTrue(ok, f"{name} rejected by the accept set: {reason}")
+
+    def test_unregistered_provider_is_rejected(self):
+        ok, reason = se._provider_binds({"provider": "not_a_provider"})
+        self.assertFalse(ok)
+        self.assertIn("not_a_provider", reason)
+
+    def test_registering_a_new_provider_admits_its_triggers(self):
+        # The drift-catcher: mutating PROVIDERS must change the accept set live.
+        # Registering a factory (the documented extension path) makes the new
+        # provider's rows flow into the bundle instead of being dropped.
+        from dynamic_registry import PROVIDERS
+
+        PROVIDERS["quux"] = lambda trigger, entry, context: (lambda: "x")
+        try:
+            ok, _ = se._provider_binds({"provider": "quux"})
+            self.assertTrue(ok)
+            bundle = build({}, {"xq": {"provider": "quux", "description": "d"}})
+            self.assertEqual([row["id"] for row in bundle["dynamic"]], ["xq"])
+        finally:
+            del PROVIDERS["quux"]
+
+
 class DynamicMetadataTests(unittest.TestCase):
     def test_category_falls_back_to_provider_then_other(self):
         registry = {
@@ -445,6 +485,36 @@ class DynamicMetadataTests(unittest.TestCase):
     def test_non_string_format_drops_render(self):
         row = build({}, {"a": {"provider": "datetime", "format": 5}})["dynamic"][0]
         self.assertFalse(row["local"])
+
+
+class DatetimeRenderSingleSourceTests(unittest.TestCase):
+    """Finding 2: the datetime default format and the extenso-wins precedence
+    live once in dynamic_registry; both the desktop provider and this bundle's
+    render block consume it, so desktop rendering and the bundle cannot diverge."""
+
+    def test_default_format_comes_from_the_shared_source(self):
+        from dynamic_registry import DEFAULT_DATE_FORMAT, datetime_render_spec
+
+        self.assertEqual(
+            datetime_render_spec({"provider": "datetime"}),
+            ("format", DEFAULT_DATE_FORMAT),
+        )
+        row = build({}, {"a": {"provider": "datetime"}})["dynamic"][0]
+        self.assertEqual(
+            row["render"]["unicode_pattern"],
+            se.strftime_to_unicode_pattern(DEFAULT_DATE_FORMAT),
+        )
+
+    def test_extenso_wins_over_format_from_the_shared_source(self):
+        from dynamic_registry import datetime_render_spec
+
+        self.assertEqual(
+            datetime_render_spec({"method": "extenso", "format": "%d"}),
+            ("extenso", None),
+        )
+        registry = {"a": {"provider": "datetime", "method": "extenso", "format": "%d"}}
+        row = build({}, registry)["dynamic"][0]
+        self.assertEqual(row["render"]["unicode_pattern"], se.EXTENSO_PATTERN)
 
 
 class StrftimeConversionTests(unittest.TestCase):

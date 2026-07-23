@@ -23,8 +23,10 @@ import time
 
 from dynamic_registry import (
     BCB_METHODS,
+    PROVIDERS,
     STOCK_METHODS,
     WHATSAPP_MODES,
+    datetime_render_spec,
     effective_trigger,
     is_enabled,
 )
@@ -52,7 +54,6 @@ PERMISSION_RETRY_DELAY = 0.5
 LOCAL_PROVIDERS = ("datetime",)
 
 EXTENSO_PATTERN = "EEEE, dd' de 'MMMM' de 'yyyy"
-DEFAULT_DATE_FORMAT = "%d/%m/%Y"
 RENDER_LOCALE = "pt-BR"
 
 # C strftime -> Unicode TR35, converted desktop-side so the phone needs no parser.
@@ -99,7 +100,10 @@ def _provider_binds(entry):
     Returns (ok, reason). ``reason`` is None when ok.
     """
     provider = entry.get("provider")
-    if provider not in ("datetime", "bcb", "stock", "whatsapp"):
+    # Derived from dynamic_registry.PROVIDERS (reading the keys invokes no factory,
+    # so build_bundle stays pure): a provider registered there must never be
+    # silently excluded from the bundle by a stale hand-copied allowlist here.
+    if provider not in PROVIDERS:
         return False, f"provider desconhecido '{provider}'"
     if provider == "bcb" and entry.get("method") not in BCB_METHODS:
         return False, f"método inválido '{entry.get('method')}' (provider bcb)"
@@ -199,11 +203,13 @@ def _render_block(key, entry, logger):
     if entry.get("provider") not in LOCAL_PROVIDERS:
         return None
 
-    if entry.get("method") == "extenso":
-        # Wins over any 'format' key, matching _datetime_provider.
+    # The default format and the extenso-wins-over-format precedence come from the
+    # single source in dynamic_registry, so desktop rendering and the bundle can
+    # never silently diverge.
+    kind, fmt = datetime_render_spec(entry)
+    if kind == "extenso":
         pattern = EXTENSO_PATTERN
     else:
-        fmt = entry.get("format", DEFAULT_DATE_FORMAT)
         pattern = strftime_to_unicode_pattern(fmt)
         if pattern is None:
             # Fail loudly: a silently wrong date is worse than a missing one.
