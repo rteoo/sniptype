@@ -2869,27 +2869,49 @@ class TextExpander:
         return True
 
     def _confirm_dynamic_shadows_static(self, key):
-        """Ask before enabling a dynamic trigger that shadows a static snippet.
+        """Ask before enabling a dynamic trigger that shadows an existing trigger.
 
-        ``validate_rename`` blocks this collision when it comes from a rename; the
-        enable toggle reaches the same state, so it needs the same check. Enabling
-        is allowed with confirmation: the static value stays on disk, the dynamic
+        ``validate_rename`` blocks both collisions when they come from a rename;
+        the enable toggle reaches the same state, so it needs the same check.
+        Enabling is allowed with confirmation: the shadowed value stays on disk
+        (a static snippet in ``snippets.json``, or the mapping container a
+        composed trigger like ``cpffulano`` is built from), and the dynamic
         snippet is what expands.
         """
         trigger = effective_trigger(key, self.dynamic_registry.get(key, {}))
-        value = self.snippets.get(trigger)
-        if trigger.startswith("_") or value is None or callable(value):
+        if trigger.startswith("_"):
             return True
 
-        self.logger.warning(
-            f"Ativar o snippet dinâmico '{trigger}' sobrepõe o snippet estático de mesmo nome."
-        )
-        return messagebox.askyesno(
-            "Trigger em conflito",
-            f"Já existe um snippet estático com o trigger '{trigger}'.\n\n"
-            "Ao ativar o dinâmico, é ele que passa a expandir. O texto estático "
-            "continua salvo em snippets.json, mas deixa de ser acionado.\n\nAtivar mesmo assim?",
-        )
+        value = self.snippets.get(trigger)
+        if value is not None and not callable(value):
+            self.logger.warning(
+                f"Ativar o snippet dinâmico '{trigger}' sobrepõe o snippet estático de mesmo nome."
+            )
+            return messagebox.askyesno(
+                "Trigger em conflito",
+                f"Já existe um snippet estático com o trigger '{trigger}'.\n\n"
+                "Ao ativar o dinâmico, é ele que passa a expandir. O texto estático "
+                "continua salvo em snippets.json, mas deixa de ser acionado.\n\nAtivar mesmo assim?",
+            )
+
+        # A mapping-composed trigger (e.g. ``cpffulano`` from the ``_cpf_numbers``
+        # container) is never a direct key in ``self.snippets`` — it resolves via
+        # ``check_dynamic_pattern`` against the ``_``-prefixed container — so the
+        # direct lookup above misses it. Enabling the dynamic entry still changes
+        # what the user's typing expands to, so it needs the same confirmation.
+        if value is None and trigger in composed_mapping_triggers(self.snippets):
+            self.logger.warning(
+                f"Ativar o snippet dinâmico '{trigger}' sobrepõe um mapeamento dinâmico de mesmo nome."
+            )
+            return messagebox.askyesno(
+                "Trigger em conflito",
+                f"Já existe um mapeamento dinâmico com o trigger '{trigger}'.\n\n"
+                "Ao ativar o snippet dinâmico, é ele que passa a expandir. O valor mapeado "
+                "continua salvo no container de mapeamento, mas deixa de ser acionado.\n\n"
+                "Ativar mesmo assim?",
+            )
+
+        return True
 
     def _create_dynamic_snippets_tab(self, parent, root):
         """Build the single tab listing every built-in dynamic snippet."""
