@@ -195,6 +195,31 @@ class EffectiveTriggerTests(unittest.TestCase):
         self.assertEqual(dr.effective_trigger("xhj", {"trigger": " xdata "}), "xdata")
 
 
+class DatetimeRenderSpecTests(unittest.TestCase):
+    def test_default_format(self):
+        self.assertEqual(dr.DEFAULT_DATE_FORMAT, "%d/%m/%Y")
+        self.assertEqual(dr.datetime_render_spec({}), ("format", dr.DEFAULT_DATE_FORMAT))
+        self.assertEqual(
+            dr.datetime_render_spec({"provider": "datetime"}),
+            ("format", dr.DEFAULT_DATE_FORMAT),
+        )
+
+    def test_explicit_format(self):
+        self.assertEqual(dr.datetime_render_spec({"format": "%Y"}), ("format", "%Y"))
+
+    def test_extenso_wins_over_format(self):
+        self.assertEqual(dr.datetime_render_spec({"method": "extenso"}), ("extenso", None))
+        self.assertEqual(
+            dr.datetime_render_spec({"method": "extenso", "format": "%d"}),
+            ("extenso", None),
+        )
+
+    def test_provider_consumes_the_spec_default(self):
+        # The desktop datetime provider's default format is the shared spec's.
+        snippets, _ = dr.build_dynamic_snippets({"x": {"provider": "datetime"}}, FakeContext())
+        self.assertRegex(snippets["x"](), r"^\d{2}/\d{2}/\d{4}$")
+
+
 class ValidateRenameTests(unittest.TestCase):
     def setUp(self):
         self.registry = {
