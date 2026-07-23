@@ -203,19 +203,66 @@ class ToggleTests(unittest.TestCase):
 
 class RefreshMenuTests(unittest.TestCase):
     """refresh_tray_menu runs after every resolve/toggle; a dying tray icon must
-    not take the worker thread down with it."""
+    not take the worker thread down with it, and on macOS the AppKit-touching
+    update must be marshaled onto the main (GUI) thread rather than run on the
+    calling worker thread (PR #50)."""
 
     def test_no_icon_is_a_noop(self):
         app = make_tray_app()  # icon is None
+        app.gui = mock.Mock()
         app.refresh_tray_menu()  # must not raise
         app.logger.warning.assert_not_called()
+        app.gui.submit.assert_not_called()
+
+    def test_windows_updates_the_menu_directly_on_the_calling_thread(self):
+        app = make_tray_app()
+        app.icon = mock.Mock()
+        app.gui = mock.Mock()
+        with mock.patch.object(
+            tx.platform_support, "tray_menu_updates_on_gui_thread", return_value=False
+        ):
+            app.refresh_tray_menu()
+        # win32 posts a message internally, so no pump hop and no behavior change.
+        app.icon.update_menu.assert_called_once()
+        app.gui.submit.assert_not_called()
 
     def test_update_menu_error_is_swallowed_and_logged(self):
         app = make_tray_app()
         app.icon = mock.Mock()
+        app.gui = mock.Mock()
         app.icon.update_menu.side_effect = RuntimeError("tray gone")
-        app.refresh_tray_menu()  # must not raise
+        with mock.patch.object(
+            tx.platform_support, "tray_menu_updates_on_gui_thread", return_value=False
+        ):
+            app.refresh_tray_menu()  # must not raise
         app.icon.update_menu.assert_called_once()
+        app.logger.warning.assert_called_once()
+
+    def test_macos_routes_the_update_through_the_gui_pump(self):
+        """pystray's darwin update_menu mutates AppKit (setMenu_) on the calling
+        thread; a task-runner caller must hand it to the pump, which runs it on
+        the main thread from inside the Tk loop."""
+        app = make_tray_app()
+        app.icon = mock.Mock()
+        app.gui = mock.Mock()
+        with mock.patch.object(
+            tx.platform_support, "tray_menu_updates_on_gui_thread", return_value=True
+        ):
+            app.refresh_tray_menu()
+        # Not touched on the worker thread; deferred to the pump instead.
+        app.icon.update_menu.assert_not_called()
+        app.gui.submit.assert_called_once_with(app._update_tray_menu)
+        # The submitted callable is what actually rebuilds the menu, and the pump
+        # passes it the Tk root as its single argument.
+        submitted = app.gui.submit.call_args.args[0]
+        submitted(object())
+        app.icon.update_menu.assert_called_once()
+
+    def test_macos_pump_side_swallows_and_logs_an_update_error(self):
+        app = make_tray_app()
+        app.icon = mock.Mock()
+        app.icon.update_menu.side_effect = RuntimeError("tray gone")
+        app._update_tray_menu(object())  # must not raise
         app.logger.warning.assert_called_once()
 
 

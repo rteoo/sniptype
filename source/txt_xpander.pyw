@@ -3365,9 +3365,27 @@ class TextExpander:
             self.refresh_tray_menu()
 
     def refresh_tray_menu(self):
-        """Re-render the tray menu so check states reflect a background change."""
+        """Re-render the tray menu so check states reflect a background change.
+
+        Callers are worker threads (autostart/permission resolves). On macOS
+        pystray's ``update_menu`` mutates AppKit (NSMenu/``setMenu_``) on the
+        calling thread, and AppKit may only be touched from the main thread —
+        so the update is routed through the GuiThread pump, which runs it on the
+        main thread from inside the Tk loop. That is AppKit-from-Tk-pump, the
+        opposite of the forbidden Tcl-from-Cocoa direction (issue #53), so it is
+        safe. ``submit`` queues rather than running inline even if the caller is
+        already the GUI thread, so this never deadlocks. Windows/Linux post an
+        internal message and call it directly, unchanged.
+        """
         if not self.icon:
             return
+        if platform_support.tray_menu_updates_on_gui_thread():
+            self.gui.submit(self._update_tray_menu)
+            return
+        self._update_tray_menu()
+
+    def _update_tray_menu(self, _root=None):
+        """Rebuild the tray menu. ``_root`` is the arg the GuiThread pump passes."""
         try:
             self.icon.update_menu()
         except Exception as e:
