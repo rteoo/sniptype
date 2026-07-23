@@ -127,6 +127,20 @@ def tk_runs_on_main_thread():
     return IS_MAC
 
 
+def tray_menu_updates_on_gui_thread():
+    """True where rebuilding the tray menu must happen on the GUI (main) thread.
+
+    macOS only. pystray's darwin backend builds the ``NSMenu`` and calls
+    ``setMenu_`` directly on whatever thread invokes ``update_menu``, with no
+    main-thread hop of its own; AppKit may only be mutated from the main thread,
+    which is the thread the ``GuiThread`` pump runs on there. A background
+    (task-runner) caller must therefore route the update through the pump. The
+    win32 backend posts an internal message and is safe from any thread, so
+    Windows stays a direct call. See ``source/docs/macos-threading.md``.
+    """
+    return IS_MAC
+
+
 def tray_icon_options():
     """Return the extra ``pystray.Icon`` kwargs this OS needs. Empty on Windows.
 
