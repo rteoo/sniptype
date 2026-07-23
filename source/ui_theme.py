@@ -39,6 +39,11 @@ BODY_FONT_SIZE = 9
 
 _WINDOWS_FAMILY = "Segoe UI"
 _WINDOWS_EMOJI_FAMILY = "Segoe UI Emoji"
+# The format-status label shipped with its own smaller face and dim gray,
+# distinct from the body ``Segoe UI``/``text_muted`` -- kept verbatim so the
+# Windows toolbar reads exactly as before the theme seam existed.
+_WINDOWS_STATUS_FAMILY = "Arial"
+_WINDOWS_STATUS_FG = "#555"
 # Not in ``font.families()`` -- it is the hidden system font Tk resolves
 # ``TkDefaultFont`` to -- but Tk accepts it by name in a font spec.
 _MAC_FAMILY = ".AppleSystemUIFont"
@@ -72,7 +77,7 @@ class Theme:
         "text", "text_strong", "text_muted", "text_on_accent",
         "border", "divider",
         "accent", "accent_active", "link", "warning", "success",
-        "select_bg", "select_fg", "text_native",
+        "select_bg", "select_fg", "text_native", "tab_unselected_fg",
     )
 
     def __init__(self, kind, system, family, emoji_family, mono_family,
@@ -166,6 +171,32 @@ class Theme:
             "activebackground": bg,
             "activeforeground": self.text_native,
         }
+
+    def toolbar_frame_colors(self):
+        """``bg`` for the formatting-toolbar frame (and its stacked status row).
+
+        Empty off macOS, and that is the point: the shipped toolbar was an
+        uncolored ``tk.Frame`` that inherited ``SystemButtonFace``, and the
+        glyph buttons and status label sit on that gray. Painting it ``card``
+        (white) on Windows was the regression -- buttons then rendered
+        white-on-white. macOS keeps the white ``card`` surface it needs so the
+        toolbar matches the editor pane.
+        """
+        if self.system != "darwin":
+            return {}
+        return {"bg": self.card}
+
+    def status_label_options(self):
+        """Font and foreground for the format-status label.
+
+        Windows keeps the shipped ``("Arial", 8)`` / ``#555`` it always had;
+        macOS takes the body face at size 8 and the dim ``text_muted`` chosen
+        for legibility against both appearances. The label's ``bg`` is passed
+        by the caller (the toolbar's own background) and is correct on every OS.
+        """
+        if self.system == "darwin":
+            return {"font": self.font(8), "fg": self.text_muted}
+        return {"font": (_WINDOWS_STATUS_FAMILY, 8), "fg": _WINDOWS_STATUS_FG}
 
     def toolbar_button_colors(self, bg):
         """Colors for the flat glyph buttons in the formatting toolbar."""
@@ -275,6 +306,9 @@ _LIGHT = {
     # Foreground for widgets the pre-change GUI left uncolored. Resolved to
     # each platform's own default so filling it in changes nothing there.
     "text_native": "#1F2937",
+    # Unselected notebook-tab label. Shipped a touch darker than ``text_strong``
+    # (the selected tab); the selected tab keeps ``text``.
+    "tab_unselected_fg": "#2F3A4A",
 }
 
 # Win32's defaults for the widgets this GUI leaves uncolored (tkWinDefault.h).
@@ -294,6 +328,7 @@ _MAC_SYSTEM = {
     "field": "systemTextBackgroundColor",
     "text": "systemTextColor",
     "text_strong": "systemTextColor",
+    "tab_unselected_fg": "systemTextColor",
     "select_bg": "systemSelectedTextBackgroundColor",
     "select_fg": "systemTextColor",
 }
