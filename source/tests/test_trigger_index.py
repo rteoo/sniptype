@@ -198,21 +198,32 @@ class DynamicTriggerEdgeTests(unittest.TestCase):
 
 
 class EmptyKeyRegressionTests(unittest.TestCase):
-    """KNOWN DEFECT — kept as a failing regression marker (no source fix applied).
+    """An empty-string trigger key is excluded from *every* index set.
 
-    compile_trigger_index does ``last_char = trigger[-1]`` (trigger_index.py:52),
-    which raises ``IndexError`` on an empty-string trigger key. validate_static_snippets
-    passes ``{"": "x"}`` through unchanged, so a syntactically valid snippets.json
-    with an empty key reaches compile_trigger_index via refresh_runtime_indexes in
-    ``TextExpander.__init__`` and crashes app startup, uncaught by
-    recover_snippets_file (which only wraps the parse step). An empty key can never
-    be a meaningful trigger (``endswith("")`` is always true) and must be skipped
-    the way ``_``-prefixed keys already are.
+    An empty key would suffix-match every keystroke (``endswith("")`` is always
+    true) and has no last character to bucket by. ``_is_indexable_trigger``
+    excludes it once, consistently, from the direct index and from both metadata
+    helpers (``form_triggers`` / ``slow_triggers``) — so the module can never
+    disagree with itself about whether "" is a trigger, regardless of the value
+    a hand-edited snippets.json pairs with the empty key.
     """
 
     def test_empty_string_trigger_key_does_not_crash_and_real_trigger_still_indexes(self):
         index = compile_trigger_index({"": "x", "abc": "y"}, set())
         self.assertEqual("abc", find_direct_trigger("zzabc", index))
+
+    def test_empty_key_with_form_variable_is_not_a_form_trigger(self):
+        # A form-variable value under an empty key must not leak into
+        # form_triggers while the direct index excludes the same key.
+        index = compile_trigger_index({"": "Hello %%name%%", "abc": "y"}, set())
+        self.assertNotIn("", index["form_triggers"])
+
+    def test_empty_key_referencing_slow_trigger_is_not_a_slow_trigger(self):
+        # A body that references a slow dynamic trigger would normally make the
+        # snippet slow; keyed under "" it must still be excluded.
+        snippets = {"": "Dólar hoje: %%xdolar%%", "xdolar": lambda: "R$5"}
+        index = compile_trigger_index(snippets, {"xdolar"})
+        self.assertNotIn("", index["slow_triggers"])
 
 
 if __name__ == "__main__":
