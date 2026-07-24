@@ -145,7 +145,7 @@ One-time prerequisite: install **Inno Setup 6** (free).
 
 ```powershell
 build_release.bat      REM 1) package the app into dist\Txt Xpander
-build_installer.bat    REM 2) compile installer\Output\TxtXpanderSetup-<version>-<channel>.exe
+build_installer.bat    REM 2) compile installer\TxtXpanderSetup-<version>-<channel>.exe
 ```
 
 `build_installer.bat` finds the Inno Setup compiler (`ISCC.exe`) automatically and compiles [`installer\txt_xpander.iss`](installer/txt_xpander.iss).

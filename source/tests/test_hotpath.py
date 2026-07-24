@@ -421,6 +421,22 @@ class FormRoutingTests(unittest.TestCase):
         fast.assert_called_once_with("xplain")
         slow.assert_not_called()
 
+    def test_mapping_form_snippet_opens_dialog_and_inserts_resolved_value(self):
+        app = make_app(self.tmp, {
+            "_prompt_codes": {
+                "__prefix__": "prompt",
+                "spec": "Write this: %%spec%%",
+            },
+        })
+        self.assertIn("promptspec", app.trigger_index["form_triggers"])
+
+        with mock.patch.object(app, "_show_form_dialog", return_value={"spec": "be concise"}) as dialog, \
+                mock.patch.object(tx.time, "sleep"):
+            app._run_expansion("promptspec")
+
+        dialog.assert_called_once_with(["spec"])
+        app.text_inserter.insert_text.assert_called_once_with("Write this: be concise")
+
 
 class InsertionTimingWiringTests(unittest.TestCase):
     """settings.json reaches the erase loop and the inserter (issue #27)."""

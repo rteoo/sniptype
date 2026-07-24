@@ -86,6 +86,18 @@ class FormTriggerMetadataTests(unittest.TestCase):
         index = compile_trigger_index(snippets, set())
         self.assertEqual(frozenset(), index["form_triggers"])
 
+    def test_mapping_item_with_form_variable_is_flagged_by_composed_trigger(self):
+        snippets = {
+            "_prompt_codes": {
+                "__prefix__": "prompt",
+                "spec": "Write this: %%spec%%",
+                "plain": "No input needed",
+            },
+        }
+        index = compile_trigger_index(snippets, set())
+        self.assertIn("promptspec", index["form_triggers"])
+        self.assertNotIn("promptplain", index["form_triggers"])
+
     def test_mapping_and_dynamic_refs_are_not_form_triggers(self):
         snippets = {
             "xmap": "CPF %%cpffulano%%",

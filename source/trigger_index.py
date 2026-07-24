@@ -18,17 +18,32 @@ def _is_indexable_trigger(trigger):
 
 
 def _compute_form_triggers(snippets, prefixes=None):
-    """Return the set of direct triggers whose value needs a form-fill dialog.
+    """Return triggers whose value needs a form-fill dialog.
 
     Computed once at compile time so the keyboard hot path never runs the
-    form-variable regex per keystroke.
+    form-variable regex per keystroke. Includes both direct triggers and
+    triggers composed from a dynamic-mapping prefix plus item name.
     """
+    if prefixes is None:
+        prefixes = get_dynamic_prefixes(snippets)
+
     form_triggers = set()
     for trigger, value in snippets.items():
         if not _is_indexable_trigger(trigger) or callable(value):
             continue
         if has_form_variables(extract_plain_text(value), snippets, prefixes):
             form_triggers.add(trigger)
+
+    for prefix, mapping_key in prefixes.items():
+        mapping = snippets.get(mapping_key)
+        if not isinstance(mapping, dict):
+            continue
+        for item_name, value in mapping.items():
+            if item_name == "__prefix__" or callable(value):
+                continue
+            if has_form_variables(extract_plain_text(value), snippets, prefixes):
+                form_triggers.add(prefix + item_name)
+
     return form_triggers
 
 
