@@ -1,7 +1,7 @@
 ﻿; Inno Setup script for Txt Xpander — per-user install, no admin required.
 ;
 ; Build: run build_release.bat first (produces dist\Txt Xpander), then
-; build_installer.bat (compiles this script into installer\Output\).
+; build_installer.bat (compiles this script into installer\).
 ;
 ; User data lives in %USERPROFILE%\.txt_xpander and is intentionally NOT removed
 ; on uninstall — the installer only manages the program files under {app}.
@@ -27,7 +27,7 @@ DisableProgramGroupPage=yes
 ; Per-user install: no administrator/UAC prompt.
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
-OutputDir=Output
+OutputDir=.
 OutputBaseFilename=TxtXpanderSetup-{#MyAppVersion}-{#MyAppChannel}
 Compression=lzma2
 SolidCompression=yes

@@ -1073,12 +1073,19 @@ class TextExpander:
         - open a popup
         - fetch the data
         - type the result
-        Also handles static snippets with form-fill variables (%%campo%%).
+        Also handles direct and mapping snippets with form-fill variables
+        (%%campo%%).
         """
         try:
-            func = self.snippets.get(trigger)
+            if trigger in self.snippets:
+                func = self.snippets[trigger]
+            else:
+                func, _ = self.check_dynamic_pattern(trigger)
+            if func is None:
+                return False
+
             if not callable(func):
-                # Static snippet routed here because it has form-fill variables.
+                # Non-callable snippet routed here because it has form-fill variables.
                 raw = func
                 plain = extract_plain_text(raw)
                 prefixes = self.trigger_index["dynamic_prefixes"]
