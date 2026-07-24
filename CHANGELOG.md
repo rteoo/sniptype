@@ -24,15 +24,18 @@ tests pass.
 - **macOS manager UI**: the manager follows light/dark appearance, uses native Aqua controls and avoids clipped toolbar and action rows.
 - **Cross-platform CI definition**: the unit suite is configured for Windows, macOS and Linux on Python 3.12 and 3.14. Hosted runs remain a stable-promotion requirement; a beta may be prepared locally when hosted runners are unavailable.
 - **Per-OS insertion timing**: clipboard settle, paste restore and erase delays use measured platform defaults with bounded settings overrides.
+- **macOS beta architecture**: the current packaged beta is native ARM64 for Apple Silicon. Intel and universal builds require their own matching toolchain and verification.
 
 ### Fixed
 
+- **macOS dialog-backed snippets own and return keyboard focus correctly**: ticker and form dialogs stay transparent until macOS confirms both that Txt Xpander is active and that the exact native popup window is receiving keyboard events; after submission, expansion waits until macOS confirms the original editor is frontmost before sending Cmd+V. Every handoff fails visibly after a bounded wait instead of dropping input or pasting into the wrong app. Previously `xfund` could ignore the first several ticker keystrokes, then paste into the hidden Tk root instead of the editor.
 - **macOS: using the menu-bar menu no longer kills the app**: clicking the tray icon made AppKit run a nested menu-tracking loop on the main thread, where a Tk timer fired into Python with no valid thread state and aborted the process (`PyEval_RestoreThread`, "Txt Xpander quit unexpectedly"). Opening the menu, opening the snippet manager and quitting all work now. Windows behaviour is unchanged.
 - Secure Keyboard Entry is checked before a trigger is erased and outside the listener hot path, so password fields keep the original typed text without adding per-keystroke framework calls.
 - Static snippets and composed mapping triggers are preserved or confirmed before a dynamic trigger shadows them; editor delete/overwrite paths no longer discard a shadowed static value.
 - Empty trigger keys are excluded consistently from every compiled index set.
 - A corrupt per-user dynamic-registry entry no longer replaces a valid bundled entry.
 - Rich-text RTF generation now handles astral Unicode characters and malformed scalar span payloads safely.
+- The macOS release build converts the shipped 256px icon directly to `.icns`; current `iconutil` versions no longer reject a partial iconset before packaging starts.
 
 ### Technical
 

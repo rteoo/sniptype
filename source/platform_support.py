@@ -9,15 +9,18 @@ Pure helpers here are unit-tested; the clipboard backends live in
 mutex remains in ``txt_xpander`` (see README "Cross-platform status").
 """
 
+import ctypes
 import ntpath
 import os
 import re
 import shlex
 import subprocess
 import sys
+import threading
 
 
 APP_NAME = "Txt Xpander"
+APPLICATION_ACTIVATION_TIMEOUT_SECONDS = 2.0
 
 
 def current_os():
@@ -190,6 +193,355 @@ def hide_dock_icon():
         )
     except Exception:
         return False
+
+
+def capture_frontmost_application():
+    """Return the external macOS app active before an expansion dialog opens.
+
+    Tk activates Txt Xpander when a modal expansion dialog takes focus. The
+    generated Cmd+V must go back to the editor that owned focus before that
+    dialog, not to Txt Xpander's hidden root. Call this on the macOS GUI/main
+    thread immediately before building the dialog.
+    """
+    if not IS_MAC:
+        return None
+    try:
+        import AppKit
+
+        app = AppKit.NSWorkspace.sharedWorkspace().frontmostApplication()
+        if app is None or int(app.processIdentifier()) == os.getpid():
+            return None
+        return app
+    except Exception:
+        return None
+
+
+def restore_frontmost_application(app):
+    """Reactivate a macOS app captured by :func:`capture_frontmost_application`.
+
+    Activation failure is non-fatal: callers retain the historical focus
+    behavior and the expansion path can still leave its payload on the
+    clipboard. Call this on the macOS GUI/main thread after the dialog closes.
+    """
+    if not IS_MAC or app is None:
+        return False
+    try:
+        import AppKit
+
+        return bool(
+            app.activateWithOptions_(
+                AppKit.NSApplicationActivateIgnoringOtherApps
+            )
+        )
+    except Exception:
+        return False
+
+
+def activate_application_when_ready(
+    on_active,
+    on_failed,
+    timeout_seconds=APPLICATION_ACTIVATION_TIMEOUT_SECONDS,
+):
+    """Request macOS activation and call ``on_active`` after Cocoa confirms it.
+
+    Activation of an accessory application is asynchronous. Mapping a Tk
+    Toplevel and immediately calling ``focus_force`` can therefore paint a
+    focused entry while physical keys still go to the previous app. The native
+    notification is the readiness barrier.
+
+    Both callbacks may run from Cocoa or a timer thread and must not call Tcl/Tk
+    directly; callers queue Tk work through ``GuiThread.submit``. The returned
+    callable cancels the observer and timeout and is safe to call more than
+    once.
+    """
+    if not IS_MAC:
+        on_active()
+        return lambda: None
+
+    state = {
+        "cancelled": False,
+        "done": False,
+        "token": None,
+        "timer": None,
+    }
+    lock = threading.Lock()
+    center = None
+
+    def finish(callback, *args):
+        with lock:
+            if state["cancelled"] or state["done"]:
+                return
+            state["done"] = True
+            token = state["token"]
+            timer = state["timer"]
+            state["token"] = None
+            state["timer"] = None
+        if center is not None and token is not None:
+            center.removeObserver_(token)
+        if timer is not None:
+            timer.cancel()
+        callback(*args)
+
+    def cancel():
+        with lock:
+            if state["cancelled"]:
+                return
+            state["cancelled"] = True
+            token = state["token"]
+            timer = state["timer"]
+            state["token"] = None
+            state["timer"] = None
+        if center is not None and token is not None:
+            center.removeObserver_(token)
+        if timer is not None:
+            timer.cancel()
+
+    def complete(_notification=None):
+        finish(on_active)
+
+    def fail(message):
+        finish(on_failed, message)
+
+    try:
+        import AppKit
+
+        app = AppKit.NSApplication.sharedApplication()
+        if app.isActive():
+            complete()
+            return cancel
+
+        center = AppKit.NSNotificationCenter.defaultCenter()
+        state["token"] = center.addObserverForName_object_queue_usingBlock_(
+            AppKit.NSApplicationDidBecomeActiveNotification,
+            app,
+            None,
+            complete,
+        )
+        timer = threading.Timer(
+            timeout_seconds,
+            fail,
+            args=("Timed out waiting for Txt Xpander to receive keyboard focus",),
+        )
+        timer.daemon = True
+        state["timer"] = timer
+        timer.start()
+        options = (
+            AppKit.NSApplicationActivateAllWindows
+            | AppKit.NSApplicationActivateIgnoringOtherApps
+        )
+        running_app = AppKit.NSRunningApplication.currentApplication()
+        activation_accepted = running_app.activateWithOptions_(options)
+        if app.isActive():
+            complete()
+        elif not activation_accepted:
+            fail("macOS refused to activate Txt Xpander")
+        return cancel
+    except Exception as exc:
+        fail(f"Could not activate Txt Xpander: {exc}")
+        return cancel
+
+
+def restore_application_when_ready(app, on_active, on_failed):
+    """Activate a captured macOS application and confirm it became frontmost.
+
+    The callbacks must not touch Tcl/Tk. The expansion worker supplies a
+    ``threading.Event`` callback and performs its bounded wait off the GUI
+    thread before it is allowed to synthesize Cmd+V.
+    """
+    if not IS_MAC or app is None:
+        on_active()
+        return lambda: None
+
+    state = {"cancelled": False, "done": False, "token": None}
+    lock = threading.Lock()
+    center = None
+
+    def finish(callback, *args):
+        with lock:
+            if state["cancelled"] or state["done"]:
+                return
+            state["done"] = True
+            token = state["token"]
+            state["token"] = None
+        if center is not None and token is not None:
+            center.removeObserver_(token)
+        callback(*args)
+
+    def cancel():
+        with lock:
+            if state["cancelled"]:
+                return
+            state["cancelled"] = True
+            token = state["token"]
+            state["token"] = None
+        if center is not None and token is not None:
+            center.removeObserver_(token)
+
+    def complete():
+        finish(on_active)
+
+    def fail(message):
+        finish(on_failed, message)
+
+    try:
+        import AppKit
+
+        target_pid = int(app.processIdentifier())
+        workspace = AppKit.NSWorkspace.sharedWorkspace()
+
+        def target_is_frontmost():
+            frontmost = workspace.frontmostApplication()
+            return (
+                frontmost is not None
+                and int(frontmost.processIdentifier()) == target_pid
+            )
+
+        if target_is_frontmost():
+            complete()
+            return cancel
+
+        center = workspace.notificationCenter()
+
+        def activated(notification):
+            user_info = notification.userInfo() or {}
+            activated_app = user_info.get(AppKit.NSWorkspaceApplicationKey)
+            if (
+                activated_app is not None
+                and int(activated_app.processIdentifier()) == target_pid
+            ):
+                complete()
+
+        state["token"] = center.addObserverForName_object_queue_usingBlock_(
+            AppKit.NSWorkspaceDidActivateApplicationNotification,
+            None,
+            None,
+            activated,
+        )
+        accepted = app.activateWithOptions_(
+            AppKit.NSApplicationActivateIgnoringOtherApps
+        )
+        if target_is_frontmost():
+            complete()
+        elif not accepted:
+            fail("macOS refused to return focus to the previous application")
+        return cancel
+    except Exception as exc:
+        fail(f"Could not return focus to the previous application: {exc}")
+        return cancel
+
+
+def focus_tk_window_when_ready(
+    dialog,
+    focus_target,
+    on_key,
+    on_failed,
+    timeout_seconds=APPLICATION_ACTIVATION_TIMEOUT_SECONDS,
+):
+    """Focus a mapped Tk dialog and confirm its exact ``NSWindow`` became key.
+
+    Application activation alone is insufficient: Aqua can map a Toplevel and
+    paint its entry as focused while the native ``TKWindow`` still routes
+    physical keys elsewhere. Tk's exported drawable bridge identifies the
+    exact ``NSWindow`` without title matching. The native observer never calls
+    Tcl/Tk; callers queue their visible reveal through ``GuiThread.submit``.
+
+    This function itself must be called from the Tk pump because ``winfo_id``
+    and ``focus_force`` are Tk operations.
+    """
+    if not IS_MAC:
+        focus_target.focus_force()
+        on_key()
+        return lambda: None
+
+    state = {
+        "cancelled": False,
+        "done": False,
+        "token": None,
+        "timer": None,
+    }
+    lock = threading.Lock()
+    center = None
+
+    def finish(callback, *args):
+        with lock:
+            if state["cancelled"] or state["done"]:
+                return
+            state["done"] = True
+            token = state["token"]
+            timer = state["timer"]
+            state["token"] = None
+            state["timer"] = None
+        if center is not None and token is not None:
+            center.removeObserver_(token)
+        if timer is not None:
+            timer.cancel()
+        callback(*args)
+
+    def cancel():
+        with lock:
+            if state["cancelled"]:
+                return
+            state["cancelled"] = True
+            token = state["token"]
+            timer = state["timer"]
+            state["token"] = None
+            state["timer"] = None
+        if center is not None and token is not None:
+            center.removeObserver_(token)
+        if timer is not None:
+            timer.cancel()
+
+    def complete(_notification=None):
+        finish(on_key)
+
+    def fail(message):
+        finish(on_failed, message)
+
+    try:
+        import AppKit
+        import objc
+
+        get_nswindow = ctypes.CDLL(None).Tk_MacOSXGetNSWindowForDrawable
+        get_nswindow.argtypes = [ctypes.c_void_p]
+        get_nswindow.restype = ctypes.c_void_p
+        pointer = get_nswindow(dialog.winfo_id())
+        if not pointer:
+            fail("Tk did not expose a native window for the input dialog")
+            return cancel
+
+        native_window = objc.objc_object(c_void_p=pointer)
+        if not native_window.canBecomeKeyWindow():
+            fail("The input dialog cannot become the macOS key window")
+            return cancel
+
+        center = AppKit.NSNotificationCenter.defaultCenter()
+        state["token"] = center.addObserverForName_object_queue_usingBlock_(
+            AppKit.NSWindowDidBecomeKeyNotification,
+            native_window,
+            None,
+            complete,
+        )
+        timer = threading.Timer(
+            timeout_seconds,
+            fail,
+            args=("Timed out waiting for the input dialog to receive keyboard focus",),
+        )
+        timer.daemon = True
+        state["timer"] = timer
+        timer.start()
+
+        # Register before both checks and the focus request so neither a mapped
+        # key window nor a synchronous key transition can be missed.
+        if native_window.isKeyWindow():
+            complete()
+        else:
+            focus_target.focus_force()
+            if native_window.isKeyWindow():
+                complete()
+        return cancel
+    except Exception as exc:
+        fail(f"Could not focus the input dialog: {exc}")
+        return cancel
 
 
 def pin_tray_backend(environ=None):

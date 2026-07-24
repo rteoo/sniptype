@@ -136,6 +136,89 @@ class TerminatorReemitTests(unittest.TestCase):
         self.app.keyboard_controller.type.assert_not_called()
 
 
+class ModalDialogFocusTests(unittest.TestCase):
+    """A dialog-backed expansion must return focus before it sends Cmd+V."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.app = make_app(self.tmp, {"xhi": "hello"})
+        root = object()
+        self.app.gui = mock.Mock()
+        self.app.gui.call.side_effect = lambda callback: callback(root)
+
+    def test_focus_is_restored_after_the_dialog_returns(self):
+        events = []
+        target = object()
+
+        def build(root):
+            events.append(("build", root))
+            return "PETR4"
+
+        with mock.patch.object(
+            tx.platform_support,
+            "capture_frontmost_application",
+            side_effect=lambda: events.append(("capture", None)) or target,
+        ), mock.patch.object(
+            tx.platform_support,
+            "restore_application_when_ready",
+            side_effect=lambda app, on_active, _on_failed: (
+                events.append(("restore", app)),
+                on_active(),
+                mock.Mock(),
+            )[-1],
+        ):
+            result = self.app._run_modal_dialog(build, None, "ticker")
+
+        self.assertEqual("PETR4", result)
+        self.assertEqual(
+            [("capture", None), ("build", mock.ANY), ("restore", target)],
+            events,
+        )
+
+    def test_focus_is_restored_when_the_dialog_raises(self):
+        target = object()
+        with mock.patch.object(
+            tx.platform_support,
+            "capture_frontmost_application",
+            return_value=target,
+        ), mock.patch.object(
+            tx.platform_support,
+            "restore_application_when_ready",
+            side_effect=lambda _app, on_active, _on_failed: (
+                on_active(),
+                mock.Mock(),
+            )[-1],
+        ) as restore:
+            with self.assertRaisesRegex(RuntimeError, "dialog failed"):
+                self.app._run_modal_dialog(
+                    lambda _root: (_ for _ in ()).throw(RuntimeError("dialog failed")),
+                    None,
+                    "ticker",
+                )
+        self.assertIs(target, restore.call_args.args[0])
+
+    def test_restore_failure_prevents_the_dialog_result_from_returning(self):
+        with mock.patch.object(
+            tx.platform_support,
+            "capture_frontmost_application",
+            return_value=object(),
+        ), mock.patch.object(
+            tx.platform_support,
+            "restore_application_when_ready",
+            side_effect=lambda _app, _on_active, on_failed: (
+                on_failed("focus restore failed"),
+                mock.Mock(),
+            )[-1],
+        ):
+            with self.assertRaisesRegex(RuntimeError, "focus restore failed"):
+                self.app._run_modal_dialog(
+                    lambda _root: "PETR4",
+                    None,
+                    "ticker",
+                )
+
+
 class ClipboardSerializationTests(unittest.TestCase):
     def test_concurrent_pastes_do_not_interleave(self):
         events = []
