@@ -12,8 +12,8 @@
 #   PYTHON=/path/to/venv/bin/python ./build_release_macos.sh
 #   CODESIGN_IDENTITY="Developer ID Application: ..." ./build_release_macos.sh
 #
-# Re-signing invalidates the bundle's TCC grants (Input Monitoring /
-# Accessibility) — see README, "Build on macOS".
+# Ad-hoc rebuilds and signing-identity changes invalidate the bundle's TCC
+# grants (Input Monitoring / Accessibility) — see README, "Build on macOS".
 
 set -euo pipefail
 
@@ -68,20 +68,11 @@ STAGING_ROOT="$WORK_ROOT/dist"
 STAGED_APP="$STAGING_ROOT/$APP_NAME.app"
 
 # --- App icon -------------------------------------------------------------
-# The repo ships a 256x256 .ico (Windows). Build the .icns from it rather than
-# committing a second copy of the same artwork; sizes above the source are left
-# out instead of upscaled.
-ICONSET="$WORK_ROOT/$APP_NAME.iconset"
+# The repo ships a 256x256 .ico (Windows). Convert that source directly instead
+# of constructing a partial iconset: current iconutil rejects iconsets without
+# the 512px slots, and upscaling the source would only manufacture fake detail.
 ICNS="$WORK_ROOT/$APP_NAME.icns"
-mkdir -p "$ICONSET"
-for spec in "16:icon_16x16" "32:icon_16x16@2x" "32:icon_32x32" "64:icon_32x32@2x" \
-            "128:icon_128x128" "256:icon_128x128@2x" "256:icon_256x256"; do
-    size="${spec%%:*}"
-    name="${spec##*:}"
-    sips -s format png -z "$size" "$size" "$REPO_DIR/source/txt_xpander.ico" \
-        --out "$ICONSET/$name.png" >/dev/null
-done
-iconutil -c icns "$ICONSET" -o "$ICNS"
+sips -s format icns "$REPO_DIR/source/txt_xpander.ico" --out "$ICNS" >/dev/null
 
 # --- Package --------------------------------------------------------------
 echo "Packaging $APP_NAME $APP_VERSION ($RELEASE_CHANNEL) ..."
@@ -100,6 +91,15 @@ echo "Packaging $APP_NAME $APP_VERSION ($RELEASE_CHANNEL) ..."
 
 if [[ ! -d "$STAGED_APP" ]]; then
     echo "Packaging failed: no app bundle was produced. The existing dist was left unchanged." >&2
+    exit 1
+fi
+
+BUNDLE_ICON_NAME="$(plutil -extract CFBundleIconFile raw \
+    "$STAGED_APP/Contents/Info.plist" 2>/dev/null || true)"
+BUNDLE_ICON="$STAGED_APP/Contents/Resources/$APP_NAME.icns"
+if [[ "$BUNDLE_ICON_NAME" != "$APP_NAME.icns" || ! -s "$BUNDLE_ICON" ]]; then
+    echo "Packaging failed: the app bundle does not contain or reference $APP_NAME.icns." >&2
+    echo "The existing dist was left unchanged." >&2
     exit 1
 fi
 
@@ -179,10 +179,13 @@ echo
 echo "Packaging complete: $TARGET_APP"
 echo "User data lives in ~/.txt_xpander (override with TXT_XPANDER_HOME)."
 echo
-echo "First launch: the bundle is unsigned/ad-hoc signed, so Gatekeeper blocks a"
-echo "double-click — right-click the app and choose Open once, or run:"
-echo "  xattr -dr com.apple.quarantine \"$TARGET_APP\""
-echo "Then grant Input Monitoring and Accessibility in System Settings > Privacy"
-echo "& Security. Those grants are tied to the bundle's signing identity — with"
-echo "\"$SIGN_IDENTITY\" they survive rebuilds; under ad-hoc (-) every build revokes"
-echo "them and the stale row has to be removed and re-added."
+if [[ "$SIGN_IDENTITY" == "-" ]]; then
+    echo "The bundle is ad-hoc signed. If Gatekeeper blocks its first launch,"
+    echo "right-click the app and choose Open once, or run:"
+    echo "  xattr -dr com.apple.quarantine \"$TARGET_APP\""
+    echo "Every ad-hoc rebuild changes the bundle's identity, so remove stale rows"
+    echo "before re-granting Input Monitoring and Accessibility."
+else
+    echo "The bundle is signed with \"$SIGN_IDENTITY\". Keep using that identity so"
+    echo "Input Monitoring and Accessibility grants survive future rebuilds."
+fi
