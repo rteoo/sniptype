@@ -27,7 +27,7 @@ DisableProgramGroupPage=yes
 ; Per-user install: no administrator/UAC prompt.
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
-OutputDir=.
+OutputDir=Output
 OutputBaseFilename=TxtXpanderSetup-{#MyAppVersion}-{#MyAppChannel}
 Compression=lzma2
 SolidCompression=yes

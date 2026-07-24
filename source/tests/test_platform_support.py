@@ -595,6 +595,454 @@ class DockIconTests(unittest.TestCase):
             self.assertFalse(ps.hide_dock_icon())
 
 
+class FrontmostApplicationTests(unittest.TestCase):
+    """Expansion dialogs must return Cmd+V to the app that triggered them."""
+
+    def test_non_macos_capture_and_restore_are_no_ops(self):
+        target = mock.Mock()
+        with mock.patch.object(ps, "IS_MAC", False):
+            self.assertIsNone(ps.capture_frontmost_application())
+            self.assertFalse(ps.restore_frontmost_application(target))
+
+    def test_capture_returns_an_external_frontmost_application(self):
+        appkit = mock.Mock()
+        target = appkit.NSWorkspace.sharedWorkspace.return_value.frontmostApplication.return_value
+        target.processIdentifier.return_value = os.getpid() + 1
+        with mock.patch.object(ps, "IS_MAC", True), \
+                mock.patch.dict(sys.modules, {"AppKit": appkit}):
+            self.assertIs(target, ps.capture_frontmost_application())
+
+    def test_capture_ignores_txt_xpander_itself(self):
+        appkit = mock.Mock()
+        target = appkit.NSWorkspace.sharedWorkspace.return_value.frontmostApplication.return_value
+        target.processIdentifier.return_value = os.getpid()
+        with mock.patch.object(ps, "IS_MAC", True), \
+                mock.patch.dict(sys.modules, {"AppKit": appkit}):
+            self.assertIsNone(ps.capture_frontmost_application())
+
+    def test_restore_activates_the_captured_application(self):
+        appkit = mock.Mock()
+        appkit.NSApplicationActivateIgnoringOtherApps = 2
+        target = mock.Mock()
+        target.activateWithOptions_.return_value = True
+        with mock.patch.object(ps, "IS_MAC", True), \
+                mock.patch.dict(sys.modules, {"AppKit": appkit}):
+            self.assertTrue(ps.restore_frontmost_application(target))
+        target.activateWithOptions_.assert_called_once_with(2)
+
+    def test_appkit_failures_never_escape(self):
+        appkit = mock.Mock()
+        appkit.NSWorkspace.sharedWorkspace.side_effect = RuntimeError("no workspace")
+        target = mock.Mock()
+        target.activateWithOptions_.side_effect = RuntimeError("not running")
+        with mock.patch.object(ps, "IS_MAC", True), \
+                mock.patch.dict(sys.modules, {"AppKit": appkit}):
+            self.assertIsNone(ps.capture_frontmost_application())
+            self.assertFalse(ps.restore_frontmost_application(target))
+
+
+class ApplicationActivationBarrierTests(unittest.TestCase):
+    """Accessory dialogs wait for native activation before revealing Tk."""
+
+    def test_non_macos_completes_immediately(self):
+        on_active = mock.Mock()
+        on_failed = mock.Mock()
+        with mock.patch.object(ps, "IS_MAC", False):
+            cancel = ps.activate_application_when_ready(on_active, on_failed)
+        on_active.assert_called_once_with()
+        on_failed.assert_not_called()
+        cancel()
+
+    def test_already_active_macos_completes_without_an_observer(self):
+        appkit = mock.Mock()
+        appkit.NSApplication.sharedApplication.return_value.isActive.return_value = True
+        on_active = mock.Mock()
+        on_failed = mock.Mock()
+        with mock.patch.object(ps, "IS_MAC", True), \
+                mock.patch.dict(sys.modules, {"AppKit": appkit}):
+            cancel = ps.activate_application_when_ready(on_active, on_failed)
+        on_active.assert_called_once_with()
+        on_failed.assert_not_called()
+        appkit.NSNotificationCenter.defaultCenter.assert_not_called()
+        cancel()
+
+    def test_inactive_macos_completes_from_the_activation_notification(self):
+        appkit = mock.Mock()
+        appkit.NSApplicationActivateAllWindows = 1
+        appkit.NSApplicationActivateIgnoringOtherApps = 2
+        appkit.NSApplicationDidBecomeActiveNotification = "active"
+        app = appkit.NSApplication.sharedApplication.return_value
+        app.isActive.return_value = False
+        center = appkit.NSNotificationCenter.defaultCenter.return_value
+        token = center.addObserverForName_object_queue_usingBlock_.return_value
+        current = appkit.NSRunningApplication.currentApplication.return_value
+        current.activateWithOptions_.return_value = True
+        on_active = mock.Mock()
+        on_failed = mock.Mock()
+        with mock.patch.object(ps, "IS_MAC", True), \
+                mock.patch.dict(sys.modules, {"AppKit": appkit}):
+            cancel = ps.activate_application_when_ready(on_active, on_failed)
+
+        on_active.assert_not_called()
+        on_failed.assert_not_called()
+        current.activateWithOptions_.assert_called_once_with(3)
+        callback = center.addObserverForName_object_queue_usingBlock_.call_args.args[3]
+        callback(mock.Mock())
+        on_active.assert_called_once_with()
+        center.removeObserver_.assert_called_once_with(token)
+        cancel()
+
+    def test_cancelled_observer_cannot_complete_later(self):
+        appkit = mock.Mock()
+        appkit.NSApplicationActivateAllWindows = 1
+        appkit.NSApplicationActivateIgnoringOtherApps = 2
+        app = appkit.NSApplication.sharedApplication.return_value
+        app.isActive.return_value = False
+        center = appkit.NSNotificationCenter.defaultCenter.return_value
+        current = appkit.NSRunningApplication.currentApplication.return_value
+        current.activateWithOptions_.return_value = True
+        on_active = mock.Mock()
+        on_failed = mock.Mock()
+        with mock.patch.object(ps, "IS_MAC", True), \
+                mock.patch.dict(sys.modules, {"AppKit": appkit}):
+            cancel = ps.activate_application_when_ready(on_active, on_failed)
+        callback = center.addObserverForName_object_queue_usingBlock_.call_args.args[3]
+        cancel()
+        callback(mock.Mock())
+        on_active.assert_not_called()
+        on_failed.assert_not_called()
+        center.removeObserver_.assert_called_once()
+
+    def test_refused_activation_fails_instead_of_revealing_unfocused_dialog(self):
+        appkit = mock.Mock()
+        appkit.NSApplicationActivateAllWindows = 1
+        appkit.NSApplicationActivateIgnoringOtherApps = 2
+        app = appkit.NSApplication.sharedApplication.return_value
+        app.isActive.return_value = False
+        center = appkit.NSNotificationCenter.defaultCenter.return_value
+        current = appkit.NSRunningApplication.currentApplication.return_value
+        current.activateWithOptions_.return_value = False
+        on_active = mock.Mock()
+        on_failed = mock.Mock()
+        with mock.patch.object(ps, "IS_MAC", True), \
+                mock.patch.dict(sys.modules, {"AppKit": appkit}):
+            cancel = ps.activate_application_when_ready(on_active, on_failed)
+        on_active.assert_not_called()
+        on_failed.assert_called_once_with("macOS refused to activate Txt Xpander")
+        center.removeObserver_.assert_called_once()
+        cancel()
+
+    def test_appkit_failure_fails_instead_of_bypassing_the_barrier(self):
+        appkit = mock.Mock()
+        appkit.NSApplication.sharedApplication.side_effect = RuntimeError("no app")
+        on_active = mock.Mock()
+        on_failed = mock.Mock()
+        with mock.patch.object(ps, "IS_MAC", True), \
+                mock.patch.dict(sys.modules, {"AppKit": appkit}):
+            cancel = ps.activate_application_when_ready(on_active, on_failed)
+        on_active.assert_not_called()
+        on_failed.assert_called_once_with("Could not activate Txt Xpander: no app")
+        cancel()
+
+    def test_timeout_fails_without_revealing_the_dialog(self):
+        appkit = mock.Mock()
+        appkit.NSApplicationActivateAllWindows = 1
+        appkit.NSApplicationActivateIgnoringOtherApps = 2
+        app = appkit.NSApplication.sharedApplication.return_value
+        app.isActive.return_value = False
+        current = appkit.NSRunningApplication.currentApplication.return_value
+        current.activateWithOptions_.return_value = True
+        timer = mock.Mock()
+        on_active = mock.Mock()
+        on_failed = mock.Mock()
+        with mock.patch.object(ps, "IS_MAC", True), \
+                mock.patch.dict(sys.modules, {"AppKit": appkit}), \
+                mock.patch.object(
+                    ps.threading,
+                    "Timer",
+                    return_value=timer,
+                ) as timer_factory:
+            cancel = ps.activate_application_when_ready(on_active, on_failed)
+        timeout_callback = timer_factory.call_args.args[1]
+        timeout_args = timer_factory.call_args.kwargs["args"]
+        timeout_callback(*timeout_args)
+        on_active.assert_not_called()
+        on_failed.assert_called_once_with(timeout_args[0])
+        cancel()
+
+
+class ApplicationRestoreBarrierTests(unittest.TestCase):
+    def test_non_macos_completes_immediately(self):
+        on_active = mock.Mock()
+        on_failed = mock.Mock()
+        with mock.patch.object(ps, "IS_MAC", False):
+            cancel = ps.restore_application_when_ready(
+                mock.Mock(),
+                on_active,
+                on_failed,
+            )
+        on_active.assert_called_once_with()
+        on_failed.assert_not_called()
+        cancel()
+
+    def test_external_app_completes_only_after_workspace_activation(self):
+        appkit = mock.Mock()
+        appkit.NSApplicationActivateIgnoringOtherApps = 2
+        appkit.NSWorkspaceDidActivateApplicationNotification = "activated"
+        appkit.NSWorkspaceApplicationKey = "app"
+        target = mock.Mock()
+        target.processIdentifier.return_value = 42
+        target.activateWithOptions_.return_value = True
+        workspace = appkit.NSWorkspace.sharedWorkspace.return_value
+        frontmost = mock.Mock()
+        frontmost.processIdentifier.return_value = 7
+        workspace.frontmostApplication.return_value = frontmost
+        center = workspace.notificationCenter.return_value
+        token = center.addObserverForName_object_queue_usingBlock_.return_value
+        on_active = mock.Mock()
+        on_failed = mock.Mock()
+        with mock.patch.object(ps, "IS_MAC", True), \
+                mock.patch.dict(sys.modules, {"AppKit": appkit}):
+            cancel = ps.restore_application_when_ready(
+                target,
+                on_active,
+                on_failed,
+            )
+
+        on_active.assert_not_called()
+        callback = center.addObserverForName_object_queue_usingBlock_.call_args.args[3]
+        notification = mock.Mock()
+        notification.userInfo.return_value = {"app": target}
+        callback(notification)
+        on_active.assert_called_once_with()
+        on_failed.assert_not_called()
+        center.removeObserver_.assert_called_once_with(token)
+        cancel()
+
+    def test_refused_restore_reports_failure(self):
+        appkit = mock.Mock()
+        appkit.NSApplicationActivateIgnoringOtherApps = 2
+        target = mock.Mock()
+        target.processIdentifier.return_value = 42
+        target.activateWithOptions_.return_value = False
+        workspace = appkit.NSWorkspace.sharedWorkspace.return_value
+        frontmost = mock.Mock()
+        frontmost.processIdentifier.return_value = 7
+        workspace.frontmostApplication.return_value = frontmost
+        on_active = mock.Mock()
+        on_failed = mock.Mock()
+        with mock.patch.object(ps, "IS_MAC", True), \
+                mock.patch.dict(sys.modules, {"AppKit": appkit}):
+            cancel = ps.restore_application_when_ready(
+                target,
+                on_active,
+                on_failed,
+            )
+        on_active.assert_not_called()
+        on_failed.assert_called_once_with(
+            "macOS refused to return focus to the previous application"
+        )
+        cancel()
+
+
+class TkWindowKeyBarrierTests(unittest.TestCase):
+    def test_non_macos_focuses_immediately(self):
+        dialog = mock.Mock()
+        target = mock.Mock()
+        on_key = mock.Mock()
+        on_failed = mock.Mock()
+        with mock.patch.object(ps, "IS_MAC", False):
+            cancel = ps.focus_tk_window_when_ready(
+                dialog,
+                target,
+                on_key,
+                on_failed,
+            )
+        target.focus_force.assert_called_once_with()
+        on_key.assert_called_once_with()
+        on_failed.assert_not_called()
+        cancel()
+
+    def test_macos_waits_for_the_exact_native_window_to_become_key(self):
+        appkit = mock.Mock()
+        appkit.NSWindowDidBecomeKeyNotification = "key"
+        objc = mock.Mock()
+        native_window = objc.objc_object.return_value
+        native_window.canBecomeKeyWindow.return_value = True
+        native_window.isKeyWindow.return_value = False
+        center = appkit.NSNotificationCenter.defaultCenter.return_value
+        token = center.addObserverForName_object_queue_usingBlock_.return_value
+        get_nswindow = mock.Mock(return_value=123)
+        library = mock.Mock()
+        library.Tk_MacOSXGetNSWindowForDrawable = get_nswindow
+        dialog = mock.Mock()
+        dialog.winfo_id.return_value = 456
+        target = mock.Mock()
+        on_key = mock.Mock()
+        on_failed = mock.Mock()
+
+        with mock.patch.object(ps, "IS_MAC", True), \
+                mock.patch.dict(
+                    sys.modules,
+                    {"AppKit": appkit, "objc": objc},
+                ), mock.patch.object(ps.ctypes, "CDLL", return_value=library):
+            cancel = ps.focus_tk_window_when_ready(
+                dialog,
+                target,
+                on_key,
+                on_failed,
+            )
+
+        target.focus_force.assert_called_once_with()
+        on_key.assert_not_called()
+        on_failed.assert_not_called()
+        observer_call = (
+            center.addObserverForName_object_queue_usingBlock_.call_args
+        )
+        self.assertIs(native_window, observer_call.args[1])
+        observer_call.args[3](mock.Mock())
+        on_key.assert_called_once_with()
+        center.removeObserver_.assert_called_once_with(token)
+        cancel()
+
+    def test_already_key_window_completes_without_refocusing(self):
+        appkit = mock.Mock()
+        objc = mock.Mock()
+        native_window = objc.objc_object.return_value
+        native_window.canBecomeKeyWindow.return_value = True
+        native_window.isKeyWindow.return_value = True
+        library = mock.Mock()
+        library.Tk_MacOSXGetNSWindowForDrawable.return_value = 123
+        dialog = mock.Mock()
+        target = mock.Mock()
+        on_key = mock.Mock()
+        on_failed = mock.Mock()
+
+        with mock.patch.object(ps, "IS_MAC", True), \
+                mock.patch.dict(
+                    sys.modules,
+                    {"AppKit": appkit, "objc": objc},
+                ), mock.patch.object(ps.ctypes, "CDLL", return_value=library):
+            cancel = ps.focus_tk_window_when_ready(
+                dialog,
+                target,
+                on_key,
+                on_failed,
+            )
+
+        target.focus_force.assert_not_called()
+        on_key.assert_called_once_with()
+        on_failed.assert_not_called()
+        cancel()
+
+    def test_missing_native_window_fails_without_focusing(self):
+        appkit = mock.Mock()
+        objc = mock.Mock()
+        library = mock.Mock()
+        library.Tk_MacOSXGetNSWindowForDrawable.return_value = 0
+        target = mock.Mock()
+        on_key = mock.Mock()
+        on_failed = mock.Mock()
+
+        with mock.patch.object(ps, "IS_MAC", True), \
+                mock.patch.dict(
+                    sys.modules,
+                    {"AppKit": appkit, "objc": objc},
+                ), mock.patch.object(ps.ctypes, "CDLL", return_value=library):
+            cancel = ps.focus_tk_window_when_ready(
+                mock.Mock(),
+                target,
+                on_key,
+                on_failed,
+            )
+
+        target.focus_force.assert_not_called()
+        on_key.assert_not_called()
+        on_failed.assert_called_once_with(
+            "Tk did not expose a native window for the input dialog"
+        )
+        cancel()
+
+    def test_key_window_timeout_fails_and_removes_the_observer(self):
+        appkit = mock.Mock()
+        objc = mock.Mock()
+        native_window = objc.objc_object.return_value
+        native_window.canBecomeKeyWindow.return_value = True
+        native_window.isKeyWindow.return_value = False
+        center = appkit.NSNotificationCenter.defaultCenter.return_value
+        token = center.addObserverForName_object_queue_usingBlock_.return_value
+        library = mock.Mock()
+        library.Tk_MacOSXGetNSWindowForDrawable.return_value = 123
+        timer = mock.Mock()
+        on_key = mock.Mock()
+        on_failed = mock.Mock()
+
+        with mock.patch.object(ps, "IS_MAC", True), \
+                mock.patch.dict(
+                    sys.modules,
+                    {"AppKit": appkit, "objc": objc},
+                ), mock.patch.object(
+                    ps.ctypes,
+                    "CDLL",
+                    return_value=library,
+                ), mock.patch.object(
+                    ps.threading,
+                    "Timer",
+                    return_value=timer,
+                ) as timer_factory:
+            cancel = ps.focus_tk_window_when_ready(
+                mock.Mock(),
+                mock.Mock(),
+                on_key,
+                on_failed,
+            )
+
+        timeout_callback = timer_factory.call_args.args[1]
+        timeout_args = timer_factory.call_args.kwargs["args"]
+        timeout_callback(*timeout_args)
+        on_key.assert_not_called()
+        on_failed.assert_called_once_with(timeout_args[0])
+        center.removeObserver_.assert_called_once_with(token)
+        cancel()
+
+    def test_cancel_blocks_a_late_key_window_notification(self):
+        appkit = mock.Mock()
+        objc = mock.Mock()
+        native_window = objc.objc_object.return_value
+        native_window.canBecomeKeyWindow.return_value = True
+        native_window.isKeyWindow.return_value = False
+        center = appkit.NSNotificationCenter.defaultCenter.return_value
+        library = mock.Mock()
+        library.Tk_MacOSXGetNSWindowForDrawable.return_value = 123
+        timer = mock.Mock()
+        on_key = mock.Mock()
+        on_failed = mock.Mock()
+
+        with mock.patch.object(ps, "IS_MAC", True), \
+                mock.patch.dict(
+                    sys.modules,
+                    {"AppKit": appkit, "objc": objc},
+                ), mock.patch.object(
+                    ps.ctypes,
+                    "CDLL",
+                    return_value=library,
+                ), mock.patch.object(ps.threading, "Timer", return_value=timer):
+            cancel = ps.focus_tk_window_when_ready(
+                mock.Mock(),
+                mock.Mock(),
+                on_key,
+                on_failed,
+            )
+
+        callback = center.addObserverForName_object_queue_usingBlock_.call_args.args[3]
+        cancel()
+        callback(mock.Mock())
+        on_key.assert_not_called()
+        on_failed.assert_not_called()
+        center.removeObserver_.assert_called_once()
+        timer.cancel.assert_called_once_with()
+
+
 class TkMainThreadSeamTests(unittest.TestCase):
     """The macOS tray + Tk threading seam (issue #24)."""
 

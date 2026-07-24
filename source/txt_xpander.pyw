@@ -127,6 +127,7 @@ from gui_support import (
     center_dialog,
     center_on_screen,
     filter_static_snippets,
+    focus_modal_input,
     iter_filtered_mapping_items,
     snippet_row_values,
 )
@@ -737,7 +738,64 @@ class TextExpander:
             )
             return on_busy
         try:
-            return self.gui.call(build)
+            restore_state = {}
+
+            def build_and_restore_focus(root):
+                target_app = platform_support.capture_frontmost_application()
+                try:
+                    return build(root)
+                finally:
+                    restored = threading.Event()
+                    errors = []
+
+                    def restore_failed(message):
+                        errors.append(message)
+                        restored.set()
+
+                    cancel = platform_support.restore_application_when_ready(
+                        target_app,
+                        restored.set,
+                        restore_failed,
+                    )
+                    restore_state.update(
+                        event=restored,
+                        errors=errors,
+                        cancel=cancel,
+                    )
+
+            def wait_for_focus_restore():
+                event = restore_state.get("event")
+                if event is None:
+                    return
+                cancel = restore_state["cancel"]
+                try:
+                    if not event.wait(
+                        platform_support.APPLICATION_ACTIVATION_TIMEOUT_SECONDS
+                    ):
+                        raise RuntimeError(
+                            "Timed out returning focus to the previous application"
+                        )
+                    if restore_state["errors"]:
+                        raise RuntimeError(restore_state["errors"][0])
+                finally:
+                    cancel()
+
+            try:
+                result = self.gui.call(build_and_restore_focus)
+            except BaseException:
+                try:
+                    wait_for_focus_restore()
+                except Exception as focus_error:
+                    self.logger.error(
+                        f"Erro ao restaurar foco após falha do diálogo: {focus_error}"
+                    )
+                raise
+
+            # This wait runs on the expansion worker, never on Tk/AppKit's main
+            # thread. Cmd+V cannot race ahead of the target application's native
+            # activation notification.
+            wait_for_focus_restore()
+            return result
         finally:
             self._dialog_lock.release()
 
@@ -754,10 +812,10 @@ class TextExpander:
             result = [None]
 
             dialog = tk.Toplevel(root)
+            dialog.withdraw()
             dialog.title(prompt_title)
             dialog.resizable(False, False)
             dialog.configure(bg=ui.surface)
-            dialog.attributes("-topmost", True)
             self._set_window_icon(dialog)
 
             container = tk.Frame(dialog, bg=ui.surface, padx=18, pady=18)
@@ -803,11 +861,11 @@ class TextExpander:
             # serializes expansion dialogs, and every window shares one root
             # now, so a grab would also freeze the manager window.
             center_on_screen(dialog)
-            dialog.lift()
-            dialog.focus_force()
-            entry.focus_set()
-
-            dialog.wait_window(dialog)
+            cancel_activation = focus_modal_input(dialog, entry, self.gui.submit)
+            try:
+                dialog.wait_window(dialog)
+            finally:
+                cancel_activation()
             return result[0]
 
         try:
@@ -838,10 +896,10 @@ class TextExpander:
             result = {"phone": None, "message": None}
 
             dialog = tk.Toplevel(root)
+            dialog.withdraw()
             dialog.title("Abrir WhatsApp")
             dialog.resizable(False, False)
             dialog.configure(bg=ui.surface)
-            dialog.attributes("-topmost", True)
             self._set_window_icon(dialog)
 
             container = tk.Frame(dialog, bg=ui.surface, padx=18, pady=18)
@@ -915,11 +973,15 @@ class TextExpander:
             # local to this dialog's own Tcl interpreter; on the shared root it
             # would freeze the manager window too.
             center_on_screen(dialog, vertical_divisor=3)
-            dialog.lift()
-            dialog.focus_force()
-            entry_phone.focus_set()
-
-            dialog.wait_window(dialog)
+            cancel_activation = focus_modal_input(
+                dialog,
+                entry_phone,
+                self.gui.submit,
+            )
+            try:
+                dialog.wait_window(dialog)
+            finally:
+                cancel_activation()
             return result["phone"], result["message"]
 
         try:
@@ -1144,6 +1206,7 @@ class TextExpander:
             entries = {}
 
             dialog = tk.Toplevel(root)
+            dialog.withdraw()
             dialog.title("Preencher campos")
             dialog.resizable(False, False)
             dialog.configure(bg=ui.surface)
@@ -1224,12 +1287,15 @@ class TextExpander:
             # grab adds no modality — and with every window on the shared root
             # it would freeze the manager window while the form is open.
             center_on_screen(dialog)
-            dialog.lift()
-            dialog.focus_force()
-            if first_entry:
-                first_entry.focus_set()
-
-            dialog.wait_window(dialog)
+            cancel_activation = focus_modal_input(
+                dialog,
+                first_entry,
+                self.gui.submit,
+            )
+            try:
+                dialog.wait_window(dialog)
+            finally:
+                cancel_activation()
             return result[0]
 
         try:

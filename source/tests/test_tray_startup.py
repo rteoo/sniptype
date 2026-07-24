@@ -9,7 +9,9 @@ a window — neither of which a unit test of the parts alone would catch.
 """
 
 import os
+import subprocess
 import sys
+import tempfile
 import threading
 import unittest
 from pathlib import Path
@@ -257,6 +259,44 @@ class AppVersionFormattingTests(unittest.TestCase):
             installer,
         )
 
+    @unittest.skipUnless(sys.platform == "darwin", "needs macOS sips")
+    def test_macos_release_icon_converts_from_the_shipped_ico(self):
+        repo_root = Path(__file__).resolve().parents[2]
+        script = (repo_root / "build_release_macos.sh").read_text(encoding="utf-8")
+        self.assertIn("sips -s format icns", script)
+        self.assertNotIn("iconutil -c icns", script)
+        self.assertIn("CFBundleIconFile", script)
+        self.assertIn('! -s "$BUNDLE_ICON"', script)
+
+        tmp_root = Path(__file__).parent / "tmp"
+        tmp_root.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=tmp_root) as temp_dir:
+            output = Path(temp_dir) / "Txt Xpander.icns"
+            result = subprocess.run(
+                [
+                    "sips",
+                    "-s",
+                    "format",
+                    "icns",
+                    str(repo_root / "source" / "txt_xpander.ico"),
+                    "--out",
+                    str(output),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertGreater(output.stat().st_size, 0)
+
+    def test_macos_release_reports_the_signing_mode_that_was_used(self):
+        repo_root = Path(__file__).resolve().parents[2]
+        script = (repo_root / "build_release_macos.sh").read_text(encoding="utf-8")
+
+        self.assertIn('if [[ "$SIGN_IDENTITY" == "-" ]]', script)
+        self.assertIn("Every ad-hoc rebuild changes the bundle's identity", script)
+        self.assertIn('The bundle is signed with \\"$SIGN_IDENTITY\\"', script)
 
 if __name__ == "__main__":
     unittest.main()

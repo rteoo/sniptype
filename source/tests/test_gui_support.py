@@ -1,13 +1,141 @@
 import unittest
+from unittest import mock
 
 from gui_support import (
     filter_static_snippets,
+    focus_modal_input,
     iter_filtered_mapping_items,
     snippet_row_values,
 )
+import gui_support
 
 
 class GuiSupportTests(unittest.TestCase):
+    def test_modal_input_reveals_and_focuses_only_after_activation(self):
+        events = []
+        dialog = mock.Mock()
+        initial_widget = mock.Mock()
+        submit = mock.Mock(side_effect=lambda callback: callback(object()))
+        dialog.attributes.side_effect = (
+            lambda name, value: events.append((name, value))
+        )
+        dialog.deiconify.side_effect = lambda: events.append("deiconify")
+        dialog.wait_visibility.side_effect = lambda: events.append("visible")
+        dialog.lift.side_effect = lambda: events.append("lift")
+        initial_widget.focus_force.side_effect = lambda: events.append("focus")
+        cancel_activation = mock.Mock()
+        cancel_key_focus = mock.Mock()
+
+        with mock.patch.object(
+            gui_support.platform_support,
+            "activate_application_when_ready",
+            return_value=cancel_activation,
+        ) as activate, mock.patch.object(
+            gui_support.platform_support,
+            "focus_tk_window_when_ready",
+            return_value=cancel_key_focus,
+        ) as focus_native:
+            cancel = focus_modal_input(dialog, initial_widget, submit)
+            self.assertEqual(
+                [("-alpha", 0.0), "deiconify", "visible", "lift"],
+                events,
+            )
+            focus_native.assert_not_called()
+            activate.call_args.args[0]()
+            focus_native.call_args.args[2]()
+
+        self.assertEqual(
+            [
+                ("-alpha", 0.0),
+                "deiconify",
+                "visible",
+                "lift",
+                ("-alpha", 1.0),
+                "lift",
+                "focus",
+            ],
+            events,
+        )
+        cancel()
+        cancel_activation.assert_called_once_with()
+        cancel_key_focus.assert_called_once_with()
+
+    def test_cancelled_modal_drops_a_queued_reveal(self):
+        dialog = mock.Mock()
+        initial_widget = mock.Mock()
+        queued = []
+        cancel_native = mock.Mock()
+
+        with mock.patch.object(
+            gui_support.platform_support,
+            "activate_application_when_ready",
+            side_effect=lambda on_active, _on_failed: on_active() or cancel_native,
+        ), mock.patch.object(
+            gui_support.platform_support,
+            "focus_tk_window_when_ready",
+        ):
+            cancel = focus_modal_input(
+                dialog,
+                initial_widget,
+                lambda callback: queued.append(callback),
+            )
+
+        cancel()
+        queued[0](object())
+        initial_widget.focus_force.assert_not_called()
+        dialog.attributes.assert_called_once_with("-alpha", 0.0)
+        cancel_native.assert_called_once_with()
+
+    def test_modal_without_an_input_focuses_the_dialog_itself(self):
+        dialog = mock.Mock()
+
+        with mock.patch.object(
+            gui_support.platform_support,
+            "activate_application_when_ready",
+            side_effect=lambda on_active, _on_failed: on_active() or (lambda: None),
+        ), mock.patch.object(
+            gui_support.platform_support,
+            "focus_tk_window_when_ready",
+            side_effect=lambda _dialog, _target, on_key, _on_failed: (
+                on_key(),
+                (lambda: None),
+            )[-1],
+        ):
+            cancel = focus_modal_input(
+                dialog,
+                None,
+                lambda callback: callback(object()),
+            )
+
+        dialog.focus_force.assert_called_once_with()
+        cancel()
+
+    def test_native_key_failure_destroys_hidden_dialog_and_raises(self):
+        dialog = mock.Mock()
+        initial_widget = mock.Mock()
+
+        with mock.patch.object(
+            gui_support.platform_support,
+            "activate_application_when_ready",
+            side_effect=lambda on_active, _on_failed: on_active() or (lambda: None),
+        ), mock.patch.object(
+            gui_support.platform_support,
+            "focus_tk_window_when_ready",
+            side_effect=lambda _dialog, _target, _on_key, on_failed: (
+                on_failed("native key failed"),
+                (lambda: None),
+            )[-1],
+        ):
+            cancel = focus_modal_input(
+                dialog,
+                initial_widget,
+                lambda callback: callback(object()),
+            )
+
+        dialog.destroy.assert_called_once_with()
+        with self.assertRaisesRegex(RuntimeError, "native key failed"):
+            cancel()
+
     def test_filter_static_snippets_without_query_keeps_only_persisted_static_entries(self):
         snippets = {
             "xname": "Example User",

@@ -1,3 +1,5 @@
+import platform_support
+
 from rich_text_support import extract_plain_text, is_rich_text_payload
 from variable_support import find_variable_names
 
@@ -74,3 +76,66 @@ def center_dialog(dialog, root):
     x = root.winfo_rootx() + (root.winfo_width() - width) // 2
     y = root.winfo_rooty() + (root.winfo_height() - height) // 2
     dialog.geometry(f"{width}x{height}+{x}+{y}")
+
+
+def focus_modal_input(dialog, initial_widget, submit):
+    """Reveal a withdrawn modal dialog only after its app can receive keys.
+
+    ``submit`` is ``GuiThread.submit``. The native activation callback may run
+    inside Cocoa, so it queues the reveal/focus closure instead of touching Tk.
+    Callers must withdraw the Toplevel immediately after creating it and invoke
+    the returned cancellation callable after ``wait_window`` unwinds.
+    """
+    state = {"cancelled": False}
+
+    def fail(reason):
+        if state["cancelled"]:
+            return
+        state["failure"] = reason
+        submit(lambda _root: dialog.destroy())
+
+    def show_ready(_root):
+        if state["cancelled"]:
+            return
+        if platform_support.IS_MAC:
+            dialog.attributes("-alpha", 1.0)
+        dialog.lift()
+        focus_target = initial_widget if initial_widget is not None else dialog
+        focus_target.focus_force()
+
+    def request_key_focus(_root):
+        if state["cancelled"]:
+            return
+        focus_target = initial_widget if initial_widget is not None else dialog
+        state["cancel_key_focus"] = platform_support.focus_tk_window_when_ready(
+            dialog,
+            focus_target,
+            lambda: submit(show_ready),
+            fail,
+        )
+
+    def queue_key_focus():
+        submit(request_key_focus)
+
+    state["failure"] = None
+    state["cancel_key_focus"] = lambda: None
+    # Give AppKit a real window to activate, but do not let it look typeable
+    # until both the application and this exact NSWindow own keyboard focus.
+    if platform_support.IS_MAC:
+        dialog.attributes("-alpha", 0.0)
+    dialog.deiconify()
+    dialog.wait_visibility()
+    dialog.lift()
+    cancel_activation = platform_support.activate_application_when_ready(
+        queue_key_focus,
+        fail,
+    )
+
+    def cancel():
+        state["cancelled"] = True
+        cancel_activation()
+        state["cancel_key_focus"]()
+        if state["failure"] is not None:
+            raise RuntimeError(state["failure"])
+
+    return cancel
