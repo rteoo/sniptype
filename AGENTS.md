@@ -54,7 +54,7 @@ build_release.bat
 
 ```powershell
 build_release.bat      # produce dist\Txt Xpander first
-build_installer.bat    # compile installer\Output\TxtXpanderSetup-<version>.exe
+build_installer.bat    # compile installer\TxtXpanderSetup-<version>.exe
 ```
 
 `build_installer.bat` requires the Inno Setup 6 compiler (`ISCC.exe`) and compiles `installer\txt_xpander.iss`: a per-user install to `%LOCALAPPDATA%\Programs\Txt Xpander` (no admin), Start Menu/Desktop/Startup shortcuts, and a proper uninstaller that leaves `~/.txt_xpander` user data intact. Bump `MyAppVersion` and `MyAppChannel` in the `.iss` alongside the app release metadata.
@@ -101,7 +101,7 @@ Build details: the release is `--onedir` (not `--onefile`); the hidden import `p
 - `source\tests\` contains unit tests.
 - `source\docs\` contains planning notes for refactors and features, plus `audit-report.md` (full code audit) and `improvement-plan.md` (phased roadmap).
 - `source\run_txt_xpander.bat` is the source-side launcher. It checks/install dependencies and starts the app with `pythonw`.
-- `installer\txt_xpander.iss` is the Inno Setup script; `build_installer.bat` compiles it into `installer\Output\` (gitignored). The per-user install location is independent of where user data lives (`~/.txt_xpander`), which is what makes a Program-Files-style install safe.
+- `installer\txt_xpander.iss` is the Inno Setup script; `build_installer.bat` compiles the versioned installer directly into `installer\` (gitignored). The per-user install location is independent of where user data lives (`~/.txt_xpander`), which is what makes a Program-Files-style install safe.
 - `build_release_macos.sh` is the macOS build script; it produces `dist/Txt Xpander.app` (menu-bar-only bundle).
 - `dist\Txt Xpander\` is the packaged application folder. Treat `build\`, `dist\`, and `dist_staging\` as generated output unless the task is explicitly about packaging.
 

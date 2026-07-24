@@ -36,6 +36,6 @@ if errorlevel 1 (
 )
 
 echo.
-echo Done. The installer is in installer\Output\
+echo Done. The installer is in installer\
 pause
 endlocal
