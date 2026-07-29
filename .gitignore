@@ -12,3 +12,4 @@ installer/TxtXpanderSetup-*.exe
 *.log
 /tests/
 source/tests/tmp/
+*.DS_Store
