@@ -641,6 +641,58 @@ class FrontmostApplicationTests(unittest.TestCase):
             self.assertFalse(ps.restore_frontmost_application(target))
 
 
+class TextTargetTests(unittest.TestCase):
+    def test_windows_capture_skips_this_process(self):
+        user32 = mock.Mock()
+        user32.GetForegroundWindow.return_value = 42
+
+        def get_pid(hwnd, out):
+            out._obj.value = os.getpid()
+            return 0
+
+        user32.GetWindowThreadProcessId.side_effect = get_pid
+        with mock.patch.object(ps, "IS_WINDOWS", True), \
+                mock.patch.object(ps, "IS_MAC", False), \
+                mock.patch.object(ps, "_win32_user32", return_value=user32):
+            self.assertIsNone(ps.capture_text_target())
+
+    def test_windows_restore_refuses_a_dead_window(self):
+        user32 = mock.Mock()
+        user32.IsWindow.return_value = 0
+        with mock.patch.object(ps, "IS_WINDOWS", True), \
+                mock.patch.object(ps, "IS_MAC", False), \
+                mock.patch.object(ps, "_win32_user32", return_value=user32):
+            self.assertFalse(ps.restore_text_target(("hwnd", 99)))
+
+    def test_missing_target_is_not_restored(self):
+        self.assertFalse(ps.restore_text_target(None))
+        self.assertFalse(ps.text_target_is_alive(None))
+
+    def test_macos_restore_text_target_waits_for_workspace_activation(self):
+        target = mock.Mock()
+        with mock.patch.object(ps, "IS_MAC", True), \
+                mock.patch.object(ps, "IS_WINDOWS", False), \
+                mock.patch.object(ps, "restore_application_when_ready") as ready:
+            def complete(app, on_active, on_failed):
+                on_active()
+                return lambda: None
+
+            ready.side_effect = complete
+            self.assertTrue(ps.restore_text_target(target))
+        ready.assert_called_once()
+        self.assertIs(ready.call_args.args[0], target)
+
+    def test_macos_restore_text_target_fails_closed_on_timeout(self):
+        target = mock.Mock()
+        with mock.patch.object(ps, "IS_MAC", True), \
+                mock.patch.object(ps, "IS_WINDOWS", False), \
+                mock.patch.object(ps, "restore_application_when_ready") as ready:
+            ready.return_value = lambda: None
+            self.assertFalse(
+                ps.wait_for_restored_application(target, timeout_seconds=0.01)
+            )
+
+
 class ApplicationActivationBarrierTests(unittest.TestCase):
     """Accessory dialogs wait for native activation before revealing Tk."""
 

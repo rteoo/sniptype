@@ -36,6 +36,12 @@ def make_startup_app():
     app._autostart_state = tx.AUTOSTART_ABSENT
     app.is_admin = mock.Mock(return_value=False)
     app.load_tray_icon = mock.Mock(return_value="icon-image")
+    app.voice = None
+    app._voice_menu_label = lambda text=None: "Entrada por voz"
+    app._voice_menu_checked = lambda item=None: False
+    app._voice_menu_visible = lambda item=None: False
+    app.toggle_voice = mock.Mock()
+    app.open_voice_settings = mock.Mock()
     return app
 
 

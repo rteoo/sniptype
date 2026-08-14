@@ -4,6 +4,28 @@ All notable changes to Txt Xpander are documented here. The format is based on [
 
 ## [Unreleased]
 
+### Added
+
+- **Optional voice input** (default off, unreleased): push-to-talk dictation,
+  spoken triggers, and form-field fill. The module is implemented; live ASR
+  is not proven and is not in the stable `v3.3.0` build. Models download on
+  demand into a non-roaming cache. Only the Balanced profile is
+  user-selectable; Accuracy and Live streaming stay in the catalog until they
+  pass adoption gates. Enabling voice without the optional `transcribe-cpp`
+  backend reports unavailable. A missing backend or a construction failure
+  leaves expansion unchanged. Changing profile during a hold stops the
+  microphone; Escape cancels native inference via `session.cancel()` and
+  shutdown joins workers before unload; a form transcript binds to the form
+  that was open at press; macOS restore waits for the captured app before
+  Cmd+V. The expansion listener does not stop PortAudio. See
+  `source/docs/voice-input-plan.md`.
+
+### Changed
+
+- The Windows and macOS build scripts exclude `torch`, `transformers`,
+  `onnxruntime`, `cv2`, `torchvision`, `torchaudio`, and `scipy` so a dirty
+  host environment cannot pull them into the packaged app.
+
 ## [3.3.0-beta] — 2026-07-23
 
 This is the beta channel for the next feature release. The stable channel
