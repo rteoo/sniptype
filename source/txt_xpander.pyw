@@ -1724,8 +1724,9 @@ class TextExpander:
 
         try:
             self.gui.submit(apply)
-        except Exception:
-            apply()
+        except Exception as exc:
+            # Never call Tk from the voice worker. On macOS that aborts the process.
+            self.logger.warning(f"Não foi possível preencher o campo por voz: {exc}")
 
     def _persist_voice_settings(self, payload):
         current = load_settings(self.settings_file)
