@@ -2,6 +2,22 @@
 
 All notable changes to Txt Xpander are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [3.4.0-beta.2] — 2026-08-14
+
+### Added
+
+- Dictation and voice-command push-to-talk shortcuts are configurable in the
+  Voice Settings dialog, validated before saving, and applied without
+  reloading the speech model.
+
+### Fixed
+
+- Normal recordings no longer exhaust a 64-chunk callback queue after roughly
+  one second. Buffered capture now uses stable 1,024-sample blocks and enforces
+  the documented 30-second limit by sample count.
+- When custom shortcuts overlap, the most-specific modifier chord wins no
+  matter which action owns it.
+
 ## [3.4.0-beta.1] — 2026-08-14
 
 ### Added
