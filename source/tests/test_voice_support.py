@@ -156,6 +156,16 @@ class ControllerTests(unittest.TestCase):
             self.controller.delete_active_model()
         self.assertFalse(self.controller.enabled)
 
+    def test_reapplying_same_options_retries_an_unavailable_backend(self):
+        self._ready()
+        self.controller.disable()
+        self.controller.settings.enabled = True
+        with mock.patch("voice_support.model_is_installed", return_value=True), \
+                mock.patch("voice_support.installed_model_path", return_value="model.gguf"), \
+                mock.patch.object(self.controller, "_start_monitor"):
+            self.controller.apply_options(profile="balanced")
+        self.assertEqual(self.controller.state, STATE_IDLE)
+
     def test_language_change_reloads_the_idle_backend(self):
         self._ready()
         with mock.patch("voice_support.model_is_installed", return_value=True), \
