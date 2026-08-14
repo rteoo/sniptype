@@ -38,6 +38,18 @@ class VoiceSettingsTests(unittest.TestCase):
         self.assertTrue(payload["voice_enabled"])
         self.assertEqual(payload["voice_profile"], "accuracy")
 
+    def test_colliding_hotkeys_stay_distinct(self):
+        notes = []
+        settings = resolve_voice_settings(
+            {
+                "voice_hotkey": "ctrl+alt+shift+space",
+                "voice_command_hotkey": "ctrl+alt+shift+space",
+            },
+            warnings=notes,
+        )
+        self.assertNotEqual(settings.hotkey, settings.command_hotkey)
+        self.assertTrue(notes)
+
 
 if __name__ == "__main__":
     unittest.main()

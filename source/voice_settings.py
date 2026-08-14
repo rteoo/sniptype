@@ -88,9 +88,12 @@ def resolve_voice_settings(settings, warnings=None):
     if command_hotkey == hotkey:
         notes.append(
             "voice_command_hotkey colide com voice_hotkey; "
-            f"comando volta para {DEFAULT_COMMAND_HOTKEY}."
+            "comando recebe um atalho distinto."
         )
-        command_hotkey = DEFAULT_COMMAND_HOTKEY
+        for candidate in (DEFAULT_COMMAND_HOTKEY, "ctrl+shift+space"):
+            if candidate != hotkey:
+                command_hotkey = candidate
+                break
 
     return VoiceSettings(
         enabled=enabled,

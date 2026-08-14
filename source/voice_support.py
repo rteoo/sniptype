@@ -179,12 +179,16 @@ class VoiceController:
             self._form_apply = None
 
     def enable(self):
+        if self._shutdown.is_set():
+            return
         with self._lock:
             self.settings.enabled = True
             if self._state in (STATE_LOADING, STATE_IDLE):
                 return
             if self._state in (STATE_RECORDING, STATE_TRANSCRIBING, STATE_ROUTING):
                 return
+            # disable()/cancel() leave this set; a later enable must start clean.
+            self._cancel.clear()
             self._state = STATE_LOADING
             self._load_error = None
         self._persist()
