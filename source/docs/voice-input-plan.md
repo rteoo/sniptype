@@ -1,15 +1,35 @@
 # Voice Input — Evaluation and Integration Plan
 
-Status: **implementation complete as an opt-in, default-off module**
-(`feat/voice-input`, 2026-08-14). Remaining work is empirical: Handy
-composition, a real transcribe.cpp wheel, and the adoption-gate benchmark.
-Do not add `sherpa-onnx` until there is a pinned ONNX catalog; the shipped
-artifacts are GGUF for transcribe.cpp.
+## Implementation status (2026-08-14)
 
-Evaluates open-source speech-to-text projects as the basis for a dictation
-feature in Txt Xpander, originally framed as "which Wispr Flow alternative
-should we fork?" The short answer is that forking is the wrong shape; the
-reasoning is below.
+The **code for this plan is done** on `feat/voice-input` (PR #66).
+**Dictation is not proven and is not in the stable `v3.3.0` release.**
+Do not merge expecting voice to paste on a clean install.
+
+| In the branch | Not done |
+|---|---|
+| Opt-in, default-off push-to-talk | Real `transcribe.cpp` / `transcribe-cpp` packaged for Windows x64 and macOS ARM64 |
+| Dedicated hotkey observer (not the expansion listener) | Parakeet Q8 download and adoption-gate bench on target hardware |
+| Dispatch into insert / spoken trigger / form field, without `_dispatch_expansion` | Handy-alongside composition test |
+| SHA256 GGUF catalog; only Balanced/Parakeet is user-selectable | Isolated `build_release` that proves the torch/ML excludes |
+| Failed import or constructor leaves expansion running | Qwen (Accuracy) and Nemotron (Live streaming) — hidden until they pass their gates and the OpenMDW-1.1 review |
+| Required deps stay the four stable packages; `sounddevice` and `transcribe-cpp` are optional | iOS (on hold) |
+| Unit suite covers the isolation path | Merge to stable |
+
+Enabling **Entrada por voz** without the optional native backend reports
+unavailable. That is expected. iOS is out of scope until this Windows-first
+path is proven.
+
+Remaining work is measurement, not more product surface. Do not add
+`sherpa-onnx` until there is a pinned ONNX catalog; the catalog artifacts are
+GGUF for transcribe.cpp.
+
+## Evaluation
+
+This document also records why the feature is an opt-in module rather than a
+fork. It was originally framed as "which Wispr Flow alternative should we
+fork?" The short answer is that forking is the wrong shape; the reasoning is
+below.
 
 ## Evidence and its limits
 
@@ -513,8 +533,7 @@ and startup before accepting the size reduction.
 
 ## Next steps
 
-Implementation of the opt-in module is in PR #66. What remains is measurement,
-not more product surface:
+See [Implementation status](#implementation-status-2026-08-14). In order:
 
 1. Run the Handy composition test on Windows and macOS.
 2. Rebuild from an isolated environment and confirm the PyInstaller excludes

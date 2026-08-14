@@ -6,12 +6,15 @@ All notable changes to Txt Xpander are documented here. The format is based on [
 
 ### Added
 
-- **Optional voice input** (default off): push-to-talk dictation, spoken
-  triggers, and form-field fill. Models download on demand into a non-roaming
-  cache. Only the Balanced profile is user-selectable; Accuracy and Live
-  streaming stay in the catalog until they pass adoption gates. A missing
-  voice backend or a construction failure leaves expansion unchanged. The
-  expansion listener is unchanged.
+- **Optional voice input** (default off, unreleased): push-to-talk dictation,
+  spoken triggers, and form-field fill. The module is implemented; live ASR
+  is not proven and is not in the stable `v3.3.0` build. Models download on
+  demand into a non-roaming cache. Only the Balanced profile is
+  user-selectable; Accuracy and Live streaming stay in the catalog until they
+  pass adoption gates. Enabling voice without the optional `transcribe-cpp`
+  backend reports unavailable. A missing backend or a construction failure
+  leaves expansion unchanged. The expansion listener is unchanged. See
+  `source/docs/voice-input-plan.md`.
 
 ### Changed
 
