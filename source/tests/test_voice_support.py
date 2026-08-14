@@ -156,6 +156,12 @@ class ControllerTests(unittest.TestCase):
             self.controller.delete_active_model()
         self.assertFalse(self.controller.enabled)
 
+    def test_language_change_reloads_the_idle_backend(self):
+        self._ready()
+        with mock.patch("voice_support.installed_model_path", return_value="model.gguf"):
+            self.controller.set_language("en-US")
+        self.assertEqual(self.backend.language, "en-US")
+
     def test_denied_microphone_does_not_open_capture(self):
         self._ready()
         self.controller._microphone_status = lambda: "denied"
