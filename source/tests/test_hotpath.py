@@ -458,6 +458,13 @@ class VoiceIsolationTests(unittest.TestCase):
         self.assertEqual("ab", app.typed_text)
         app.task_runner.start.assert_not_called()
 
+    def test_form_hooks_are_safe_when_voice_is_missing(self):
+        with mock.patch.object(tx, "VoiceController", side_effect=RuntimeError("boom")):
+            app = make_app(self.tmp, {"xform": "Olá %%nome%%"})
+        self.assertIsNone(app.voice)
+        app._register_voice_form_target(lambda text: None)
+        app._unregister_voice_form_target()
+
 
 class BufferMarginDispatchTests(unittest.TestCase):
     """The typed-text buffer must be sized so a trigger longer than the default,
