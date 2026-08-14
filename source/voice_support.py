@@ -181,20 +181,20 @@ class VoiceController:
         )
         for warning in warnings:
             self._log(warning)
-        previous = self.settings.language
+        previous = self.settings
         self.settings = candidate
         self._persist()
-        if (
-            candidate.language != previous
-            and self.is_enabled()
-            and self.state == STATE_IDLE
-            and self._backend.is_loaded()
-        ):
-            path = installed_model_path(
-                catalog_entry(candidate.profile), self.cache_dir
-            )
-            if path:
-                self._backend.load(path, candidate.profile, candidate.language)
+        if candidate.language == previous.language:
+            return
+        with self._lock:
+            if not candidate.enabled or self._state != STATE_IDLE:
+                return
+            self._state = STATE_LOADING
+        self.task_runner.start(
+            self._switch_profile_worker,
+            previous,
+            name="voice-switch-language",
+        )
 
     def partial_text(self):
         with self._lock:
