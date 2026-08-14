@@ -156,6 +156,28 @@ class ControllerTests(unittest.TestCase):
             self.controller.delete_active_model()
         self.assertFalse(self.controller.enabled)
 
+    def test_denied_microphone_does_not_open_capture(self):
+        self._ready()
+        self.controller._microphone_status = lambda: "denied"
+        self.assertFalse(self.controller.handle_hotkey_press(MODE_DICTATION))
+        self.assertEqual(self.controller.state, STATE_IDLE)
+        self.assertFalse(self.capture.started)
+
+    def test_download_progress_reaches_the_tray_label(self):
+        seen = []
+        self.controller._on_status_change = lambda: seen.append(self.controller.status_label())
+
+        def fake_download(entry, cache_dir, progress=None, cancel_event=None):
+            if progress is not None:
+                progress(50, 100)
+            return os.path.join(self.tmp, "model.gguf")
+
+        self.controller._download = fake_download
+        with mock.patch("voice_support.model_is_installed", return_value=False), \
+                mock.patch.object(self.controller, "_start_monitor"):
+            self.controller.enable()
+        self.assertTrue(any("baixando" in label for label in seen))
+
     def test_enable_after_disable_returns_to_idle(self):
         self._ready()
         self.controller.disable()

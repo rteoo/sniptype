@@ -149,6 +149,19 @@ def format_size(size_bytes):
     return f"{size_bytes / (1024 ** 2):.0f} MB"
 
 
+def third_party_notices():
+    """License lines for the settings dialog and a future About surface."""
+    lines = [
+        "transcribe.cpp — MIT",
+        "sounddevice / PortAudio — MIT",
+    ]
+    for entry in MODEL_CATALOG:
+        lines.append(
+            f"{entry['upstream_model']} — {entry['license_id']}. {entry['attribution']}"
+        )
+    return tuple(lines)
+
+
 def default_language_for_profile(profile, requested=LANGUAGE_AUTO):
     """Resolve the language stored in settings against profile constraints.
 

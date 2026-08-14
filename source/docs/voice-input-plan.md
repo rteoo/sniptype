@@ -1,8 +1,10 @@
 # Voice Input — Evaluation and Integration Plan
 
-Status: **implemented as an opt-in, default-off module** on `feat/voice-input`
-(2026-08-13). Real-model benchmark gates and packaged `transcribe.cpp` wheels
-remain open. The architecture below is what shipped.
+Status: **implementation complete as an opt-in, default-off module**
+(`feat/voice-input`, 2026-08-14). Remaining work is empirical: Handy
+composition, a real transcribe.cpp wheel, and the adoption-gate benchmark.
+Do not add `sherpa-onnx` until there is a pinned ONNX catalog; the shipped
+artifacts are GGUF for transcribe.cpp.
 
 Evaluates open-source speech-to-text projects as the basis for a dictation
 feature in Txt Xpander, originally framed as "which Wispr Flow alternative
@@ -511,21 +513,13 @@ and startup before accepting the size reduction.
 
 ## Next steps
 
-1. Run the Handy composition test on Windows and macOS, including literal text,
-   direct triggers, mapping triggers, form dialogs, and terminator mode.
-2. Reproduce and fix PyInstaller over-collection from an isolated build through
-   the durable Windows and macOS build scripts; do not edit the generated spec.
-3. Obtain dependency approval for an isolated benchmark prototype. Run
-   transcribe.cpp Q8 builds of Parakeet v3, Qwen3-ASR-1.7B, and Nemotron 3.5 at
-   560 ms on the same pt-BR/en-US/code-switched corpus; keep Whisper Medium Q8
-   as the control. Measure every profile-specific adoption gate.
-4. In parallel with the benchmark, package the candidate native runtime and
-   model loader on clean Windows x64 and macOS ARM64 hosts. Test model switching,
-   cancellation, corrupt downloads, Unicode paths, and one-model-only residency.
-5. If the Balanced gates pass, approve the production dependency set and write
-   the implementation plan around the recording state machine, target handling,
-   transcript dispatcher, profile-aware model manager, permissions, and packaged
-   test matrix. Maximum accuracy and Live streaming ship only if their own gates
-   and licenses pass.
-6. Only then implement the opt-in feature behind a default-off setting, with
-   Balanced selected by default.
+Implementation of the opt-in module is in PR #66. What remains is measurement,
+not more product surface:
+
+1. Run the Handy composition test on Windows and macOS.
+2. Rebuild from an isolated environment and confirm the PyInstaller excludes
+   actually drop torch/transformers/onnxruntime.
+3. Package `transcribe.cpp` on Windows x64 and macOS ARM64, then run the
+   Balanced adoption gates on the named hardware.
+4. Keep Accuracy and Live streaming hidden until they pass their own gates
+   and the Nemotron OpenMDW-1.1 review.

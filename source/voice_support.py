@@ -70,6 +70,8 @@ class VoiceController:
         capture_target=None,
         restore_target=None,
         secure_input_blocks=None,
+        microphone_status=None,
+        on_status_change=None,
         backend=None,
         capture_factory=None,
         cache_dir=None,
@@ -87,6 +89,10 @@ class VoiceController:
         self._capture_target = capture_target or (lambda: VoiceTarget("unknown"))
         self._restore_target = restore_target or (lambda target: True)
         self._secure_input_blocks = secure_input_blocks or (lambda: False)
+        self._microphone_status = microphone_status
+        self._on_status_change = on_status_change
+        self._download_done = 0
+        self._download_total = 0
         self._backend = backend if backend is not None else create_backend()
         self._capture_factory = capture_factory or AudioCapture
         self._download = download or download_model
@@ -132,7 +138,19 @@ class VoiceController:
         with self._lock:
             if not self.settings.enabled:
                 return "Entrada por voz"
+            if self._state == STATE_LOADING and self._download_total:
+                percent = min(100, int(100 * self._download_done / self._download_total))
+                return f"Entrada por voz (baixando {percent}%)"
             return _STATE_LABELS.get(self._state, "Entrada por voz")
+
+    def _emit_status(self):
+        callback = self._on_status_change
+        if callback is None:
+            return
+        try:
+            callback()
+        except Exception:
+            pass
 
     def is_enabled(self):
         return bool(self.settings.enabled)
@@ -191,7 +209,10 @@ class VoiceController:
             self._cancel.clear()
             self._state = STATE_LOADING
             self._load_error = None
+            self._download_done = 0
+            self._download_total = 0
         self._persist()
+        self._emit_status()
         self.task_runner.start(self._load_worker, name="voice-load")
 
     def disable(self):
@@ -260,6 +281,14 @@ class VoiceController:
             if mode not in (MODE_DICTATION, MODE_COMMAND):
                 mode = MODE_DICTATION
             form_apply = self._form_apply
+        if self._microphone_status is not None:
+            status = self._microphone_status()
+            if status == "denied":
+                self._notify(
+                    "O macOS bloqueou o microfone. Conceda a permissão e reinicie o app.",
+                    key="voice-mic",
+                )
+                return False
         target = self._capture_target()
         if form_apply is not None and mode != MODE_COMMAND:
             target = VoiceTarget("form")
@@ -334,6 +363,11 @@ class VoiceController:
         if self._shutdown.is_set():
             return
         try:
+            if not self._backend.available() and not self._backend.is_loaded():
+                raise VoiceRuntimeError(
+                    "O runtime transcribe.cpp não está instalado. "
+                    "A voz fica desligada até o pacote nativo estar disponível."
+                )
             path = self._ensure_model()
             if self._cancel.is_set() or self._shutdown.is_set():
                 return
@@ -343,6 +377,7 @@ class VoiceController:
                 self._state = STATE_UNAVAILABLE
                 self._load_error = str(exc)
             self._notify(str(exc), key="voice-load")
+            self._emit_status()
             return
         except Exception as exc:
             with self._lock:
@@ -350,14 +385,19 @@ class VoiceController:
                 self._load_error = str(exc)
             self._warn(f"Falha ao ativar a entrada por voz: {exc}")
             self._notify(f"Falha ao ativar a entrada por voz: {exc}", key="voice-load")
+            self._emit_status()
             return
         with self._lock:
             if not self.settings.enabled or self._shutdown.is_set():
                 self._state = STATE_UNAVAILABLE
+                self._emit_status()
                 return
             self._state = STATE_IDLE
             self._load_error = None
+            self._download_done = 0
+            self._download_total = 0
         self._start_monitor()
+        self._emit_status()
 
     def _switch_profile_worker(self, previous):
         if self._shutdown.is_set():
@@ -395,7 +435,19 @@ class VoiceController:
             raise VoiceModelError("Perfil de voz desconhecido.")
         if model_is_installed(entry, self.cache_dir):
             return installed_model_path(entry, self.cache_dir)
-        return self._download(entry, self.cache_dir, cancel_event=self._cancel)
+
+        def progress(done, total):
+            with self._lock:
+                self._download_done = done
+                self._download_total = total or entry["size_bytes"]
+            self._emit_status()
+
+        return self._download(
+            entry,
+            self.cache_dir,
+            progress=progress,
+            cancel_event=self._cancel,
+        )
 
     def _finish_worker(self, generation, capture):
         if self._shutdown.is_set():
