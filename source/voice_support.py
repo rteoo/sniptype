@@ -181,8 +181,20 @@ class VoiceController:
         )
         for warning in warnings:
             self._log(warning)
+        previous = self.settings.language
         self.settings = candidate
         self._persist()
+        if (
+            candidate.language != previous
+            and self.is_enabled()
+            and self.state == STATE_IDLE
+            and self._backend.is_loaded()
+        ):
+            path = installed_model_path(
+                catalog_entry(candidate.profile), self.cache_dir
+            )
+            if path:
+                self._backend.load(path, candidate.profile, candidate.language)
 
     def partial_text(self):
         with self._lock:
@@ -390,13 +402,15 @@ class VoiceController:
         with self._lock:
             if not self.settings.enabled or self._shutdown.is_set():
                 self._state = STATE_UNAVAILABLE
-                self._emit_status()
-                return
-            self._state = STATE_IDLE
-            self._load_error = None
-            self._download_done = 0
-            self._download_total = 0
-        self._start_monitor()
+                start_monitor = False
+            else:
+                self._state = STATE_IDLE
+                self._load_error = None
+                self._download_done = 0
+                self._download_total = 0
+                start_monitor = True
+        if start_monitor:
+            self._start_monitor()
         self._emit_status()
 
     def _switch_profile_worker(self, previous):
