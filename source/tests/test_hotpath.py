@@ -485,6 +485,33 @@ class VoiceIsolationTests(unittest.TestCase):
         entry.insert.assert_not_called()
         entry.winfo_exists.assert_not_called()
 
+    def test_transient_voice_status_never_rebuilds_the_tray_menu(self):
+        app = make_app(self.tmp, {"xhi": "hello"})
+        app.voice = mock.Mock()
+        app.voice.status_snapshot.return_value = {
+            "state": "transcribing",
+            "mode": "dictation",
+            "partial": "",
+        }
+        app.gui.submit = mock.Mock()
+        app.refresh_tray_menu = mock.Mock()
+        app._voice_status_changed()
+        app.gui.submit.assert_called_once()
+        app.refresh_tray_menu.assert_not_called()
+
+    def test_idle_voice_status_still_refreshes_the_tray_menu(self):
+        app = make_app(self.tmp, {"xhi": "hello"})
+        app.voice = mock.Mock()
+        app.voice.status_snapshot.return_value = {
+            "state": "idle",
+            "mode": None,
+            "partial": "",
+        }
+        app.gui.submit = mock.Mock()
+        app.refresh_tray_menu = mock.Mock()
+        app._voice_status_changed()
+        app.refresh_tray_menu.assert_called_once_with()
+
 
 class BufferMarginDispatchTests(unittest.TestCase):
     """The typed-text buffer must be sized so a trigger longer than the default,
