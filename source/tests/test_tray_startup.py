@@ -233,10 +233,10 @@ class AppVersionFormattingTests(unittest.TestCase):
             "Txt Xpander v3.3.0 beta",
         )
 
-    def test_running_build_is_the_3_3_0_stable_release(self):
-        self.assertEqual(tx.APP_VERSION, "3.3.0")
-        self.assertEqual(tx.RELEASE_CHANNEL, "stable")
-        self.assertEqual(tx.APP_DISPLAY_NAME, "Txt Xpander v3.3.0")
+    def test_running_build_is_the_3_4_0_beta_release(self):
+        self.assertEqual(tx.APP_VERSION, "3.4.0")
+        self.assertEqual(tx.RELEASE_CHANNEL, "beta")
+        self.assertEqual(tx.APP_DISPLAY_NAME, "Txt Xpander v3.4.0 beta")
 
     def test_older_source_without_a_channel_is_treated_as_stable(self):
         with mock.patch.object(tx, "__doc__", "Version: 9.8.7"):
@@ -253,17 +253,19 @@ class AppVersionFormattingTests(unittest.TestCase):
             "Txt Xpander — versão desconhecida",
         )
 
-    def test_windows_installer_matches_the_stable_metadata(self):
+    def test_windows_installer_matches_the_beta_metadata(self):
         repo_root = Path(__file__).resolve().parents[2]
         installer = (repo_root / "installer" / "txt_xpander.iss").read_text(
             encoding="utf-8-sig"
         )
-        self.assertIn('#define MyAppVersion "3.3.0"', installer)
-        self.assertIn('#define MyAppChannel "stable"', installer)
+        self.assertIn('#define MyAppVersion "3.4.0"', installer)
+        self.assertIn('#define MyAppChannel "beta"', installer)
         self.assertIn(
-            "OutputBaseFilename=TxtXpanderSetup-{#MyAppVersion}",
+            "OutputBaseFilename=TxtXpanderSetup-{#MyInstallerVersion}",
             installer,
         )
+        self.assertIn('MyInstallerVersion MyAppVersion + "-beta"', installer)
+        self.assertIn('MyAppDisplayVersion MyAppVersion + " beta"', installer)
 
     @unittest.skipUnless(sys.platform == "darwin", "needs macOS sips")
     def test_macos_release_icon_converts_from_the_shipped_ico(self):
