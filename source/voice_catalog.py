@@ -49,6 +49,7 @@ _PARAKEET_Q8 = {
     ),
     "source_url": "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3",
     "purpose": "Perfil equilibrado (padrão): ditado após soltar o atalho.",
+    "user_selectable": True,
 }
 
 _QWEN_Q8 = {
@@ -80,6 +81,7 @@ _QWEN_Q8 = {
     ),
     "source_url": "https://huggingface.co/Qwen/Qwen3-ASR-1.7B",
     "purpose": "Máxima acurácia (opcional): download grande e mais lento.",
+    "user_selectable": False,
 }
 
 _NEMOTRON_Q8 = {
@@ -111,6 +113,7 @@ _NEMOTRON_Q8 = {
     ),
     "source_url": "https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b",
     "purpose": "Transcrição ao vivo (opcional): parciais só na interface.",
+    "user_selectable": False,
 }
 
 MODEL_CATALOG = (_PARAKEET_Q8, _QWEN_Q8, _NEMOTRON_Q8)
@@ -138,6 +141,17 @@ def is_known_profile(profile):
     return profile in PROFILES
 
 
+def is_selectable_profile(profile):
+    """True when the profile may appear in the settings UI and be downloaded."""
+    entry = catalog_entry(profile)
+    return bool(entry and entry.get("user_selectable"))
+
+
+def selectable_catalog():
+    """Profiles that have passed (or do not need) adoption gates."""
+    return tuple(entry for entry in MODEL_CATALOG if entry.get("user_selectable"))
+
+
 def is_known_language(language):
     return language in LANGUAGES
 
@@ -155,7 +169,7 @@ def third_party_notices():
         "transcribe.cpp — MIT",
         "sounddevice / PortAudio — MIT",
     ]
-    for entry in MODEL_CATALOG:
+    for entry in selectable_catalog():
         lines.append(
             f"{entry['upstream_model']} — {entry['license_id']}. {entry['attribution']}"
         )

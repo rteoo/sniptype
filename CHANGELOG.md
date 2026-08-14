@@ -8,8 +8,10 @@ All notable changes to Txt Xpander are documented here. The format is based on [
 
 - **Optional voice input** (default off): push-to-talk dictation, spoken
   triggers, and form-field fill. Models download on demand into a non-roaming
-  cache. The Balanced profile is the default; Accuracy and Live streaming stay
-  explicit choices. The expansion listener is unchanged.
+  cache. Only the Balanced profile is user-selectable; Accuracy and Live
+  streaming stay in the catalog until they pass adoption gates. A missing
+  voice backend or a construction failure leaves expansion unchanged. The
+  expansion listener is unchanged.
 
 ### Changed
 

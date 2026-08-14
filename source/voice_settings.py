@@ -9,7 +9,7 @@ from voice_catalog import (
     LANGUAGE_AUTO,
     default_language_for_profile,
     is_known_language,
-    is_known_profile,
+    is_selectable_profile,
 )
 from voice_hotkey import DEFAULT_COMMAND_HOTKEY, DEFAULT_DICTATION_HOTKEY, parse_chord
 
@@ -56,8 +56,12 @@ def resolve_voice_settings(settings, warnings=None):
     enabled = _as_bool(data.get("voice_enabled", False))
 
     profile = data.get("voice_profile", DEFAULT_PROFILE)
-    if not is_known_profile(profile):
-        notes.append(f"voice_profile inválido ({profile!r}); usando {DEFAULT_PROFILE}.")
+    if not is_selectable_profile(profile):
+        if profile != DEFAULT_PROFILE:
+            notes.append(
+                f"voice_profile {profile!r} ainda não está liberado; "
+                f"usando {DEFAULT_PROFILE}."
+            )
         profile = DEFAULT_PROFILE
 
     language = data.get("voice_language", LANGUAGE_AUTO)

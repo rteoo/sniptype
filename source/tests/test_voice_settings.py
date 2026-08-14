@@ -33,10 +33,16 @@ class VoiceSettingsTests(unittest.TestCase):
         self.assertGreaterEqual(len(notes), 3)
 
     def test_payload_roundtrip_keys(self):
-        settings = resolve_voice_settings({"voice_enabled": True, "voice_profile": "accuracy"})
+        settings = resolve_voice_settings({"voice_enabled": True, "voice_profile": "balanced"})
         payload = voice_settings_payload(settings)
         self.assertTrue(payload["voice_enabled"])
-        self.assertEqual(payload["voice_profile"], "accuracy")
+        self.assertEqual(payload["voice_profile"], "balanced")
+
+    def test_hidden_profiles_fall_back_to_balanced(self):
+        notes = []
+        settings = resolve_voice_settings({"voice_profile": "accuracy"}, warnings=notes)
+        self.assertEqual(settings.profile, "balanced")
+        self.assertTrue(notes)
 
     def test_colliding_hotkeys_stay_distinct(self):
         notes = []
