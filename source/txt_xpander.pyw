@@ -879,7 +879,7 @@ class TextExpander:
 
             entry = tk.Entry(container, font=ui.font(10), width=28, **ui.entry_colors())
             entry.pack(fill=tk.X, pady=(0, 12))
-            self.voice.register_form_target(
+            self._register_voice_form_target(
                 lambda text, _entry=entry: self._apply_voice_form({"ticker": _entry}, text)
             )
 
@@ -910,7 +910,7 @@ class TextExpander:
                 dialog.wait_window(dialog)
             finally:
                 cancel_activation()
-                self.voice.unregister_form_target()
+                self._unregister_voice_form_target()
             return result[0]
 
         try:
@@ -1270,7 +1270,7 @@ class TextExpander:
             frame.grid_columnconfigure(0, weight=1)
 
             first_entry = None
-            self.voice.register_form_target(
+            self._register_voice_form_target(
                 lambda text, _entries=entries: self._apply_voice_form(_entries, text)
             )
             for i, name in enumerate(field_names):
@@ -1344,7 +1344,7 @@ class TextExpander:
                 dialog.wait_window(dialog)
             finally:
                 cancel_activation()
-                self.voice.unregister_form_target()
+                self._unregister_voice_form_target()
             return result[0]
 
         try:
@@ -1692,6 +1692,16 @@ class TextExpander:
                 cooldown_seconds=5,
             )
             return False
+
+    def _register_voice_form_target(self, apply_fn):
+        voice = self.voice
+        if voice is not None:
+            voice.register_form_target(apply_fn)
+
+    def _unregister_voice_form_target(self):
+        voice = self.voice
+        if voice is not None:
+            voice.unregister_form_target()
 
     def _apply_voice_form(self, entries, text):
         def apply(_root=None):
