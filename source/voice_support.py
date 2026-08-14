@@ -211,13 +211,15 @@ class VoiceController:
             )
         if active:
             # Stop the microphone before the switch worker unloads the backend.
-            # Leaving state at recording would keep capture open after release
-            # is rejected; flipping to loading without stop() leaks the device.
+            # The abort also bumps the session generation and keeps LOADING so
+            # a cancelled finish worker cannot reopen IDLE mid-unload.
             self._cancel_session_locked(reason="switch")
-        with self._lock:
-            if not candidate.enabled:
-                return
-            self._state = STATE_LOADING
+        else:
+            with self._lock:
+                if not candidate.enabled:
+                    return
+                self._session_generation += 1
+                self._state = STATE_LOADING
         self._start_worker(
             self._switch_profile_worker,
             previous,
@@ -379,7 +381,16 @@ class VoiceController:
                 self._session_form_apply = None
                 self._partial = ""
                 self.last_outcome = OUTCOME_CANCELLED
-                self._state = STATE_IDLE if self.settings.enabled else STATE_UNAVAILABLE
+                if reason == "switch":
+                    self._session_generation += 1
+                    self._state = STATE_LOADING
+                elif reason == "shutdown":
+                    self._session_generation += 1
+                    self._state = STATE_UNAVAILABLE
+                else:
+                    self._state = (
+                        STATE_IDLE if self.settings.enabled else STATE_UNAVAILABLE
+                    )
         if capture is not None:
             try:
                 capture.stop()
@@ -435,6 +446,8 @@ class VoiceController:
         self._join_workers(_SHUTDOWN_JOIN_SECONDS)
         if self._shutdown.is_set():
             return
+        # The aborted session set this; a new download/load must not inherit it.
+        self._cancel.clear()
         try:
             self._backend.unload()
             path = self._ensure_model()
@@ -491,15 +504,16 @@ class VoiceController:
             try:
                 pcm, overflow = capture.stop()
             except Exception as exc:
-                self._fail_to_idle(f"Falha ao encerrar a gravação: {exc}")
+                self._fail_to_idle(f"Falha ao encerrar a gravação: {exc}", generation)
                 return
         if overflow:
-            self._fail_to_idle("A gravação de voz estourou o limite e foi cancelada.")
+            self._fail_to_idle(
+                "A gravação de voz estourou o limite e foi cancelada.",
+                generation,
+            )
             return
         if self._cancel.is_set() or self._shutdown.is_set():
-            with self._lock:
-                self.last_outcome = OUTCOME_CANCELLED
-                self._state = STATE_IDLE if self.settings.enabled else STATE_UNAVAILABLE
+            self._complete_session(generation, OUTCOME_CANCELLED)
             return
         try:
             if self.settings.profile == PROFILE_STREAMING and self._backend.supports_stream():
@@ -507,18 +521,18 @@ class VoiceController:
             else:
                 transcript = self._backend.transcribe(pcm, cancel_event=self._cancel)
         except VoiceRuntimeError as exc:
-            self._fail_to_idle(str(exc))
+            self._fail_to_idle(str(exc), generation)
             return
         except Exception as exc:
-            self._fail_to_idle(f"Falha na transcrição: {exc}")
+            self._fail_to_idle(f"Falha na transcrição: {exc}", generation)
             return
         if self._cancel.is_set() or self._shutdown.is_set():
-            with self._lock:
-                self.last_outcome = OUTCOME_CANCELLED
-                self._state = STATE_IDLE if self.settings.enabled else STATE_UNAVAILABLE
+            self._complete_session(generation, OUTCOME_CANCELLED)
             return
         with self._lock:
             if generation != self._session_generation:
+                return
+            if self._state != STATE_TRANSCRIBING:
                 return
             self._state = STATE_ROUTING
             mode = self._active_mode or MODE_DICTATION
@@ -527,13 +541,7 @@ class VoiceController:
         if self._shutdown.is_set():
             return
         if getattr(target, "kind", None) == "form" and form_apply is None:
-            with self._lock:
-                self.last_outcome = OUTCOME_CANCELLED
-                self._active_mode = None
-                self._active_target = None
-                self._session_form_apply = None
-                self._partial = ""
-                self._state = STATE_IDLE if self.settings.enabled else STATE_UNAVAILABLE
+            self._complete_session(generation, OUTCOME_CANCELLED)
             return
         outcome = dispatch_voice_result(
             transcript,
@@ -553,7 +561,7 @@ class VoiceController:
             leave_on_clipboard=self._leave_on_clipboard,
             cancelled=self._cancel.is_set(),
         )
-        self._finish_outcome(outcome)
+        self._finish_outcome(outcome, generation)
 
     def _stream_worker(self, generation):
         if not self._backend.supports_stream():
@@ -611,14 +619,28 @@ class VoiceController:
         except Exception:
             pass
 
-    def _finish_outcome(self, outcome):
+    def _complete_session(self, generation, outcome):
+        """Return True when this session still owns the controller state."""
         with self._lock:
+            if generation != self._session_generation:
+                return False
+            if self._state not in (
+                STATE_RECORDING,
+                STATE_TRANSCRIBING,
+                STATE_ROUTING,
+            ):
+                return False
             self.last_outcome = outcome
             self._active_mode = None
             self._active_target = None
             self._session_form_apply = None
             self._partial = ""
             self._state = STATE_IDLE if self.settings.enabled else STATE_UNAVAILABLE
+        return True
+
+    def _finish_outcome(self, outcome, generation):
+        if not self._complete_session(generation, outcome):
+            return
         if outcome == OUTCOME_NO_MATCH:
             self._notify("Nenhum atalho corresponde ao que foi falado.", key="voice-nomatch")
         elif outcome == OUTCOME_SECURE_INPUT:
@@ -637,15 +659,12 @@ class VoiceController:
         elif outcome == OUTCOME_FAILED:
             self._notify("Não foi possível inserir o texto de voz.", key="voice-insert")
 
-    def _fail_to_idle(self, message):
-        with self._lock:
-            self.last_outcome = OUTCOME_FAILED
-            self._active_mode = None
-            self._active_target = None
-            self._session_form_apply = None
-            self._partial = ""
-            self._state = STATE_IDLE if self.settings.enabled else STATE_UNAVAILABLE
-        self._notify(message, key="voice-error")
+    def _fail_to_idle(self, message, generation=None):
+        if generation is None:
+            with self._lock:
+                generation = self._session_generation
+        if self._complete_session(generation, OUTCOME_FAILED):
+            self._notify(message, key="voice-error")
 
     def _persist(self):
         if self._persist_settings is None:
