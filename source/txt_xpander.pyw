@@ -292,6 +292,8 @@ class TextExpander:
             capture_target=self._capture_voice_target,
             restore_target=self._restore_voice_target,
             secure_input_blocks=self._secure_input_blocks_expansion,
+            microphone_status=macos_permissions.check_microphone,
+            on_status_change=self.refresh_tray_menu,
         )
         self.voice.bind_library(lambda: self.snippets, lambda: self.trigger_index)
         # Opt-in: expand only after a terminator (space/punctuation). Default off
@@ -858,6 +860,9 @@ class TextExpander:
 
             entry = tk.Entry(container, font=ui.font(10), width=28, **ui.entry_colors())
             entry.pack(fill=tk.X, pady=(0, 12))
+            self.voice.register_form_target(
+                lambda text, _entry=entry: self._apply_voice_form({"ticker": _entry}, text)
+            )
 
             buttons = tk.Frame(container, bg=ui.surface)
             buttons.pack(fill=tk.X)
@@ -886,6 +891,7 @@ class TextExpander:
                 dialog.wait_window(dialog)
             finally:
                 cancel_activation()
+                self.voice.unregister_form_target()
             return result[0]
 
         try:
@@ -1726,6 +1732,14 @@ class TextExpander:
     def _confirm_and_enable_voice(self, _root=None):
         from voice_catalog import catalog_entry, format_size
 
+        if macos_permissions.check_microphone() == macos_permissions.DENIED:
+            self.notify_error(
+                "O macOS bloqueou o microfone. Conceda Microfone em Privacidade "
+                "e reinicie o Txt Xpander.",
+                key="voice-mic",
+            )
+            macos_permissions.open_settings_pane(macos_permissions.MICROPHONE)
+            return
         entry = catalog_entry(self.voice.settings.profile)
         if entry is not None and not self.voice.model_installed():
             size = format_size(entry["size_bytes"])
@@ -1757,7 +1771,7 @@ class TextExpander:
         import tkinter as tk
         from tkinter import messagebox
 
-        from voice_catalog import MODEL_CATALOG, format_size
+        from voice_catalog import LANGUAGES, MODEL_CATALOG, format_size, third_party_notices
         from voice_models import model_is_installed
 
         ui = ui_theme.bind(root)
@@ -1796,6 +1810,35 @@ class TextExpander:
                 **ui.checkbutton_colors(ui.surface),
             ).pack(anchor="w", padx=16, pady=4)
 
+        language = tk.StringVar(value=self.voice.settings.language)
+        lang_row = tk.Frame(dialog, bg=ui.surface)
+        lang_row.pack(anchor="w", padx=16, pady=(8, 4))
+        tk.Label(
+            lang_row,
+            text="Idioma:",
+            bg=ui.surface,
+            fg=ui.text,
+            font=ui.font(9),
+        ).pack(side=tk.LEFT)
+        for lang in LANGUAGES:
+            tk.Radiobutton(
+                lang_row,
+                text=lang,
+                variable=language,
+                value=lang,
+                **ui.checkbutton_colors(ui.surface),
+            ).pack(side=tk.LEFT, padx=4)
+
+        tk.Label(
+            dialog,
+            text="\n".join(third_party_notices()),
+            font=ui.font(8),
+            bg=ui.surface,
+            fg=ui.text_muted,
+            wraplength=460,
+            justify="left",
+        ).pack(anchor="w", padx=16, pady=(8, 0))
+
         def apply_profile():
             profile = selected.get()
             entry = next((item for item in MODEL_CATALOG if item["profile"] == profile), None)
@@ -1806,6 +1849,7 @@ class TextExpander:
                 )
                 if not messagebox.askokcancel("Baixar modelo de voz", warning, parent=dialog):
                     return
+            self.voice.set_language(language.get())
             self.voice.set_profile(profile)
             if not self.voice.is_enabled():
                 self.voice.enable()

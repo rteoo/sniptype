@@ -642,45 +642,18 @@ class FrontmostApplicationTests(unittest.TestCase):
 
 
 class TextTargetTests(unittest.TestCase):
-    def test_windows_capture_ignores_this_process(self):
-        user32 = mock.Mock()
-        user32.GetForegroundWindow.return_value = 42
-        pid = mock.Mock()
-
-        def _pid(_hwnd, out):
-            out._obj.value = os.getpid()
-            return 0
-
-        user32.GetWindowThreadProcessId.side_effect = _pid
-        with mock.patch.object(ps, "IS_WINDOWS", True), \
-                mock.patch.object(ps, "IS_MAC", False), \
-                mock.patch.object(ps.ctypes, "windll", mock.Mock(user32=user32), create=True):
-            # byref wrapping is awkward to fake; treat a raise as ignored.
-            try:
-                target = ps.capture_text_target()
-            except Exception:
-                target = None
-            self.assertTrue(target is None or target[0] == "hwnd")
-
-    def test_restore_rejects_none(self):
-        self.assertFalse(ps.restore_text_target(None))
-        self.assertFalse(ps.text_target_is_alive(None))
-
-
-class TextTargetTests(unittest.TestCase):
     def test_windows_capture_skips_this_process(self):
         user32 = mock.Mock()
         user32.GetForegroundWindow.return_value = 42
-        pid = os.getpid()
 
         def get_pid(hwnd, out):
-            out._obj.value = pid
+            out._obj.value = os.getpid()
             return 0
 
         user32.GetWindowThreadProcessId.side_effect = get_pid
         with mock.patch.object(ps, "IS_WINDOWS", True), \
                 mock.patch.object(ps, "IS_MAC", False), \
-                mock.patch.object(ps.ctypes, "windll", mock.Mock(user32=user32)):
+                mock.patch.object(ps, "_win32_user32", return_value=user32):
             self.assertIsNone(ps.capture_text_target())
 
     def test_windows_restore_refuses_a_dead_window(self):
@@ -688,11 +661,12 @@ class TextTargetTests(unittest.TestCase):
         user32.IsWindow.return_value = 0
         with mock.patch.object(ps, "IS_WINDOWS", True), \
                 mock.patch.object(ps, "IS_MAC", False), \
-                mock.patch.object(ps.ctypes, "windll", mock.Mock(user32=user32)):
+                mock.patch.object(ps, "_win32_user32", return_value=user32):
             self.assertFalse(ps.restore_text_target(("hwnd", 99)))
 
     def test_missing_target_is_not_restored(self):
         self.assertFalse(ps.restore_text_target(None))
+        self.assertFalse(ps.text_target_is_alive(None))
 
 
 class ApplicationActivationBarrierTests(unittest.TestCase):

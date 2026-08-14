@@ -237,6 +237,11 @@ def restore_frontmost_application(app):
         return False
 
 
+def _win32_user32():
+    """Return the Win32 user32 DLL. Isolated so tests never patch ctypes.windll."""
+    return ctypes.windll.user32
+
+
 def capture_text_target():
     """Foreground app/window that should receive a voice insertion.
 
@@ -250,7 +255,7 @@ def capture_text_target():
     if not IS_WINDOWS:
         return None
     try:
-        user32 = ctypes.windll.user32
+        user32 = _win32_user32()
         hwnd = user32.GetForegroundWindow()
         if not hwnd:
             return None
@@ -274,7 +279,7 @@ def restore_text_target(target):
     if not (isinstance(target, tuple) and len(target) == 2 and target[0] == "hwnd"):
         return False
     try:
-        user32 = ctypes.windll.user32
+        user32 = _win32_user32()
         hwnd = int(target[1])
         if not user32.IsWindow(hwnd):
             return False
@@ -294,7 +299,7 @@ def text_target_is_alive(target):
             return False
     if IS_WINDOWS and isinstance(target, tuple) and target[0] == "hwnd":
         try:
-            return bool(ctypes.windll.user32.IsWindow(int(target[1])))
+            return bool(_win32_user32().IsWindow(int(target[1])))
         except Exception:
             return False
     return False

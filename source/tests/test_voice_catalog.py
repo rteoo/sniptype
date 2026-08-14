@@ -96,6 +96,13 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(format_size(739508576), "705 MB")
         self.assertEqual(format_size(2185030624), "2.03 GB")
 
+    def test_notices_name_every_catalog_license(self):
+        from voice_catalog import third_party_notices
+        text = "\n".join(third_party_notices())
+        self.assertIn("CC-BY-4.0", text)
+        self.assertIn("Apache-2.0", text)
+        self.assertIn("OpenMDW-1.1", text)
+
 
 class CacheLocationTests(unittest.TestCase):
     def test_env_override_wins(self):
