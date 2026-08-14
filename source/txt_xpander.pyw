@@ -1,7 +1,7 @@
 """
 Txt Xpander - Windows system tray snippet expander.
-Version: 3.3.0
-Channel: stable
+Version: 3.4.0
+Channel: beta
 
 IMPORTANT: This program captures keyboard input only to expand text
 snippets (shortcuts), similar to TextExpander. It does not store,

@@ -2,11 +2,11 @@
 
 All notable changes to Txt Xpander are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [3.4.0-beta.1] — 2026-08-14
 
 ### Added
 
-- **Optional voice input** (default off, unreleased): push-to-talk dictation,
+- **Optional voice input** (default off, beta): push-to-talk dictation,
   spoken triggers, and form-field fill. The module is implemented; live ASR
   is not proven and is not in the stable `v3.3.0` build. Models download on
   demand into a non-roaming cache. Only the Balanced profile is
