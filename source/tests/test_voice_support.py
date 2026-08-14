@@ -10,7 +10,7 @@ from trigger_index import compile_trigger_index
 from voice_audio import VoiceAudioError
 from voice_dispatch import MODE_COMMAND, MODE_DICTATION, OUTCOME_INSERTED, VoiceTarget
 from voice_runtime import FakeAsrBackend
-from voice_support import STATE_IDLE, STATE_UNAVAILABLE, VoiceController
+from voice_support import STATE_IDLE, STATE_RECORDING, STATE_UNAVAILABLE, VoiceController
 
 
 class InlineRunner:
@@ -155,7 +155,15 @@ class ControllerTests(unittest.TestCase):
         with mock.patch("voice_support.delete_model"):
             self.controller.delete_active_model()
         self.assertFalse(self.controller.enabled)
+
+    def test_enable_after_disable_returns_to_idle(self):
+        self._ready()
+        self.controller.disable()
         self.assertEqual(self.controller.state, STATE_UNAVAILABLE)
+        self._ready()
+        self.assertEqual(self.controller.state, STATE_IDLE)
+        self.assertTrue(self.controller.handle_hotkey_press(MODE_DICTATION))
+        self.assertEqual(self.controller.state, STATE_RECORDING)
 
 
 if __name__ == "__main__":
