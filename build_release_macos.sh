@@ -76,6 +76,10 @@ sips -s format icns "$REPO_DIR/source/txt_xpander.ico" --out "$ICNS" >/dev/null
 
 # --- Package --------------------------------------------------------------
 echo "Packaging $APP_NAME $APP_VERSION ($RELEASE_CHANNEL) ..."
+VOICE_COLLECT_ARGS=()
+if "$PYTHON" -c "import transcribe_cpp, transcribe_cpp_native" >/dev/null 2>&1; then
+    VOICE_COLLECT_ARGS=(--collect-all transcribe_cpp --collect-all transcribe_cpp_native)
+fi
 "$PYTHON" -m PyInstaller --noconfirm --clean --windowed --onedir \
     --distpath "$STAGING_ROOT" \
     --workpath "$WORK_ROOT/build" \
@@ -87,6 +91,7 @@ echo "Packaging $APP_NAME $APP_VERSION ($RELEASE_CHANNEL) ..."
     --add-data "$REPO_DIR/source/dynamic_snippets.json:." \
     --add-data "$REPO_DIR/source/txt_xpander.ico:." \
     --hidden-import pystray._darwin \
+    "${VOICE_COLLECT_ARGS[@]}" \
     --exclude-module torch \
     --exclude-module torchvision \
     --exclude-module torchaudio \
