@@ -135,6 +135,7 @@ from gui_support import (
     snippet_row_values,
 )
 from gui_thread import GuiThread
+from voice_indicator import VoiceStatusIndicator
 
 # GUI for managing snippets
 import tkinter as tk
@@ -254,6 +255,7 @@ class TextExpander:
         self.gui = GuiThread(logger=self.logger)
         self.manager_window = None
         self.macos_permission_window = None
+        self.voice_status_indicator = None
         # Cached macOS TCC probe. Like the autostart cache, the tray menu only
         # ever reads this: pystray re-evaluates `visible=` on every render and
         # the probe is a TCC round-trip. Empty (all unknown) off macOS.
@@ -308,7 +310,7 @@ class TextExpander:
                     restore_target=self._restore_voice_target,
                     secure_input_blocks=self._secure_input_blocks_expansion,
                     microphone_status=macos_permissions.check_microphone,
-                    on_status_change=self.refresh_tray_menu,
+                    on_status_change=self._voice_status_changed,
                 )
                 self.voice.bind_library(lambda: self.snippets, lambda: self.trigger_index)
             except Exception as exc:
@@ -1740,6 +1742,25 @@ class TextExpander:
         if self.voice is None:
             return "Entrada por voz"
         return self.voice.status_label()
+
+    def _voice_status_changed(self):
+        """Refresh voice UI without touching Tk from a voice worker."""
+        voice = self.voice
+        if voice is None:
+            return
+        snapshot = voice.status_snapshot()
+        self.refresh_tray_menu()
+        try:
+            self.gui.submit(
+                lambda root, value=snapshot: self._render_voice_status(root, value)
+            )
+        except Exception as exc:
+            self.logger.warning(f"Não foi possível atualizar o indicador de voz: {exc}")
+
+    def _render_voice_status(self, root, snapshot):
+        if self.voice_status_indicator is None:
+            self.voice_status_indicator = VoiceStatusIndicator(root)
+        self.voice_status_indicator.update(snapshot["state"], snapshot["mode"])
 
     def _voice_menu_checked(self, _item=None):
         return bool(self.voice is not None and self.voice.is_enabled())
