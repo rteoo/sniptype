@@ -1883,10 +1883,15 @@ class TextExpander:
             fg=ui.text,
             font=ui.font(9),
         ).pack(side=tk.LEFT)
+        language_labels = {
+            "auto": "auto (menos preciso)",
+            "pt-BR": "pt-BR",
+            "en-US": "en-US",
+        }
         for lang in LANGUAGES:
             tk.Radiobutton(
                 lang_row,
-                text=lang,
+                text=language_labels.get(lang, lang),
                 variable=language,
                 value=lang,
                 **ui.checkbutton_colors(ui.surface),

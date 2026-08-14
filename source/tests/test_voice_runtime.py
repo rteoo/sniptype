@@ -79,6 +79,20 @@ class RuntimeTests(unittest.TestCase):
         session.cancel.assert_called()
         self.assertTrue(errors)
 
+    def test_transcribe_cpp_maps_ui_locales_to_model_language_codes(self):
+        backend = TranscribeCppBackend()
+        backend._profile = "balanced"
+        backend._language = "pt-BR"
+        self.assertEqual(backend._language_kw(), {"language": "pt"})
+        backend._language = "en-US"
+        self.assertEqual(backend._language_kw(), {"language": "en"})
+
+    def test_transcribe_cpp_auto_omits_the_language_hint(self):
+        backend = TranscribeCppBackend()
+        backend._profile = "balanced"
+        backend._language = "auto"
+        self.assertEqual(backend._language_kw(), {})
+
 
 if __name__ == "__main__":
     unittest.main()
