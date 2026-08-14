@@ -668,6 +668,30 @@ class TextTargetTests(unittest.TestCase):
         self.assertFalse(ps.restore_text_target(None))
         self.assertFalse(ps.text_target_is_alive(None))
 
+    def test_macos_restore_text_target_waits_for_workspace_activation(self):
+        target = mock.Mock()
+        with mock.patch.object(ps, "IS_MAC", True), \
+                mock.patch.object(ps, "IS_WINDOWS", False), \
+                mock.patch.object(ps, "restore_application_when_ready") as ready:
+            def complete(app, on_active, on_failed):
+                on_active()
+                return lambda: None
+
+            ready.side_effect = complete
+            self.assertTrue(ps.restore_text_target(target))
+        ready.assert_called_once()
+        self.assertIs(ready.call_args.args[0], target)
+
+    def test_macos_restore_text_target_fails_closed_on_timeout(self):
+        target = mock.Mock()
+        with mock.patch.object(ps, "IS_MAC", True), \
+                mock.patch.object(ps, "IS_WINDOWS", False), \
+                mock.patch.object(ps, "restore_application_when_ready") as ready:
+            ready.return_value = lambda: None
+            self.assertFalse(
+                ps.wait_for_restored_application(target, timeout_seconds=0.01)
+            )
+
 
 class ApplicationActivationBarrierTests(unittest.TestCase):
     """Accessory dialogs wait for native activation before revealing Tk."""

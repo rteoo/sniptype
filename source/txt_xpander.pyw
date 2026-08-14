@@ -1529,10 +1529,6 @@ class TextExpander:
         try:
             if hasattr(key, 'char') and key.char:
                 self._handle_char(key.char)
-            elif key == Key.esc:
-                voice = self.voice
-                if voice is not None and voice.is_enabled():
-                    voice.cancel()
             elif key == Key.enter:
                 # ceiling: terminator mode does not gate on Enter (re-typing it could
                 # double-submit); Enter always just resets the buffer. Extend to Enter

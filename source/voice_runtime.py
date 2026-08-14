@@ -4,6 +4,8 @@ The package is optional until a self-contained wheel exists. Tests inject a
 fake backend. Missing native code leaves voice unavailable instead of crashing.
 """
 
+import threading
+
 from voice_catalog import LANGUAGE_AUTO, PROFILE_ACCURACY, PROFILE_STREAMING
 
 
@@ -29,6 +31,10 @@ class AsrBackend:
     def transcribe(self, pcm, cancel_event=None):
         raise VoiceRuntimeError("Backend de voz indisponível.")
 
+    def cancel(self):
+        """Interrupt an in-flight ``transcribe`` from another thread."""
+        return None
+
     def start_stream(self):
         raise VoiceRuntimeError("Este perfil não faz transcrição contínua.")
 
@@ -52,6 +58,8 @@ class FakeAsrBackend(AsrBackend):
         self.profile = None
         self.language = None
         self.transcribe_calls = []
+        self.cancel_calls = 0
+        self._cancel = threading.Event()
         self._stream = []
 
     def available(self):
@@ -61,6 +69,7 @@ class FakeAsrBackend(AsrBackend):
         self.loaded_path = model_path
         self.profile = profile
         self.language = language
+        self._cancel.clear()
 
     def unload(self):
         self.loaded_path = None
@@ -71,10 +80,19 @@ class FakeAsrBackend(AsrBackend):
         return self.loaded_path is not None
 
     def transcribe(self, pcm, cancel_event=None):
-        if cancel_event is not None and cancel_event.is_set():
+        if self._cancelled(cancel_event):
             raise VoiceRuntimeError("Transcrição cancelada.")
         self.transcribe_calls.append(list(pcm) if pcm is not None else None)
         return self.transcript
+
+    def cancel(self):
+        self.cancel_calls += 1
+        self._cancel.set()
+
+    def _cancelled(self, cancel_event):
+        return self._cancel.is_set() or (
+            cancel_event is not None and cancel_event.is_set()
+        )
 
     def supports_stream(self):
         return True
@@ -174,21 +192,49 @@ class TranscribeCppBackend(AsrBackend):
             return {}
         return {"language": self._language}
 
+    def cancel(self):
+        session = self._session
+        if session is None:
+            return
+        cancel = getattr(session, "cancel", None)
+        if cancel is None:
+            return
+        try:
+            cancel()
+        except Exception:
+            pass
+
     def transcribe(self, pcm, cancel_event=None):
         if self._session is None:
             raise VoiceRuntimeError("Nenhum modelo de voz está carregado.")
         if cancel_event is not None and cancel_event.is_set():
+            self.cancel()
             raise VoiceRuntimeError("Transcrição cancelada.")
+        done = threading.Event()
+
+        def watch():
+            while not done.wait(0.05):
+                if cancel_event is not None and cancel_event.is_set():
+                    self.cancel()
+                    return
+
+        watcher = None
+        if cancel_event is not None:
+            watcher = threading.Thread(
+                target=watch, name="voice-native-cancel", daemon=True
+            )
+            watcher.start()
         try:
-            if cancel_event is not None and hasattr(self._session, "cancel"):
-                # Best-effort: the binding cancels an in-flight run from
-                # another thread. We still check the event after return.
-                pass
-            result = self._session.run(pcm, **self._language_kw())
-        except TypeError:
-            result = self._session.run(pcm)
+            try:
+                result = self._session.run(pcm, **self._language_kw())
+            except TypeError:
+                result = self._session.run(pcm)
         except Exception as exc:
             raise VoiceRuntimeError(f"Falha na transcrição: {exc}") from exc
+        finally:
+            done.set()
+            if watcher is not None:
+                watcher.join(0.2)
         if cancel_event is not None and cancel_event.is_set():
             raise VoiceRuntimeError("Transcrição cancelada.")
         return _result_text(result)
