@@ -4,8 +4,7 @@ Txt Xpander is a Windows text expander with a system tray app, snippet manager G
 
 ## Release Channels
 
-- **Stable — `v3.2.1`**: the current production release. Stable tags use `vMAJOR.MINOR.PATCH` with no suffix.
-- **Beta — `3.3.0 beta`**: the current release candidate. The running app shows the beta label in its tray tooltip, tray menu and manager title. Windows produces `TxtXpanderSetup-3.3.0-beta.exe`; the macOS bundle records version `3.3.0` and channel `beta` in `Info.plist`.
+- **Stable — `v3.3.0`**: the current production release. Stable tags use `vMAJOR.MINOR.PATCH` with no suffix; Windows produces `TxtXpanderSetup-3.3.0.exe`.
 
 Beta tags use `vMAJOR.MINOR.PATCH-beta.N` and the corresponding GitHub Release must be marked as a prerelease. Beta and stable builds share the same data directory and installer identity, so an upgrade preserves `~/.txt_xpander`; do not run both channels simultaneously. Promote a beta to stable only after the full supported-OS test matrix and packaged desktop smoke tests pass.
 
@@ -111,7 +110,7 @@ Use `PYTHON=/path/to/venv/bin/python ./build_release_macos.sh` to build with a s
 
 Like the Windows script it stages into a temp folder and swaps `dist` only on success, and it refuses to run while the app is running. It deliberately does **not** port the Windows-only steps: there is no Startup shortcut to offer (macOS autostart is the LaunchAgent the tray toggle writes) and no packaged `snippets.json` to preserve (user data lives in `~/.txt_xpander`).
 
-The script produces the native architecture of the selected Python interpreter. The current `3.3.0 beta` bundle is built on Apple Silicon and is **ARM64-only**; it does not run on Intel Macs. An Intel or universal release requires a matching Python/dependency toolchain and a separate verified build.
+The script produces the native architecture of the selected Python interpreter. The current `3.3.0` bundle is built on Apple Silicon and is **ARM64-only**; it does not run on Intel Macs. An Intel or universal release requires a matching Python/dependency toolchain and a separate verified build.
 
 First launch, Gatekeeper and permissions:
 
