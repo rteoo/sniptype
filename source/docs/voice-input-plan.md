@@ -2,7 +2,7 @@
 
 ## Implementation status (2026-08-14)
 
-The **code for this plan is done** on `feat/voice-input` (PR #66).
+The **opt-in module is implemented** on `feat/voice-input` (PR #66).
 **Dictation is not proven and is not in the stable `v3.3.0` release.**
 Do not merge expecting voice to paste on a clean install.
 
@@ -13,16 +13,18 @@ Do not merge expecting voice to paste on a clean install.
 | Dispatch into insert / spoken trigger / form field, without `_dispatch_expansion` | Handy-alongside composition test |
 | SHA256 GGUF catalog; only Balanced/Parakeet is user-selectable | Isolated `build_release` that proves the torch/ML excludes |
 | Failed import or constructor leaves expansion running | Qwen (Accuracy) and Nemotron (Live streaming) — hidden until they pass their gates and the OpenMDW-1.1 review |
-| Required deps stay the four stable packages; `sounddevice` and `transcribe-cpp` are optional | iOS (on hold) |
-| Unit suite covers the isolation path | Merge to stable |
+| Required deps stay the four stable packages; `sounddevice` and `transcribe-cpp` are optional | Model downloader resume/retry after a partial or dropped transfer |
+| Session abort stops capture, calls `session.cancel()`, and boundedly joins workers before unload | iOS (on hold) |
+| Form transcripts bind to the form that was open at press | Merge to stable |
 
 Enabling **Entrada por voz** without the optional native backend reports
 unavailable. That is expected. iOS is out of scope until this Windows-first
 path is proven.
 
-Remaining work is measurement, not more product surface. Do not add
-`sherpa-onnx` until there is a pinned ONNX catalog; the catalog artifacts are
-GGUF for transcribe.cpp.
+Remaining work is measurement **and** the unfinished runtime pieces above
+(packaging, resume/retry, live ASR). Do not add more product surface, and do
+not add `sherpa-onnx` until there is a pinned ONNX catalog; the catalog
+artifacts are GGUF for transcribe.cpp.
 
 ## Evaluation
 
@@ -542,3 +544,4 @@ See [Implementation status](#implementation-status-2026-08-14). In order:
    Balanced adoption gates on the named hardware.
 4. Keep Accuracy and Live streaming hidden until they pass their own gates
    and the Nemotron OpenMDW-1.1 review.
+5. Add downloader resume/retry so a dropped 740 MB transfer does not start over.

@@ -13,7 +13,11 @@ All notable changes to Txt Xpander are documented here. The format is based on [
   user-selectable; Accuracy and Live streaming stay in the catalog until they
   pass adoption gates. Enabling voice without the optional `transcribe-cpp`
   backend reports unavailable. A missing backend or a construction failure
-  leaves expansion unchanged. The expansion listener is unchanged. See
+  leaves expansion unchanged. Changing profile during a hold stops the
+  microphone; Escape cancels native inference via `session.cancel()` and
+  shutdown joins workers before unload; a form transcript binds to the form
+  that was open at press; macOS restore waits for the captured app before
+  Cmd+V. The expansion listener does not stop PortAudio. See
   `source/docs/voice-input-plan.md`.
 
 ### Changed

@@ -1,10 +1,19 @@
 import os
 import sys
+import threading
+import time
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from voice_runtime import AsrBackend, FakeAsrBackend, VoiceRuntimeError, create_backend
+from voice_runtime import (
+    AsrBackend,
+    FakeAsrBackend,
+    TranscribeCppBackend,
+    VoiceRuntimeError,
+    create_backend,
+)
 
 
 class RuntimeTests(unittest.TestCase):
@@ -31,6 +40,36 @@ class RuntimeTests(unittest.TestCase):
         cancel = type("E", (), {"is_set": lambda self: True})()
         with self.assertRaises(VoiceRuntimeError):
             backend.transcribe([0.0], cancel_event=cancel)
+
+    def test_transcribe_cpp_cancel_interrupts_an_in_flight_run(self):
+        started = threading.Event()
+        session = mock.Mock()
+
+        def run(pcm, **kwargs):
+            started.set()
+            time.sleep(0.25)
+            return "late"
+
+        session.run.side_effect = run
+        backend = TranscribeCppBackend()
+        backend._session = session
+        cancel = threading.Event()
+        errors = []
+
+        def worker():
+            try:
+                backend.transcribe([0.0], cancel_event=cancel)
+            except VoiceRuntimeError as exc:
+                errors.append(str(exc))
+
+        thread = threading.Thread(target=worker)
+        thread.start()
+        self.assertTrue(started.wait(1.0))
+        cancel.set()
+        thread.join(1.0)
+        self.assertFalse(thread.is_alive())
+        session.cancel.assert_called()
+        self.assertTrue(errors)
 
 
 if __name__ == "__main__":

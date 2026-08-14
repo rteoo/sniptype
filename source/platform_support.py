@@ -268,12 +268,41 @@ def capture_text_target():
         return None
 
 
+def wait_for_restored_application(
+    app,
+    timeout_seconds=APPLICATION_ACTIVATION_TIMEOUT_SECONDS,
+):
+    """Block until a captured macOS app is frontmost, or fail.
+
+    Must run off the Tk/AppKit main thread. Uses the same
+    ``NSWorkspaceDidActivateApplicationNotification`` barrier as expansion
+    dialogs. ``restore_frontmost_application`` only submits activation and
+    must not be used on the insertion path.
+    """
+    if not IS_MAC or app is None:
+        return False
+    ready = threading.Event()
+    errors = []
+
+    def failed(message):
+        errors.append(message)
+        ready.set()
+
+    cancel = restore_application_when_ready(app, ready.set, failed)
+    try:
+        if not ready.wait(timeout_seconds):
+            return False
+        return not errors
+    finally:
+        cancel()
+
+
 def restore_text_target(target):
     """Bring a captured text target to the foreground. False if it is gone."""
     if target is None:
         return False
     if IS_MAC:
-        return restore_frontmost_application(target)
+        return wait_for_restored_application(target)
     if not IS_WINDOWS:
         return False
     if not (isinstance(target, tuple) and len(target) == 2 and target[0] == "hwnd"):
