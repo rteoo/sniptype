@@ -92,7 +92,7 @@ def parse_chord(spec):
         modifiers.append(alias)
     if not modifiers:
         raise ValueError("hotkey needs a modifier")
-    return Chord(modifiers, key, "+".join(parts))
+    return Chord(modifiers, key, "+".join([*modifiers, key]))
 
 
 def _key_name(key):

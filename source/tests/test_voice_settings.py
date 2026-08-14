@@ -50,6 +50,19 @@ class VoiceSettingsTests(unittest.TestCase):
         self.assertNotEqual(settings.hotkey, settings.command_hotkey)
         self.assertTrue(notes)
 
+    def test_aliased_modifiers_still_count_as_a_collision(self):
+        notes = []
+        settings = resolve_voice_settings(
+            {
+                "voice_hotkey": "control+alt+shift+space",
+                "voice_command_hotkey": "ctrl+alt+shift+space",
+            },
+            warnings=notes,
+        )
+        from voice_hotkey import parse_chord
+        self.assertNotEqual(parse_chord(settings.hotkey), parse_chord(settings.command_hotkey))
+        self.assertTrue(notes)
+
 
 if __name__ == "__main__":
     unittest.main()
