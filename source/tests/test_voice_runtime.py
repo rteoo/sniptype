@@ -24,8 +24,16 @@ class RuntimeTests(unittest.TestCase):
             backend.load("x.gguf", "balanced", "auto")
 
     def test_create_backend_without_wheel_is_unavailable(self):
-        backend = create_backend()
-        self.assertFalse(backend.available())
+        real_import = __import__
+
+        def import_without_backend(name, *args, **kwargs):
+            if name == "transcribe_cpp":
+                raise ImportError("simulated missing optional backend")
+            return real_import(name, *args, **kwargs)
+
+        with mock.patch("builtins.__import__", side_effect=import_without_backend):
+            backend = create_backend()
+            self.assertFalse(backend.available())
 
     def test_fake_backend_roundtrip(self):
         backend = FakeAsrBackend(transcript="ok")

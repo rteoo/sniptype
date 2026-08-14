@@ -5,6 +5,7 @@ Txt Xpander is a Windows text expander with a system tray app, snippet manager G
 ## Release Channels
 
 - **Stable — `v3.3.0`**: the current production release. Stable tags use `vMAJOR.MINOR.PATCH` with no suffix; Windows produces `TxtXpanderSetup-3.3.0.exe`.
+- **Beta — `v3.4.0-beta.1`**: optional push-to-talk voice input for early testing. Windows produces `TxtXpanderSetup-3.4.0-beta.exe`.
 
 Beta tags use `vMAJOR.MINOR.PATCH-beta.N` and the corresponding GitHub Release must be marked as a prerelease. Beta and stable builds share the same data directory and installer identity, so an upgrade preserves `~/.txt_xpander`; do not run both channels simultaneously. Promote a beta to stable only after the full supported-OS test matrix and packaged desktop smoke tests pass.
 
