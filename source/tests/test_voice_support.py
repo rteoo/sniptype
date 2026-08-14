@@ -67,7 +67,7 @@ class ControllerTests(unittest.TestCase):
             backend=self.backend,
             capture_factory=lambda: self.capture,
             cache_dir=self.tmp,
-            download=lambda entry, cache_dir, cancel_event=None: os.path.join(
+            download=lambda entry, cache_dir, progress=None, cancel_event=None: os.path.join(
                 self.tmp, "model.gguf"
             ),
         )
@@ -158,9 +158,12 @@ class ControllerTests(unittest.TestCase):
 
     def test_language_change_reloads_the_idle_backend(self):
         self._ready()
-        with mock.patch("voice_support.installed_model_path", return_value="model.gguf"):
+        with mock.patch("voice_support.model_is_installed", return_value=True), \
+                mock.patch("voice_support.installed_model_path", return_value="model.gguf"), \
+                mock.patch.object(self.controller, "_start_monitor"):
             self.controller.set_language("en-US")
         self.assertEqual(self.backend.language, "en-US")
+        self.assertEqual(self.controller.state, STATE_IDLE)
 
     def test_denied_microphone_does_not_open_capture(self):
         self._ready()
