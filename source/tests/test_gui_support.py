@@ -34,7 +34,9 @@ class GuiSupportTests(unittest.TestCase):
             gui_support.platform_support,
             "focus_tk_window_when_ready",
             return_value=cancel_key_focus,
-        ) as focus_native:
+        ) as focus_native, mock.patch.object(
+            gui_support.platform_support, "IS_MAC", True
+        ):
             cancel = focus_modal_input(dialog, initial_widget, submit)
             self.assertEqual(
                 [("-alpha", 0.0), "deiconify", "visible", "lift"],
@@ -73,7 +75,7 @@ class GuiSupportTests(unittest.TestCase):
         ), mock.patch.object(
             gui_support.platform_support,
             "focus_tk_window_when_ready",
-        ):
+        ), mock.patch.object(gui_support.platform_support, "IS_MAC", True):
             cancel = focus_modal_input(
                 dialog,
                 initial_widget,
