@@ -85,14 +85,14 @@ def resolve_voice_settings(settings, warnings=None):
         )
         command_hotkey = DEFAULT_COMMAND_HOTKEY
 
-    if command_hotkey == hotkey:
+    if parse_chord(command_hotkey) == parse_chord(hotkey):
         notes.append(
             "voice_command_hotkey colide com voice_hotkey; "
             "comando recebe um atalho distinto."
         )
         for candidate in (DEFAULT_COMMAND_HOTKEY, "ctrl+shift+space"):
-            if candidate != hotkey:
-                command_hotkey = candidate
+            if parse_chord(candidate) != parse_chord(hotkey):
+                command_hotkey = parse_chord(candidate).spec
                 break
 
     return VoiceSettings(
