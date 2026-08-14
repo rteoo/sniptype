@@ -195,6 +195,8 @@ class VoiceController:
         self.settings = candidate
         self._persist()
         if same:
+            if candidate.enabled and self.state == STATE_UNAVAILABLE:
+                self.enable()
             return
         with self._lock:
             if not candidate.enabled:
