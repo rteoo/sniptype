@@ -183,11 +183,16 @@ class VoiceHotkeyMonitor:
     def _mode_for_key(self, key_name):
         if key_name is None:
             return None
+        matches = []
         if chord_is_held(self.command_chord, self._held, key_name):
-            return MODE_COMMAND
+            matches.append((len(self.command_chord.modifiers), MODE_COMMAND))
         if chord_is_held(self.dictation_chord, self._held, key_name):
-            return MODE_DICTATION
-        return None
+            matches.append((len(self.dictation_chord.modifiers), MODE_DICTATION))
+        if not matches:
+            return None
+        # A user may assign the longer chord to either action. Prefer the most
+        # specific match; keep command as the deterministic tie-breaker.
+        return max(matches, key=lambda item: (item[0], item[1] == MODE_COMMAND))[1]
 
     def _handle_press(self, key):
         name = _key_name(key)

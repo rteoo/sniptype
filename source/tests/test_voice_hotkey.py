@@ -79,6 +79,22 @@ class MonitorTests(unittest.TestCase):
         monitor._handle_press(Key.space)
         self.assertEqual(events, [MODE_COMMAND])
 
+    def test_dictation_chord_can_be_more_specific_than_command(self):
+        events = []
+        monitor = VoiceHotkeyMonitor(
+            parse_chord("ctrl+alt+shift+space"),
+            parse_chord("ctrl+alt+space"),
+            on_press=lambda mode: events.append(mode),
+            on_release=lambda mode: None,
+        )
+        from pynput.keyboard import Key
+
+        monitor._handle_press(Key.ctrl)
+        monitor._handle_press(Key.alt)
+        monitor._handle_press(Key.shift)
+        monitor._handle_press(Key.space)
+        self.assertEqual(events, [MODE_DICTATION])
+
     def test_auto_repeat_does_not_rearm_while_held(self):
         events = []
         monitor = VoiceHotkeyMonitor(
