@@ -26,14 +26,13 @@ Usage notes:
 2. User data lives in `%USERPROFILE%\.txt_xpander` (override with the `TXT_XPANDER_HOME` environment variable): `snippets.json`, rotating `backups\`, `logs\`, and optional `settings.json`. On first launch the app migrates any legacy `snippets.json` found beside the executable into this folder (the legacy file is left in place as an extra copy) and, failing that, seeds from the bundled sample. The live library is automatically backed up on every save (newest 30 kept) and a corrupt file is quarantined and restored from the newest valid backup instead of being overwritten.
 3. Use the tray icon to open `Gerenciar Snippets`, reload snippets, `Backup agora`, `Abrir pasta de dados`, enable or disable expansion, and quit the app. The manager's **Backups** tab lists backups and offers restore, export, and import.
 4. By default expansion fires immediately on the last character of a matching trigger. To require a word boundary instead, set `"terminator_mode": true` in `%USERPROFILE%\.txt_xpander\settings.json`: a trigger then expands only when you type a following space or punctuation, which is re-typed after the expansion (Enter is not treated as a terminator).
-5. Voice input is off until you enable **Entrada por voz** in the tray. The default hotkey is Ctrl+Alt+Space (dictation) and Ctrl+Alt+Shift+Space (speak an exact trigger). Models download on demand into a local cache, not into `~/.txt_xpander`. Nothing is transcribed in the cloud.
-6. The delays in the insertion path have per-OS defaults and can each be overridden in `settings.json`: `clipboard_settle_delay` (clipboard write → paste shortcut; 0.05 s on Windows and Linux, 0.02 s on macOS, where `pbcopy` only returns after the pasteboard is written), `paste_restore_delay` (paste → restoring the previous clipboard; 0.12 s everywhere) and `erase_key_delay` (between the backspaces that erase the trigger; 0.01 s everywhere). Values must be numbers between 0 and 2 seconds — anything else is ignored, logged at startup, and the platform default is used. Details and the macOS measurements are in `source/docs/macos-insertion.md`.
-7. The built-in `xwapp` trigger reads a phone number from the clipboard, creates a `wa.me` link, opens it in the browser, and keeps the final link in the clipboard.
-8. The built-in `xlwapp` trigger follows the same validation flow but inserts the generated `wa.me` link into the current field and also keeps that link in the clipboard.
-9. The built-in `xpwapp` trigger skips clipboard lookup, opens the popup immediately for phone and optional message entry, then opens the browser and keeps the final link in the clipboard.
-10. If `xwapp` or `xlwapp` cannot normalize the clipboard content into a valid phone number, the app opens the same popup for manual phone and optional message entry.
-11. Before replacing the packaged folder with a newer build, close any running `Txt Xpander.exe` first.
-12. `build_release.bat` keeps a one-time safety copy of any existing packaged `snippets.json` when updating `dist\Txt Xpander`. User data is no longer stored in `dist` — it lives in `%USERPROFILE%\.txt_xpander`, so a rebuild never touches the live library.
+5. The delays in the insertion path have per-OS defaults and can each be overridden in `settings.json`: `clipboard_settle_delay` (clipboard write → paste shortcut; 0.05 s on Windows and Linux, 0.02 s on macOS, where `pbcopy` only returns after the pasteboard is written), `paste_restore_delay` (paste → restoring the previous clipboard; 0.12 s everywhere) and `erase_key_delay` (between the backspaces that erase the trigger; 0.01 s everywhere). Values must be numbers between 0 and 2 seconds — anything else is ignored, logged at startup, and the platform default is used. Details and the macOS measurements are in `source/docs/macos-insertion.md`.
+6. The built-in `xwapp` trigger reads a phone number from the clipboard, creates a `wa.me` link, opens it in the browser, and keeps the final link in the clipboard.
+7. The built-in `xlwapp` trigger follows the same validation flow but inserts the generated `wa.me` link into the current field and also keeps that link in the clipboard.
+8. The built-in `xpwapp` trigger skips clipboard lookup, opens the popup immediately for phone and optional message entry, then opens the browser and keeps the final link in the clipboard.
+9. If `xwapp` or `xlwapp` cannot normalize the clipboard content into a valid phone number, the app opens the same popup for manual phone and optional message entry.
+10. Before replacing the packaged folder with a newer build, close any running `Txt Xpander.exe` first.
+11. `build_release.bat` keeps a one-time safety copy of any existing packaged `snippets.json` when updating `dist\Txt Xpander`. User data is no longer stored in `dist` — it lives in `%USERPROFILE%\.txt_xpander`, so a rebuild never touches the live library.
 
 ### Auto-start with Windows
 
@@ -81,6 +80,15 @@ pythonw txt_xpander.pyw
 Or use the source-side launcher, which checks dependencies and starts the app with `pythonw`:
 
 - [`source\run_txt_xpander.bat`](source/run_txt_xpander.bat)
+
+### Voice input (unreleased)
+
+Voice is **not** in the stable `v3.3.0` packaged build. The module lives on
+`feat/voice-input` (PR #66): default-off, optional, and isolated from
+expansion. Enabling **Entrada por voz** without the optional `sounddevice` +
+`transcribe-cpp` backend reports unavailable — that is expected. Only the
+Balanced/Parakeet profile is user-selectable. Status, gates, and what is still
+unproven are in [`source/docs/voice-input-plan.md`](source/docs/voice-input-plan.md).
 
 ## Build A New Packaged Release
 
