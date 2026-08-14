@@ -93,6 +93,7 @@ Build details: the release is `--onedir` (not `--onefile`); the hidden import `p
 - `source\macos_permissions.py` probes the two macOS TCC grants the app depends on (Input Monitoring for the listener, Accessibility for the synthesized paste) and owns the PT-BR onboarding copy, the System Settings deep-links and the re-check decision. Inert off macOS: every check answers `unknown` and the decision layer then asks for nothing.
 - `source\whatsapp_support.py` normalizes phone numbers and builds WhatsApp URLs.
 - `source\whatsapp_runtime_support.py` runs the `xwapp`, `xlwapp`, and `xpwapp` action flows.
+- `source\voice_support.py` owns the optional push-to-talk state machine. `voice_catalog.py` is the SHA256-pinned model list; `voice_models.py` downloads into a non-roaming cache (never `~/.txt_xpander`); `voice_dispatch.py` routes dictation, spoken triggers, and form fields without calling `_dispatch_expansion`; `voice_hotkey.py` is a dedicated observer, not the expansion listener. Voice is default-off.
 - `source\bcb_consultor.py` fetches Brazilian Central Bank API values with caching.
 - `source\yf_stocks.py` wraps yfinance stock/fundamentals lookups. The ticker prompt itself is a Tk dialog in `txt_xpander.pyw` (`ask_ticker_input`), not in this module.
 - `source\gui_thread.py` owns the process's only `tk.Tk()` root. Worker threads never touch Tk: they pass a callable to `GuiThread.call` (blocks, returns the result, re-raises errors) or `GuiThread.submit` (fire-and-forget), and a `root.after` pump runs it on the GUI thread. The keyboard listener must never call into it. *Which* thread that is depends on the OS: a dedicated worker thread on Windows (`ensure_started`), the main thread on macOS (`adopt_main_thread` + `run_mainloop`, selected by `platform_support.tk_runs_on_main_thread`). The marshaling contract is identical in both modes — only the thread the pump ticks on changes.
@@ -211,8 +212,9 @@ Runtime dependencies are listed in `source\requirements.txt`:
 - `pystray`
 - `Pillow`
 - `yfinance`
+- `sounddevice` (optional voice capture; the rest of the app starts without it)
 
-`source\requirements.txt` holds exactly these four runtime dependencies. PyInstaller is needed to build releases and is installed separately (`pip install pyinstaller`); it is not in `requirements.txt`.
+`source\requirements.txt` holds these runtime dependencies. `transcribe.cpp` / `transcribe-cpp` is an optional native backend, not a required install. PyInstaller is needed to build releases and is installed separately (`pip install pyinstaller`); it is not in `requirements.txt`.
 
 ## Agent Workflow
 

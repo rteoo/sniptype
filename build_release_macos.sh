@@ -87,6 +87,13 @@ echo "Packaging $APP_NAME $APP_VERSION ($RELEASE_CHANNEL) ..."
     --add-data "$REPO_DIR/source/dynamic_snippets.json:." \
     --add-data "$REPO_DIR/source/txt_xpander.ico:." \
     --hidden-import pystray._darwin \
+    --exclude-module torch \
+    --exclude-module torchvision \
+    --exclude-module torchaudio \
+    --exclude-module cv2 \
+    --exclude-module transformers \
+    --exclude-module onnxruntime \
+    --exclude-module scipy \
     "$REPO_DIR/source/txt_xpander.pyw"
 
 if [[ ! -d "$STAGED_APP" ]]; then
@@ -119,6 +126,14 @@ plutil -replace CFBundleVersion -string "$APP_VERSION" \
 plutil -replace TxtXpanderReleaseChannel -string "$RELEASE_CHANNEL" \
     "$STAGED_APP/Contents/Info.plist" 2>/dev/null \
     || plutil -insert TxtXpanderReleaseChannel -string "$RELEASE_CHANNEL" \
+        "$STAGED_APP/Contents/Info.plist"
+plutil -replace NSMicrophoneUsageDescription -string "O Txt Xpander usa o microfone só quando a entrada por voz está ligada, para transcrever o que você ditar." \
+    "$STAGED_APP/Contents/Info.plist" 2>/dev/null \
+    || plutil -insert NSMicrophoneUsageDescription -string "O Txt Xpander usa o microfone só quando a entrada por voz está ligada, para transcrever o que você ditar." \
+        "$STAGED_APP/Contents/Info.plist"
+plutil -replace NSMicrophoneUsageDescription -string "O Txt Xpander usa o microfone só para o ditado local, e só quando a entrada por voz está ligada." \
+    "$STAGED_APP/Contents/Info.plist" 2>/dev/null \
+    || plutil -insert NSMicrophoneUsageDescription -string "O Txt Xpander usa o microfone só para o ditado local, e só quando a entrada por voz está ligada." \
         "$STAGED_APP/Contents/Info.plist"
 
 SIGN_IDENTITY="${CODESIGN_IDENTITY:-}"
