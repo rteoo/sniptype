@@ -212,9 +212,8 @@ Runtime dependencies are listed in `source\requirements.txt`:
 - `pystray`
 - `Pillow`
 - `yfinance`
-- `sounddevice` (optional voice capture; the rest of the app starts without it)
 
-`source\requirements.txt` holds these runtime dependencies. `transcribe.cpp` / `transcribe-cpp` is an optional native backend, not a required install. PyInstaller is needed to build releases and is installed separately (`pip install pyinstaller`); it is not in `requirements.txt`.
+`source\requirements.txt` holds exactly these four runtime dependencies. Voice capture (`sounddevice`) and `transcribe-cpp` are optional: missing them leaves expansion unchanged and voice unavailable. PyInstaller is needed to build releases and is installed separately (`pip install pyinstaller`); it is not in `requirements.txt`.
 
 ## Agent Workflow
 

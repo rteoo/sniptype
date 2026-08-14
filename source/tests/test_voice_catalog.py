@@ -100,8 +100,13 @@ class CatalogTests(unittest.TestCase):
         from voice_catalog import third_party_notices
         text = "\n".join(third_party_notices())
         self.assertIn("CC-BY-4.0", text)
-        self.assertIn("Apache-2.0", text)
-        self.assertIn("OpenMDW-1.1", text)
+        self.assertNotIn("OpenMDW-1.1", text)
+        self.assertNotIn("Qwen3-ASR", text)
+
+    def test_only_balanced_is_user_selectable(self):
+        from voice_catalog import selectable_catalog
+        visible = selectable_catalog()
+        self.assertEqual([entry["profile"] for entry in visible], ["balanced"])
 
 
 class CacheLocationTests(unittest.TestCase):
