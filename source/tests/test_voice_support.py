@@ -184,6 +184,28 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(self.backend.language, "en-US")
         self.assertEqual(self.controller.state, STATE_IDLE)
 
+    def test_hotkey_change_restarts_monitor_without_reloading_backend(self):
+        self._ready()
+        with mock.patch.object(self.controller, "_start_monitor") as start_monitor, \
+                mock.patch.object(self.backend, "load", wraps=self.backend.load) as load:
+            self.controller.apply_options(
+                hotkey="control+shift+f8",
+                command_hotkey="ctrl+alt+f9",
+            )
+        self.assertEqual(self.controller.settings.hotkey, "ctrl+shift+f8")
+        self.assertEqual(self.controller.settings.command_hotkey, "ctrl+alt+f9")
+        start_monitor.assert_called_once_with()
+        load.assert_not_called()
+
+    def test_hotkey_change_cancels_an_active_recording(self):
+        self._ready()
+        self.assertTrue(self.controller.handle_hotkey_press(MODE_DICTATION))
+        with mock.patch.object(self.controller, "_start_monitor"):
+            self.controller.apply_options(hotkey="ctrl+shift+f8")
+        self.assertGreaterEqual(self.capture.stop_calls, 1)
+        self.assertFalse(self.capture.started)
+        self.assertEqual(self.controller.state, STATE_IDLE)
+
     def test_denied_microphone_does_not_open_capture(self):
         self._ready()
         self.controller._microphone_status = lambda: "denied"
