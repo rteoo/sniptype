@@ -543,7 +543,11 @@ class VoiceController:
             trigger_index=self._trigger_index(),
             insert_text=self._insert_text,
             expand_trigger=self._expand_trigger,
-            apply_form=form_apply if mode != MODE_COMMAND else None,
+            apply_form=(
+                self._invoke_session_form
+                if form_apply is not None and mode != MODE_COMMAND
+                else None
+            ),
             restore_target=self._restore_target,
             secure_input_blocks=self._secure_input_blocks,
             leave_on_clipboard=self._leave_on_clipboard,
@@ -592,6 +596,14 @@ class VoiceController:
     def bind_library(self, get_snippets, get_trigger_index):
         self.get_snippets = get_snippets
         self.get_trigger_index = get_trigger_index
+
+    def _invoke_session_form(self, text):
+        """Apply only if the form captured at press is still the session target."""
+        with self._lock:
+            apply_fn = self._session_form_apply
+        if apply_fn is None:
+            return
+        apply_fn(text)
 
     def _leave_on_clipboard(self, text):
         try:

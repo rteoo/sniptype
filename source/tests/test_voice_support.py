@@ -235,6 +235,9 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(first, [])
         self.assertEqual(second, [])
         self.assertEqual(self.inserted, [])
+        self.controller._invoke_session_form("tarde demais")
+        self.assertEqual(first, [])
+        self.assertEqual(second, [])
 
     def test_shutdown_cancels_native_inference_before_unload(self):
         import threading
