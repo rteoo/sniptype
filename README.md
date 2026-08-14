@@ -81,6 +81,15 @@ Or use the source-side launcher, which checks dependencies and starts the app wi
 
 - [`source\run_txt_xpander.bat`](source/run_txt_xpander.bat)
 
+### Voice input (unreleased)
+
+Voice is **not** in the stable `v3.3.0` packaged build. The module lives on
+`feat/voice-input` (PR #66): default-off, optional, and isolated from
+expansion. Enabling **Entrada por voz** without the optional `sounddevice` +
+`transcribe-cpp` backend reports unavailable — that is expected. Only the
+Balanced/Parakeet profile is user-selectable. Status, gates, and what is still
+unproven are in [`source/docs/voice-input-plan.md`](source/docs/voice-input-plan.md).
+
 ## Build A New Packaged Release
 
 Prefer the automated script — it backs up the packaged `snippets.json`, stages the PyInstaller output, and swaps `dist\Txt Xpander` only on success:

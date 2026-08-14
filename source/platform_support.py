@@ -237,6 +237,103 @@ def restore_frontmost_application(app):
         return False
 
 
+def _win32_user32():
+    """Return the Win32 user32 DLL. Isolated so tests never patch ctypes.windll."""
+    return ctypes.windll.user32
+
+
+def capture_text_target():
+    """Foreground app/window that should receive a voice insertion.
+
+    macOS reuses the AppKit application handle already used by expansion
+    dialogs. Windows stores the foreground HWND. The caller must invoke this
+    on hotkey press, before any Txt Xpander UI can take focus. Returns None
+    when the foreground owner is this process or cannot be read.
+    """
+    if IS_MAC:
+        return capture_frontmost_application()
+    if not IS_WINDOWS:
+        return None
+    try:
+        user32 = _win32_user32()
+        hwnd = user32.GetForegroundWindow()
+        if not hwnd:
+            return None
+        pid = ctypes.c_ulong(0)
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if int(pid.value) == os.getpid():
+            return None
+        return ("hwnd", int(hwnd))
+    except Exception:
+        return None
+
+
+def wait_for_restored_application(
+    app,
+    timeout_seconds=APPLICATION_ACTIVATION_TIMEOUT_SECONDS,
+):
+    """Block until a captured macOS app is frontmost, or fail.
+
+    Must run off the Tk/AppKit main thread. Uses the same
+    ``NSWorkspaceDidActivateApplicationNotification`` barrier as expansion
+    dialogs. ``restore_frontmost_application`` only submits activation and
+    must not be used on the insertion path.
+    """
+    if not IS_MAC or app is None:
+        return False
+    ready = threading.Event()
+    errors = []
+
+    def failed(message):
+        errors.append(message)
+        ready.set()
+
+    cancel = restore_application_when_ready(app, ready.set, failed)
+    try:
+        if not ready.wait(timeout_seconds):
+            return False
+        return not errors
+    finally:
+        cancel()
+
+
+def restore_text_target(target):
+    """Bring a captured text target to the foreground. False if it is gone."""
+    if target is None:
+        return False
+    if IS_MAC:
+        return wait_for_restored_application(target)
+    if not IS_WINDOWS:
+        return False
+    if not (isinstance(target, tuple) and len(target) == 2 and target[0] == "hwnd"):
+        return False
+    try:
+        user32 = _win32_user32()
+        hwnd = int(target[1])
+        if not user32.IsWindow(hwnd):
+            return False
+        return bool(user32.SetForegroundWindow(hwnd))
+    except Exception:
+        return False
+
+
+def text_target_is_alive(target):
+    """True when the captured target still exists."""
+    if target is None:
+        return False
+    if IS_MAC:
+        try:
+            return int(target.processIdentifier()) > 0
+        except Exception:
+            return False
+    if IS_WINDOWS and isinstance(target, tuple) and target[0] == "hwnd":
+        try:
+            return bool(_win32_user32().IsWindow(int(target[1])))
+        except Exception:
+            return False
+    return False
+
+
 def activate_application_when_ready(
     on_active,
     on_failed,

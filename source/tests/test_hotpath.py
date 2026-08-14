@@ -418,6 +418,73 @@ class OnPressSpecialKeyTests(unittest.TestCase):
         self.app.on_press(Key.shift)
         self.assertEqual("ab", self.app.typed_text)
 
+    def test_escape_with_voice_off_does_not_dispatch_or_clear_buffer(self):
+        self._press("ab")
+        self.app.task_runner.reset_mock()
+        self.app.on_press(Key.esc)
+        self.assertEqual("ab", self.app.typed_text)
+        self.app.task_runner.start.assert_not_called()
+
+    def test_escape_does_not_cancel_voice_on_the_expansion_listener(self):
+        self._press("ab")
+        voice = mock.Mock()
+        voice.is_enabled.return_value = True
+        self.app.voice = voice
+        self.app.task_runner.reset_mock()
+        self.app.on_press(Key.esc)
+        voice.cancel.assert_not_called()
+        self.app.task_runner.start.assert_not_called()
+        self.assertEqual("ab", self.app.typed_text)
+
+
+class VoiceIsolationTests(unittest.TestCase):
+    """Voice must stay off the expansion hot path unless the user opts in."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def _type(self, app, text):
+        for char in text:
+            app._handle_char(char)
+
+    def test_voice_stays_disabled_by_default(self):
+        app = make_app(self.tmp, {"xhi": "hello"})
+        self.assertFalse(bool(app.voice is not None and app.voice.is_enabled()))
+
+    def test_construction_failure_does_not_block_expansion(self):
+        with mock.patch.object(tx, "VoiceController", side_effect=RuntimeError("boom")):
+            app = make_app(self.tmp, {"xhi": "hello"})
+        self.assertIsNone(app.voice)
+        self._type(app, "xhi")
+        app.task_runner.start.assert_called_once()
+        self.assertEqual(app.task_runner.start.call_args.args[1], "xhi")
+
+    def test_escape_with_no_controller_leaves_buffer(self):
+        with mock.patch.object(tx, "VoiceController", side_effect=RuntimeError("boom")):
+            app = make_app(self.tmp, {"xhi": "hello"})
+        for char in "ab":
+            app.on_press(KeyCode.from_char(char))
+        app.task_runner.reset_mock()
+        app.on_press(Key.esc)
+        self.assertEqual("ab", app.typed_text)
+        app.task_runner.start.assert_not_called()
+
+    def test_form_hooks_are_safe_when_voice_is_missing(self):
+        with mock.patch.object(tx, "VoiceController", side_effect=RuntimeError("boom")):
+            app = make_app(self.tmp, {"xform": "Olá %%nome%%"})
+        self.assertIsNone(app.voice)
+        app._register_voice_form_target(lambda text: None)
+        app._unregister_voice_form_target()
+
+    def test_form_apply_does_not_touch_tk_when_submit_fails(self):
+        app = make_app(self.tmp, {"xform": "Olá %%nome%%"})
+        entry = mock.Mock()
+        with mock.patch.object(app.gui, "submit", side_effect=RuntimeError("no pump")):
+            app._apply_voice_form({"nome": entry}, "João")
+        entry.delete.assert_not_called()
+        entry.insert.assert_not_called()
+        entry.winfo_exists.assert_not_called()
+
 
 class BufferMarginDispatchTests(unittest.TestCase):
     """The typed-text buffer must be sized so a trigger longer than the default,
