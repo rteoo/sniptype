@@ -425,6 +425,17 @@ class OnPressSpecialKeyTests(unittest.TestCase):
         self.assertEqual("ab", self.app.typed_text)
         self.app.task_runner.start.assert_not_called()
 
+    def test_escape_does_not_cancel_voice_on_the_expansion_listener(self):
+        self._press("ab")
+        voice = mock.Mock()
+        voice.is_enabled.return_value = True
+        self.app.voice = voice
+        self.app.task_runner.reset_mock()
+        self.app.on_press(Key.esc)
+        voice.cancel.assert_not_called()
+        self.app.task_runner.start.assert_not_called()
+        self.assertEqual("ab", self.app.typed_text)
+
 
 class VoiceIsolationTests(unittest.TestCase):
     """Voice must stay off the expansion hot path unless the user opts in."""

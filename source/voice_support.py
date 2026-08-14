@@ -6,6 +6,7 @@ inference, Tk, and disk stay off the keyboard threads.
 """
 
 import threading
+import time
 
 from clipboard_support import Clipboard
 from voice_audio import AudioCapture, VoiceAudioError, sounddevice_available
@@ -104,11 +105,13 @@ class VoiceController:
         self._shutdown = threading.Event()
         self._active_mode = None
         self._active_target = None
+        self._session_form_apply = None
         self._capture = None
         self._form_apply = None
         self._partial = ""
         self._monitor = None
         self._load_error = None
+        self._workers = []
         self.last_outcome = None
         for warning in warnings:
             self._log(warning)
@@ -198,13 +201,24 @@ class VoiceController:
             if candidate.enabled and self.state == STATE_UNAVAILABLE:
                 self.enable()
             return
+        if not candidate.enabled:
+            return
+        with self._lock:
+            active = self._state in (
+                STATE_RECORDING,
+                STATE_TRANSCRIBING,
+                STATE_ROUTING,
+            )
+        if active:
+            # Stop the microphone before the switch worker unloads the backend.
+            # Leaving state at recording would keep capture open after release
+            # is rejected; flipping to loading without stop() leaks the device.
+            self._cancel_session_locked(reason="switch")
         with self._lock:
             if not candidate.enabled:
                 return
-            if self._state in (STATE_RECORDING, STATE_TRANSCRIBING, STATE_ROUTING):
-                self._cancel.set()
             self._state = STATE_LOADING
-        self.task_runner.start(
+        self._start_worker(
             self._switch_profile_worker,
             previous,
             name="voice-switch",
@@ -220,7 +234,10 @@ class VoiceController:
 
     def unregister_form_target(self):
         with self._lock:
+            closed = self._form_apply
             self._form_apply = None
+            if self._session_form_apply is closed:
+                self._session_form_apply = None
 
     def enable(self):
         if self._shutdown.is_set():
@@ -239,10 +256,11 @@ class VoiceController:
             self._download_total = 0
         self._persist()
         self._emit_status()
-        self.task_runner.start(self._load_worker, name="voice-load")
+        self._start_worker(self._load_worker, name="voice-load")
 
     def disable(self):
         self._cancel_session_locked(reason="disable")
+        self._join_workers(_SHUTDOWN_JOIN_SECONDS)
         with self._lock:
             self.settings.enabled = False
             self._state = STATE_UNAVAILABLE
@@ -255,19 +273,16 @@ class VoiceController:
 
     def shutdown(self, timeout=_SHUTDOWN_JOIN_SECONDS):
         self._shutdown.set()
-        self._cancel.set()
+        self._cancel_session_locked(reason="shutdown")
         self._stop_monitor()
-        capture = None
         with self._lock:
-            capture = self._capture
-            self._capture = None
             self._state = STATE_UNAVAILABLE
             self.settings.enabled = False
-        if capture is not None:
-            try:
-                capture.stop()
-            except Exception:
-                pass
+        # ceiling: 2 s. A stuck native run is abandoned after this and then
+        # unloaded; raise if a real backend needs a longer bounded wait.
+        joined = self._join_workers(timeout)
+        if not joined:
+            self._warn("Encerramento da voz atingiu o tempo limite; descarregando mesmo assim.")
         try:
             self._backend.unload()
         except Exception:
@@ -294,8 +309,10 @@ class VoiceController:
                 )
                 return False
         target = self._capture_target()
+        session_form = None
         if form_apply is not None and mode != MODE_COMMAND:
-            target = VoiceTarget("form")
+            target = VoiceTarget("form", handle=form_apply)
+            session_form = form_apply
         try:
             capture = self._capture_factory()
             capture.start()
@@ -316,12 +333,13 @@ class VoiceController:
             self._cancel.clear()
             self._active_mode = mode
             self._active_target = target
+            self._session_form_apply = session_form
             self._capture = capture
             self._partial = ""
             self._state = STATE_RECORDING
             generation = self._session_generation
         if self.settings.profile == PROFILE_STREAMING:
-            self.task_runner.start(self._stream_worker, generation, name="voice-stream")
+            self._start_worker(self._stream_worker, generation, name="voice-stream")
         return True
 
     def handle_hotkey_release(self, mode):
@@ -334,7 +352,7 @@ class VoiceController:
             capture = self._capture
             self._capture = None
             self._state = STATE_TRANSCRIBING
-        self.task_runner.start(
+        self._start_worker(
             self._finish_worker,
             generation,
             capture,
@@ -347,6 +365,10 @@ class VoiceController:
 
     def _cancel_session_locked(self, reason):
         self._cancel.set()
+        try:
+            self._backend.cancel()
+        except Exception:
+            pass
         capture = None
         with self._lock:
             if self._state in (STATE_RECORDING, STATE_TRANSCRIBING, STATE_ROUTING):
@@ -354,6 +376,7 @@ class VoiceController:
                 self._capture = None
                 self._active_mode = None
                 self._active_target = None
+                self._session_form_apply = None
                 self._partial = ""
                 self.last_outcome = OUTCOME_CANCELLED
                 self._state = STATE_IDLE if self.settings.enabled else STATE_UNAVAILABLE
@@ -406,6 +429,10 @@ class VoiceController:
         self._emit_status()
 
     def _switch_profile_worker(self, previous):
+        if self._shutdown.is_set():
+            return
+        # A cancelled finish/stream worker may still be inside native inference.
+        self._join_workers(_SHUTDOWN_JOIN_SECONDS)
         if self._shutdown.is_set():
             return
         try:
@@ -496,8 +523,17 @@ class VoiceController:
             self._state = STATE_ROUTING
             mode = self._active_mode or MODE_DICTATION
             target = self._active_target
-            form_apply = self._form_apply
+            form_apply = self._session_form_apply
         if self._shutdown.is_set():
+            return
+        if getattr(target, "kind", None) == "form" and form_apply is None:
+            with self._lock:
+                self.last_outcome = OUTCOME_CANCELLED
+                self._active_mode = None
+                self._active_target = None
+                self._session_form_apply = None
+                self._partial = ""
+                self._state = STATE_IDLE if self.settings.enabled else STATE_UNAVAILABLE
             return
         outcome = dispatch_voice_result(
             transcript,
@@ -568,6 +604,7 @@ class VoiceController:
             self.last_outcome = outcome
             self._active_mode = None
             self._active_target = None
+            self._session_form_apply = None
             self._partial = ""
             self._state = STATE_IDLE if self.settings.enabled else STATE_UNAVAILABLE
         if outcome == OUTCOME_NO_MATCH:
@@ -593,6 +630,7 @@ class VoiceController:
             self.last_outcome = OUTCOME_FAILED
             self._active_mode = None
             self._active_target = None
+            self._session_form_apply = None
             self._partial = ""
             self._state = STATE_IDLE if self.settings.enabled else STATE_UNAVAILABLE
         self._notify(message, key="voice-error")
@@ -633,21 +671,54 @@ class VoiceController:
         if monitor is not None:
             monitor.stop()
 
+    def _start_worker(self, fn, *args, name=None):
+        thread = self.task_runner.start(fn, *args, name=name)
+        if thread is None or not hasattr(thread, "join"):
+            return thread
+        with self._lock:
+            self._workers.append(thread)
+        return thread
+
+    def _join_workers(self, timeout):
+        """Join tracked voice workers except the caller. True if all finished."""
+        deadline = time.monotonic() + max(0.0, float(timeout))
+        current = threading.current_thread()
+        with self._lock:
+            workers = list(self._workers)
+        pending = []
+        for thread in workers:
+            if thread is current:
+                pending.append(thread)
+                continue
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                pending.append(thread)
+                continue
+            try:
+                thread.join(remaining)
+            except Exception:
+                pass
+            if thread.is_alive():
+                pending.append(thread)
+        with self._lock:
+            self._workers = pending
+        return not pending
+
     def _hotkey_press_from_os(self, mode):
         # OS callback: enqueue only.
         if self._shutdown.is_set():
             return
-        self.task_runner.start(self.handle_hotkey_press, mode, name="voice-press")
+        self._start_worker(self.handle_hotkey_press, mode, name="voice-press")
 
     def _hotkey_release_from_os(self, mode):
         if self._shutdown.is_set():
             return
-        self.task_runner.start(self.handle_hotkey_release, mode, name="voice-release")
+        self._start_worker(self.handle_hotkey_release, mode, name="voice-release")
 
     def _hotkey_escape_from_os(self):
         if self._shutdown.is_set():
             return
-        self.task_runner.start(self.cancel, name="voice-escape")
+        self._start_worker(self.cancel, name="voice-escape")
 
     def delete_active_model(self):
         """Disable voice, then remove only the catalog directory of the profile."""

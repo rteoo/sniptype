@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from trigger_index import compile_trigger_index
 from voice_audio import VoiceAudioError
 from voice_dispatch import MODE_COMMAND, MODE_DICTATION, OUTCOME_INSERTED, VoiceTarget
-from voice_runtime import FakeAsrBackend
+from voice_runtime import FakeAsrBackend, VoiceRuntimeError
 from voice_support import STATE_IDLE, STATE_RECORDING, STATE_UNAVAILABLE, VoiceController
 
 
@@ -24,6 +24,7 @@ class FakeCapture:
         self.overflow = overflow
         self.error = error
         self.started = False
+        self.stop_calls = 0
         self._queue = _Queue(self.samples)
 
     def start(self):
@@ -32,6 +33,8 @@ class FakeCapture:
         self.started = True
 
     def stop(self):
+        self.stop_calls += 1
+        self.started = False
         return self.samples, self.overflow
 
 
@@ -205,6 +208,95 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(self.controller.state, STATE_IDLE)
         self.assertTrue(self.controller.handle_hotkey_press(MODE_DICTATION))
         self.assertEqual(self.controller.state, STATE_RECORDING)
+
+    def test_switch_during_recording_stops_capture(self):
+        self._ready()
+        self.assertTrue(self.controller.handle_hotkey_press(MODE_DICTATION))
+        self.assertEqual(self.controller.state, STATE_RECORDING)
+        with mock.patch("voice_support.model_is_installed", return_value=True), \
+                mock.patch("voice_support.installed_model_path", return_value="model.gguf"), \
+                mock.patch.object(self.controller, "_start_monitor"):
+            self.controller.set_language("en-US")
+        self.assertGreaterEqual(self.capture.stop_calls, 1)
+        self.assertFalse(self.capture.started)
+        self.assertFalse(self.controller.handle_hotkey_release(MODE_DICTATION))
+        self.assertEqual(self.inserted, [])
+
+    def test_closed_form_does_not_receive_a_later_forms_transcript(self):
+        self._ready()
+        first = []
+        second = []
+        self.controller.register_form_target(lambda text: first.append(text))
+        self.controller.handle_hotkey_press(MODE_DICTATION)
+        self.controller.unregister_form_target()
+        self.controller.register_form_target(lambda text: second.append(text))
+        self.backend.transcript = "João"
+        self.controller.handle_hotkey_release(MODE_DICTATION)
+        self.assertEqual(first, [])
+        self.assertEqual(second, [])
+        self.assertEqual(self.inserted, [])
+
+    def test_shutdown_cancels_native_inference_before_unload(self):
+        import threading
+        import time
+
+        class ThreadRunner:
+            def start(self, fn, *args, name=None):
+                thread = threading.Thread(target=fn, args=args, daemon=True, name=name)
+                thread.start()
+                return thread
+
+        entered = threading.Event()
+        left = threading.Event()
+        unloaded_before_exit = []
+
+        class SlowBackend(FakeAsrBackend):
+            def transcribe(self, pcm, cancel_event=None):
+                entered.set()
+                try:
+                    deadline = time.time() + 1.0
+                    while time.time() < deadline:
+                        if self._cancelled(cancel_event):
+                            raise VoiceRuntimeError("Transcrição cancelada.")
+                        time.sleep(0.01)
+                    return self.transcript
+                finally:
+                    left.set()
+
+            def unload(self):
+                unloaded_before_exit.append(not left.is_set())
+                super().unload()
+
+        backend = SlowBackend(transcript="late")
+        controller = VoiceController(
+            {"voice_enabled": False},
+            task_runner=ThreadRunner(),
+            insert_text=lambda text: self.inserted.append(text) or True,
+            expand_trigger=lambda trigger: True,
+            notify=self.notify,
+            logger=self.logger,
+            capture_target=lambda: VoiceTarget("window", handle=1),
+            restore_target=lambda target: True,
+            secure_input_blocks=lambda: False,
+            backend=backend,
+            capture_factory=lambda: FakeCapture(),
+            cache_dir=self.tmp,
+            download=lambda entry, cache_dir, progress=None, cancel_event=None: os.path.join(
+                self.tmp, "model.gguf"
+            ),
+        )
+        with mock.patch("voice_support.model_is_installed", return_value=True), \
+                mock.patch("voice_support.installed_model_path", return_value="model.gguf"), \
+                mock.patch.object(controller, "_start_monitor"):
+            controller.enable()
+        self.assertTrue(controller.handle_hotkey_press(MODE_DICTATION))
+        self.assertTrue(controller.handle_hotkey_release(MODE_DICTATION))
+        self.assertTrue(entered.wait(1.0))
+        controller.shutdown(timeout=1.0)
+        self.assertTrue(left.wait(1.0))
+        self.assertGreaterEqual(backend.cancel_calls, 1)
+        self.assertEqual(unloaded_before_exit, [False])
+        self.assertEqual(self.inserted, [])
 
 
 if __name__ == "__main__":
