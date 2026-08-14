@@ -1849,8 +1849,7 @@ class TextExpander:
                 )
                 if not messagebox.askokcancel("Baixar modelo de voz", warning, parent=dialog):
                     return
-            self.voice.set_language(language.get())
-            self.voice.set_profile(profile)
+            self.voice.apply_options(profile=profile, language=language.get())
             if not self.voice.is_enabled():
                 self.voice.enable()
             dialog.destroy()

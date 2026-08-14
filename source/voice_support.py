@@ -174,26 +174,38 @@ class VoiceController:
         return bool(entry and model_is_installed(entry, self.cache_dir))
 
     def set_language(self, language):
+        self.apply_options(language=language)
+
+    def apply_options(self, profile=None, language=None):
+        """Persist profile/language and reload the backend once if needed."""
         warnings = []
-        candidate = resolve_voice_settings(
-            {**voice_settings_payload(self.settings), "voice_language": language},
-            warnings,
-        )
+        payload = voice_settings_payload(self.settings)
+        if profile is not None:
+            payload["voice_profile"] = profile
+        if language is not None:
+            payload["voice_language"] = language
+        candidate = resolve_voice_settings(payload, warnings)
         for warning in warnings:
             self._log(warning)
         previous = self.settings
+        same = (
+            candidate.profile == previous.profile
+            and candidate.language == previous.language
+        )
         self.settings = candidate
         self._persist()
-        if candidate.language == previous.language:
+        if same:
             return
         with self._lock:
-            if not candidate.enabled or self._state != STATE_IDLE:
+            if not candidate.enabled:
                 return
+            if self._state in (STATE_RECORDING, STATE_TRANSCRIBING, STATE_ROUTING):
+                self._cancel.set()
             self._state = STATE_LOADING
         self.task_runner.start(
             self._switch_profile_worker,
             previous,
-            name="voice-switch-language",
+            name="voice-switch",
         )
 
     def partial_text(self):
@@ -260,29 +272,7 @@ class VoiceController:
             pass
 
     def set_profile(self, profile):
-        warnings = []
-        candidate = resolve_voice_settings(
-            {**voice_settings_payload(self.settings), "voice_profile": profile},
-            warnings,
-        )
-        for warning in warnings:
-            self._log(warning)
-        with self._lock:
-            if candidate.profile == self.settings.profile and self._state == STATE_IDLE:
-                return
-            if self._state in (STATE_RECORDING, STATE_TRANSCRIBING, STATE_ROUTING):
-                self._cancel.set()
-            previous = self.settings
-            self.settings = candidate
-            self._state = STATE_LOADING if candidate.enabled else STATE_UNAVAILABLE
-        self._persist()
-        if not candidate.enabled:
-            return
-        self.task_runner.start(
-            self._switch_profile_worker,
-            previous,
-            name="voice-switch-profile",
-        )
+        self.apply_options(profile=profile)
 
     def handle_hotkey_press(self, mode):
         if self._shutdown.is_set():
