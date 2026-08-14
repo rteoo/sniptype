@@ -39,6 +39,7 @@ def make_startup_app():
     app.voice = None
     app._voice_menu_label = lambda text=None: "Entrada por voz"
     app._voice_menu_checked = lambda item=None: False
+    app._voice_menu_visible = lambda item=None: False
     app.toggle_voice = mock.Mock()
     app.open_voice_settings = mock.Mock()
     return app
