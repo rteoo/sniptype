@@ -1811,6 +1811,7 @@ class TextExpander:
         from tkinter import messagebox
 
         from voice_catalog import LANGUAGES, format_size, selectable_catalog, third_party_notices
+        from voice_hotkey import parse_chord
         from voice_models import model_is_installed
 
         ui = ui_theme.bind(root)
@@ -1869,6 +1870,47 @@ class TextExpander:
                 **ui.checkbutton_colors(ui.surface),
             ).pack(side=tk.LEFT, padx=4)
 
+        hotkey = tk.StringVar(value=self.voice.settings.hotkey)
+        command_hotkey = tk.StringVar(value=self.voice.settings.command_hotkey)
+        shortcut_frame = tk.Frame(dialog, bg=ui.surface)
+        shortcut_frame.pack(fill=tk.X, padx=16, pady=(8, 4))
+        shortcut_frame.grid_columnconfigure(1, weight=1)
+        tk.Label(
+            shortcut_frame,
+            text="Ditado (segure para falar):",
+            bg=ui.surface,
+            fg=ui.text,
+            font=ui.font(9),
+        ).grid(row=0, column=0, sticky="w", padx=(0, 8), pady=3)
+        tk.Entry(
+            shortcut_frame,
+            textvariable=hotkey,
+            font=ui.font(9),
+            width=28,
+            **ui.entry_colors(),
+        ).grid(row=0, column=1, sticky="ew", pady=3)
+        tk.Label(
+            shortcut_frame,
+            text="Comando por voz:",
+            bg=ui.surface,
+            fg=ui.text,
+            font=ui.font(9),
+        ).grid(row=1, column=0, sticky="w", padx=(0, 8), pady=3)
+        tk.Entry(
+            shortcut_frame,
+            textvariable=command_hotkey,
+            font=ui.font(9),
+            width=28,
+            **ui.entry_colors(),
+        ).grid(row=1, column=1, sticky="ew", pady=3)
+        tk.Label(
+            shortcut_frame,
+            text="Formato: ctrl+alt+space, ctrl+shift+f8, etc.",
+            bg=ui.surface,
+            fg=ui.text_muted,
+            font=ui.font(8),
+        ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(2, 0))
+
         tk.Label(
             dialog,
             text="\n".join(third_party_notices()),
@@ -1879,8 +1921,35 @@ class TextExpander:
             justify="left",
         ).pack(anchor="w", padx=16, pady=(8, 0))
 
-        def apply_profile():
+        def apply_voice_settings():
             profile = selected.get()
+            try:
+                dictation_chord = parse_chord(hotkey.get())
+            except ValueError:
+                messagebox.showerror(
+                    "Atalho inválido",
+                    "O atalho de ditado precisa de um modificador e uma tecla.\n\n"
+                    "Exemplo: ctrl+alt+space",
+                    parent=dialog,
+                )
+                return
+            try:
+                command_chord = parse_chord(command_hotkey.get())
+            except ValueError:
+                messagebox.showerror(
+                    "Atalho inválido",
+                    "O atalho de comando precisa de um modificador e uma tecla.\n\n"
+                    "Exemplo: ctrl+alt+shift+space",
+                    parent=dialog,
+                )
+                return
+            if command_chord == dictation_chord:
+                messagebox.showerror(
+                    "Atalhos em conflito",
+                    "Escolha atalhos diferentes para ditado e comando por voz.",
+                    parent=dialog,
+                )
+                return
             entry = next((item for item in visible if item["profile"] == profile), None)
             if entry is not None and not model_is_installed(entry, self.voice.cache_dir):
                 warning = (
@@ -1889,7 +1958,12 @@ class TextExpander:
                 )
                 if not messagebox.askokcancel("Baixar modelo de voz", warning, parent=dialog):
                     return
-            self.voice.apply_options(profile=profile, language=language.get())
+            self.voice.apply_options(
+                profile=profile,
+                language=language.get(),
+                hotkey=dictation_chord.spec,
+                command_hotkey=command_chord.spec,
+            )
             if not self.voice.is_enabled():
                 self.voice.enable()
             dialog.destroy()
@@ -1916,8 +1990,8 @@ class TextExpander:
         ).pack(side=tk.RIGHT, padx=(4, 0))
         tk.Button(
             buttons,
-            text="Usar este perfil",
-            command=apply_profile,
+            text="Salvar e usar",
+            command=apply_voice_settings,
             **ui.button_colors(accent=True),
         ).pack(side=tk.RIGHT)
         tk.Button(
