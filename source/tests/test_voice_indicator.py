@@ -16,16 +16,13 @@ class VoiceIndicatorContentTests(unittest.TestCase):
                 self.assertIsNotNone(indicator_content(state))
 
     def test_recording_explains_release_and_cancel(self):
-        title, detail, accent = indicator_content("recording", "dictation")
+        title, accent = indicator_content("recording", "dictation")
         self.assertEqual(title, "Ouvindo…")
-        self.assertIn("Solte para transcrever", detail)
-        self.assertIn("Esc para cancelar", detail)
         self.assertEqual(accent, "warning")
 
     def test_command_mode_is_distinct(self):
-        title, detail, _accent = indicator_content("recording", "command")
+        title, _accent = indicator_content("recording", "command")
         self.assertIn("comando", title)
-        self.assertIn("Solte para executar", detail)
 
     def test_idle_is_hidden(self):
         self.assertIsNone(indicator_content("idle"))

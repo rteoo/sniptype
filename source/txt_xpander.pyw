@@ -1749,13 +1749,14 @@ class TextExpander:
         if voice is None:
             return
         snapshot = voice.status_snapshot()
-        self.refresh_tray_menu()
         try:
             self.gui.submit(
                 lambda root, value=snapshot: self._render_voice_status(root, value)
             )
         except Exception as exc:
             self.logger.warning(f"Não foi possível atualizar o indicador de voz: {exc}")
+        if snapshot["state"] not in {"recording", "transcribing", "routing"}:
+            self.refresh_tray_menu()
 
     def _render_voice_status(self, root, snapshot):
         if self.voice_status_indicator is None:
