@@ -10,7 +10,13 @@ from trigger_index import compile_trigger_index
 from voice_audio import VoiceAudioError
 from voice_dispatch import MODE_COMMAND, MODE_DICTATION, OUTCOME_INSERTED, VoiceTarget
 from voice_runtime import FakeAsrBackend, VoiceRuntimeError
-from voice_support import STATE_IDLE, STATE_RECORDING, STATE_UNAVAILABLE, VoiceController
+from voice_support import (
+    STATE_IDLE,
+    STATE_LOADING,
+    STATE_RECORDING,
+    STATE_UNAVAILABLE,
+    VoiceController,
+)
 
 
 class InlineRunner:
@@ -299,6 +305,82 @@ class ControllerTests(unittest.TestCase):
         self.assertTrue(left.wait(1.0))
         self.assertGreaterEqual(backend.cancel_calls, 1)
         self.assertEqual(unloaded_before_exit, [False])
+        self.assertEqual(self.inserted, [])
+
+    def test_switch_during_transcription_keeps_loading_and_rejects_press(self):
+        import threading
+        import time
+
+        class ThreadRunner:
+            def start(self, fn, *args, name=None):
+                thread = threading.Thread(target=fn, args=args, daemon=True, name=name)
+                thread.start()
+                return thread
+
+        entered = threading.Event()
+        in_unload = threading.Event()
+        allow_unload = threading.Event()
+        captures = []
+
+        class SlowBackend(FakeAsrBackend):
+            def transcribe(self, pcm, cancel_event=None):
+                entered.set()
+                deadline = time.time() + 1.0
+                while time.time() < deadline:
+                    if self._cancelled(cancel_event):
+                        raise VoiceRuntimeError("Transcrição cancelada.")
+                    time.sleep(0.01)
+                return self.transcript
+
+            def unload(self):
+                in_unload.set()
+                allow_unload.wait(1.0)
+                super().unload()
+
+        def factory():
+            capture = FakeCapture()
+            captures.append(capture)
+            return capture
+
+        backend = SlowBackend(transcript="late")
+        controller = VoiceController(
+            {"voice_enabled": False},
+            task_runner=ThreadRunner(),
+            insert_text=lambda text: self.inserted.append(text) or True,
+            expand_trigger=lambda trigger: True,
+            notify=self.notify,
+            logger=self.logger,
+            capture_target=lambda: VoiceTarget("window", handle=1),
+            restore_target=lambda target: True,
+            secure_input_blocks=lambda: False,
+            backend=backend,
+            capture_factory=factory,
+            cache_dir=self.tmp,
+            download=lambda entry, cache_dir, progress=None, cancel_event=None: os.path.join(
+                self.tmp, "model.gguf"
+            ),
+        )
+        with mock.patch("voice_support.model_is_installed", return_value=True), \
+                mock.patch("voice_support.installed_model_path", return_value="model.gguf"), \
+                mock.patch.object(controller, "_start_monitor"):
+            controller.enable()
+            deadline = time.time() + 1.0
+            while controller.state != STATE_IDLE and time.time() < deadline:
+                time.sleep(0.01)
+            self.assertEqual(controller.state, STATE_IDLE)
+            self.assertTrue(controller.handle_hotkey_press(MODE_DICTATION))
+            self.assertTrue(controller.handle_hotkey_release(MODE_DICTATION))
+            self.assertTrue(entered.wait(1.0))
+            controller.set_language("en-US")
+            self.assertTrue(in_unload.wait(1.0))
+            self.assertEqual(controller.state, STATE_LOADING)
+            self.assertFalse(controller.handle_hotkey_press(MODE_DICTATION))
+            allow_unload.set()
+            deadline = time.time() + 1.0
+            while controller.state == STATE_LOADING and time.time() < deadline:
+                time.sleep(0.01)
+        self.assertEqual(controller.state, STATE_IDLE)
+        self.assertFalse(any(capture.started for capture in captures))
         self.assertEqual(self.inserted, [])
 
 

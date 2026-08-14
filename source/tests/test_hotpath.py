@@ -476,6 +476,15 @@ class VoiceIsolationTests(unittest.TestCase):
         app._register_voice_form_target(lambda text: None)
         app._unregister_voice_form_target()
 
+    def test_form_apply_does_not_touch_tk_when_submit_fails(self):
+        app = make_app(self.tmp, {"xform": "Olá %%nome%%"})
+        entry = mock.Mock()
+        with mock.patch.object(app.gui, "submit", side_effect=RuntimeError("no pump")):
+            app._apply_voice_form({"nome": entry}, "João")
+        entry.delete.assert_not_called()
+        entry.insert.assert_not_called()
+        entry.winfo_exists.assert_not_called()
+
 
 class BufferMarginDispatchTests(unittest.TestCase):
     """The typed-text buffer must be sized so a trigger longer than the default,
