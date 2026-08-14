@@ -1714,6 +1714,11 @@ class TextExpander:
             target = focused or next(iter(entries.values()), None)
             if target is None:
                 return
+            try:
+                if not target.winfo_exists():
+                    return
+            except Exception:
+                return
             target.delete(0, "end")
             target.insert(0, text)
 
