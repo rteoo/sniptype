@@ -14,6 +14,8 @@ from voice_support import (
     STATE_IDLE,
     STATE_LOADING,
     STATE_RECORDING,
+    STATE_ROUTING,
+    STATE_TRANSCRIBING,
     STATE_UNAVAILABLE,
     VoiceController,
 )
@@ -108,6 +110,29 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(self.inserted, ["xadds"])
         self.assertEqual(self.expanded, [])
         self.assertEqual(self.controller.last_outcome, OUTCOME_INSERTED)
+
+    def test_status_callback_covers_interactive_session_states(self):
+        self._ready()
+        seen = []
+        self.controller._on_status_change = lambda: seen.append(
+            self.controller.status_snapshot()
+        )
+        self.controller.handle_hotkey_press(MODE_DICTATION)
+        self.controller.handle_hotkey_release(MODE_DICTATION)
+        self.assertEqual(
+            [item["state"] for item in seen],
+            [STATE_RECORDING, STATE_TRANSCRIBING, STATE_ROUTING, STATE_IDLE],
+        )
+        self.assertEqual(seen[0]["mode"], MODE_DICTATION)
+        self.assertIsNone(seen[-1]["mode"])
+
+    def test_cancel_returns_indicator_state_to_idle(self):
+        self._ready()
+        seen = []
+        self.controller._on_status_change = lambda: seen.append(self.controller.state)
+        self.controller.handle_hotkey_press(MODE_DICTATION)
+        self.controller.cancel()
+        self.assertEqual(seen, [STATE_RECORDING, STATE_IDLE])
 
     def test_voice_command_expands(self):
         self._ready()
