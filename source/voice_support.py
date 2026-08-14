@@ -179,25 +179,39 @@ class VoiceController:
     def set_language(self, language):
         self.apply_options(language=language)
 
-    def apply_options(self, profile=None, language=None):
-        """Persist profile/language and reload the backend once if needed."""
+    def apply_options(
+        self,
+        profile=None,
+        language=None,
+        hotkey=None,
+        command_hotkey=None,
+    ):
+        """Persist voice options and apply only the runtime changes required."""
         warnings = []
         payload = voice_settings_payload(self.settings)
         if profile is not None:
             payload["voice_profile"] = profile
         if language is not None:
             payload["voice_language"] = language
+        if hotkey is not None:
+            payload["voice_hotkey"] = hotkey
+        if command_hotkey is not None:
+            payload["voice_command_hotkey"] = command_hotkey
         candidate = resolve_voice_settings(payload, warnings)
         for warning in warnings:
             self._log(warning)
         previous = self.settings
-        same = (
+        runtime_same = (
             candidate.profile == previous.profile
             and candidate.language == previous.language
         )
+        hotkeys_same = (
+            candidate.hotkey == previous.hotkey
+            and candidate.command_hotkey == previous.command_hotkey
+        )
         self.settings = candidate
         self._persist()
-        if same:
+        if runtime_same and hotkeys_same:
             if candidate.enabled and self.state == STATE_UNAVAILABLE:
                 self.enable()
             return
@@ -209,6 +223,18 @@ class VoiceController:
                 STATE_TRANSCRIBING,
                 STATE_ROUTING,
             )
+        if runtime_same:
+            if active:
+                self._cancel_session_locked(reason="hotkey")
+            with self._lock:
+                state = self._state
+            if state == STATE_IDLE:
+                self._start_monitor()
+            elif state == STATE_UNAVAILABLE:
+                self.enable()
+            # A load already in progress starts the monitor with the latest
+            # settings when it reaches idle.
+            return
         if active:
             # Stop the microphone before the switch worker unloads the backend.
             # The abort also bumps the session generation and keeps LOADING so
