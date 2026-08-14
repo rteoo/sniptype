@@ -14,7 +14,8 @@ SAMPLE_WIDTH = 4  # float32
 # ceiling: 30 s of 16 kHz mono float32 (~1.9 MB). Longer holds cancel rather
 # than grow without bound. Raise if real dictation needs longer takes.
 MAX_SAMPLES = SAMPLE_RATE * 30
-QUEUE_MAX_CHUNKS = 64
+BLOCK_SIZE = 1024
+QUEUE_MAX_CHUNKS = (MAX_SAMPLES + BLOCK_SIZE - 1) // BLOCK_SIZE
 
 
 class VoiceAudioError(Exception):
@@ -32,10 +33,13 @@ def sounddevice_available():
 class AudioCapture:
     """Bounded float32 mono capture. ``stop()`` returns (pcm_list, overflow)."""
 
-    def __init__(self, max_samples=MAX_SAMPLES, queue_max=QUEUE_MAX_CHUNKS):
+    def __init__(self, max_samples=MAX_SAMPLES, queue_max=None):
         self.max_samples = max_samples
+        if queue_max is None:
+            queue_max = (max_samples + BLOCK_SIZE - 1) // BLOCK_SIZE
         self._queue = queue.Queue(maxsize=queue_max)
         self._overflow = False
+        self._sample_count = 0
         self._stream = None
         self._started = False
 
@@ -49,6 +53,7 @@ class AudioCapture:
                 "A captura de áudio não está disponível neste aplicativo."
             ) from exc
         self._overflow = False
+        self._sample_count = 0
         while True:
             try:
                 self._queue.get_nowait()
@@ -58,6 +63,10 @@ class AudioCapture:
         def callback(indata, frames, time_info, status):
             if status:
                 self._overflow = True
+            self._sample_count += frames
+            if self._sample_count > self.max_samples:
+                self._overflow = True
+                return
             try:
                 self._queue.put_nowait(indata.copy())
             except queue.Full:
@@ -68,6 +77,7 @@ class AudioCapture:
                 samplerate=SAMPLE_RATE,
                 channels=CHANNELS,
                 dtype="float32",
+                blocksize=BLOCK_SIZE,
                 callback=callback,
             )
             self._stream.start()
@@ -105,6 +115,7 @@ class AudioCapture:
                 break
         overflow = self._overflow
         self._overflow = False
+        self._sample_count = 0
         if overflow:
             return [], True
         return samples, False
