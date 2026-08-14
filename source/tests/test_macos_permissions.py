@@ -66,12 +66,33 @@ class ProbeTests(unittest.TestCase):
             self.assertEqual(mp.check_input_monitoring(), UNKNOWN)
             self.assertEqual(mp.check_accessibility(), UNKNOWN)
 
+    def test_microphone_is_granted_off_mac(self):
+        with mock.patch.object(mp, "IS_MAC", False):
+            self.assertEqual(mp.check_microphone(), GRANTED)
+
+    def test_microphone_unknown_when_avfoundation_missing(self):
+        with mock.patch.object(mp, "IS_MAC", True):
+            with mock.patch.dict(sys.modules, {"AVFoundation": None}):
+                with mock.patch("builtins.__import__", side_effect=ImportError):
+                    self.assertEqual(mp.check_microphone(), UNKNOWN)
+
+    def test_microphone_is_not_in_expansion_onboarding(self):
+        self.assertNotIn(mp.MICROPHONE, mp.PERMISSIONS)
+
     def test_off_mac_nothing_is_probed(self):
         symbol = mock.Mock()
         with mock.patch.object(mp, "IS_MAC", False), \
                 mock.patch.object(mp, "_framework_symbol", symbol):
             self.assertEqual(mp.check_permissions(), status(UNKNOWN, UNKNOWN))
         symbol.assert_not_called()
+
+    def test_microphone_is_not_part_of_expansion_onboarding(self):
+        self.assertNotIn(mp.MICROPHONE, mp.PERMISSIONS)
+        with mock.patch.object(mp, "IS_MAC", False):
+            self.assertEqual(mp.check_microphone(), mp.GRANTED)
+
+    def test_microphone_denial_does_not_open_expansion_onboarding(self):
+        self.assertFalse(mp.needs_onboarding(status()))
 
     def test_framework_symbol_survives_a_missing_library(self):
         with mock.patch.object(mp.ctypes.util, "find_library", return_value=None):

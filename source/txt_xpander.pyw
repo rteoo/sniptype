@@ -12,6 +12,7 @@ Libraries used:
 - pystray (open source, LGPL)
 - pillow (open source, PIL License)
 - yfinance (open source, Apache 2.0)
+- sounddevice (optional, MIT) for voice capture
 """
 
 import time
@@ -75,7 +76,9 @@ from app_paths import (
     migrate_snippets,
     needs_migration,
 )
-from settings_support import load_settings
+from settings_support import load_settings, save_settings
+from voice_dispatch import VoiceTarget
+from voice_support import VoiceController
 from validation_support import validate_trigger
 import macos_permissions
 import ui_theme
@@ -88,8 +91,10 @@ from platform_support import (
     IS_WINDOWS,
     acquire_lockfile,
     autostart_target_exists,
+    capture_text_target,
     classify_autostart,
     install_autostart,
+    restore_text_target,
     insertion_timings,
     invalid_timing_overrides,
     read_autostart_command,
@@ -276,6 +281,19 @@ class TextExpander:
         self.notification_history_file = os.path.join(self.data_dir, "notifications.json")
         self.notification_history = load_notification_history(self.notification_history_file)
         self.settings = load_settings(self.settings_file)
+        self.voice = VoiceController(
+            self.settings,
+            task_runner=self.task_runner,
+            insert_text=self._insert_voice_text,
+            expand_trigger=self.expand_from_voice,
+            notify=self.notify_error,
+            logger=self.logger,
+            persist_settings=self._persist_voice_settings,
+            capture_target=self._capture_voice_target,
+            restore_target=self._restore_voice_target,
+            secure_input_blocks=self._secure_input_blocks_expansion,
+        )
+        self.voice.bind_library(lambda: self.snippets, lambda: self.trigger_index)
         # Opt-in: expand only after a terminator (space/punctuation). Default off
         # to preserve the existing expand-on-last-character muscle memory.
         self.terminator_mode = bool(self.settings.get("terminator_mode", False))
@@ -329,7 +347,9 @@ class TextExpander:
         # Load snippets before anything else
         self.snippets = self.load_snippets()
         self.refresh_runtime_indexes()
-    
+        if self.voice.is_enabled():
+            self.voice.enable()
+
     # =====================================================================
     # SNIPPET LOADING AND SAVING
     # =====================================================================
@@ -1225,6 +1245,9 @@ class TextExpander:
             frame.grid_columnconfigure(0, weight=1)
 
             first_entry = None
+            self.voice.register_form_target(
+                lambda text, _entries=entries: self._apply_voice_form(_entries, text)
+            )
             for i, name in enumerate(field_names):
                 label_text = name.replace("_", " ").title()
                 tk.Label(
@@ -1296,6 +1319,7 @@ class TextExpander:
                 dialog.wait_window(dialog)
             finally:
                 cancel_activation()
+                self.voice.unregister_form_target()
             return result[0]
 
         try:
@@ -1480,6 +1504,9 @@ class TextExpander:
         try:
             if hasattr(key, 'char') and key.char:
                 self._handle_char(key.char)
+            elif key == Key.esc:
+                if self.voice is not None:
+                    self.voice.cancel()
             elif key == Key.enter:
                 # ceiling: terminator mode does not gate on Enter (re-typing it could
                 # double-submit); Enter always just resets the buffer. Extend to Enter
@@ -1599,6 +1626,223 @@ class TextExpander:
                 key=f"expand-error:{trigger}",
                 cooldown_seconds=5,
             )
+
+    def _capture_voice_target(self):
+        handle = platform_support.capture_text_target()
+        if handle is None:
+            return VoiceTarget("self")
+        return VoiceTarget("window", handle)
+
+    def _restore_voice_target(self, target):
+        if target is None:
+            return False
+        if target.kind == "form":
+            return True
+        if target.kind != "window":
+            return False
+        return platform_support.restore_text_target(target.handle)
+
+    def _insert_voice_text(self, text):
+        return bool(self.text_inserter.insert_text(text))
+
+    def expand_from_voice(self, trigger):
+        """Expand a spoken trigger. Nothing was typed, so nothing is erased."""
+        if not self.enabled:
+            return False
+        try:
+            if (
+                trigger in self.trigger_index["slow_triggers"]
+                or trigger in self.trigger_index["form_triggers"]
+            ):
+                return bool(self.run_slow_snippet(trigger))
+            return bool(self.expand_snippet(trigger))
+        except Exception as exc:
+            self.logger.error(f"Erro na expansão por voz de {trigger}: {exc}")
+            self.notify_error(
+                f"Falha ao expandir {trigger}: {exc}",
+                key=f"voice-expand-error:{trigger}",
+                cooldown_seconds=5,
+            )
+            return False
+
+    def _apply_voice_form(self, entries, text):
+        def apply(_root=None):
+            if not entries:
+                return
+            focused = None
+            for entry in entries.values():
+                try:
+                    if entry.focus_get() is entry:
+                        focused = entry
+                        break
+                except Exception:
+                    continue
+            target = focused or next(iter(entries.values()), None)
+            if target is None:
+                return
+            target.delete(0, "end")
+            target.insert(0, text)
+
+        try:
+            self.gui.submit(apply)
+        except Exception:
+            apply()
+
+    def _persist_voice_settings(self, payload):
+        current = load_settings(self.settings_file)
+        if not isinstance(current, dict):
+            current = {}
+        current.update(payload)
+        if save_settings(self.settings_file, current):
+            self.settings.update(payload)
+
+    def _voice_menu_label(self, _text=None):
+        if self.voice is None:
+            return "Entrada por voz"
+        return self.voice.status_label()
+
+    def _voice_menu_checked(self, _item=None):
+        return bool(self.voice is not None and self.voice.is_enabled())
+
+    def toggle_voice(self, icon=None, item=None):
+        if self.voice is None:
+            return
+        if self.voice.is_enabled():
+            self.voice.disable()
+            self.refresh_tray_menu()
+            return
+        if not self.voice._backend.available() and not getattr(
+            self.voice._backend, "loaded_path", None
+        ):
+            # A missing native runtime still lets the user enable so the
+            # download/load worker can report the concrete failure.
+            pass
+        try:
+            self.gui.submit(self._confirm_and_enable_voice)
+        except Exception:
+            self.voice.enable()
+        self.refresh_tray_menu()
+
+    def _confirm_and_enable_voice(self, _root=None):
+        from voice_catalog import catalog_entry, format_size
+
+        entry = catalog_entry(self.voice.settings.profile)
+        if entry is not None and not self.voice.model_installed():
+            size = format_size(entry["size_bytes"])
+            message = (
+                f"Baixar o modelo {entry['id']} ({size})?\n\n"
+                f"{entry['purpose']}\n\n"
+                f"Licença: {entry['license_id']}\n"
+                f"{entry['attribution']}\n\n"
+                "O arquivo fica num cache local, não na pasta de snippets."
+            )
+            if not messagebox.askyesno("Entrada por voz", message):
+                return
+        self.voice.enable()
+        self.refresh_tray_menu()
+
+    def open_voice_settings(self, icon=None, item=None):
+        """Open the voice profile/license dialog on the GUI thread."""
+        try:
+            self.gui.submit(self._show_voice_settings)
+        except Exception as exc:
+            self.logger.error(f"Erro ao abrir configurações de voz: {exc}")
+            self.notify_error(
+                f"Erro ao abrir configurações de voz: {exc}",
+                key="voice-settings-open",
+                cooldown_seconds=5,
+            )
+
+    def _show_voice_settings(self, root):
+        import tkinter as tk
+        from tkinter import messagebox
+
+        from voice_catalog import MODEL_CATALOG, format_size
+        from voice_models import model_is_installed
+
+        ui = ui_theme.bind(root)
+        dialog = tk.Toplevel(root)
+        dialog.title("Entrada por voz")
+        dialog.configure(bg=ui.surface)
+        self._set_window_icon(dialog)
+
+        tk.Label(
+            dialog,
+            text="Modelos baixados sob demanda. Nada é enviado para a nuvem.",
+            font=ui.font(9),
+            bg=ui.surface,
+            fg=ui.text,
+            wraplength=460,
+            justify="left",
+        ).pack(anchor="w", padx=16, pady=(16, 8))
+
+        selected = tk.StringVar(value=self.voice.settings.profile)
+        for entry in MODEL_CATALOG:
+            installed = model_is_installed(entry, self.voice.cache_dir)
+            status = "instalado" if installed else "não baixado"
+            text = (
+                f"{entry['purpose']}\n"
+                f"Download {format_size(entry['size_bytes'])} · "
+                f"{entry['license_id']} · {status}"
+            )
+            tk.Radiobutton(
+                dialog,
+                text=text,
+                variable=selected,
+                value=entry["profile"],
+                anchor="w",
+                justify="left",
+                wraplength=440,
+                **ui.checkbutton_colors(ui.surface),
+            ).pack(anchor="w", padx=16, pady=4)
+
+        def apply_profile():
+            profile = selected.get()
+            entry = next((item for item in MODEL_CATALOG if item["profile"] == profile), None)
+            if entry is not None and not model_is_installed(entry, self.voice.cache_dir):
+                warning = (
+                    f"Isso vai baixar {format_size(entry['size_bytes'])} "
+                    f"({entry['license_id']}).\n\n{entry['attribution']}"
+                )
+                if not messagebox.askokcancel("Baixar modelo de voz", warning, parent=dialog):
+                    return
+            self.voice.set_profile(profile)
+            if not self.voice.is_enabled():
+                self.voice.enable()
+            dialog.destroy()
+            self.refresh_tray_menu()
+
+        def remove_model():
+            if not messagebox.askokcancel(
+                "Remover modelo",
+                "A entrada por voz será desligada e só o modelo deste perfil será apagado.",
+                parent=dialog,
+            ):
+                return
+            self.voice.delete_active_model()
+            dialog.destroy()
+            self.refresh_tray_menu()
+
+        buttons = tk.Frame(dialog, bg=ui.surface)
+        buttons.pack(fill=tk.X, padx=16, pady=(8, 16))
+        tk.Button(
+            buttons,
+            text="Cancelar",
+            command=dialog.destroy,
+            **ui.button_colors(),
+        ).pack(side=tk.RIGHT, padx=(4, 0))
+        tk.Button(
+            buttons,
+            text="Usar este perfil",
+            command=apply_profile,
+            **ui.button_colors(accent=True),
+        ).pack(side=tk.RIGHT)
+        tk.Button(
+            buttons,
+            text="Remover modelo",
+            command=remove_model,
+            **ui.button_colors(),
+        ).pack(side=tk.LEFT)
 
     # =====================================================================
     # SNIPPET MANAGEMENT GUI
@@ -3583,6 +3827,8 @@ class TextExpander:
     def quit_app(self, icon, item):
         """Quit the application."""
         self.enabled = False
+        if self.voice is not None:
+            self.voice.shutdown()
         if self.listener:
             self.listener.stop()
         self.gui.stop()
@@ -3661,6 +3907,11 @@ class TextExpander:
                 checked=lambda item: self.enabled
             ),
             pystray.MenuItem(
+                self._voice_menu_label,
+                self.toggle_voice,
+                checked=self._voice_menu_checked,
+            ),
+            pystray.MenuItem(
                 "⚠ Permissões do macOS",
                 self.tray_macos_permissions,
                 visible=self.macos_permissions_pending,
@@ -3669,6 +3920,7 @@ class TextExpander:
             pystray.MenuItem("Gerenciar Snippets", self.manage_snippets_gui, default=True),
             pystray.MenuItem("Recarregar Snippets", self.reload_snippets),
             pystray.Menu.SEPARATOR,
+            pystray.MenuItem("Configurar voz…", self.open_voice_settings),
             pystray.MenuItem("Backup agora", self.tray_backup_now),
             pystray.MenuItem("Abrir pasta de dados", self.tray_open_data_folder),
             pystray.Menu.SEPARATOR,

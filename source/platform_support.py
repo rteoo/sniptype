@@ -237,6 +237,69 @@ def restore_frontmost_application(app):
         return False
 
 
+def capture_text_target():
+    """Foreground app/window that should receive a voice insertion.
+
+    macOS reuses the AppKit application handle already used by expansion
+    dialogs. Windows stores the foreground HWND. The caller must invoke this
+    on hotkey press, before any Txt Xpander UI can take focus. Returns None
+    when the foreground owner is this process or cannot be read.
+    """
+    if IS_MAC:
+        return capture_frontmost_application()
+    if not IS_WINDOWS:
+        return None
+    try:
+        user32 = ctypes.windll.user32
+        hwnd = user32.GetForegroundWindow()
+        if not hwnd:
+            return None
+        pid = ctypes.c_ulong(0)
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if int(pid.value) == os.getpid():
+            return None
+        return ("hwnd", int(hwnd))
+    except Exception:
+        return None
+
+
+def restore_text_target(target):
+    """Bring a captured text target to the foreground. False if it is gone."""
+    if target is None:
+        return False
+    if IS_MAC:
+        return restore_frontmost_application(target)
+    if not IS_WINDOWS:
+        return False
+    if not (isinstance(target, tuple) and len(target) == 2 and target[0] == "hwnd"):
+        return False
+    try:
+        user32 = ctypes.windll.user32
+        hwnd = int(target[1])
+        if not user32.IsWindow(hwnd):
+            return False
+        return bool(user32.SetForegroundWindow(hwnd))
+    except Exception:
+        return False
+
+
+def text_target_is_alive(target):
+    """True when the captured target still exists."""
+    if target is None:
+        return False
+    if IS_MAC:
+        try:
+            return int(target.processIdentifier()) > 0
+        except Exception:
+            return False
+    if IS_WINDOWS and isinstance(target, tuple) and target[0] == "hwnd":
+        try:
+            return bool(ctypes.windll.user32.IsWindow(int(target[1])))
+        except Exception:
+            return False
+    return False
+
+
 def activate_application_when_ready(
     on_active,
     on_failed,

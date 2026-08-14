@@ -1,6 +1,8 @@
 # Voice Input — Evaluation and Integration Plan
 
-Status: **research only, nothing implemented.** Dated 2026-08-13.
+Status: **implemented as an opt-in, default-off module** on `feat/voice-input`
+(2026-08-13). Real-model benchmark gates and packaged `transcribe.cpp` wheels
+remain open. The architecture below is what shipped.
 
 Evaluates open-source speech-to-text projects as the basis for a dictation
 feature in Txt Xpander, originally framed as "which Wispr Flow alternative
@@ -15,20 +17,92 @@ project on 2026-08-13, or pulled from the GitHub API on the same date.
 catalog metadata and was not independently confirmed. **[inference]** is
 reasoning, not measurement.
 
-**No application was installed, built, or benchmarked.** There are no measured
-latency, CPU, or RSS numbers anywhere in this document. Every performance claim
-is vendor-reported metadata. Before committing to an engine, run the real
-benchmark on target hardware — that gap is the single largest hole in this
-evaluation.
+**No application was installed, built, or benchmarked on Txt Xpander's target
+machines.** The model comparison now includes reproducible measurements from
+the model authors and portable runtimes, but those results come from other
+hardware. Before committing to an engine, run the same models on the supported
+Windows and macOS targets — that remains the largest evidence gap.
 
 ## Verdict
 
-Do not fork any of the three candidates. Add `sherpa-onnx` + `silero-vad` as an
-opt-in module with download-on-demand models, and wire the result into the
-existing snippet pipeline rather than beside it.
+Do not fork any of the three candidates. Build voice as an opt-in module with
+download-on-demand models and explicit routes into the existing insertion,
+trigger-expansion, and form-input paths.
+
+The product exposes three explicit model profiles:
+
+1. **Balanced — default:** Parakeet TDT 0.6B v3 Q8/INT8.
+2. **Maximum accuracy — optional:** Qwen3-ASR-1.7B Q8.
+3. **Live streaming — optional:** Nemotron 3.5 ASR Streaming 0.6B Q8/INT8.
+
+The user selects a profile; the app never changes profiles or downloads a
+larger model automatically. Only one ASR model is resident at a time. The
+default first release remains push-to-talk with completed-utterance decoding;
+the live-streaming profile adds partial transcripts without changing transcript
+routing or insertion semantics.
+
+Prefer one native inference runtime for all three profiles. `transcribe.cpp`
+currently supports their Q8 GGUF builds through a common C API and publishes
+same-runtime CPU benchmarks. Benchmark its Python binding and packaged native
+library first. Retain `sherpa-onnx` as the fallback for Parakeet and Nemotron if
+the unified runtime fails packaging or behavior gates; do not ship two inference
+stacks merely to expose an optional profile.
+
+The audio-capture candidate remains `sounddevice`. A SHA256-pinned
+`silero_vad.onnx` is optional because hotkey release already supplies an
+endpoint. When using sherpa, load it through sherpa's VAD API. Do **not** add
+the `silero-vad` Python package: its published package requires `torch` and
+`torchaudio`, recreating the bundle weight this plan aims to remove.
 
 Rationale in [Why not a fork](#why-not-a-fork) and
 [Proposed shape](#proposed-shape).
+
+### Adoption gates
+
+Set up a repeatable corpus and measurement harness before changing project
+dependencies. The provisional go/no-go gates are:
+
+| Dimension | Balanced default | Maximum accuracy | Live streaming |
+|---|---|---|---|
+| Result latency | Warm end-of-speech → paste p95 ≤ 1.5 s for utterances up to 15 s | Warm end-of-speech → paste p95 ≤ 3.0 s; UI labels the slower profile | First stable partial p95 ≤ 1.0 s; final paste p95 ≤ 1.5 s after release |
+| Cold model load | ≤ 10 s, with visible non-blocking progress | ≤ 20 s, with visible non-blocking progress | ≤ 10 s, with visible non-blocking progress |
+| Inference speed | real-time factor ≤ 0.5 | real-time factor ≤ 0.8 | sustained real-time factor ≤ 0.5 |
+| Peak process RSS | ≤ 1.5 GB | ≤ 6 GB and never selected automatically | ≤ 1.5 GB |
+| Accuracy | pt-BR and en-US each no worse than 10% relative WER above Whisper Medium Q8; named entities separate | Must beat Balanced materially on the same corpus: ≥10% relative WER reduction overall or ≥15% named-entity error reduction | Must remain within 20% relative WER of Balanced while meeting partial-latency gate |
+
+Common gates apply to every profile:
+
+| Dimension | Gate |
+|---|---|
+| Idle cost while voice is enabled | < 1% CPU; no open microphone stream |
+| Packaged support | Windows x64 and macOS ARM64 smoke tests pass from clean installs |
+| Failure behavior | denied permission, missing device, corrupt model, offline download, cancellation, and paste failure all return safely to idle |
+
+An optional profile failing its own gate does not block the Balanced release;
+it stays hidden or experimental until it passes.
+
+The corpus must include punctuation, Brazilian names and addresses, English
+technical vocabulary, mixed pt-BR/English speech, trigger names, mapping items,
+and form-field values. Record model version, quantization, hardware, OS, Python,
+thread count, cold/warm state, latency, CPU, RSS, and transcript for every run.
+
+### Model profiles and current evidence
+
+WER is lower-is-better. Model-card rows and runtime benchmarks use different
+normalization and datasets unless explicitly stated, so they define the
+benchmark order, not the final winner. Full citations and qualifications live
+in [voice-model-value-research.md](voice-model-value-research.md).
+
+| Profile | Model | Accuracy evidence | Q8 footprint | Portable CPU evidence | Product definition |
+|---|---|---|---:|---|---|
+| **Balanced (default)** | Parakeet TDT 0.6B v3 Q8/INT8 | NVIDIA FLEURS: pt 4.76%, en 4.85% on the reference checkpoint. In transcribe.cpp, English LibriSpeech test-clean is 1.94% Q8 versus 1.95% F32. Quantized pt-BR WER is unmeasured. | 740 MB GGUF; about 640 MB sherpa ONNX | 27–29x realtime on M4 Max CPU; 7–8x on Ryzen 4750U CPU | Completed-utterance push-to-talk. Smallest accuracy-oriented default. No live partials. |
+| **Maximum accuracy** | Qwen3-ASR-1.7B Q8 | Qwen reports FLEURS-en 3.35% and 4.90% multilingual FLEURS across a set including Portuguese; no isolated pt-BR WER. transcribe.cpp Q8 scores 1.61% on LibriSpeech test-clean versus BF16 1.62%. | 2.08 GB GGUF | About 8x realtime on M4 Max CPU; 1.9–2.1x on Ryzen 4750U CPU | Explicit opt-in download with resource warning. Completed-utterance decoding in v1. Use only after it proves a material corpus win. |
+| **Live streaming** | Nemotron 3.5 ASR Streaming 0.6B Q8/INT8 | NVIDIA at 560 ms with language supplied: pt 5.65%, en 7.99%. transcribe.cpp Q8 at the 1.12 s tier scores 7.88% English versus reference 7.99%. Quantized pt-BR WER at 560 ms is unmeasured. | 716 MB GGUF; about 650 MB sherpa ONNX | 28–30x realtime on M4 Max CPU; 7–8x on Ryzen 4750U CPU | Stateful partial transcripts. Default to 560 ms and an explicit `pt-BR` or `en-US` language hint; auto-detect remains optional because published English accuracy is weaker. |
+
+Reference-precision Parakeet is a benchmark control, not a product profile: its
+2.51 GB artifact has no demonstrated accuracy advantage over Q8 sufficient to
+justify a roughly 3.4x larger download. Keep it out of the model catalog unless
+the local corpus proves otherwise.
 
 ## Candidates evaluated
 
@@ -162,45 +236,182 @@ its upgrade path indefinitely. Concretely:
 - **Buzz** is the only stack match (Python, MIT) and is the wrong product
   category entirely.
 
-The subsystem we actually need is audio capture, VAD, and inference — available
-directly as libraries, without the surrounding application.
+The inference subsystem we need is available directly as libraries. The product
+still needs its own recording lifecycle, microphone permission flow, target-app
+tracking, transcript routing, model delivery, and failure handling; none of
+those should be imported by forking a second desktop application.
 
 ## What Txt Xpander already provides
 
-The expensive parts of a dictation app are already built and shipping.
-**[verified]**
+Several useful integration seams are already built and shipping. **[verified]**
+They reduce the work, but they are not a push-to-talk implementation.
 
 | Dictation requirement | Existing implementation |
 |---|---|
-| Global hotkey listener | `pynput` listener, `txt_xpander.pyw:3593` |
+| Global keyboard event source | `pynput` listener, `txt_xpander.pyw:3593`; currently `on_press` only, with no chord/release lifecycle |
 | Inject text into focused app | `clipboard_support.py` paste path, incl. rich text |
-| Capture / restore frontmost app | `platform_support.capture_frontmost_application()` |
-| macOS secure input + permissions | `macos_permissions.py`, secure-input hot-path fix |
+| Capture / restore frontmost app | macOS dialog path only: `platform_support.capture_frontmost_application()` |
+| macOS keyboard/paste permissions | `macos_permissions.py` covers Input Monitoring and Accessibility, not microphone access |
 | Tray, autostart, installer, cross-platform | already shipping |
 
-Missing: **audio capture → VAD → inference**. That is a module, not a fork.
+Missing: configurable push-to-talk input, press/release state, audio capture,
+VAD, inference, microphone permissions, target tracking, transcript routing,
+model delivery, cancellation, and packaged native-library verification. This is
+still a bounded feature inside Txt Xpander, not a reason to fork another app.
 
 ## Proposed shape
 
 Not yet approved. Adding any of these changes the dependency set and needs
 sign-off per the global dependency policy.
 
-- **`sherpa-onnx`** (Apache-2.0) — Parakeet TDT v3, runs on `onnxruntime`, which
-  the bundle already carries. Python bindings, no PyTorch requirement, CPU-only,
-  ~750 MB model, pt-BR supported. This is the engine Handy and OpenWhispr use
-  for Parakeet. **[inference]** that it is the best fit — unbenchmarked.
-- **`silero-vad`** for endpointing — small ONNX model on the same runtime.
-- **`sounddevice`** for capture.
+- **`transcribe.cpp`** (MIT) — leading unified ASR runtime candidate. Its C API
+  and Python binding cover Parakeet v3, Qwen3-ASR-1.7B, and Nemotron 3.5 from
+  Q8 GGUF files, with CPU, Metal, Vulkan, and CUDA backends. Verify binding
+  stability, thread cancellation, Unicode paths, native-library discovery, and
+  PyInstaller behavior before adoption.
+- **`sherpa-onnx`** (Apache-2.0) — fallback runtime for Parakeet and Nemotron,
+  and a possible Silero VAD host. Its wheel ships compatible ONNX Runtime
+  binaries; the unrelated `onnxruntime` currently over-collected into `dist`
+  is not a reusable dependency and must not sit beside sherpa's copy in the
+  frozen build. It does not provide the same ready-made Qwen3-ASR-1.7B path.
+- **`silero_vad.onnx` model asset** — optional trimming/endpoint component.
+  Push-to-talk release remains the authoritative endpoint, so VAD must prove
+  value rather than become a prerequisite. If used through sherpa, do not also
+  bundle a second standalone ONNX Runtime. Never install the `silero-vad`
+  Python package, whose `torch`/`torchaudio` dependencies defeat the lean design.
+- **`sounddevice`** for capture, using a non-blocking callback and a bounded
+  queue. Its PortAudio binary must be verified in both packaged targets.
+
+OpenWhispr uses sherpa-onnx for Parakeet. Handy has moved across native runtimes
+and remains a useful product and download-security reference, not proof that
+any particular Python/native packaging path works for Txt Xpander.
+
+### Recording lifecycle
+
+Voice is a single-owner state machine:
+
+```text
+unavailable --enable/install--> loading --model ready--> idle
+loading --cancel/error--> unavailable
+idle --hotkey press--> recording
+recording --live audio chunks--> recording (display-only partials)
+recording --hotkey release/VAD--> transcribing/finalizing
+transcribing/finalizing --result--> routing --insert/expand/update--> idle
+recording/transcribing/finalizing/routing --cancel/error/shutdown--> idle
+```
+
+Download and load the selected profile's model on a worker when the user
+enables voice.
+Show non-blocking progress and expose a clear ready state; a hotkey received
+while the model is unavailable or loading must not begin recording later and
+drop the start of the utterance. Do not open the microphone until the model is
+ready. The first version is push-to-talk: press starts, release stops. Toggle
+mode can follow only if real use shows a need.
+
+Profile behavior is explicit:
+
+- **Balanced** and **Maximum accuracy** buffer the utterance and decode after
+  release. They never simulate live output by repeatedly decoding a growing
+  buffer.
+- **Live streaming** may show non-activating partial text while the key is held,
+  but partials are display-only. Only the finalized transcript enters the
+  dispatcher and target application.
+- Changing profiles waits for or cancels the active session, unloads the old
+  model, then downloads/loads the new one. A failed switch leaves the previous
+  valid profile available; it never falls forward into a surprise model.
+- Store profile and language separately. `Auto`, `pt-BR`, and `en-US` are the
+  first supported language choices. Nemotron defaults to the explicit locale
+  because its published English auto-detect WER is worse; Parakeet and Qwen may
+  use auto detection after corpus validation.
+
+Rules:
+
+1. Extend the listener with `on_release` and a configurable chord. Listener
+   callbacks only update guarded Python state and enqueue work; they never open
+   devices, load models, run inference, touch Tk, or write files.
+2. One session lock owns recording through insertion. Auto-repeat and a second
+   hotkey press are ignored while a session is active.
+3. The audio callback only copies frames into a bounded queue. A worker owns the
+   stream, resampling, VAD, inference, and cleanup. Queue overflow fails loudly
+   and cancels the session instead of growing memory without bound.
+4. Escape cancels. App shutdown closes the stream, signals workers, joins them
+   with a bound, and performs no paste after shutdown begins.
+5. Device disappearance, empty speech, inference failure, and insertion failure
+   leave no stuck state. Audio and transcripts are not written to disk or logged
+   by default.
+
+### Target and permission handling
+
+Capture the intended text target when the hotkey is pressed, before any app UI
+can take focus. Extend `platform_support.py` with a cross-platform target handle
+and bounded restore/readiness seam: macOS can build on the existing AppKit path;
+Windows needs its own foreground-window implementation. If the target closed or
+cannot be restored, leave the transcript on the clipboard and notify instead of
+pasting into an arbitrary application.
+
+On macOS, add `NSMicrophoneUsageDescription` to the staged `Info.plist` before
+the existing re-sign step, add microphone status to onboarding, and test denied,
+granted, and restart-required behavior. Input Monitoring and Accessibility
+remain separate grants. On Windows, surface privacy denial, no default device,
+device-in-use, and mid-recording disconnect as actionable errors.
+
+Secure Keyboard Entry must be checked before external voice insertion just as
+it is before trigger erasure today. A blocked paste preserves the transcript on
+the clipboard. Any recording indicator must be non-activating; it cannot steal
+the text target.
+
+### Transcript routing
+
+Do not feed every transcript back through the keyboard listener. Add a dedicated
+voice-result dispatcher with three explicit modes:
+
+1. **Dictation** — default. Treat the transcript as literal text and pass it to
+   `TextInserter`; trigger-looking words remain literal.
+2. **Voice command** — a separate configured hotkey. Normalize the complete
+   transcript, require an exact match to an effective direct or mapping trigger,
+   and invoke expansion without erasing characters. No fuzzy trigger execution
+   in the first version.
+3. **Form input** — when the captured target is a Txt Xpander form field, marshal
+   the value through `GuiThread` and update that widget directly. Never synthesize
+   a global paste into the app's own Tk window.
+
+The dispatcher may share trigger-index lookup and `_run_expansion` internals,
+but it must not call `_dispatch_expansion`, whose contract assumes a physical
+trigger was typed and must be erased. Tests must cover trigger collisions,
+disabled/renamed dynamic triggers, mapping items, rich text, cancellation, and
+focus changes between recording and completion.
+
+### Model delivery
 
 Patterns to copy from Handy (MIT permits reuse with attribution):
 
 1. **SHA256-pinned model catalog compiled into the binary** as trust anchor.
-   We would be downloading a ~750 MB blob onto user machines; this is the
-   correct way to do it.
-2. **Download models on first use into `%APPDATA%`**, never bundled. Keeps the
-   installer lean and makes voice a genuinely optional component.
+   Pin the archive URL, compressed size, archive digest, expected extracted
+   files, product profile, upstream model id and commit, runtime format,
+   quantization, capabilities, minimum/recommended memory, license,
+   attribution, and source URL. The initial catalog contains exactly the three
+   approved Q8 profiles; F32 Parakeet is a benchmark fixture, not a user option.
+2. **Download models on first use into a dedicated non-roaming cache**, never
+   the installer or `%APPDATA%`. Resolve it through a support module with an
+   explicit override for tests and power users; do not silently place 640 MB to
+   2.08 GB of regenerable assets in the snippet-data or sync-export directory.
 3. **Any cloud post-processing off by default.** Capture stays local; cleanup is
    opt-in.
+
+The settings UI shows the download size, installed size, profile purpose,
+license, and a plain-language resource warning before download. Qwen's 2.08 GB
+model is never preloaded or selected automatically. Multiple profiles may be
+cached, but the model manager keeps only one resident. Deleting the active model
+first disables voice cleanly, then removes only the exact catalog-owned cache
+directory after explicit confirmation.
+
+The downloader must check free space for both archive and extraction, follow a
+bounded redirect policy, support progress/cancel/resume/retry, stream into a
+temporary file, verify size and SHA256 before extraction, reject absolute or
+traversing archive paths, validate the complete extracted manifest, and promote
+the model directory atomically. Keep the last valid version until the new one
+passes a load smoke test. Provide explicit delete/re-download controls and make
+offline failure recoverable without restarting the app.
 
 Reference **Buzz's build tooling** (`Buzz.spec`, `hatch_build.py`,
 `installer.iss`) for whisper.cpp/ffmpeg packaging on Windows, which is the
@@ -208,16 +419,33 @@ genuinely painful part. Take nothing else from it.
 
 ### Licensing constraint
 
-Txt Xpander is closed-source. Handy, Buzz, and OpenWhispr are all MIT and safe
-to draw from with attribution. **FluidVoice is GPL-3.0** and VoiceInk's license
-is non-standard — do not copy from either. **[verified]**
+Txt Xpander is closed-source. Handy, Buzz, and OpenWhispr are MIT; code copied
+from them must retain the applicable license and attribution and record the
+source commit. **FluidVoice is GPL-3.0** and VoiceInk's license is non-standard
+— do not copy from either. **[verified]**
+
+The application licenses do not cover the proposed runtime and model artifacts:
+
+| Artifact | License / obligation |
+|---|---|
+| `transcribe.cpp` | MIT; ship the license and retain attribution for the exact bundled commit |
+| `sherpa-onnx` | Apache-2.0; ship the license and any applicable NOTICE material |
+| `sounddevice` / PortAudio | verify and ship their license notices for the exact approved versions |
+| `silero_vad.onnx` | verify the model asset's MIT provenance and retain attribution |
+| Parakeet TDT 0.6B v3 | CC-BY-4.0; provide credit, license link, source, and modification/quantization disclosure |
+| Qwen3-ASR-1.7B | Apache-2.0; ship the license, source link, model identity, and Q8 conversion attribution |
+| Nemotron 3.5 ASR Streaming 0.6B | Open Model Derivative Works License 1.1; legal/package review must confirm redistribution, attribution, and quantized-derivative obligations before enabling download |
+
+Before distribution, add a third-party notices surface covering every bundled
+native library and every downloaded model. The model catalog owns the same
+license metadata so the download UI can show it before installation.
 
 ## The product argument
 
-A plain dictation feature is not worth building: Handy already does it well,
-free, and composes with us today — it types into the focused field, we expand
-triggers in the focused field. Dictating a trigger name already works with zero
-code from us. **[inference — untested, and worth testing before any build.]**
+A plain dictation feature is not worth building: Handy already does it well and
+may compose with us today. Whether Handy's injected text reaches pynput as the
+character events needed for trigger expansion is platform- and injection-path
+dependent. **[inference — untested, and the first experiment to run.]**
 
 The version that justifies the work is voice as an **input method for the
 expander**: dictate into a snippet form field, speak a trigger to fire a
@@ -244,31 +472,60 @@ torchvision     12 MB
 No source file imports `torch`, `cv2`, `transformers`, `onnxruntime`, `scipy`,
 `numpy`, or `pandas` directly — `pandas`/`numpy` arrive legitimately via
 `yfinance`, but `torch`, `cv2`, `transformers`, and `torchvision` do not appear
-to be reachable at all. `Txt Xpander.spec` has `excludes=[]`, so PyInstaller is
-collecting from global site-packages. **[inference]** on the cause; the import
-absence and the sizes are measured.
+to be reachable at all. `Txt Xpander.spec` has `excludes=[]`. PyInstaller is
+collecting the modules through some reachable import or analysis hook in the
+current host environment; which edge causes each collection is not yet
+established. **[inference]** on the cause; the import absence and sizes are
+measured.
 
-Effect: roughly 520 MB of dead weight in the 215 MB installer / 821 MB unpacked
-bundle, present since at least 3.0.0. A populated `excludes` list should bring
-the installer closer to ~40 MB.
+Effect: roughly 520 MB of apparent dead weight in the 215 MB installer / 821 MB
+unpacked bundle, present since at least 3.0.0. The estimate that the installer
+could approach 40 MB is **[inference]** until a clean build proves it.
 
-This should be fixed independently of any voice work — and doing so first means
-STT dependencies land in a bundle that is honest about its own size.
+Fix this independently of voice, but do not hand-edit `Txt Xpander.spec`: both
+release scripts generate their specs. Rebuild from an isolated environment
+containing only the declared runtime dependencies plus PyInstaller, inspect the
+analysis graph and warnings, and identify the importing module or hook for each
+unexpected package. If exclusions remain necessary, add verified
+`--exclude-module` flags or a project hook to both durable build scripts. Run
+source and packaged smoke tests for stock snippets, clipboard insertion, tray,
+and startup before accepting the size reduction.
 
 ## Open questions
 
 1. Does Handy-alongside-Txt-Xpander already solve the need? Untested; cheapest
    possible outcome. **Test before writing code.**
-2. Real latency, CPU, and RSS for Parakeet TDT v3 via `sherpa-onnx` on target
-   Windows hardware. No numbers exist yet.
-3. pt-BR accuracy for Parakeet v3 vs Whisper Medium on actual dictation, not
-   benchmark audio.
-4. Does the ~750 MB model download survive contact with real users, or does
-   voice need a smaller default with the large model as an upgrade?
+2. Does `transcribe.cpp` package and behave reliably on Windows x64 and macOS
+   ARM64 through its Python binding, including cancellation and Unicode paths?
+3. On the same real corpus, does Qwen3-ASR-1.7B Q8 materially beat Parakeet Q8
+   for pt-BR, en-US, named entities, and code-switching enough to justify its
+   roughly fourfold CPU cost and 2.08 GB download?
+4. Does Nemotron 560 ms meet the live partial-latency gate without an
+   unacceptable pt-BR/en-US accuracy loss, and should 1.12 s be selectable?
+5. Does the ~740 MB default download survive contact with real users, and is a
+   2.08 GB optional accuracy model acceptable with an explicit warning?
+6. Which push-to-talk chord avoids collisions with existing applications and
+   remains observable as both press and release on supported platforms?
+7. Should the first release support only the default microphone, or is device
+   selection required for the target users?
 
 ## Next steps
 
-1. Fix `excludes=[]` in the spec — independent, and a bug in shipped releases.
-2. Run the compose test (question 1) before any implementation.
-3. If proceeding: benchmark `sherpa-onnx` + Parakeet v3 on Windows before the
-   dependency-set discussion.
+1. Run the Handy composition test on Windows and macOS, including literal text,
+   direct triggers, mapping triggers, form dialogs, and terminator mode.
+2. Reproduce and fix PyInstaller over-collection from an isolated build through
+   the durable Windows and macOS build scripts; do not edit the generated spec.
+3. Obtain dependency approval for an isolated benchmark prototype. Run
+   transcribe.cpp Q8 builds of Parakeet v3, Qwen3-ASR-1.7B, and Nemotron 3.5 at
+   560 ms on the same pt-BR/en-US/code-switched corpus; keep Whisper Medium Q8
+   as the control. Measure every profile-specific adoption gate.
+4. In parallel with the benchmark, package the candidate native runtime and
+   model loader on clean Windows x64 and macOS ARM64 hosts. Test model switching,
+   cancellation, corrupt downloads, Unicode paths, and one-model-only residency.
+5. If the Balanced gates pass, approve the production dependency set and write
+   the implementation plan around the recording state machine, target handling,
+   transcript dispatcher, profile-aware model manager, permissions, and packaged
+   test matrix. Maximum accuracy and Live streaming ship only if their own gates
+   and licenses pass.
+6. Only then implement the opt-in feature behind a default-off setting, with
+   Balanced selected by default.

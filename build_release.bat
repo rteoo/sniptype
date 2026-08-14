@@ -62,7 +62,7 @@ if exist "%PREVIOUS_DIR%" (
     rmdir /s /q "%PREVIOUS_DIR%" >nul 2>&1
 )
 
-python -m PyInstaller --noconfirm --clean --windowed --onedir --distpath "%STAGING_ROOT%" --workpath "%WORK_DIR%" --specpath "%REPO_DIR%" --name "Txt Xpander" --icon "%REPO_DIR%\source\txt_xpander.ico" --add-data "%REPO_DIR%\source\snippets.json;." --add-data "%REPO_DIR%\source\dynamic_snippets.json;." --add-data "%REPO_DIR%\source\txt_xpander.ico;." --hidden-import pystray._win32 "%REPO_DIR%\source\txt_xpander.pyw"
+python -m PyInstaller --noconfirm --clean --windowed --onedir --distpath "%STAGING_ROOT%" --workpath "%WORK_DIR%" --specpath "%REPO_DIR%" --name "Txt Xpander" --icon "%REPO_DIR%\source\txt_xpander.ico" --add-data "%REPO_DIR%\source\snippets.json;." --add-data "%REPO_DIR%\source\dynamic_snippets.json;." --add-data "%REPO_DIR%\source\txt_xpander.ico;." --hidden-import pystray._win32 --exclude-module torch --exclude-module torchvision --exclude-module torchaudio --exclude-module cv2 --exclude-module transformers --exclude-module onnxruntime --exclude-module scipy "%REPO_DIR%\source\txt_xpander.pyw"
 if errorlevel 1 (
     echo.
     echo Packaging failed. The existing dist was left unchanged.

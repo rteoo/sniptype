@@ -4,6 +4,19 @@ All notable changes to Txt Xpander are documented here. The format is based on [
 
 ## [Unreleased]
 
+### Added
+
+- **Optional voice input** (default off): push-to-talk dictation, spoken
+  triggers, and form-field fill. Models download on demand into a non-roaming
+  cache. The Balanced profile is the default; Accuracy and Live streaming stay
+  explicit choices. The expansion listener is unchanged.
+
+### Changed
+
+- The Windows and macOS build scripts exclude `torch`, `transformers`,
+  `onnxruntime`, `cv2`, `torchvision`, `torchaudio`, and `scipy` so a dirty
+  host environment cannot pull them into the packaged app.
+
 ## [3.3.0-beta] — 2026-07-23
 
 This is the beta channel for the next feature release. The stable channel

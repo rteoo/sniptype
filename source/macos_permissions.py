@@ -33,9 +33,12 @@ from platform_support import IS_MAC
 
 INPUT_MONITORING = "input_monitoring"
 ACCESSIBILITY = "accessibility"
+MICROPHONE = "microphone"
 
 # Order matters: it is the order the user is asked to fix them, and Input
 # Monitoring comes first because without it nothing is ever detected.
+# Microphone is intentionally not in this tuple: it is a voice-only grant and
+# must not trigger expansion onboarding.
 PERMISSIONS = (INPUT_MONITORING, ACCESSIBILITY)
 
 GRANTED = "granted"
@@ -49,16 +52,19 @@ UNKNOWN = "unknown"
 SETTINGS_PANE_URLS = {
     INPUT_MONITORING: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent",
     ACCESSIBILITY: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+    MICROPHONE: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
 }
 
 PERMISSION_LABELS = {
     INPUT_MONITORING: "Monitoramento de Entrada",
     ACCESSIBILITY: "Acessibilidade",
+    MICROPHONE: "Microfone",
 }
 
 PERMISSION_REASONS = {
     INPUT_MONITORING: "detectar o atalho digitado",
     ACCESSIBILITY: "colar o texto expandido",
+    MICROPHONE: "gravar o ditado",
 }
 
 # IOKit/hid/IOHIDLib.h: IOHIDRequestType and IOHIDAccessType.
@@ -166,6 +172,33 @@ SECURE_INPUT_MESSAGE = (
     "Entrada segura do macOS ativa (campo de senha ou Terminal com "
     "\"Secure Keyboard Entry\"). O snippet não foi expandido."
 )
+
+
+def check_microphone():
+    """Return the microphone grant state. Voice-only; unused by expansion.
+
+    Off macOS this answers ``granted``: Windows and Linux surface denial when
+    the capture device fails to open. A missing AVFoundation symbol on macOS
+    answers ``unknown`` and must not nag.
+    """
+    if not IS_MAC:
+        return GRANTED
+    try:
+        import AVFoundation
+    except Exception:
+        return UNKNOWN
+    try:
+        status = AVFoundation.AVCaptureDevice.authorizationStatusForMediaType_(
+            AVFoundation.AVMediaTypeAudio
+        )
+    except Exception:
+        return UNKNOWN
+    # 0 notDetermined, 1 restricted, 2 denied, 3 authorized
+    if int(status) == 3:
+        return GRANTED
+    if int(status) in (1, 2):
+        return DENIED
+    return UNKNOWN
 
 
 def check_permissions():
