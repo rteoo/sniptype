@@ -80,8 +80,8 @@ _QWEN_Q8 = {
         "auto-detect only."
     ),
     "source_url": "https://huggingface.co/Qwen/Qwen3-ASR-1.7B",
-    "purpose": "Máxima acurácia (opcional): download grande e mais lento.",
-    "user_selectable": False,
+    "purpose": "Perfil preciso (Qwen): melhor para pt-BR, en-US e texto misto.",
+    "user_selectable": True,
 }
 
 _NEMOTRON_Q8 = {

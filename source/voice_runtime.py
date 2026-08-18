@@ -6,7 +6,19 @@ fake backend. Missing native code leaves voice unavailable instead of crashing.
 
 import threading
 
-from voice_catalog import LANGUAGE_AUTO, PROFILE_ACCURACY, PROFILE_STREAMING
+from voice_catalog import (
+    LANGUAGE_AUTO,
+    LANGUAGE_EN_US,
+    LANGUAGE_PT_BR,
+    PROFILE_ACCURACY,
+    PROFILE_STREAMING,
+)
+
+
+_MODEL_LANGUAGE_CODES = {
+    LANGUAGE_PT_BR: "pt",
+    LANGUAGE_EN_US: "en",
+}
 
 
 class VoiceRuntimeError(Exception):
@@ -190,7 +202,7 @@ class TranscribeCppBackend(AsrBackend):
     def _language_kw(self):
         if self._language in (None, LANGUAGE_AUTO) or self._profile == PROFILE_ACCURACY:
             return {}
-        return {"language": self._language}
+        return {"language": _MODEL_LANGUAGE_CODES.get(self._language, self._language)}
 
     def cancel(self):
         session = self._session
