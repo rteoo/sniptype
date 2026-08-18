@@ -38,9 +38,19 @@ class VoiceSettingsTests(unittest.TestCase):
         self.assertTrue(payload["voice_enabled"])
         self.assertEqual(payload["voice_profile"], "balanced")
 
+    def test_accuracy_profile_is_selectable_and_forces_auto_language(self):
+        notes = []
+        settings = resolve_voice_settings(
+            {"voice_profile": "accuracy", "voice_language": "pt-BR"},
+            warnings=notes,
+        )
+        self.assertEqual(settings.profile, "accuracy")
+        self.assertEqual(settings.language, "auto")
+        self.assertEqual(notes, [])
+
     def test_hidden_profiles_fall_back_to_balanced(self):
         notes = []
-        settings = resolve_voice_settings({"voice_profile": "accuracy"}, warnings=notes)
+        settings = resolve_voice_settings({"voice_profile": "streaming"}, warnings=notes)
         self.assertEqual(settings.profile, "balanced")
         self.assertTrue(notes)
 

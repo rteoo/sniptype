@@ -246,6 +246,7 @@ class VoiceController:
                     return
                 self._session_generation += 1
                 self._state = STATE_LOADING
+            self._emit_status()
         self._start_worker(
             self._switch_profile_worker,
             previous,
@@ -255,6 +256,15 @@ class VoiceController:
     def partial_text(self):
         with self._lock:
             return self._partial
+
+    def status_snapshot(self):
+        """Return one consistent status value for UI callbacks."""
+        with self._lock:
+            return {
+                "state": self._state,
+                "mode": self._active_mode,
+                "partial": self._partial,
+            }
 
     def register_form_target(self, apply_fn):
         with self._lock:
@@ -298,6 +308,7 @@ class VoiceController:
         except Exception:
             pass
         self._persist()
+        self._emit_status()
 
     def shutdown(self, timeout=_SHUTDOWN_JOIN_SECONDS):
         self._shutdown.set()
@@ -306,6 +317,7 @@ class VoiceController:
         with self._lock:
             self._state = STATE_UNAVAILABLE
             self.settings.enabled = False
+        self._emit_status()
         # ceiling: 2 s. A stuck native run is abandoned after this and then
         # unloaded; raise if a real backend needs a longer bounded wait.
         joined = self._join_workers(timeout)
@@ -366,6 +378,7 @@ class VoiceController:
             self._partial = ""
             self._state = STATE_RECORDING
             generation = self._session_generation
+        self._emit_status()
         if self.settings.profile == PROFILE_STREAMING:
             self._start_worker(self._stream_worker, generation, name="voice-stream")
         return True
@@ -380,6 +393,7 @@ class VoiceController:
             capture = self._capture
             self._capture = None
             self._state = STATE_TRANSCRIBING
+        self._emit_status()
         self._start_worker(
             self._finish_worker,
             generation,
@@ -422,6 +436,7 @@ class VoiceController:
                 capture.stop()
             except Exception:
                 pass
+        self._emit_status()
 
     def _load_worker(self):
         if self._shutdown.is_set():
@@ -564,6 +579,7 @@ class VoiceController:
             mode = self._active_mode or MODE_DICTATION
             target = self._active_target
             form_apply = self._session_form_apply
+        self._emit_status()
         if self._shutdown.is_set():
             return
         if getattr(target, "kind", None) == "form" and form_apply is None:
@@ -662,6 +678,7 @@ class VoiceController:
             self._session_form_apply = None
             self._partial = ""
             self._state = STATE_IDLE if self.settings.enabled else STATE_UNAVAILABLE
+        self._emit_status()
         return True
 
     def _finish_outcome(self, outcome, generation):
