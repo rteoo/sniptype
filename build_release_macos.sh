@@ -77,9 +77,12 @@ sips -s format icns "$REPO_DIR/source/txt_xpander.ico" --out "$ICNS" >/dev/null
 # --- Package --------------------------------------------------------------
 echo "Packaging $APP_NAME $APP_VERSION ($RELEASE_CHANNEL) ..."
 VOICE_COLLECT_ARGS=()
-if "$PYTHON" -c "import transcribe_cpp, transcribe_cpp_native" >/dev/null 2>&1; then
-    VOICE_COLLECT_ARGS=(--collect-all transcribe_cpp --collect-all transcribe_cpp_native)
+if ! "$PYTHON" -c "import sounddevice, transcribe_cpp, transcribe_cpp_native" >/dev/null 2>&1; then
+    echo "Voice release dependencies are missing." >&2
+    echo "Install them with: $PYTHON -m pip install -r source/requirements-voice.txt" >&2
+    exit 1
 fi
+VOICE_COLLECT_ARGS=(--collect-all sounddevice --collect-all transcribe_cpp --collect-all transcribe_cpp_native)
 "$PYTHON" -m PyInstaller --noconfirm --clean --windowed --onedir \
     --distpath "$STAGING_ROOT" \
     --workpath "$WORK_ROOT/build" \
@@ -132,10 +135,6 @@ plutil -replace TxtXpanderReleaseChannel -string "$RELEASE_CHANNEL" \
     "$STAGED_APP/Contents/Info.plist" 2>/dev/null \
     || plutil -insert TxtXpanderReleaseChannel -string "$RELEASE_CHANNEL" \
         "$STAGED_APP/Contents/Info.plist"
-plutil -replace NSMicrophoneUsageDescription -string "O Txt Xpander usa o microfone só quando a entrada por voz está ligada, para transcrever o que você ditar." \
-    "$STAGED_APP/Contents/Info.plist" 2>/dev/null \
-    || plutil -insert NSMicrophoneUsageDescription -string "O Txt Xpander usa o microfone só quando a entrada por voz está ligada, para transcrever o que você ditar." \
-        "$STAGED_APP/Contents/Info.plist"
 plutil -replace NSMicrophoneUsageDescription -string "O Txt Xpander usa o microfone só para o ditado local, e só quando a entrada por voz está ligada." \
     "$STAGED_APP/Contents/Info.plist" 2>/dev/null \
     || plutil -insert NSMicrophoneUsageDescription -string "O Txt Xpander usa o microfone só para o ditado local, e só quando a entrada por voz está ligada." \
@@ -174,6 +173,11 @@ fi
 # bundle whose signature does not match its Info.plist. Never promote one.
 if ! codesign --verify --deep --strict "$STAGED_APP"; then
     echo "The staged bundle failed signature verification. dist left unchanged." >&2
+    exit 1
+fi
+
+if ! "$STAGED_APP/Contents/MacOS/$APP_NAME" --voice-runtime-probe; then
+    echo "The staged voice runtime probe failed. dist left unchanged." >&2
     exit 1
 fi
 
