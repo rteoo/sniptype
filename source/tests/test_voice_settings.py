@@ -35,6 +35,16 @@ class VoiceSettingsTests(unittest.TestCase):
     def test_payload_roundtrip_keys(self):
         settings = resolve_voice_settings({"voice_enabled": True, "voice_profile": "balanced"})
         payload = voice_settings_payload(settings)
+        self.assertEqual(
+            set(payload),
+            {
+                "voice_enabled",
+                "voice_profile",
+                "voice_language",
+                "voice_hotkey",
+                "voice_command_hotkey",
+            },
+        )
         self.assertTrue(payload["voice_enabled"])
         self.assertEqual(payload["voice_profile"], "balanced")
 

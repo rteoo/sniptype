@@ -8,6 +8,8 @@ both required; auto-repeat is ignored by the controller, not here.
 
 from pynput.keyboard import Key, KeyCode
 
+from platform_support import current_os
+
 
 DEFAULT_DICTATION_HOTKEY = "ctrl+alt+space"
 DEFAULT_COMMAND_HOTKEY = "ctrl+alt+shift+space"
@@ -42,6 +44,84 @@ _MODIFIER_KEYS = {
     Key.cmd: "cmd",
     Key.cmd_l: "cmd",
     Key.cmd_r: "cmd",
+}
+
+# macOS event taps expose physical key codes rather than pynput ``Key``
+# objects. These are the stable ANSI keyboard codes for the keys accepted by
+# ``parse_chord``. Unicode extraction below fills in keys on other layouts
+# when Quartz can provide it.
+_DARWIN_KEYCODES = {
+    0: "a",
+    1: "s",
+    2: "d",
+    3: "f",
+    4: "h",
+    5: "g",
+    6: "z",
+    7: "x",
+    8: "c",
+    9: "v",
+    11: "b",
+    12: "q",
+    13: "w",
+    14: "e",
+    15: "r",
+    16: "y",
+    17: "t",
+    18: "1",
+    19: "2",
+    20: "3",
+    21: "4",
+    22: "6",
+    23: "5",
+    24: "=",
+    25: "9",
+    26: "7",
+    27: "-",
+    28: "8",
+    29: "0",
+    30: "]",
+    31: "o",
+    32: "u",
+    33: "[",
+    34: "i",
+    35: "p",
+    36: "enter",
+    37: "l",
+    38: "j",
+    39: "'",
+    40: "k",
+    41: ";",
+    42: "\\",
+    43: ",",
+    44: "/",
+    45: "n",
+    46: "m",
+    47: ".",
+    48: "tab",
+    49: "space",
+    50: "`",
+    53: "esc",
+    64: "f17",
+    79: "f18",
+    80: "f19",
+    90: "f20",
+    96: "f5",
+    97: "f6",
+    98: "f7",
+    99: "f3",
+    100: "f8",
+    101: "f9",
+    103: "f11",
+    105: "f13",
+    106: "f16",
+    107: "f14",
+    109: "f10",
+    111: "f12",
+    113: "f15",
+    118: "f4",
+    120: "f2",
+    122: "f1",
 }
 
 try:
@@ -144,6 +224,7 @@ class VoiceHotkeyMonitor:
         self._on_escape = on_escape
         self._held = set()
         self._active_mode = None
+        self._darwin_suppressed_key = None
         self._listener = None
 
     def start(self):
@@ -155,18 +236,15 @@ class VoiceHotkeyMonitor:
             "on_press": self._handle_press,
             "on_release": self._handle_release,
         }
-        # Selective swallow of the chord's final key, when the platform filter
-        # exists. Unknown kwargs would break older pynput; only pass if present.
+        system = current_os()
+        if system == "windows":
+            kwargs["win32_event_filter"] = self._win32_filter
+        elif system == "darwin":
+            kwargs["darwin_intercept"] = self._darwin_intercept
+        # Linux deliberately stays listen-only: it has no selective global
+        # filter in pynput, and suppressing the whole listener would swallow
+        # ordinary typing.
         self._listener = keyboard.Listener(**kwargs)
-        if hasattr(self._listener, "suppress_event"):
-            try:
-                self._listener = keyboard.Listener(
-                    on_press=self._handle_press,
-                    on_release=self._handle_release,
-                    win32_event_filter=self._win32_filter,
-                )
-            except TypeError:
-                self._listener = keyboard.Listener(**kwargs)
         self._listener.start()
 
     def stop(self):
@@ -174,6 +252,7 @@ class VoiceHotkeyMonitor:
         self._listener = None
         self._held.clear()
         self._active_mode = None
+        self._darwin_suppressed_key = None
         if listener is not None:
             try:
                 listener.stop()
@@ -209,40 +288,87 @@ class VoiceHotkeyMonitor:
         if mode is None:
             return
         self._active_mode = mode
+        self._darwin_suppressed_key = self._chord_for_mode(mode).key
         self._on_press(mode)
 
     def _handle_release(self, key):
         name = _key_name(key)
         if name in _MODIFIER_ALIASES.values():
             self._held.discard(name)
-            if self._active_mode is not None and not (
-                chord_is_held(
-                    self.command_chord if self._active_mode == MODE_COMMAND
-                    else self.dictation_chord,
-                    self._held | {name},
-                    (
-                        self.command_chord.key
-                        if self._active_mode == MODE_COMMAND
-                        else self.dictation_chord.key
-                    ),
-                )
+            if (
+                self._active_mode is not None
+                and name in self._chord_for_mode(self._active_mode).modifiers
             ):
-                # Releasing a required modifier ends the hold.
+                # Releasing any required modifier ends the hold. An unrelated
+                # modifier may be released while the chord remains active.
                 mode = self._active_mode
                 self._active_mode = None
                 self._on_release(mode)
             return
         if self._active_mode is None:
             return
-        expected = (
-            self.command_chord.key
-            if self._active_mode == MODE_COMMAND
-            else self.dictation_chord.key
-        )
+        expected = self._chord_for_mode(self._active_mode).key
         if name == expected:
             mode = self._active_mode
             self._active_mode = None
             self._on_release(mode)
+
+    def _chord_for_mode(self, mode):
+        return self.command_chord if mode == MODE_COMMAND else self.dictation_chord
+
+    @staticmethod
+    def _darwin_key_name(event):
+        """Return the configured-key name represented by a Quartz event."""
+        try:
+            key_name = getattr(event, "key_name", None)
+        except Exception:
+            key_name = None
+        if isinstance(key_name, str) and key_name:
+            return key_name.lower()
+        try:
+            from Quartz import (
+                CGEventGetIntegerValueField,
+                CGEventKeyboardGetUnicodeString,
+                kCGKeyboardEventKeycode,
+            )
+
+            keycode = int(
+                CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode)
+            )
+        except (ImportError, AttributeError, TypeError, ValueError, OSError):
+            return None
+        name = _DARWIN_KEYCODES.get(keycode)
+        if name is not None:
+            return name
+        try:
+            result = CGEventKeyboardGetUnicodeString(event, 4, None, None)
+            chars = result[1] if isinstance(result, tuple) else result
+        except (AttributeError, TypeError, ValueError, OSError):
+            return None
+        if isinstance(chars, str) and chars:
+            return _key_name(KeyCode.from_char(chars[0]))
+        return None
+
+    def _darwin_intercept(self, event_type, event):
+        """Suppress only an armed chord's final key down/up on macOS."""
+        try:
+            from Quartz import kCGEventKeyDown, kCGEventKeyUp
+        except (ImportError, AttributeError):
+            return event
+        if event_type not in (kCGEventKeyDown, kCGEventKeyUp):
+            return event
+        name = self._darwin_key_name(event)
+        if name is None:
+            return event
+        if event_type == kCGEventKeyDown:
+            if self._darwin_suppressed_key == name or self._mode_for_key(name):
+                self._darwin_suppressed_key = name
+                return None
+            return event
+        if self._darwin_suppressed_key == name:
+            self._darwin_suppressed_key = None
+            return None
+        return event
 
     def _win32_filter(self, msg, data):
         # Swallow only the final key of an armed chord so it does not type.

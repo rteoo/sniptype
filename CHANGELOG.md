@@ -2,6 +2,33 @@
 
 All notable changes to Txt Xpander are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+
+### Added
+
+- Interrupted voice-model downloads now resume from a deterministic partial
+  file when the server returns a valid byte range. Invalid or ignored ranges
+  restart safely, while integrity failures discard the partial artifact.
+- Release builds install an exact pinned voice dependency set and run an
+  embedded runtime probe before promoting the staged Windows or macOS app.
+
+### Changed
+
+- The Accuracy/Qwen profile is user-selectable, clearly labeled as slower and
+  memory-heavy, and locked to automatic language detection.
+- The macOS recording indicator uses a click-through non-activating native
+  panel so showing voice status does not steal focus from the target app.
+
+### Fixed
+
+- Releasing any required push-to-talk modifier ends the active hold exactly
+  once; configured final keys are selectively suppressed on Windows and
+  macOS without swallowing unrelated shortcuts.
+- Voice profile changes now publish a final stable status after success,
+  rollback, or terminal failure instead of leaving the UI in a loading state.
+- Tk-dependent tests skip cleanly when the host Tcl/Tk installation is
+  unusable rather than failing during collection.
+
 ## [3.4.0-beta.2] — 2026-08-14
 
 ### Added

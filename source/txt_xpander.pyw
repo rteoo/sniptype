@@ -23,6 +23,19 @@ import shutil
 import ctypes
 import webbrowser
 
+
+def run_voice_runtime_probe_if_requested(argv=None):
+    """Exit before desktop imports when the packaged diagnostic is requested."""
+    arguments = sys.argv[1:] if argv is None else argv
+    if "--voice-runtime-probe" not in arguments:
+        return False
+    from voice_runtime_probe import main as voice_runtime_probe_main
+
+    raise SystemExit(voice_runtime_probe_main())
+
+
+run_voice_runtime_probe_if_requested()
+
 import platform_support
 
 # Must run before ``import pystray``: it reads PYSTRAY_BACKEND at import time.
@@ -1832,7 +1845,14 @@ class TextExpander:
         import tkinter as tk
         from tkinter import messagebox
 
-        from voice_catalog import LANGUAGES, format_size, selectable_catalog, third_party_notices
+        from voice_catalog import (
+            LANGUAGES,
+            available_languages,
+            default_language_for_profile,
+            format_size,
+            selectable_catalog,
+            third_party_notices,
+        )
         from voice_hotkey import parse_chord
         from voice_models import model_is_installed
 
@@ -1854,6 +1874,7 @@ class TextExpander:
 
         selected = tk.StringVar(value=self.voice.settings.profile)
         visible = selectable_catalog()
+        profile_buttons = []
         for entry in visible:
             installed = model_is_installed(entry, self.voice.cache_dir)
             status = "instalado" if installed else "não baixado"
@@ -1862,7 +1883,7 @@ class TextExpander:
                 f"Download {format_size(entry['size_bytes'])} · "
                 f"{entry['license_id']} · {status}"
             )
-            tk.Radiobutton(
+            profile_button = tk.Radiobutton(
                 dialog,
                 text=text,
                 variable=selected,
@@ -1871,31 +1892,61 @@ class TextExpander:
                 justify="left",
                 wraplength=440,
                 **ui.checkbutton_colors(ui.surface),
-            ).pack(anchor="w", padx=16, pady=4)
+            )
+            profile_button.pack(anchor="w", padx=16, pady=4)
+            profile_buttons.append(profile_button)
 
         language = tk.StringVar(value=self.voice.settings.language)
         lang_row = tk.Frame(dialog, bg=ui.surface)
         lang_row.pack(anchor="w", padx=16, pady=(8, 4))
-        tk.Label(
+        language_label = tk.Label(
             lang_row,
             text="Idioma:",
             bg=ui.surface,
             fg=ui.text,
             font=ui.font(9),
-        ).pack(side=tk.LEFT)
+        )
+        language_label.pack(side=tk.LEFT)
         language_labels = {
-            "auto": "auto (menos preciso)",
+            "auto": "detecção automática",
             "pt-BR": "pt-BR",
             "en-US": "en-US",
         }
+        language_buttons = {}
         for lang in LANGUAGES:
-            tk.Radiobutton(
+            button = tk.Radiobutton(
                 lang_row,
                 text=language_labels.get(lang, lang),
                 variable=language,
                 value=lang,
+                state=(
+                    tk.NORMAL
+                    if lang in available_languages(selected.get())
+                    else tk.DISABLED
+                ),
                 **ui.checkbutton_colors(ui.surface),
-            ).pack(side=tk.LEFT, padx=4)
+            )
+            button.pack(side=tk.LEFT, padx=4)
+            language_buttons[lang] = button
+
+        def update_language_options(*_args):
+            profile = selected.get()
+            allowed = set(available_languages(profile))
+            if language.get() not in allowed:
+                language.set(default_language_for_profile(profile, language.get()))
+            for lang, button in language_buttons.items():
+                button.configure(
+                    state=tk.NORMAL if lang in allowed else tk.DISABLED
+                )
+            if profile == "accuracy":
+                language_label.configure(text="Idioma: detecção automática (Qwen)")
+            else:
+                language_label.configure(text="Idioma:")
+
+        for button in profile_buttons:
+            button.configure(command=update_language_options)
+        selected.trace_add("write", update_language_options)
+        update_language_options()
 
         hotkey = tk.StringVar(value=self.voice.settings.hotkey)
         command_hotkey = tk.StringVar(value=self.voice.settings.command_hotkey)
