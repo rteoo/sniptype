@@ -73,6 +73,11 @@ class VoiceIndicatorGuiSmokeTests(unittest.TestCase):
 
             root = tk.Tk()
             root.withdraw()
+            if current_os() == "darwin":
+                import AppKit
+                AppKit.NSApplication.sharedApplication().setActivationPolicy_(
+                    AppKit.NSApplicationActivationPolicyAccessory
+                )
             indicator = VoiceStatusIndicator(root)
             indicator.update("recording", "dictation")
             root.update()
