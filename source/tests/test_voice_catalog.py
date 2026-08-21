@@ -10,12 +10,14 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from voice_catalog import (
     DEFAULT_PROFILE,
     LANGUAGE_AUTO,
+    LANGUAGE_EN_US,
     LANGUAGE_PT_BR,
     MODEL_CATALOG,
     PROFILE_ACCURACY,
     PROFILE_BALANCED,
     PROFILE_STREAMING,
     catalog_entry,
+    available_languages,
     default_language_for_profile,
     format_size,
 )
@@ -77,6 +79,11 @@ class CatalogTests(unittest.TestCase):
 
     def test_qwen_cannot_take_a_language_hint(self):
         self.assertEqual(catalog_entry(PROFILE_ACCURACY)["language_hint"], "unsupported")
+        self.assertEqual(available_languages(PROFILE_ACCURACY), (LANGUAGE_AUTO,))
+        self.assertEqual(
+            available_languages(PROFILE_BALANCED),
+            (LANGUAGE_AUTO, LANGUAGE_PT_BR, LANGUAGE_EN_US),
+        )
         self.assertEqual(
             default_language_for_profile(PROFILE_ACCURACY, "pt-BR"),
             LANGUAGE_AUTO,
@@ -110,6 +117,12 @@ class CatalogTests(unittest.TestCase):
             [entry["profile"] for entry in visible],
             ["balanced", "accuracy"],
         )
+
+    def test_accuracy_copy_identifies_optional_resource_cost(self):
+        purpose = catalog_entry(PROFILE_ACCURACY)["purpose"].lower()
+        self.assertIn("opcional", purpose)
+        self.assertIn("memória", purpose)
+        self.assertIn("automaticamente", purpose)
 
 
 class CacheLocationTests(unittest.TestCase):

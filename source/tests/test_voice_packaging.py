@@ -30,9 +30,9 @@ class PackagingExcludeTests(unittest.TestCase):
         path = os.path.join(ROOT, "build_release_macos.sh")
         with open(path, encoding="utf-8") as handle:
             text = handle.read()
-        self.assertIn("NSMicrophoneUsageDescription", text)
+        self.assertEqual(text.count("plutil -replace NSMicrophoneUsageDescription"), 1)
 
-    def test_optional_native_voice_runtime_is_collected_when_installed(self):
+    def test_release_requires_and_collects_the_complete_voice_runtime(self):
         windows = os.path.join(ROOT, "build_release.bat")
         macos = os.path.join(ROOT, "build_release_macos.sh")
         with open(windows, encoding="utf-8") as handle:
@@ -41,8 +41,42 @@ class PackagingExcludeTests(unittest.TestCase):
             mac_text = handle.read()
         for text in (win_text, mac_text):
             self.assertIn("VOICE_COLLECT_ARGS", text)
+            self.assertIn("import sounddevice, transcribe_cpp, transcribe_cpp_native", text)
+            self.assertIn("--collect-all sounddevice", text)
             self.assertIn("--collect-all transcribe_cpp", text)
             self.assertIn("--collect-all transcribe_cpp_native", text)
+            self.assertIn("--voice-runtime-probe", text)
+
+    def test_runtime_probe_covers_the_desktop_and_voice_imports(self):
+        path = os.path.join(ROOT, "source", "voice_runtime_probe.py")
+        with open(path, encoding="utf-8") as handle:
+            text = handle.read()
+        for package in ("tkinter", "sounddevice", "transcribe_cpp_native"):
+            self.assertIn(f"import {package}", text)
+
+    def test_entrypoint_runs_the_probe_before_desktop_imports(self):
+        path = os.path.join(ROOT, "source", "txt_xpander.pyw")
+        with open(path, encoding="utf-8") as handle:
+            text = handle.read()
+        probe_call = "\nrun_voice_runtime_probe_if_requested()\n"
+        self.assertLess(text.index(probe_call), text.index("import platform_support"))
+
+    def test_voice_build_dependencies_are_version_pinned(self):
+        path = os.path.join(ROOT, "source", "requirements-voice.txt")
+        with open(path, encoding="utf-8") as handle:
+            requirements = {
+                line.strip()
+                for line in handle
+                if line.strip() and not line.lstrip().startswith("#")
+            }
+        self.assertEqual(
+            requirements,
+            {
+                "sounddevice==0.5.5",
+                "transcribe-cpp==0.1.3",
+                "transcribe-cpp-native==0.1.3",
+            },
+        )
 
 
 if __name__ == "__main__":

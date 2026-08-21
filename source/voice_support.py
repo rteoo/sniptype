@@ -505,16 +505,19 @@ class VoiceController:
                     self._backend.load(path, previous.profile, previous.language)
                     with self._lock:
                         self._state = STATE_IDLE
+                    self._emit_status()
                     return
             except Exception:
                 pass
             with self._lock:
                 self._state = STATE_UNAVAILABLE
+            self._emit_status()
             self._notify(str(exc), key="voice-switch")
             return
         with self._lock:
             self._state = STATE_IDLE
         self._start_monitor()
+        self._emit_status()
 
     def _ensure_model(self):
         entry = catalog_entry(self.settings.profile)
