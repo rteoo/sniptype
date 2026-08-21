@@ -9,6 +9,15 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from voice_indicator import VISIBLE_STATES, indicator_content
 
 
+MAIN_TK_AVAILABLE = (
+    subprocess.run(
+        [sys.executable, "-c", "import tkinter; tkinter.Tk().destroy()"],
+        capture_output=True,
+    ).returncode
+    == 0
+)
+
+
 class VoiceIndicatorContentTests(unittest.TestCase):
     def test_visible_states_have_copy(self):
         for state in VISIBLE_STATES:
@@ -29,6 +38,7 @@ class VoiceIndicatorContentTests(unittest.TestCase):
         self.assertIsNone(indicator_content("unavailable"))
 
 
+@unittest.skipUnless(MAIN_TK_AVAILABLE, "Tk display not available")
 class VoiceIndicatorGuiSmokeTests(unittest.TestCase):
     def test_overlay_shows_and_hides_in_an_isolated_tk_process(self):
         script = textwrap.dedent(
