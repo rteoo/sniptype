@@ -4,7 +4,7 @@ import ctypes
 import tkinter as tk
 
 import ui_theme
-from platform_support import current_os
+from platform_support import current_os, show_voice_overlay_without_activation
 
 
 VISIBLE_STATES = frozenset({"recording", "transcribing", "routing"})
@@ -156,9 +156,12 @@ class VoiceStatusIndicator:
 
     def _show_without_activation(self):
         """Reveal without moving keyboard focus away from the dictation target."""
+        if current_os() == "darwin":
+            if not show_voice_overlay_without_activation(self.window):
+                self.window.deiconify()
+            return
         if current_os() != "windows":
             self.window.deiconify()
-            self.window.lift()
             return
         try:
             user32 = _windows_user32()
