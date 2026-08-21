@@ -80,7 +80,10 @@ _QWEN_Q8 = {
         "auto-detect only."
     ),
     "source_url": "https://huggingface.co/Qwen/Qwen3-ASR-1.7B",
-    "purpose": "Perfil preciso (Qwen): melhor para pt-BR, en-US e texto misto.",
+    "purpose": (
+        "Perfil preciso opcional (Qwen): modelo grande, mais lento e com maior "
+        "uso de memória; nunca é selecionado automaticamente."
+    ),
     "user_selectable": True,
 }
 
@@ -156,6 +159,25 @@ def is_known_language(language):
     return language in LANGUAGES
 
 
+def available_languages(profile):
+    """Return language choices the selected model can actually honor.
+
+    Qwen's transcribe.cpp adapter has no language-hint parameter. Keeping the
+    constraint in the catalog gives both settings normalization and the GUI a
+    single source of truth, instead of displaying choices that are silently
+    discarded later.
+    """
+    entry = catalog_entry(profile)
+    if entry and entry.get("language_hint") == "unsupported":
+        return (LANGUAGE_AUTO,)
+    return LANGUAGES
+
+
+def is_language_available(profile, language):
+    """Return whether ``language`` is an honored choice for ``profile``."""
+    return language in available_languages(profile)
+
+
 def format_size(size_bytes):
     """Human-readable size for the download UI (decimal MB/GB)."""
     if size_bytes >= 1024 ** 3:
@@ -183,7 +205,7 @@ def default_language_for_profile(profile, requested=LANGUAGE_AUTO):
     decodes with auto-detect. Nemotron's published English auto-detect WER is
     weaker, so streaming defaults to ``pt-BR`` when the user left Auto.
     """
-    if requested not in LANGUAGES:
+    if requested not in LANGUAGES or not is_language_available(profile, requested):
         requested = LANGUAGE_AUTO
     if profile == PROFILE_ACCURACY:
         return LANGUAGE_AUTO

@@ -1,0 +1,4 @@
+# Optional dependencies required when producing an official voice-enabled build.
+sounddevice==0.5.5
+transcribe-cpp==0.1.3
+transcribe-cpp-native==0.1.3

@@ -63,8 +63,13 @@ if exist "%PREVIOUS_DIR%" (
 )
 
 set "VOICE_COLLECT_ARGS="
-python -c "import transcribe_cpp, transcribe_cpp_native" >nul 2>&1
-if not errorlevel 1 set "VOICE_COLLECT_ARGS=--collect-all transcribe_cpp --collect-all transcribe_cpp_native"
+python -c "import sounddevice, transcribe_cpp, transcribe_cpp_native" >nul 2>&1
+if errorlevel 1 (
+    echo Voice release dependencies are missing.
+    echo Install them with: python -m pip install -r source\requirements-voice.txt
+    goto cleanup_and_fail
+)
+set "VOICE_COLLECT_ARGS=--collect-all sounddevice --collect-all transcribe_cpp --collect-all transcribe_cpp_native"
 
 python -m PyInstaller --noconfirm --clean --windowed --onedir --distpath "%STAGING_ROOT%" --workpath "%WORK_DIR%" --specpath "%REPO_DIR%" --name "Txt Xpander" --icon "%REPO_DIR%\source\txt_xpander.ico" --add-data "%REPO_DIR%\source\snippets.json;." --add-data "%REPO_DIR%\source\dynamic_snippets.json;." --add-data "%REPO_DIR%\source\txt_xpander.ico;." --hidden-import pystray._win32 %VOICE_COLLECT_ARGS% --exclude-module torch --exclude-module torchvision --exclude-module torchaudio --exclude-module cv2 --exclude-module transformers --exclude-module onnxruntime --exclude-module scipy "%REPO_DIR%\source\txt_xpander.pyw"
 if errorlevel 1 (
@@ -75,6 +80,12 @@ if errorlevel 1 (
 
 if not exist "%STAGING_DIR%" (
     echo Packaging failed: staged dist was not created.
+    goto cleanup_and_fail
+)
+
+start "" /wait "%STAGING_DIR%\Txt Xpander.exe" --voice-runtime-probe
+if errorlevel 1 (
+    echo Packaging failed: the staged voice runtime probe did not pass.
     goto cleanup_and_fail
 )
 
