@@ -1130,7 +1130,8 @@ class VoiceOverlayPresentationTests(unittest.TestCase):
         window.update_idletasks.assert_called_once_with()
         window.deiconify.assert_not_called()
         native_window.setIgnoresMouseEvents_.assert_called_once_with(True)
-        native_window.orderFrontRegardless.assert_called_once_with()
+        native_window.orderFront_.assert_called_once_with(None)
+        native_window.orderFrontRegardless.assert_not_called()
         appkit.NSApplication.sharedApplication.assert_not_called()
 
 
