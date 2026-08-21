@@ -112,10 +112,10 @@ optional at runtime. After staging, they run `--voice-runtime-probe` against
 the packaged executable and refuse to promote an artifact with missing Tk,
 audio capture, or native transcription support.
 
-The equivalent raw PyInstaller command (note: this does **not** preserve the packaged `snippets.json` — use the script for routine rebuilds):
+The equivalent raw PyInstaller command (note: this does **not** preserve the packaged `snippets.json` or run the post-build probe — use the script for routine rebuilds):
 
 ```powershell
-python -m PyInstaller --noconfirm --clean --windowed --onedir --name "Txt Xpander" --icon source\txt_xpander.ico --add-data "source\snippets.json;." --add-data "source\dynamic_snippets.json;." --add-data "source\txt_xpander.ico;." --hidden-import pystray._win32 source\txt_xpander.pyw
+python -m PyInstaller --noconfirm --clean --windowed --onedir --name "Txt Xpander" --icon source\txt_xpander.ico --add-data "source\snippets.json;." --add-data "source\dynamic_snippets.json;." --add-data "source\txt_xpander.ico;." --hidden-import pystray._win32 --collect-all sounddevice --collect-all transcribe_cpp --collect-all transcribe_cpp_native --exclude-module torch --exclude-module torchvision --exclude-module torchaudio --exclude-module cv2 --exclude-module transformers --exclude-module onnxruntime --exclude-module scipy source\txt_xpander.pyw
 ```
 
 This produces the shipping folder in [`dist\Txt Xpander\`](dist/Txt%20Xpander).
