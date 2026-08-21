@@ -1,6 +1,7 @@
 import os
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -110,6 +111,156 @@ class MonitorTests(unittest.TestCase):
         monitor._handle_press(Key.space)
         monitor._handle_press(Key.space)
         self.assertEqual(events, ["press"])
+
+    def test_releasing_required_modifier_ends_hold(self):
+        events = []
+        monitor = VoiceHotkeyMonitor(
+            parse_chord("ctrl+alt+space"),
+            parse_chord("ctrl+alt+shift+space"),
+            on_press=lambda mode: events.append(("press", mode)),
+            on_release=lambda mode: events.append(("release", mode)),
+        )
+        from pynput.keyboard import Key
+
+        monitor._handle_press(Key.ctrl)
+        monitor._handle_press(Key.alt)
+        monitor._handle_press(Key.space)
+        monitor._handle_release(Key.alt)
+        monitor._handle_release(Key.alt)
+        self.assertEqual(
+            events,
+            [("press", MODE_DICTATION), ("release", MODE_DICTATION)],
+        )
+
+    def test_final_key_release_then_modifier_release_is_once(self):
+        events = []
+        monitor = VoiceHotkeyMonitor(
+            parse_chord("ctrl+alt+space"),
+            parse_chord("ctrl+alt+shift+space"),
+            on_press=lambda mode: events.append(("press", mode)),
+            on_release=lambda mode: events.append(("release", mode)),
+        )
+        from pynput.keyboard import Key
+
+        monitor._handle_press(Key.ctrl)
+        monitor._handle_press(Key.alt)
+        monitor._handle_press(Key.space)
+        monitor._handle_release(Key.space)
+        monitor._handle_release(Key.ctrl)
+        self.assertEqual(
+            events,
+            [("press", MODE_DICTATION), ("release", MODE_DICTATION)],
+        )
+
+    def test_unrelated_extra_modifier_does_not_end_hold(self):
+        events = []
+        monitor = VoiceHotkeyMonitor(
+            parse_chord("ctrl+alt+space"),
+            parse_chord("ctrl+alt+shift+enter"),
+            on_press=lambda mode: events.append(("press", mode)),
+            on_release=lambda mode: events.append(("release", mode)),
+        )
+        from pynput.keyboard import Key
+
+        monitor._handle_press(Key.ctrl)
+        monitor._handle_press(Key.alt)
+        monitor._handle_press(Key.shift)
+        monitor._handle_press(Key.space)
+        monitor._handle_release(Key.shift)
+        self.assertEqual(events, [("press", MODE_DICTATION)])
+        monitor._handle_release(Key.space)
+        self.assertEqual(
+            events,
+            [("press", MODE_DICTATION), ("release", MODE_DICTATION)],
+        )
+
+    def test_overlapping_command_chord_ends_when_its_extra_modifier_releases(self):
+        events = []
+        monitor = VoiceHotkeyMonitor(
+            parse_chord("ctrl+alt+space"),
+            parse_chord("ctrl+alt+shift+space"),
+            on_press=lambda mode: events.append(("press", mode)),
+            on_release=lambda mode: events.append(("release", mode)),
+        )
+        from pynput.keyboard import Key
+
+        monitor._handle_press(Key.ctrl)
+        monitor._handle_press(Key.alt)
+        monitor._handle_press(Key.shift)
+        monitor._handle_press(Key.space)
+        monitor._handle_release(Key.shift)
+        monitor._handle_release(Key.space)
+        self.assertEqual(
+            events,
+            [("press", MODE_COMMAND), ("release", MODE_COMMAND)],
+        )
+
+
+class ListenerFilterTests(unittest.TestCase):
+    def _monitor(self):
+        return VoiceHotkeyMonitor(
+            parse_chord("ctrl+alt+space"),
+            parse_chord("ctrl+alt+shift+space"),
+            on_press=lambda mode: None,
+            on_release=lambda mode: None,
+        )
+
+    def test_darwin_listener_uses_selective_intercept(self):
+        monitor = self._monitor()
+        fake_listener = mock.Mock()
+        with mock.patch("voice_hotkey.current_os", return_value="darwin"), mock.patch(
+            "pynput.keyboard.Listener", return_value=fake_listener
+        ) as listener:
+            monitor.start()
+
+        kwargs = listener.call_args.kwargs
+        self.assertIn("darwin_intercept", kwargs)
+        self.assertNotIn("win32_event_filter", kwargs)
+        self.assertIs(kwargs["darwin_intercept"].__self__, monitor)
+
+    def test_linux_listener_has_no_global_suppression_filter(self):
+        monitor = self._monitor()
+        fake_listener = mock.Mock()
+        with mock.patch("voice_hotkey.current_os", return_value="linux"), mock.patch(
+            "pynput.keyboard.Listener", return_value=fake_listener
+        ) as listener:
+            monitor.start()
+
+        kwargs = listener.call_args.kwargs
+        self.assertNotIn("darwin_intercept", kwargs)
+        self.assertNotIn("win32_event_filter", kwargs)
+
+    def test_windows_listener_keeps_win32_filter(self):
+        monitor = self._monitor()
+        fake_listener = mock.Mock()
+        with mock.patch("voice_hotkey.current_os", return_value="windows"), mock.patch(
+            "pynput.keyboard.Listener", return_value=fake_listener
+        ) as listener:
+            monitor.start()
+
+        kwargs = listener.call_args.kwargs
+        self.assertIs(kwargs["win32_event_filter"].__self__, monitor)
+        self.assertNotIn("darwin_intercept", kwargs)
+
+    def test_darwin_intercept_suppresses_configured_final_key_down_and_up(self):
+        monitor = self._monitor()
+        from pynput.keyboard import Key
+
+        fake_quartz = mock.Mock(
+            kCGEventKeyDown=10,
+            kCGEventKeyUp=11,
+            kCGKeyboardEventKeycode=999,
+        )
+        fake_quartz.CGEventGetIntegerValueField.return_value = 49
+        fake_event = object()
+        with mock.patch.dict(sys.modules, {"Quartz": fake_quartz}):
+            self.assertIs(monitor._darwin_intercept(10, fake_event), fake_event)
+            monitor._handle_press(Key.ctrl)
+            monitor._handle_press(Key.alt)
+            monitor._handle_press(Key.space)
+            self.assertIsNone(monitor._darwin_intercept(10, fake_event))
+            monitor._handle_release(Key.space)
+            self.assertIsNone(monitor._darwin_intercept(11, fake_event))
 
 
 class SettingsTests(unittest.TestCase):
