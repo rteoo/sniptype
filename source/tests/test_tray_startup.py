@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -78,6 +79,18 @@ class RunStartupTests(unittest.TestCase):
         icon.run.assert_called_once_with(setup=app.on_tray_ready)
         icon.run_detached.assert_not_called()
         self.assertEqual(icon_cls.call_args.kwargs, {})
+
+    def test_runtime_probe_flag_exits_before_single_instance_startup(self):
+        probe = mock.Mock(return_value=0)
+        module = types.SimpleNamespace(main=probe)
+        with mock.patch.dict(sys.modules, {"voice_runtime_probe": module}), \
+                mock.patch.object(tx, "acquire_single_instance_mutex") as acquire, \
+                self.assertRaises(SystemExit) as raised:
+            tx.run_voice_runtime_probe_if_requested(["--voice-runtime-probe"])
+
+        self.assertEqual(raised.exception.code, 0)
+        probe.assert_called_once_with()
+        acquire.assert_not_called()
 
     def test_tray_menu_and_tooltip_show_the_running_version(self):
         menu = object()

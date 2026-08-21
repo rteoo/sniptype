@@ -23,6 +23,19 @@ import shutil
 import ctypes
 import webbrowser
 
+
+def run_voice_runtime_probe_if_requested(argv=None):
+    """Exit before desktop imports when the packaged diagnostic is requested."""
+    arguments = sys.argv[1:] if argv is None else argv
+    if "--voice-runtime-probe" not in arguments:
+        return False
+    from voice_runtime_probe import main as voice_runtime_probe_main
+
+    raise SystemExit(voice_runtime_probe_main())
+
+
+run_voice_runtime_probe_if_requested()
+
 import platform_support
 
 # Must run before ``import pystray``: it reads PYSTRAY_BACKEND at import time.
