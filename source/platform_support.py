@@ -234,7 +234,6 @@ def show_voice_overlay_without_activation(window):
         native_window = _macos_native_window_for_tk(window)
         if native_window is None:
             return False
-        window.deiconify()
         native_window.setIgnoresMouseEvents_(True)
         native_window.setHidesOnDeactivate_(False)
         native_window.setLevel_(AppKit.NSFloatingWindowLevel)
