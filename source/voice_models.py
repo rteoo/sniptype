@@ -3,14 +3,17 @@
 Models never live in the snippet data directory or the installer. The cache
 is a non-roaming per-user location, overridable for tests and power users.
 
-A download is streamed to a sibling temp file, hashed as it arrives, and
-promoted with ``os.replace`` only after size and SHA-256 match the catalog.
-Corrupt or cancelled downloads leave the last valid install in place.
+A download is streamed to a deterministic sibling ``.partial`` file and
+re-hashed before a verified HTTP Range resume. It is promoted with
+``os.replace`` only after size and SHA-256 match the catalog. Corrupt
+downloads are discarded; cancelled or interrupted transfers remain resumable
+without touching the last valid install.
 """
 
 import hashlib
 import json
 import os
+import re
 import shutil
 import tempfile
 import urllib.error
@@ -66,6 +69,11 @@ def model_path(cache_dir, entry):
 
 def manifest_path(cache_dir, entry):
     return os.path.join(model_dir(cache_dir, entry), MANIFEST_NAME)
+
+
+def partial_path(cache_dir, entry):
+    """Stable, catalog-owned recovery path for an interrupted download."""
+    return model_path(cache_dir, entry) + PARTIAL_SUFFIX
 
 
 def _read_manifest(path):
@@ -141,6 +149,71 @@ def _opener():
     return urllib.request.build_opener(_LimitedRedirect)
 
 
+def _response_status(response):
+    status = getattr(response, "status", None)
+    if status is None:
+        getcode = getattr(response, "getcode", None)
+        status = getcode() if callable(getcode) else 200
+    return int(status)
+
+
+def _response_url_is_https(response):
+    geturl = getattr(response, "geturl", None)
+    if not callable(geturl):
+        return True
+    final_url = geturl()
+    return isinstance(final_url, str) and final_url.lower().startswith("https://")
+
+
+def _matching_content_range(value, offset, total):
+    if not isinstance(value, str):
+        return False
+    match = re.fullmatch(r"bytes (\d+)-(\d+)/(\d+)", value.strip(), re.IGNORECASE)
+    if match is None:
+        return False
+    start, end, declared_total = (int(item) for item in match.groups())
+    return (
+        start == offset
+        and declared_total == total
+        and offset <= end < total
+    )
+
+
+def _remove_file(path):
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        pass
+
+
+def _rehash_partial(path, expected_size):
+    """Return the digest state for retained bytes, rejecting unsafe leftovers."""
+    hasher = hashlib.sha256()
+    written = 0
+    oversized = False
+    try:
+        with open(path, "rb") as handle:
+            while True:
+                chunk = handle.read(CHUNK_SIZE)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > expected_size:
+                    oversized = True
+                    break
+                hasher.update(chunk)
+    except FileNotFoundError:
+        return hashlib.sha256(), 0
+    except OSError as exc:
+        raise VoiceModelError(f"Falha ao ler o download parcial: {exc}") from exc
+    if oversized:
+        _remove_file(path)
+        raise VoiceModelError("O arquivo parcial é maior que o tamanho pinado.")
+    return hasher, written
+
+
 def download_model(entry, cache_dir, progress=None, cancel_event=None, opener=None):
     """Download and verify ``entry`` into ``cache_dir``.
 
@@ -154,66 +227,120 @@ def download_model(entry, cache_dir, progress=None, cancel_event=None, opener=No
     dest_dir = model_dir(cache_dir, entry)
     dest_file = model_path(cache_dir, entry)
     os.makedirs(dest_dir, exist_ok=True)
+    retained_path = partial_path(cache_dir, entry)
+    expected_size = entry["size_bytes"]
 
-    needed = int(entry["size_bytes"] * 1.1) + CHUNK_SIZE
+    url = _safe_url(entry["url"])
+
+    hasher, written = _rehash_partial(retained_path, expected_size)
+    needed = int((expected_size - written) * 1.1) + CHUNK_SIZE
     free = _free_bytes(dest_dir)
     if free < needed:
         raise VoiceModelError(
             "Espaço em disco insuficiente para baixar o modelo de voz."
         )
+    if written == expected_size:
+        if hasher.hexdigest() != entry["sha256"]:
+            _remove_file(retained_path)
+            raise VoiceModelError("A verificação SHA-256 do modelo de voz falhou.")
+        os.replace(retained_path, dest_file)
+        _write_manifest(entry, cache_dir, entry["sha256"])
+        return dest_file
+    if progress is not None and written:
+        progress(written, expected_size)
 
-    url = _safe_url(entry["url"])
-    fd, tmp_path = tempfile.mkstemp(
-        prefix=entry["id"] + ".",
-        suffix=PARTIAL_SUFFIX,
-        dir=dest_dir,
-    )
-    os.close(fd)
-    hasher = hashlib.sha256()
-    written = 0
+    open_url = opener or _opener().open
+    resume = bool(written)
+    oversized = False
     try:
-        request = urllib.request.Request(url, method="GET")
-        open_url = opener or _opener().open
-        with open_url(request, timeout=30) as response, \
-                open(tmp_path, "wb") as handle:
-            while True:
-                if cancel_event is not None and cancel_event.is_set():
-                    raise VoiceModelError("Download do modelo cancelado.")
-                chunk = response.read(CHUNK_SIZE)
-                if not chunk:
-                    break
-                handle.write(chunk)
-                hasher.update(chunk)
-                written += len(chunk)
-                if progress is not None:
-                    progress(written, entry["size_bytes"])
-                if written > entry["size_bytes"]:
+        while True:
+            headers = {"Range": f"bytes={written}-"} if resume else {}
+            request = urllib.request.Request(url, headers=headers, method="GET")
+            restart_without_range = False
+            try:
+                response_context = open_url(request, timeout=30)
+            except urllib.error.HTTPError as exc:
+                if resume and exc.code == 416:
+                    exc.close()
+                    _remove_file(retained_path)
+                    hasher = hashlib.sha256()
+                    written = 0
+                    resume = False
+                    if progress is not None:
+                        progress(0, expected_size)
+                    continue
+                raise
+            with response_context as response:
+                if not _response_url_is_https(response):
+                    raise VoiceModelError("Redirecionamento inseguro recusado.")
+                status = _response_status(response)
+                if resume:
+                    content_range = response.headers.get("Content-Range")
+                    if status == 206 and _matching_content_range(
+                            content_range, written, expected_size):
+                        mode = "ab"
+                    elif status == 200:
+                        hasher = hashlib.sha256()
+                        written = 0
+                        mode = "wb"
+                        if progress is not None:
+                            progress(0, expected_size)
+                    else:
+                        _remove_file(retained_path)
+                        hasher = hashlib.sha256()
+                        written = 0
+                        resume = False
+                        if progress is not None:
+                            progress(0, expected_size)
+                        restart_without_range = True
+                        mode = None
+                elif status == 200:
+                    mode = "wb"
+                else:
                     raise VoiceModelError(
-                        "O arquivo baixado é maior que o tamanho pinado."
+                        "Resposta de download parcial inesperada do servidor."
                     )
+
+                if not restart_without_range:
+                    with open(retained_path, mode) as handle:
+                        while True:
+                            if cancel_event is not None and cancel_event.is_set():
+                                raise VoiceModelError("Download do modelo cancelado.")
+                            chunk = response.read(CHUNK_SIZE)
+                            if not chunk:
+                                break
+                            if written + len(chunk) > expected_size:
+                                oversized = True
+                                break
+                            handle.write(chunk)
+                            hasher.update(chunk)
+                            written += len(chunk)
+                            if progress is not None:
+                                progress(written, expected_size)
+            if restart_without_range:
+                continue
+            break
+        if oversized:
+            _remove_file(retained_path)
+            raise VoiceModelError("O arquivo baixado é maior que o tamanho pinado.")
         digest = hasher.hexdigest()
-        if written != entry["size_bytes"]:
+        if written != expected_size:
+            _remove_file(retained_path)
             raise VoiceModelError(
                 "Tamanho do modelo baixado não confere com o catálogo."
             )
         if digest != entry["sha256"]:
+            _remove_file(retained_path)
             raise VoiceModelError(
                 "A verificação SHA-256 do modelo de voz falhou."
             )
-        os.replace(tmp_path, dest_file)
-        tmp_path = None
+        os.replace(retained_path, dest_file)
         _write_manifest(entry, cache_dir, digest)
         return dest_file
     except VoiceModelError:
         raise
     except (urllib.error.URLError, OSError, TimeoutError) as exc:
         raise VoiceModelError(f"Falha ao baixar o modelo de voz: {exc}") from exc
-    finally:
-        if tmp_path and os.path.exists(tmp_path):
-            try:
-                os.remove(tmp_path)
-            except OSError:
-                pass
 
 
 def _write_manifest(entry, cache_dir, digest):
