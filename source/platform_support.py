@@ -221,8 +221,8 @@ def _macos_native_window_for_tk(window):
 def show_voice_overlay_without_activation(window):
     """Reveal a macOS Tk overlay without making Txt Xpander active.
 
-    ``orderFrontRegardless`` displays an accessory window while leaving the
-    editor that owns the push-to-talk target frontmost. This function is a
+    ``orderFront_`` displays the accessory window while leaving the editor
+    that owns the push-to-talk target frontmost. This function is a
     no-op off macOS; Windows keeps its stricter HWND implementation in the
     indicator module.
     """
@@ -237,7 +237,7 @@ def show_voice_overlay_without_activation(window):
         native_window.setIgnoresMouseEvents_(True)
         native_window.setHidesOnDeactivate_(False)
         native_window.setLevel_(AppKit.NSFloatingWindowLevel)
-        native_window.orderFrontRegardless()
+        native_window.orderFront_(None)
         return True
     except Exception:
         return False
