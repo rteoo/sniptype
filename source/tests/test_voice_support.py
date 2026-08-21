@@ -184,6 +184,41 @@ class ControllerTests(unittest.TestCase):
             self.controller.set_profile("accuracy")
         self.assertEqual(self.controller.settings.profile, "balanced")
 
+    def test_profile_switch_emits_final_idle_status_after_success(self):
+        self._ready()
+        seen = []
+        self.controller._on_status_change = lambda: seen.append(self.controller.state)
+        with mock.patch("voice_support.model_is_installed", return_value=True), \
+                mock.patch("voice_support.installed_model_path", return_value="new.gguf"), \
+                mock.patch.object(self.controller, "_start_monitor"):
+            self.controller.set_profile("accuracy")
+        self.assertEqual(seen, [STATE_LOADING, STATE_IDLE])
+        self.assertEqual(self.controller.settings.profile, "accuracy")
+
+    def test_profile_switch_emits_final_idle_status_after_rollback(self):
+        self._ready()
+        seen = []
+        self.controller._on_status_change = lambda: seen.append(self.controller.state)
+        self.backend.load = mock.Mock(side_effect=[Exception("new model failed"), None])
+        with mock.patch("voice_support.model_is_installed", return_value=True), \
+                mock.patch("voice_support.installed_model_path", return_value="old.gguf"), \
+                mock.patch.object(self.controller, "_start_monitor"):
+            self.controller.set_profile("accuracy")
+        self.assertEqual(seen, [STATE_LOADING, STATE_IDLE])
+        self.assertEqual(self.controller.settings.profile, "balanced")
+
+    def test_profile_switch_emits_unavailable_status_after_terminal_failure(self):
+        self._ready()
+        seen = []
+        self.controller._on_status_change = lambda: seen.append(self.controller.state)
+        self.backend.load = mock.Mock(side_effect=Exception("new model failed"))
+        with mock.patch("voice_support.model_is_installed", return_value=True), \
+                mock.patch("voice_support.installed_model_path", return_value=None), \
+                mock.patch.object(self.controller, "_start_monitor"):
+            self.controller.set_profile("accuracy")
+        self.assertEqual(seen, [STATE_LOADING, STATE_UNAVAILABLE])
+        self.assertEqual(self.controller.settings.profile, "balanced")
+
     def test_delete_disables(self):
         self._ready()
         with mock.patch("voice_support.delete_model"):
