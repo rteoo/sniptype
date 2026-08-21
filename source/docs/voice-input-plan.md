@@ -12,8 +12,8 @@ physical-desktop and supported-OS gates below pass.
 | Default-off push-to-talk with dedicated observer and exact end-of-hold semantics | Live microphone-to-paste ASR on Windows x64 and macOS ARM64 |
 | Dictation, spoken-trigger, and form-field dispatch without `_dispatch_expansion` | Parakeet and Qwen latency/accuracy adoption-gate measurements on target hardware |
 | User-selectable Balanced/Parakeet and Accuracy/Qwen profiles; Qwen forces automatic language detection | Handy-alongside shortcut and focus composition test |
-| SHA256 catalog and range-validated resumable model downloads | Hosted Windows/macOS/Linux matrix for the final PR |
-| Exact pinned release dependencies plus packaged native-runtime probe | Clean Windows x64 package and installer smoke test on a host with working Tcl/Tk |
+| SHA256 catalog and range-validated resumable model downloads | Hosted Windows/macOS/Linux matrix after Actions billing is restored |
+| Exact pinned release dependencies plus packaged native-runtime probe and Windows package smoke | Windows installer install/upgrade/uninstall smoke test |
 | ARM64 macOS package probe and physical focus check for the non-activating recording panel | Signed macOS build from an interactive keychain session and granted-TCC paste smoke |
 | Failed backend import, controller construction, or profile swap leaves normal expansion available | Nemotron live streaming and its OpenMDW-1.1 review |
 | Cancellation stops capture, calls `session.cancel()`, and boundedly joins workers | iOS (on hold) |
