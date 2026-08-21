@@ -15,6 +15,28 @@ def nonactivating_panel_style(appkit):
     )
 
 
+def order_panel_without_activation(appkit, panel):
+    """Order the first Cocoa panel without letting Tk activate its process.
+
+    Tk's shared ``NSApplication`` activates on the first window order even for
+    a correctly styled non-activating ``NSPanel``. Briefly making the app
+    ineligible for activation closes that framework-level gap; the original
+    accessory policy is restored before this function returns.
+    """
+    application = appkit.NSApplication.sharedApplication()
+    original_policy = application.activationPolicy()
+    prohibited = appkit.NSApplicationActivationPolicyProhibited
+    restore_policy = original_policy != prohibited
+    if restore_policy and not application.setActivationPolicy_(prohibited):
+        return False
+    try:
+        panel.orderFrontRegardless()
+    finally:
+        if restore_policy:
+            application.setActivationPolicy_(original_policy)
+    return True
+
+
 class MacVoiceStatusPanel:
     """Small click-through panel; call only from the Tk pump on macOS."""
 
@@ -83,7 +105,7 @@ class MacVoiceStatusPanel:
         self.title.setStringValue_(title)
         self.dot.setTextColor_(self._accent_color(accent_name))
         self._position()
-        self.panel.orderFront_(None)
+        return order_panel_without_activation(self._appkit, self.panel)
 
     def hide(self):
         self.panel.orderOut_(None)
