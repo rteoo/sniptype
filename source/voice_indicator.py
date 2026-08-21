@@ -4,7 +4,8 @@ import ctypes
 import tkinter as tk
 
 import ui_theme
-from platform_support import current_os, show_voice_overlay_without_activation
+from macos_voice_overlay import MacVoiceStatusPanel
+from platform_support import current_os
 
 
 VISIBLE_STATES = frozenset({"recording", "transcribing", "routing"})
@@ -67,15 +68,21 @@ class VoiceStatusIndicator:
         self.title_label = None
         self.dot_label = None
         self._native_hwnd = None
+        self._mac_panel = None
 
     def update(self, state, mode=None):
         content = indicator_content(state, mode)
         if content is None:
             self.hide()
             return
+        title, accent_name = content
+        if current_os() == "darwin":
+            if self._mac_panel is None:
+                self._mac_panel = MacVoiceStatusPanel()
+            self._mac_panel.update(title, accent_name)
+            return
         if self.window is None or not self._window_exists():
             self._build()
-        title, accent_name = content
         ui = ui_theme.theme()
         accent = getattr(ui, accent_name)
         self.title_label.configure(text=title)
@@ -83,10 +90,16 @@ class VoiceStatusIndicator:
         self._show_without_activation()
 
     def hide(self):
+        if self._mac_panel is not None:
+            self._mac_panel.hide()
+            return
         if self.window is not None and self._window_exists():
             self.window.withdraw()
 
     def destroy(self):
+        if self._mac_panel is not None:
+            self._mac_panel.destroy()
+            self._mac_panel = None
         if self.window is not None and self._window_exists():
             self.window.destroy()
         self.window = None
@@ -156,10 +169,6 @@ class VoiceStatusIndicator:
 
     def _show_without_activation(self):
         """Reveal without moving keyboard focus away from the dictation target."""
-        if current_os() == "darwin":
-            if not show_voice_overlay_without_activation(self.window):
-                self.window.deiconify()
-            return
         if current_os() != "windows":
             self.window.deiconify()
             return

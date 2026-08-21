@@ -3,6 +3,7 @@ import subprocess
 import sys
 import textwrap
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -38,6 +39,24 @@ class VoiceIndicatorContentTests(unittest.TestCase):
         self.assertIsNone(indicator_content("unavailable"))
 
 
+class MacVoiceIndicatorRoutingTests(unittest.TestCase):
+    def test_macos_uses_the_native_nonactivating_panel(self):
+        from voice_indicator import VoiceStatusIndicator
+
+        panel = mock.Mock()
+        with mock.patch("voice_indicator.current_os", return_value="darwin"), \
+                mock.patch("voice_indicator.MacVoiceStatusPanel", return_value=panel):
+            indicator = VoiceStatusIndicator(mock.Mock())
+            indicator.update("recording", "dictation")
+            indicator.hide()
+            indicator.destroy()
+
+        panel.update.assert_called_once_with("Ouvindo…", "warning")
+        panel.hide.assert_called_once_with()
+        panel.destroy.assert_called_once_with()
+        self.assertIsNone(indicator.window)
+
+
 @unittest.skipUnless(MAIN_TK_AVAILABLE, "Tk display not available")
 class VoiceIndicatorGuiSmokeTests(unittest.TestCase):
     def test_overlay_shows_and_hides_in_an_isolated_tk_process(self):
@@ -57,8 +76,11 @@ class VoiceIndicatorGuiSmokeTests(unittest.TestCase):
             indicator = VoiceStatusIndicator(root)
             indicator.update("recording", "dictation")
             root.update()
-            assert indicator.window.state() == "normal"
-            assert indicator.title_label.cget("text") == "Ouvindo…"
+            if current_os() == "darwin":
+                assert indicator._mac_panel.is_visible()
+            else:
+                assert indicator.window.state() == "normal"
+                assert indicator.title_label.cget("text") == "Ouvindo…"
             if current_os() == "windows":
                 user32 = _windows_user32()
                 widget_hwnd = indicator.window.winfo_id()
@@ -66,7 +88,10 @@ class VoiceIndicatorGuiSmokeTests(unittest.TestCase):
                 assert user32.GetWindowLongW(hwnd, _GWL_EXSTYLE) & _WS_EX_NOACTIVATE
             indicator.update("idle")
             root.update()
-            assert indicator.window.state() == "withdrawn"
+            if current_os() == "darwin":
+                assert not indicator._mac_panel.is_visible()
+            else:
+                assert indicator.window.state() == "withdrawn"
             root.destroy()
             """
         )

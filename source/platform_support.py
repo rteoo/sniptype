@@ -195,54 +195,6 @@ def hide_dock_icon():
         return False
 
 
-def _macos_native_window_for_tk(window):
-    """Return the NSWindow backing a mapped Tk window, or ``None``.
-
-    Call only from the Tk pump. Resolving Tk's drawable is a Tcl operation;
-    Cocoa callbacks must never enter this helper.
-    """
-    if not IS_MAC:
-        return None
-    try:
-        import objc
-
-        window.update_idletasks()
-        get_nswindow = ctypes.CDLL(None).Tk_MacOSXGetNSWindowForDrawable
-        get_nswindow.argtypes = [ctypes.c_void_p]
-        get_nswindow.restype = ctypes.c_void_p
-        pointer = get_nswindow(window.winfo_id())
-        if not pointer:
-            return None
-        return objc.objc_object(c_void_p=pointer)
-    except Exception:
-        return None
-
-
-def show_voice_overlay_without_activation(window):
-    """Reveal a macOS Tk overlay without making Txt Xpander active.
-
-    ``orderFront_`` displays the accessory window while leaving the editor
-    that owns the push-to-talk target frontmost. This function is a
-    no-op off macOS; Windows keeps its stricter HWND implementation in the
-    indicator module.
-    """
-    if not IS_MAC:
-        return False
-    try:
-        import AppKit
-
-        native_window = _macos_native_window_for_tk(window)
-        if native_window is None:
-            return False
-        native_window.setIgnoresMouseEvents_(True)
-        native_window.setHidesOnDeactivate_(False)
-        native_window.setLevel_(AppKit.NSFloatingWindowLevel)
-        native_window.orderFront_(None)
-        return True
-    except Exception:
-        return False
-
-
 def capture_frontmost_application():
     """Return the external macOS app active before an expansion dialog opens.
 

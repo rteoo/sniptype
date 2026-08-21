@@ -1106,35 +1106,6 @@ class TkMainThreadSeamTests(unittest.TestCase):
             self.assertFalse(ps.tk_runs_on_main_thread())
 
 
-class VoiceOverlayPresentationTests(unittest.TestCase):
-    def test_non_macos_has_no_native_overlay_path(self):
-        window = mock.Mock()
-        with mock.patch.object(ps, "IS_MAC", False):
-            self.assertFalse(ps.show_voice_overlay_without_activation(window))
-        window.assert_not_called()
-
-    def test_macos_orders_overlay_front_without_activating_the_app(self):
-        appkit = mock.Mock()
-        objc = mock.Mock()
-        native_window = objc.objc_object.return_value
-        library = mock.Mock()
-        library.Tk_MacOSXGetNSWindowForDrawable.return_value = 123
-        window = mock.Mock()
-        window.winfo_id.return_value = 456
-
-        with mock.patch.object(ps, "IS_MAC", True), \
-                mock.patch.dict(sys.modules, {"AppKit": appkit, "objc": objc}), \
-                mock.patch.object(ps.ctypes, "CDLL", return_value=library):
-            self.assertTrue(ps.show_voice_overlay_without_activation(window))
-
-        window.update_idletasks.assert_called_once_with()
-        window.deiconify.assert_not_called()
-        native_window.setIgnoresMouseEvents_.assert_called_once_with(True)
-        native_window.orderFront_.assert_called_once_with(None)
-        native_window.orderFrontRegardless.assert_not_called()
-        appkit.NSApplication.sharedApplication.assert_not_called()
-
-
 class InsertionTimingTests(unittest.TestCase):
     """Per-OS paste/erase delays with settings.json overrides (issue #27)."""
 
