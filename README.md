@@ -5,7 +5,7 @@ Txt Xpander is a Windows text expander with a system tray app, snippet manager G
 ## Release Channels
 
 - **Stable — `v3.3.0`**: the current production release. Stable tags use `vMAJOR.MINOR.PATCH` with no suffix; Windows produces `TxtXpanderSetup-3.3.0.exe`.
-- **Beta — `v3.4.0-beta.2`**: optional push-to-talk voice input with configurable shortcuts for early testing. Windows produces `TxtXpanderSetup-3.4.0-beta.exe`.
+- **Beta — `v3.4.0-beta.2`**: the current published prerelease, with optional push-to-talk voice input. The `3.4.0` beta source now also includes the stable-readiness hardening described below. Windows produces `TxtXpanderSetup-3.4.0-beta.exe`.
 
 Beta tags use `vMAJOR.MINOR.PATCH-beta.N` and the corresponding GitHub Release must be marked as a prerelease. Beta and stable builds share the same data directory and installer identity, so an upgrade preserves `~/.txt_xpander`; do not run both channels simultaneously. Promote a beta to stable only after the full supported-OS test matrix and packaged desktop smoke tests pass.
 
@@ -82,22 +82,35 @@ Or use the source-side launcher, which checks dependencies and starts the app wi
 
 - [`source\run_txt_xpander.bat`](source/run_txt_xpander.bat)
 
-### Voice input (unreleased)
+### Voice input (beta)
 
-Voice is **not** in the stable `v3.3.0` packaged build. The module lives on
-`feat/voice-input` (PR #66): default-off, optional, and isolated from
-expansion. Enabling **Entrada por voz** without the optional `sounddevice` +
-`transcribe-cpp` backend reports unavailable — that is expected. Only the
-Balanced/Parakeet profile is user-selectable. Status, gates, and what is still
-unproven are in [`source/docs/voice-input-plan.md`](source/docs/voice-input-plan.md).
+Voice is **not** in the stable `v3.3.0` packaged build. In the `3.4.0` beta it
+is default-off, optional, and isolated from normal expansion. Balanced
+(Parakeet) and the slower, memory-heavier Accuracy (Qwen) profile are
+user-selectable; Accuracy always uses automatic language detection. Live
+streaming remains unavailable. Model downloads are SHA256-verified and resume
+an interrupted transfer only when the server confirms the requested range.
+
+Running from source without `sounddevice` and `transcribe-cpp` keeps voice
+unavailable while normal expansion continues. Official release builds require
+the exact native stack pinned in `source/requirements-voice.txt` and fail the
+build if the packaged runtime probe cannot import and initialize it. Status,
+remaining adoption gates, and unproven live behavior are in
+[`source/docs/voice-input-plan.md`](source/docs/voice-input-plan.md).
 
 ## Build A New Packaged Release
 
 Prefer the automated script — it backs up the packaged `snippets.json`, stages the PyInstaller output, and swaps `dist\Txt Xpander` only on success:
 
 ```powershell
+python -m pip install -r source\requirements.txt -r source\requirements-voice.txt pyinstaller
 build_release.bat
 ```
+
+The release scripts require the pinned voice stack even though voice remains
+optional at runtime. After staging, they run `--voice-runtime-probe` against
+the packaged executable and refuse to promote an artifact with missing Tk,
+audio capture, or native transcription support.
 
 The equivalent raw PyInstaller command (note: this does **not** preserve the packaged `snippets.json` — use the script for routine rebuilds):
 
@@ -112,7 +125,7 @@ This produces the shipping folder in [`dist\Txt Xpander\`](dist/Txt%20Xpander).
 [`build_release_macos.sh`](build_release_macos.sh) is the macOS counterpart. It builds `dist/Txt Xpander.app` — a **menu-bar-only** bundle (`LSUIElement`, so no Dock icon and no app menu), with the `.icns` generated from the shipped `.ico` at build time. `LSUIElement` alone is not enough: Aqua Tk sets the Regular activation policy while it creates the root, which overrides the plist at runtime, so the app puts the policy back to *accessory* right after (`platform_support.hide_dock_icon()`) — that is what actually keeps it out of the Dock, and it applies to a source checkout too.
 
 ```bash
-python3 -m pip install -r source/requirements.txt pyinstaller
+python3 -m pip install -r source/requirements.txt -r source/requirements-voice.txt pyinstaller
 ./build_release_macos.sh
 ```
 

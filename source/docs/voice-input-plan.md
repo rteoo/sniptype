@@ -1,30 +1,30 @@
 # Voice Input — Evaluation and Integration Plan
 
-## Implementation status (2026-08-14)
+## Implementation status (2026-08-21)
 
-The **opt-in module is implemented** on `feat/voice-input` (PR #66).
-**Dictation is not proven and is not in the stable `v3.3.0` release.**
-Do not merge expecting voice to paste on a clean install.
+The **opt-in module and stable-readiness hardening are implemented** in the
+`3.4.0` beta source. **Live dictation is not yet proven and voice is not in the
+stable `v3.3.0` release.** Do not promote `3.4.0` to stable until the remaining
+physical-desktop and supported-OS gates below pass.
 
-| In the branch | Not done |
+| Implemented and covered | Still required before stable |
 |---|---|
-| Opt-in, default-off push-to-talk | Real `transcribe.cpp` / `transcribe-cpp` packaged for Windows x64 and macOS ARM64 |
-| Dedicated hotkey observer (not the expansion listener) | Parakeet Q8 download and adoption-gate bench on target hardware |
-| Dispatch into insert / spoken trigger / form field, without `_dispatch_expansion` | Handy-alongside composition test |
-| SHA256 GGUF catalog; only Balanced/Parakeet is user-selectable | Isolated `build_release` that proves the torch/ML excludes |
-| Failed import or constructor leaves expansion running | Qwen (Accuracy) and Nemotron (Live streaming) — hidden until they pass their gates and the OpenMDW-1.1 review |
-| Required deps stay the four stable packages; `sounddevice` and `transcribe-cpp` are optional | Model downloader resume/retry after a partial or dropped transfer |
-| Session abort stops capture, calls `session.cancel()`, and boundedly joins workers before unload | iOS (on hold) |
-| Form transcripts bind to the form that was open at press | Merge to stable |
+| Default-off push-to-talk with dedicated observer and exact end-of-hold semantics | Live microphone-to-paste ASR on Windows x64 and macOS ARM64 |
+| Dictation, spoken-trigger, and form-field dispatch without `_dispatch_expansion` | Parakeet and Qwen latency/accuracy adoption-gate measurements on target hardware |
+| User-selectable Balanced/Parakeet and Accuracy/Qwen profiles; Qwen forces automatic language detection | Handy-alongside shortcut and focus composition test |
+| SHA256 catalog and range-validated resumable model downloads | Hosted Windows/macOS/Linux matrix for the final PR |
+| Exact pinned release dependencies plus packaged native-runtime probe | Clean Windows x64 package and installer smoke test on a host with working Tcl/Tk |
+| ARM64 macOS package probe and physical focus check for the non-activating recording panel | Signed macOS build from an interactive keychain session and granted-TCC paste smoke |
+| Failed backend import, controller construction, or profile swap leaves normal expansion available | Nemotron live streaming and its OpenMDW-1.1 review |
+| Cancellation stops capture, calls `session.cancel()`, and boundedly joins workers | iOS (on hold) |
 
 Enabling **Entrada por voz** without the optional native backend reports
 unavailable. That is expected. iOS is out of scope until this Windows-first
 path is proven.
 
-Remaining work is measurement **and** the unfinished runtime pieces above
-(packaging, resume/retry, live ASR). Do not add more product surface, and do
-not add `sherpa-onnx` until there is a pinned ONNX catalog; the catalog
-artifacts are GGUF for transcribe.cpp.
+Remaining work is measurement and physical packaged-runtime validation, not
+more product surface. Do not add `sherpa-onnx` until there is a pinned ONNX
+catalog; the catalog artifacts are GGUF for transcribe.cpp.
 
 ## Evaluation
 
