@@ -2,12 +2,13 @@
 
 ## Implementation status (2026-08-21)
 
-The **opt-in module and stable-readiness hardening are implemented** in the
-`3.4.0` beta source. **Live dictation is not yet proven and voice is not in the
-stable `v3.3.0` release.** Do not promote `3.4.0` to stable until the remaining
-physical-desktop and supported-OS gates below pass.
+The **opt-in module and stable-readiness hardening shipped** in the `3.4.0`
+stable release. Voice remains default-off. **Live dictation is not yet proven
+on target hardware**; the remaining physical-desktop and supported-OS items
+below are follow-up measurement and packaged-runtime validation, not more
+product surface.
 
-| Implemented and covered | Still required before stable |
+| Implemented and covered | Follow-up after 3.4.0 |
 |---|---|
 | Default-off push-to-talk with dedicated observer and exact end-of-hold semantics | Live microphone-to-paste ASR on Windows x64 and macOS ARM64 |
 | Dictation, spoken-trigger, and form-field dispatch without `_dispatch_expansion` | Parakeet and Qwen latency/accuracy adoption-gate measurements on target hardware |

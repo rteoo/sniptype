@@ -4,8 +4,7 @@ Txt Xpander is a Windows text expander with a system tray app, snippet manager G
 
 ## Release Channels
 
-- **Stable — `v3.3.0`**: the current production release. Stable tags use `vMAJOR.MINOR.PATCH` with no suffix; Windows produces `TxtXpanderSetup-3.3.0.exe`.
-- **Beta — `v3.4.0-beta.3`**: the current published prerelease, with optional push-to-talk voice input and the stable-readiness hardening described below. Windows produces `TxtXpanderSetup-3.4.0-beta.exe`.
+- **Stable — `v3.4.0`**: the current production release. Stable tags use `vMAJOR.MINOR.PATCH` with no suffix; Windows produces `TxtXpanderSetup-3.4.0.exe`.
 
 Beta tags use `vMAJOR.MINOR.PATCH-beta.N` and the corresponding GitHub Release must be marked as a prerelease. Beta and stable builds share the same data directory and installer identity, so an upgrade preserves `~/.txt_xpander`; do not run both channels simultaneously. Promote a beta to stable only after the full supported-OS test matrix and packaged desktop smoke tests pass.
 
@@ -82,14 +81,14 @@ Or use the source-side launcher, which checks dependencies and starts the app wi
 
 - [`source\run_txt_xpander.bat`](source/run_txt_xpander.bat)
 
-### Voice input (beta)
+### Voice input
 
-Voice is **not** in the stable `v3.3.0` packaged build. In the `3.4.0` beta it
-is default-off, optional, and isolated from normal expansion. Balanced
-(Parakeet) and the slower, memory-heavier Accuracy (Qwen) profile are
-user-selectable; Accuracy always uses automatic language detection. Live
-streaming remains unavailable. Model downloads are SHA256-verified and resume
-an interrupted transfer only when the server confirms the requested range.
+Voice is **optional and default-off** in the `v3.4.0` packaged build, and it is
+isolated from normal expansion. Balanced (Parakeet) and the slower,
+memory-heavier Accuracy (Qwen) profile are user-selectable; Accuracy always
+uses automatic language detection. Live streaming remains unavailable. Model
+downloads are SHA256-verified and resume an interrupted transfer only when the
+server confirms the requested range.
 
 Running from source without `sounddevice` and `transcribe-cpp` keeps voice
 unavailable while normal expansion continues. Official release builds require
@@ -133,7 +132,7 @@ Use `PYTHON=/path/to/venv/bin/python ./build_release_macos.sh` to build with a s
 
 Like the Windows script it stages into a temp folder and swaps `dist` only on success, and it refuses to run while the app is running. It deliberately does **not** port the Windows-only steps: there is no Startup shortcut to offer (macOS autostart is the LaunchAgent the tray toggle writes) and no packaged `snippets.json` to preserve (user data lives in `~/.txt_xpander`).
 
-The script produces the native architecture of the selected Python interpreter. The current `3.3.0` bundle is built on Apple Silicon and is **ARM64-only**; it does not run on Intel Macs. An Intel or universal release requires a matching Python/dependency toolchain and a separate verified build.
+The script produces the native architecture of the selected Python interpreter. The current `3.4.0` bundle is built on Apple Silicon and is **ARM64-only**; it does not run on Intel Macs. An Intel or universal release requires a matching Python/dependency toolchain and a separate verified build.
 
 First launch, Gatekeeper and permissions:
 

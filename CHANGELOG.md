@@ -2,6 +2,50 @@
 
 All notable changes to Txt Xpander are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [3.4.0] — 2026-08-24
+
+Promotes `3.4.0` from beta to the stable channel. Optional voice input ships
+default-off; a missing backend or a failed controller leaves expansion
+unchanged.
+
+### Added
+
+- **Optional voice input** (default off): push-to-talk dictation, spoken
+  triggers, and form-field fill. Balanced (Parakeet) and Accuracy (Qwen) are
+  user-selectable; Accuracy is labeled slower and memory-heavy and always uses
+  automatic language detection. Live streaming remains unavailable. Models
+  download on demand into a non-roaming cache, resume from a verified byte
+  range, and are SHA256-checked. A missing `transcribe-cpp` backend or a
+  construction failure leaves expansion unchanged.
+- Configurable dictation and voice-command push-to-talk shortcuts in Voice
+  Settings, validated before save and applied without reloading the speech
+  model.
+- Release builds install an exact pinned voice dependency set and run an
+  embedded runtime probe before promoting the staged Windows or macOS app.
+- Native click-through, non-activating macOS recording panel so voice status
+  does not steal focus from the target app.
+
+### Changed
+
+- The Windows and macOS build scripts exclude `torch`, `transformers`,
+  `onnxruntime`, `cv2`, `torchvision`, `torchaudio`, and `scipy` so a dirty
+  host environment cannot pull them into the packaged app.
+
+### Fixed
+
+- Releasing any required push-to-talk modifier ends the active hold exactly
+  once; configured final keys are selectively suppressed on Windows and
+  macOS without swallowing unrelated shortcuts.
+- Voice profile changes now publish a final stable status after success,
+  rollback, or terminal failure instead of leaving the UI in a loading state.
+- Normal recordings no longer exhaust a 64-chunk callback queue after roughly
+  one second. Buffered capture now uses stable 1,024-sample blocks and enforces
+  the documented 30-second limit by sample count.
+- When custom shortcuts overlap, the most-specific modifier chord wins no
+  matter which action owns it.
+- Tk-dependent tests skip cleanly when the host Tcl/Tk installation is
+  unusable rather than failing during collection.
+
 ## [3.4.0-beta.3] — 2026-08-21
 
 ### Added
@@ -359,7 +403,7 @@ behavioral change and warrants a major version bump.
 
 ## Versioning Strategy
 
-- **Stable channel**: the latest `vMAJOR.MINOR.PATCH` tag and non-prerelease artifact; currently `v3.2.1`.
-- **Beta channel**: the next product version with an explicit `beta` channel label; currently `3.3.0 beta`.
+- **Stable channel**: the latest `vMAJOR.MINOR.PATCH` tag and non-prerelease artifact; currently `v3.4.0`.
+- **Beta channel**: the next product version with an explicit `beta` channel label; none open after `3.4.0`.
 - **Beta tags**: use `vMAJOR.MINOR.PATCH-beta.N` and mark the corresponding GitHub Release as a prerelease.
 - **Promotion**: beta becomes stable only after the full supported-OS test matrix and packaged desktop smoke tests pass. Promotion removes the channel suffix without changing the tested product version.
