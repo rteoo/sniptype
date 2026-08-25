@@ -1,0 +1,20 @@
+{
+  "xname": "Ada Lovelace",
+  "xmail": "ada@example.com",
+  "xtel": "(11) 90000-0000",
+  "xaddr": "123 Example Street, Suite 100\nSpringfield\nZIP 00000-000",
+  "sign": "Best regards,\nAda",
+  "_cnpj_numbers": {
+    "acme": "12.345.678/0001-90",
+    "globex": "98.765.432/0001-10"
+  },
+  "_cpf_numbers": {
+    "alice": "123.456.789-09",
+    "bob": "987.654.321-00"
+  },
+  "_snippet_codes": {
+    "__prefix__": "sample",
+    "greeting": "Hello, thanks for reaching out!",
+    "clip": "You pasted: %%clipboard-paste%%"
+  }
+}
