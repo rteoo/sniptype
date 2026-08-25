@@ -1,11 +1,11 @@
 """
-Txt Xpander - Windows system tray snippet expander.
+Sniptype - Windows system tray snippet expander.
 Version: 3.4.0
 Channel: stable
 
 IMPORTANT: This program captures keyboard input only to expand text
-snippets (shortcuts), similar to TextExpander. It does not store,
-transmit, or log keystrokes. All processing is local.
+snippets (shortcuts). It does not store, transmit, or log keystrokes.
+Some explicitly used features make network requests; see README.md.
 
 Libraries used:
 - pynput (open source, LGPL)
@@ -170,7 +170,7 @@ else:
 def _read_release_metadata():
     """Read the app version and release channel from this module's docstring.
 
-    Derived rather than duplicated: the docstring and installer/txt_xpander.iss are
+    Derived rather than duplicated: the docstring and installer metadata are
     the two hand-maintained places today, and more constants would be more places
     to forget. The version remains nullable because the sync bundle's
     ``generator.version`` permits that; an absent channel is treated as stable so
@@ -201,8 +201,9 @@ def format_app_version(version, channel="stable"):
 APP_DISPLAY_NAME = format_app_version(APP_VERSION, RELEASE_CHANNEL)
 
 
-APP_MUTEX_NAME = r"Local\TxtXpanderSingleton"
-APP_MUTEX_HANDLE = None
+APP_MUTEX_NAME = r"Local\SniptypeSingleton"
+LEGACY_APP_MUTEX_NAME = r"Local\TxtXpanderSingleton"
+APP_MUTEX_HANDLES = []
 ERROR_ALREADY_EXISTS = 183
 MB_ICONINFORMATION = 0x40
 
@@ -229,30 +230,36 @@ def get_runtime_resource_dir():
 
 
 def acquire_single_instance_mutex():
-    """Keep only one Txt Xpander process running at a time."""
-    global APP_MUTEX_HANDLE
+    """Keep new and legacy-branded processes from running together."""
+    global APP_MUTEX_HANDLES
 
-    mutex_handle = ctypes.windll.kernel32.CreateMutexW(None, False, APP_MUTEX_NAME)
-    if not mutex_handle:
-        return True
+    acquired = []
+    kernel32 = ctypes.windll.kernel32
+    for mutex_name in (LEGACY_APP_MUTEX_NAME, APP_MUTEX_NAME):
+        mutex_handle = kernel32.CreateMutexW(None, False, mutex_name)
+        if not mutex_handle:
+            continue
+        if kernel32.GetLastError() == ERROR_ALREADY_EXISTS:
+            kernel32.CloseHandle(mutex_handle)
+            for acquired_handle in acquired:
+                kernel32.CloseHandle(acquired_handle)
+            APP_MUTEX_HANDLES = []
+            return False
+        acquired.append(mutex_handle)
 
-    if ctypes.windll.kernel32.GetLastError() == ERROR_ALREADY_EXISTS:
-        ctypes.windll.kernel32.CloseHandle(mutex_handle)
-        return False
-
-    APP_MUTEX_HANDLE = mutex_handle
+    APP_MUTEX_HANDLES = acquired
     return True
 
 
 def show_already_running_message():
-    message = "Txt Xpander já está em execução."
+    message = "Sniptype já está em execução."
     if IS_WINDOWS:
-        ctypes.windll.user32.MessageBoxW(0, message, "Txt Xpander", MB_ICONINFORMATION)
+        ctypes.windll.user32.MessageBoxW(0, message, "Sniptype", MB_ICONINFORMATION)
     else:
         print(message)
 
 
-class TextExpander:
+class Sniptype:
     def __init__(self, snippets_file: str = 'snippets.json'):
         self.keyboard_controller = Controller()
         self.typed_text = ""
@@ -293,7 +300,7 @@ class TextExpander:
         self.notification_history = []
         self.pending_notifications = []
 
-        # User data lives in a stable per-user dir (~/.txt_xpander), never inside
+        # User data lives in a stable per-user dir (~/.sniptype), never inside
         # OneDrive; bundled resources may live in _internal for the frozen build.
         self.base_dir = get_runtime_base_dir()
         self.resource_dir = get_runtime_resource_dir()
@@ -1449,7 +1456,7 @@ class TextExpander:
         self.refresh_runtime_indexes()
         return "ok"
 
-    def notify(self, message: str, title: str = "Text Expander", key: str = None, cooldown_seconds: float = 0, kind: str = "info"):
+    def notify(self, message: str, title: str = "Sniptype", key: str = None, cooldown_seconds: float = 0, kind: str = "info"):
         """Send a tray notification when the icon is available, with optional cooldown.
 
         The cooldown check and the history append are done under
@@ -1526,7 +1533,7 @@ class TextExpander:
         if icon is not None:
             self.icon = icon
         time.sleep(0.75)
-        self.notify_status("Text Expander iniciado com sucesso.", key="startup")
+        self.notify_status("Sniptype iniciado com sucesso.", key="startup")
         pending, self.pending_notifications = self.pending_notifications, []
         for message, key, kind, cooldown in pending:
             self.notify(message, key=key, cooldown_seconds=cooldown, kind=kind)
@@ -1807,7 +1814,7 @@ class TextExpander:
         if macos_permissions.check_microphone() == macos_permissions.DENIED:
             self.notify_error(
                 "O macOS bloqueou o microfone. Conceda Microfone em Privacidade "
-                "e reinicie o Txt Xpander.",
+                "e reinicie o Sniptype.",
                 key="voice-mic",
             )
             macos_permissions.open_settings_pane(macos_permissions.MICROPHONE)
@@ -2368,7 +2375,7 @@ class TextExpander:
         refresh_backups()
 
     def _set_window_icon(self, window):
-        icon_path = self.resolve_resource_path("txt_xpander.ico")
+        icon_path = self.resolve_resource_path("sniptype.ico")
         if not icon_path:
             return
         try:
@@ -3679,7 +3686,7 @@ class TextExpander:
 
     def load_tray_icon(self):
         """Prefer the packaged ICO file when available for better tray compatibility."""
-        icon_path = self.resolve_resource_path("txt_xpander.ico")
+        icon_path = self.resolve_resource_path("sniptype.ico")
         if icon_path:
             try:
                 with Image.open(icon_path) as image:
@@ -4078,7 +4085,7 @@ class TextExpander:
     def run(self):
         """Start the program with the system tray."""
         print("=" * 60)
-        print("          TEXT EXPANDER - EXPANSOR DE SNIPPETS")
+        print("               SNIPTYPE - EXPANSOR DE SNIPPETS")
         print("=" * 60)
         
         if self.is_admin():
@@ -4180,7 +4187,7 @@ class TextExpander:
 
         
         self.icon = pystray.Icon(
-            "text_expander",
+            "sniptype",
             self.load_tray_icon(),
             APP_DISPLAY_NAME,
             menu,
@@ -4223,7 +4230,7 @@ def main():
     if IS_WINDOWS:
         acquired = acquire_single_instance_mutex()
     else:
-        lock_path = os.path.join(ensure_data_dir(), "txt_xpander.lock")
+        lock_path = os.path.join(ensure_data_dir(), "sniptype.lock")
         acquired = acquire_lockfile(lock_path)
     if not acquired:
         show_already_running_message()
@@ -4231,7 +4238,7 @@ def main():
 
     set_dpi_awareness()
     try:
-        expander = TextExpander()
+        expander = Sniptype()
         expander.run()
     finally:
         if lock_path is not None:

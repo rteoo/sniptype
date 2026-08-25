@@ -1,5 +1,5 @@
 """
-Text Expander - B3 stock fundamentals lookup module
+Sniptype - B3 stock fundamentals lookup module
 Uses the yfinance library (https://github.com/ranaroussi/yfinance)
 A mature library widely used by the community
 

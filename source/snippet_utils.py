@@ -5,7 +5,7 @@ import tempfile
 
 
 DEFAULT_SNIPPETS = {
-    "xname": "Project Contributors",
+    "xname": "Example User",
     "_cnpj_numbers": {
         "empresa1": "12.345.678/0001-90",
         "empresa2": "98.765.432/0001-10",

@@ -140,21 +140,21 @@ class GuiSupportTests(unittest.TestCase):
 
     def test_filter_static_snippets_without_query_keeps_only_persisted_static_entries(self):
         snippets = {
-            "xname": "Example User",
+            "xname": "Alex",
             "_cpf_numbers": {"fulano": "123"},
             "xdyn": lambda: "value",
         }
 
-        self.assertEqual({"xname": "Example User"}, filter_static_snippets(snippets, ""))
+        self.assertEqual({"xname": "Alex"}, filter_static_snippets(snippets, ""))
 
     def test_filter_static_snippets_matches_key_and_value(self):
         snippets = {
-            "xname": "Example User",
+            "xname": "Alex",
             "xemail": "contato@example.com",
         }
 
         self.assertEqual({"xemail": "contato@example.com"}, filter_static_snippets(snippets, "example"))
-        self.assertEqual({"xname": "Example User"}, filter_static_snippets(snippets, "name"))
+        self.assertEqual({"xname": "Alex"}, filter_static_snippets(snippets, "name"))
 
     def test_filter_static_snippets_matches_rich_text_plain_value(self):
         snippets = {
@@ -182,7 +182,7 @@ class FilterEdgeCaseTests(unittest.TestCase):
     """Adversarial queries: whitespace, unicode/accents, regex metacharacters."""
 
     def test_whitespace_only_query_behaves_like_an_empty_query(self):
-        snippets = {"xname": "Example User", "xemail": "a@b.com"}
+        snippets = {"xname": "Alex", "xemail": "a@b.com"}
         self.assertEqual(snippets, filter_static_snippets(snippets, "   \t "))
 
     def test_query_is_a_literal_substring_not_a_regex(self):
@@ -228,7 +228,7 @@ class FilterEdgeCaseTests(unittest.TestCase):
 
 class SnippetRowValuesTests(unittest.TestCase):
     def test_plain_snippet_has_no_markers(self):
-        self.assertEqual(("xname", "Example User", ""), snippet_row_values("xname", "Example User"))
+        self.assertEqual(("xname", "Alex", ""), snippet_row_values("xname", "Alex"))
 
     def test_newlines_and_runs_of_space_collapse(self):
         _, preview, _ = snippet_row_values("xsig", "linha um\n\nlinha  dois\tfim")

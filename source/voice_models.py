@@ -22,7 +22,8 @@ import urllib.request
 from voice_catalog import catalog_entry, catalog_entry_by_id
 
 
-ENV_VOICE_CACHE = "TXT_XPANDER_VOICE_CACHE"
+ENV_VOICE_CACHE = "SNIPTYPE_VOICE_CACHE"
+LEGACY_ENV_VOICE_CACHE = "TXT_XPANDER_VOICE_CACHE"
 CACHE_DIR_NAME = "voice-models"
 MANIFEST_NAME = "manifest.json"
 PARTIAL_SUFFIX = ".partial"
@@ -39,11 +40,11 @@ class VoiceModelError(Exception):
 def default_voice_cache_dir(system=None):
     """Non-roaming cache for regenerable model files.
 
-    Windows: ``%LOCALAPPDATA%\\Txt Xpander\\voice-models``
-    macOS: ``~/Library/Caches/Txt Xpander/voice-models``
-    Linux: ``~/.cache/txt-xpander/voice-models``
+    Windows: ``%LOCALAPPDATA%\\Sniptype\\voice-models``
+    macOS: ``~/Library/Caches/Sniptype/voice-models``
+    Linux: ``~/.cache/sniptype/voice-models``
     """
-    override = os.environ.get(ENV_VOICE_CACHE)
+    override = os.environ.get(ENV_VOICE_CACHE) or os.environ.get(LEGACY_ENV_VOICE_CACHE)
     if override:
         return os.path.abspath(os.path.expanduser(override))
 
@@ -53,10 +54,10 @@ def default_voice_cache_dir(system=None):
     home = os.path.expanduser("~")
     if os_name == "windows":
         root = os.environ.get("LOCALAPPDATA") or os.path.join(home, "AppData", "Local")
-        return os.path.join(root, "Txt Xpander", CACHE_DIR_NAME)
+        return os.path.join(root, "Sniptype", CACHE_DIR_NAME)
     if os_name == "darwin":
-        return os.path.join(home, "Library", "Caches", "Txt Xpander", CACHE_DIR_NAME)
-    return os.path.join(home, ".cache", "txt-xpander", CACHE_DIR_NAME)
+        return os.path.join(home, "Library", "Caches", "Sniptype", CACHE_DIR_NAME)
+    return os.path.join(home, ".cache", "sniptype", CACHE_DIR_NAME)
 
 
 def model_dir(cache_dir, entry):
