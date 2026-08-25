@@ -13,29 +13,29 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import clipboard_support
 import runtime_support
-from app_module import txt_xpander as tx  # .pyw is not importable off Windows
+from app_module import sniptype as tx  # .pyw is not importable off Windows
 from pynput.keyboard import Key, KeyCode
 
 
 def make_app(base_dir, snippets, stub_inserter=True):
-    """Construct a TextExpander with keyboard/task side effects mocked out.
+    """Construct a Sniptype with keyboard/task side effects mocked out.
 
     ``stub_inserter=False`` keeps the real ``TextInserter`` so its wiring (the
     paste delays) can be inspected; it is never driven in that state.
     """
     with open(os.path.join(base_dir, "snippets.json"), "w", encoding="utf-8") as handle:
         json.dump(snippets, handle)
-    previous_home = os.environ.get("TXT_XPANDER_HOME")
-    os.environ["TXT_XPANDER_HOME"] = base_dir
+    previous_home = os.environ.get("SNIPTYPE_HOME")
+    os.environ["SNIPTYPE_HOME"] = base_dir
     try:
         with mock.patch.object(tx, "get_runtime_base_dir", return_value=base_dir), \
                 mock.patch.object(tx, "get_runtime_resource_dir", return_value=base_dir):
-            app = tx.TextExpander()
+            app = tx.Sniptype()
     finally:
         if previous_home is None:
-            os.environ.pop("TXT_XPANDER_HOME", None)
+            os.environ.pop("SNIPTYPE_HOME", None)
         else:
-            os.environ["TXT_XPANDER_HOME"] = previous_home
+            os.environ["SNIPTYPE_HOME"] = previous_home
     app.keyboard_controller = mock.Mock()
     app.task_runner = mock.Mock()
     if stub_inserter:
@@ -396,7 +396,7 @@ class OnPressSpecialKeyTests(unittest.TestCase):
 
     def test_enter_resets_the_buffer(self):
         # KNOWN DEFECT — kept as a failing regression marker (no source fix).
-        # on_press (txt_xpander.pyw:1304) guards with ``hasattr(key, 'char')``,
+        # on_press (sniptype.pyw:1304) guards with ``hasattr(key, 'char')``,
         # which is False for Key.enter, so the try body short-circuits WITHOUT
         # touching key.char, no AttributeError is raised, and the
         # ``except AttributeError`` block that clears the buffer is dead code.

@@ -127,8 +127,8 @@ class CatalogTests(unittest.TestCase):
 
 class CacheLocationTests(unittest.TestCase):
     def test_env_override_wins(self):
-        previous = os.environ.get("TXT_XPANDER_VOICE_CACHE")
-        os.environ["TXT_XPANDER_VOICE_CACHE"] = os.path.join(tempfile.gettempdir(), "vx")
+        previous = os.environ.get("SNIPTYPE_VOICE_CACHE")
+        os.environ["SNIPTYPE_VOICE_CACHE"] = os.path.join(tempfile.gettempdir(), "vx")
         try:
             self.assertTrue(
                 default_voice_cache_dir().endswith("vx")
@@ -136,14 +136,14 @@ class CacheLocationTests(unittest.TestCase):
             )
         finally:
             if previous is None:
-                os.environ.pop("TXT_XPANDER_VOICE_CACHE", None)
+                os.environ.pop("SNIPTYPE_VOICE_CACHE", None)
             else:
-                os.environ["TXT_XPANDER_VOICE_CACHE"] = previous
+                os.environ["SNIPTYPE_VOICE_CACHE"] = previous
 
     def test_default_is_not_the_snippet_data_dir(self):
-        os.environ.pop("TXT_XPANDER_VOICE_CACHE", None)
+        os.environ.pop("SNIPTYPE_VOICE_CACHE", None)
         cache = default_voice_cache_dir(system="windows")
-        self.assertNotIn(".txt_xpander", cache)
+        self.assertNotIn(".sniptype", cache)
         self.assertIn("voice-models", cache)
 
 

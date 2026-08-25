@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import macos_permissions as mp
-from app_module import txt_xpander as tx  # .pyw is not importable off Windows
+from app_module import sniptype as tx  # .pyw is not importable off Windows
 
 
 GRANTED = mp.GRANTED
@@ -201,8 +201,8 @@ class OpenPaneTests(unittest.TestCase):
 
 
 def make_app():
-    """A TextExpander with only what the permission flow touches."""
-    app = tx.TextExpander.__new__(tx.TextExpander)
+    """A Sniptype with only what the permission flow touches."""
+    app = tx.Sniptype.__new__(tx.Sniptype)
     app.logger = mock.Mock()
     app.task_runner = mock.Mock()
     app.gui = mock.Mock()
@@ -292,21 +292,21 @@ class AppFlowTests(unittest.TestCase):
 
     def test_the_window_is_opened_on_the_gui_thread_never_inline(self):
         app = make_app()
-        app.open_macos_permission_window = tx.TextExpander.open_macos_permission_window.__get__(app)
+        app.open_macos_permission_window = tx.Sniptype.open_macos_permission_window.__get__(app)
         app.open_macos_permission_window()
         app.gui.submit.assert_called_once_with(app._show_macos_permission_window)
 
     def test_a_gui_failure_while_opening_is_logged_not_raised(self):
         app = make_app()
         app.gui.submit.side_effect = RuntimeError("no root")
-        app.open_macos_permission_window = tx.TextExpander.open_macos_permission_window.__get__(app)
+        app.open_macos_permission_window = tx.Sniptype.open_macos_permission_window.__get__(app)
         app.open_macos_permission_window()
         self.assertTrue(app.logger.error.called)
 
 
 class StartupWiringTests(unittest.TestCase):
     def test_the_probe_is_scheduled_once_the_tray_icon_exists(self):
-        app = tx.TextExpander.__new__(tx.TextExpander)
+        app = tx.Sniptype.__new__(tx.Sniptype)
         app.task_runner = mock.Mock()
         app.icon = None
         icon = mock.Mock()
@@ -392,7 +392,7 @@ class SecureInputExpansionGateTests(unittest.TestCase):
     """A trigger typed under secure input is left exactly as typed."""
 
     def _app(self):
-        app = tx.TextExpander.__new__(tx.TextExpander)
+        app = tx.Sniptype.__new__(tx.Sniptype)
         app.logger = mock.Mock()
         app.notify = mock.Mock()
         app.task_runner = mock.Mock()
@@ -450,7 +450,7 @@ class SecureInputNotifyDeferralTests(unittest.TestCase):
     notification (history JSON write + tray call) must be deferred (PR #52)."""
 
     def _app(self):
-        app = tx.TextExpander.__new__(tx.TextExpander)
+        app = tx.Sniptype.__new__(tx.Sniptype)
         app.logger = mock.Mock()
         app.task_runner = mock.Mock()
         app.icon = mock.Mock()
@@ -476,7 +476,7 @@ class SecureInputNotifyDeferralTests(unittest.TestCase):
         # A bound method is re-created on each attribute access, so compare by
         # value (same function, same instance) rather than identity.
         self.assertEqual(deferred, app.notify)
-        self.assertEqual(deferred.__func__, tx.TextExpander.notify)
+        self.assertEqual(deferred.__func__, tx.Sniptype.notify)
 
 
 class NotifySerializationTests(unittest.TestCase):
@@ -484,7 +484,7 @@ class NotifySerializationTests(unittest.TestCase):
     the listener and worker threads at once; a lock keeps them atomic (PR #52)."""
 
     def _app(self):
-        app = tx.TextExpander.__new__(tx.TextExpander)
+        app = tx.Sniptype.__new__(tx.Sniptype)
         app.logger = mock.Mock()
         app.icon = mock.Mock()
         app._notification_lock = threading.Lock()

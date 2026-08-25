@@ -25,7 +25,7 @@ class SnippetUtilsTests(unittest.TestCase):
 
     def setUp(self):
         self.snippets = {
-            "xname": "Example User",
+            "xname": "Alex",
             "xsig": "Assinatura",
             "_cpf_numbers": {
                 "fulano": "123.456.789-00",
@@ -33,9 +33,9 @@ class SnippetUtilsTests(unittest.TestCase):
             "_cnpj_numbers": {
                 "empresa": "12.345.678/0001-90",
             },
-            "_openclaw_codes": {
+            "_service_codes": {
                 "__prefix__": "clw",
-                "gtw": "openclaw gateway restart",
+                "gtw": "service gateway restart",
             },
             "_email_codes": {
                 "work": "work@example.com",
@@ -81,13 +81,13 @@ class SnippetUtilsTests(unittest.TestCase):
         self.assertEqual({"new": "value"}, json.loads(path.read_text(encoding='utf-8')))
 
     def test_build_saveable_snippets_filters_runtime_callables(self):
-        saveable = build_saveable_snippets({"xname": "Example User", "xdyn": lambda: "value"})
+        saveable = build_saveable_snippets({"xname": "Alex", "xdyn": lambda: "value"})
 
-        self.assertEqual({"xname": "Example User"}, saveable)
+        self.assertEqual({"xname": "Alex"}, saveable)
 
     def test_find_shadowed_statics_reports_names_taken_by_a_callable(self):
         shadowed = find_shadowed_statics(
-            {"xhj": "meu texto", "xname": "Example User"},
+            {"xhj": "meu texto", "xname": "Alex"},
             {"xhj": lambda: "data de hoje"},
         )
 
@@ -120,7 +120,7 @@ class SnippetUtilsTests(unittest.TestCase):
 
         self.assertEqual("_cpf_numbers", prefixes["cpf"])
         self.assertEqual("_cnpj_numbers", prefixes["cnpj"])
-        self.assertEqual("_openclaw_codes", prefixes["clw"])
+        self.assertEqual("_service_codes", prefixes["clw"])
         self.assertEqual("_email_codes", prefixes["email"])
 
     def test_check_dynamic_pattern_resolves_builtin_mapping(self):
@@ -133,7 +133,7 @@ class SnippetUtilsTests(unittest.TestCase):
         prefixes = get_dynamic_prefixes(self.snippets)
         value, trigger_length = check_dynamic_pattern(self.snippets, "clwgtw", prefixes)
 
-        self.assertEqual("openclaw gateway restart", value)
+        self.assertEqual("service gateway restart", value)
         self.assertEqual(len("clwgtw"), trigger_length)
 
     def test_check_dynamic_pattern_ignores_prefix_metadata(self):
@@ -143,7 +143,7 @@ class SnippetUtilsTests(unittest.TestCase):
         self.assertEqual(0, trigger_length)
 
     def test_calculate_max_trigger_length_matches_current_direct_key_behavior(self):
-        self.assertEqual(len("_openclaw_codes"), calculate_max_trigger_length(self.snippets))
+        self.assertEqual(len("_service_codes"), calculate_max_trigger_length(self.snippets))
 
     def test_calculate_max_trigger_length_with_mappings_counts_full_dynamic_trigger(self):
         snippets = {
@@ -170,7 +170,7 @@ class CheckDynamicPatternEdgeTests(unittest.TestCase):
     def setUp(self):
         self.snippets = {
             "_cpf_numbers": {"fulano": "123.456.789-00"},
-            "_openclaw_codes": {"__prefix__": "clw", "gtw": "restart"},
+            "_service_codes": {"__prefix__": "clw", "gtw": "restart"},
         }
 
     def test_text_equal_to_prefix_returns_none(self):
@@ -202,9 +202,9 @@ class GetDynamicPrefixesEdgeTests(unittest.TestCase):
         self.assertEqual({}, get_dynamic_prefixes({"_internal_flag": True}))
 
     def test_dunder_prefix_overrides_the_derived_name(self):
-        prefixes = get_dynamic_prefixes({"_openclaw_codes": {"__prefix__": "clw"}})
-        self.assertEqual("_openclaw_codes", prefixes["clw"])
-        self.assertNotIn("openclaw", prefixes)
+        prefixes = get_dynamic_prefixes({"_service_codes": {"__prefix__": "clw"}})
+        self.assertEqual("_service_codes", prefixes["clw"])
+        self.assertNotIn("service", prefixes)
 
     def test_non_dict_mapping_still_registers_a_prefix_but_resolves_to_nothing(self):
         prefixes = get_dynamic_prefixes({"_bad_numbers": "notadict"})
@@ -215,7 +215,7 @@ class GetDynamicPrefixesEdgeTests(unittest.TestCase):
 
 class MergeAndShadowRoundTripTests(unittest.TestCase):
     def test_full_save_round_trip_keeps_shadow_and_strips_all_callables(self):
-        static = {"xhj": "important", "xname": "Example User", "_cpf_numbers": {"fulano": "1"}}
+        static = {"xhj": "important", "xname": "Alex", "_cpf_numbers": {"fulano": "1"}}
         dynamic = {"xhj": lambda: "date", "xdolar": lambda: "R$5"}
 
         merged = merge_snippets(static, dynamic)
@@ -223,7 +223,7 @@ class MergeAndShadowRoundTripTests(unittest.TestCase):
         saveable = build_saveable_snippets(merged, preserved)
 
         self.assertEqual("important", saveable["xhj"])          # shadowed static survives
-        self.assertEqual("Example User", saveable["xname"])
+        self.assertEqual("Alex", saveable["xname"])
         self.assertEqual({"fulano": "1"}, saveable["_cpf_numbers"])  # mapping container kept
         self.assertNotIn("xdolar", saveable)                    # runtime-only callable dropped
         self.assertFalse(any(callable(v) for v in saveable.values()))

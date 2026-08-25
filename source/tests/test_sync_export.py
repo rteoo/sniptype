@@ -51,7 +51,7 @@ class TopLevelShapeTests(unittest.TestCase):
         bundle = build({"xa": "A"})
         self.assertEqual(bundle["schema_version"], 1)
         self.assertEqual(bundle["exported_at"], "2026-07-21T13:45:02Z")
-        self.assertEqual(bundle["generator"]["name"], "txt_xpander")
+        self.assertEqual(bundle["generator"]["name"], "sniptype")
         self.assertEqual(bundle["generator"]["platform"], sys.platform)
         self.assertIsInstance(bundle["entries"], list)
         self.assertIsInstance(bundle["dynamic"], list)
@@ -145,19 +145,19 @@ class RichTextTests(unittest.TestCase):
         return {"__kind__": "rich_text", "text": text, "spans": [], "html": html, "rtf": "{}"}
 
     def test_html_copied_when_clean(self):
-        bundle = build({"xa": self.payload("Example User\nDiretor")})
+        bundle = build({"xa": self.payload("Alex\nDirector")})
         entry = entry_for(bundle, "xa")
         self.assertEqual(entry["kind"], "rich_text")
-        self.assertEqual(entry["text"], "Example User\nDiretor")
+        self.assertEqual(entry["text"], "Alex\nDirector")
         self.assertEqual(entry["html"], "<div>x</div>")
         self.assertNotIn("spans", entry)
         self.assertNotIn("rtf", entry)
 
     def test_html_omitted_when_raw_value_had_variables(self):
-        bundle = build({"xname": "Example User", "xa": self.payload("Olá, %%xname%%")})
+        bundle = build({"xname": "Alex", "xa": self.payload("Hello, %%xname%%")})
         entry = entry_for(bundle, "xa")
         self.assertEqual(entry["kind"], "rich_text")
-        self.assertEqual(entry["text"], "Olá, Example User")
+        self.assertEqual(entry["text"], "Hello, Alex")
         self.assertNotIn("html", entry)
 
     def test_empty_html_is_not_emitted(self):
@@ -187,9 +187,9 @@ class UnexportableValueTests(unittest.TestCase):
 
 class VariableResolutionTests(unittest.TestCase):
     def test_snippet_ref_is_resolved(self):
-        bundle = build({"xname": "Project Contributors", "xs": "Olá, aqui é %%xname%%."})
+        bundle = build({"xname": "Example User", "xs": "Hello, this is %%xname%%."})
         entry = entry_for(bundle, "xs")
-        self.assertEqual(entry["text"], "Olá, aqui é Project Contributors.")
+        self.assertEqual(entry["text"], "Hello, this is Example User.")
         self.assertNotIn("input", entry)
 
     def test_mapping_ref_is_resolved(self):
@@ -255,12 +255,12 @@ class VariableResolutionTests(unittest.TestCase):
         # "%%xname%% e %%xb%%" with xb = "cc %%xname%%": the second copy is never
         # chased, so xname is residual even though it was in the raw list.
         bundle = build({
-            "xname": "Example User",
+            "xname": "Alex",
             "xb": "cc %%xname%%",
             "xa": "%%xname%% e %%xb%%",
         })
         entry = entry_for(bundle, "xa")
-        self.assertEqual(entry["text"], "Example User e cc %%xname%%")
+        self.assertEqual(entry["text"], "Alex e cc %%xname%%")
         self.assertEqual(entry["input"]["residual"], ["xname"])
 
     def test_consumed_names_are_not_also_residual(self):
@@ -567,8 +567,8 @@ class StrftimeConversionTests(unittest.TestCase):
 class WorkedExampleTests(unittest.TestCase):
     def test_matches_the_design_doc(self):
         static = {
-            "xname": "Project Contributors",
-            "xsaudacao": "Olá, aqui é %%xname%%.",
+            "xname": "Example User",
+            "xsaudacao": "Hello, this is %%xname%%.",
             "_cpf_numbers": {"fulano": "123.456.789-00"},
             "_custom_codes": {"__prefix__": "cod", "nf": "NF-4471"},
         }
@@ -582,8 +582,8 @@ class WorkedExampleTests(unittest.TestCase):
         bundle = build(static, registry, app_version="3.2.0")
 
         self.assertEqual(bundle["entries"], [
-            {"trigger": "xname", "text": "Project Contributors", "kind": "text", "source": "static"},
-            {"trigger": "xsaudacao", "text": "Olá, aqui é Project Contributors.", "kind": "text",
+            {"trigger": "xname", "text": "Example User", "kind": "text", "source": "static"},
+            {"trigger": "xsaudacao", "text": "Hello, this is Example User.", "kind": "text",
              "source": "static"},
             {"trigger": "cpffulano", "text": "123.456.789-00", "kind": "text", "source": "mapping",
              "group": {"container": "_cpf_numbers", "prefix": "cpf", "item": "fulano"}},
@@ -662,7 +662,7 @@ class ExportBundleTests(unittest.TestCase):
         self.dest_dir = os.path.join(self.tmp.name, "cloud")
         os.makedirs(self.dest_dir)
         self.state_path = os.path.join(self.tmp.name, "sync_export.state")
-        self.bundle_path = os.path.join(self.dest_dir, "txt_xpander_bundle.json")
+        self.bundle_path = os.path.join(self.dest_dir, "sniptype_bundle.json")
         self.logger = RecordingLogger()
 
     _DEFAULT_DIR = object()
@@ -721,7 +721,7 @@ class ExportBundleTests(unittest.TestCase):
         os.makedirs(other)
         self.export({"xa": "A"})
         self.assertTrue(self.export({"xa": "A"}, export_dir=other))
-        self.assertTrue(os.path.exists(os.path.join(other, "txt_xpander_bundle.json")))
+        self.assertTrue(os.path.exists(os.path.join(other, "sniptype_bundle.json")))
 
     def test_a_to_b_to_a_round_trip_rewrites_a(self):
         other = os.path.join(self.tmp.name, "other")
@@ -752,7 +752,7 @@ class ExportBundleTests(unittest.TestCase):
         original = se.write_json_atomic
 
         def boom(path, data):
-            if path.endswith("txt_xpander_bundle.json"):
+            if path.endswith("sniptype_bundle.json"):
                 raise OSError("disk full")
             return original(path, data)
 
@@ -767,7 +767,7 @@ class ExportBundleTests(unittest.TestCase):
 
         def flaky(path, data):
             calls.append(path)
-            if path.endswith("txt_xpander_bundle.json") and len(calls) == 1:
+            if path.endswith("sniptype_bundle.json") and len(calls) == 1:
                 raise PermissionError("locked by the cloud client")
             return original(path, data)
 
@@ -782,7 +782,7 @@ class ExportBundleTests(unittest.TestCase):
 
     def test_atomic_write_leaves_no_temp_file(self):
         self.export({"xa": "A"})
-        self.assertEqual(os.listdir(self.dest_dir), ["txt_xpander_bundle.json"])
+        self.assertEqual(os.listdir(self.dest_dir), ["sniptype_bundle.json"])
 
     def test_mirror_dir_equal_to_export_dir_warns_but_still_exports(self):
         self.assertTrue(self.export({"xa": "A"}, mirror_dir=self.dest_dir))
@@ -860,7 +860,7 @@ class CallSiteTests(unittest.TestCase):
         from unittest import mock
 
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-        from app_module import txt_xpander as tx
+        from app_module import sniptype as tx
 
         self.tx = tx
         self.mock = mock
@@ -871,23 +871,23 @@ class CallSiteTests(unittest.TestCase):
         self.base = self.tmp.name
         self.dest_dir = os.path.join(self.base, "cloud")
         os.makedirs(self.dest_dir)
-        self.bundle_path = os.path.join(self.dest_dir, "txt_xpander_bundle.json")
+        self.bundle_path = os.path.join(self.dest_dir, "sniptype_bundle.json")
 
         with open(os.path.join(self.base, "snippets.json"), "w", encoding="utf-8") as handle:
             json.dump({"xhi": "hello"}, handle)
         with open(os.path.join(self.base, "dynamic_snippets.json"), "w", encoding="utf-8") as handle:
             json.dump({"xhj": {"provider": "datetime", "format": "%d/%m/%Y"}}, handle)
 
-        previous = os.environ.get("TXT_XPANDER_HOME")
-        os.environ["TXT_XPANDER_HOME"] = self.base
+        previous = os.environ.get("SNIPTYPE_HOME")
+        os.environ["SNIPTYPE_HOME"] = self.base
         self.addCleanup(
-            lambda: os.environ.pop("TXT_XPANDER_HOME", None)
+            lambda: os.environ.pop("SNIPTYPE_HOME", None)
             if previous is None
-            else os.environ.__setitem__("TXT_XPANDER_HOME", previous)
+            else os.environ.__setitem__("SNIPTYPE_HOME", previous)
         )
         with mock.patch.object(tx, "get_runtime_base_dir", return_value=self.base), \
                 mock.patch.object(tx, "get_runtime_resource_dir", return_value=self.base):
-            self.app = tx.TextExpander()
+            self.app = tx.Sniptype()
 
         self.app.settings["sync_export_dir"] = self.dest_dir
         self.app.notify_status = lambda *a, **k: None

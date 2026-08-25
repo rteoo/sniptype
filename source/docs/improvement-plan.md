@@ -1,4 +1,4 @@
-# Txt Xpander — Improvement Plan
+# Sniptype — Improvement Plan
 
 > **Status (2026-07-20):** Phases 0–4 fully implemented; Phases 5–6 implemented except two items that need a running app / non-Windows host to verify. Full unittest suite green (261 tests). Phase 5.1 (single Tk root, audit 3.3) and Phase 6 clipboard backend split (`clipboard_support.py`, last hard Win32 coupling) both landed 2026-07-20 — the POSIX backend is plain-text only and unverified on a real macOS/Linux host. Phase 5 Treeview list/preview (4.2) landed 2026-07-20; the autostart adapter is wired to a tray toggle and the ticker dialog moved to Tk with Phase 5.1, closing the adapter follow-ups. Remaining, tracked follow-up: Phase 6 rich-text paste off Windows.
 
@@ -16,11 +16,11 @@ Goal: the existing code follows the owner's global agent guidelines before new b
 
 Branch: `chore/guideline-compliance`.
 
-1. **Delete dead code:** stale integration comment block in `bcb_consultor.py` (lines 194–223), unused `_manager_lock`/`_manager_open` in `txt_xpander.pyw`, trailing blank lines, the stray committed `source/snippets_versão de testes.json` (recoverable from git history).
-2. **English-only comments and docstrings** in `txt_xpander.pyw`, `bcb_consultor.py`, `yf_stocks.py`. User-facing strings (UI labels, notifications, console/log messages) stay Portuguese — they are product surface, not code commentary. Remove "changed this" comments (`VERSÃO ATUALIZADA` etc.) outright instead of translating them.
+1. **Delete dead code:** stale integration comment block in `bcb_consultor.py` (lines 194–223), unused `_manager_lock`/`_manager_open` in `sniptype.pyw`, trailing blank lines, the stray committed `source/snippets_versão de testes.json` (recoverable from git history).
+2. **English-only comments and docstrings** in `sniptype.pyw`, `bcb_consultor.py`, `yf_stocks.py`. User-facing strings (UI labels, notifications, console/log messages) stay Portuguese — they are product surface, not code commentary. Remove "changed this" comments (`VERSÃO ATUALIZADA` etc.) outright instead of translating them.
 3. **Narrow bare `except:` to `except Exception:`** in `yf_stocks.py` and `bcb_consultor.py`. Returned `"N/A"` / `"[Erro: …]"` values are unchanged (behavior preserved); wiring the swallowed causes into a real logger lands with Phase 1's logging.
 4. **Add `ceiling:` markers** at the known deliberate simplifications, each naming its upgrade trigger: insertion-order trigger matching (→ longest-first in Phase 3), plain-text-only clipboard restore (→ format-preserving restore if rich clipboard loss bites), print-only logger (→ Phase 1), BCB callables on the listener thread (→ Phase 3).
-5. **Metadata fixes:** `txt_xpander.pyw` header version 2.6 → 2.7; remove the unused `markdown` entry from `requirements.txt` (it is imported nowhere — verified).
+5. **Metadata fixes:** `sniptype.pyw` header version 2.6 → 2.7; remove the unused `markdown` entry from `requirements.txt` (it is imported nowhere — verified).
 
 Verification: full unittest suite before and after, plus an AST-equivalence check (parse old and new modules, strip docstrings, compare dumps) proving comment/docstring-only edits changed no code paths.
 
@@ -39,7 +39,7 @@ Goal: it becomes impossible to lose the snippet library through a crash, a bad s
    - In `load_snippets()`, on parse failure: rename the bad file to `snippets.corrupt-YYYYMMDD-HHMMSS.json`, then try the newest backup; only if no backup exists fall back to defaults. Never call `save_snippets(defaults)` over a file that existed.
    - Notify via tray: "snippets.json estava corrompido; restaurado do backup de <ts>".
 3. **Real file logging.**
-   - Replace `AppLogger`'s prints with `logging` + `RotatingFileHandler` writing to `<data_dir>/logs/txt_xpander.log` (1 MB × 3). Keep console echo when stdout exists (dev mode).
+   - Replace `AppLogger`'s prints with `logging` + `RotatingFileHandler` writing to `<data_dir>/logs/sniptype.log` (1 MB × 3). Keep console echo when stdout exists (dev mode).
 4. **Surface save failures.** `save_snippets()` returns success/failure; GUI shows an error messagebox and the tray notifies on failure instead of claiming success.
 
 Tests: backup rotation and pruning; corrupt-file quarantine + backup restore (write garbage JSON, load, assert original bytes preserved under quarantine name); save-failure propagation (mock `write_json_atomic` to raise).
@@ -48,12 +48,12 @@ Effort: small-medium. No behavior change for the happy path.
 
 ## Phase 2 — Move data out of OneDrive to `$HOME` + migration/restore UX (fixes 1.4, 1.5, 1.7, 4.1)
 
-Goal: app data lives in `~/.txt_xpander/`, identical layout on Windows/macOS/Linux, with a one-time automatic migration and a visible backup/restore surface.
+Goal: app data lives in `~/.sniptype/`, identical layout on Windows/macOS/Linux, with a one-time automatic migration and a visible backup/restore surface.
 
 1. **Data directory resolver** (new small module, e.g. `app_paths.py`):
-   - `TXT_XPANDER_HOME` env var override → else `Path.home() / ".txt_xpander"`.
+   - `SNIPTYPE_HOME` env var override → else `Path.home() / ".sniptype"`.
    - Layout: `snippets.json`, `dynamic_snippets.json` (Phase 4), `backups/`, `logs/`, `settings.json` (future).
-2. **One-time migration on startup:** if `~/.txt_xpander/snippets.json` doesn't exist and a legacy exe-side file does, copy it in (and drop a `migrated-from.txt` breadcrumb + first backup). The legacy file is left untouched as an extra safety copy. Tray notification announces the move and the new path.
+2. **One-time migration on startup:** if `~/.sniptype/snippets.json` doesn't exist and a legacy exe-side file does, copy it in (and drop a `migrated-from.txt` breadcrumb + first backup). The legacy file is left untouched as an extra safety copy. Tray notification announces the move and the new path.
 3. **Simplify the build pipeline:** `build_release.bat` stops syncing dist→source and stops restoring snippets into the new dist — user data no longer lives in dist at all. The bundled `snippets.json` becomes a small **anonymized seed** (sample entries only).
 4. **De-personalize the repo:** replace `source/snippets.json` content with the seed; delete `source/snippets_versão de testes.json`. (Optionally rewrite git history later — separate decision; at minimum stop adding new personal data.)
 5. **Backup/restore/export UI:**
@@ -84,7 +84,7 @@ Effort: medium-large. Highest-risk phase — touch the hot path with the regress
 
 Goal: one data file describes every dynamic trigger; code only provides named providers.
 
-1. **`dynamic_snippets.json`** bundled with the app; user copy in `~/.txt_xpander/` overrides/extends it (bad entries: log + skip, never crash). Schema per trigger: `provider`, provider params (`format`, `method`, `mode`…), `slow`/`dialog` flag, `description`, `enabled`.
+1. **`dynamic_snippets.json`** bundled with the app; user copy in `~/.sniptype/` overrides/extends it (bad entries: log + skip, never crash). Schema per trigger: `provider`, provider params (`format`, `method`, `mode`…), `slow`/`dialog` flag, `description`, `enabled`.
 2. **Provider registry in code:** `datetime`, `bcb`, `stock`, `whatsapp` register factory functions; `get_dynamic_snippets()` becomes "read registry file → bind providers".
 3. **Generate the GUI reference tabs** (Data/Hora, Economia, Ações, WhatsApp) from the registry — delete the hand-maintained lists in `gui_support.py`.
 4. **Manager additions:** the dynamic tabs get an enable/disable checkbox and editable trigger name per entry (writes to the user override file, reload applies).
@@ -106,7 +106,7 @@ Effort: medium-large, but each item ships independently. Item 1 first — the re
 
 ## Phase 6 — Cross-platform groundwork (fixes §6, 2.7 partially)
 
-Goal: `python txt_xpander.pyw` runs on macOS/Linux with graceful degradation; Windows behavior unchanged.
+Goal: `python sniptype.pyw` runs on macOS/Linux with graceful degradation; Windows behavior unchanged.
 
 1. **Platform adapter module** (`platform_support.py`) with a Windows implementation extracted from today's code and interfaces for: clipboard (get/set text+HTML+RTF), single-instance guard (lockfile+PID replaces mutex), paste shortcut (Ctrl+V vs Cmd+V), "already running" message, autostart install/remove.
 2. **Replace remaining Windows-only calls** in the main file: `FindWindowW` focus trick → in-process window tracking (**done** with Phase 5.1); `MessageBoxW` → Tk.
@@ -132,4 +132,4 @@ Effort: large, but Phases 2 and 5 will have already removed most couplings. Ship
 
 Each phase = one branch, one PR, tests included (`python -m unittest discover -s tests -v` green). Phases 1+2 can be combined into a single release since both are prerequisites for trusting the data layer; everything after that is incremental.
 
-Immediate manual step (before any code lands): copy `dist/Txt Xpander/snippets.json` somewhere safe today — it is currently the only copy of the live library.
+Immediate manual step (before any code lands): copy `dist/Sniptype/snippets.json` somewhere safe today — it is currently the only copy of the live library.

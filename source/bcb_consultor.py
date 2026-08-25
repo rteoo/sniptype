@@ -1,5 +1,5 @@
 """
-Txt Xpander - Brazilian Central Bank API lookup module
+Sniptype - Brazilian Central Bank API lookup module
 """
 
 import json

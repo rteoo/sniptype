@@ -42,7 +42,7 @@ project on 2026-08-13, or pulled from the GitHub API on the same date.
 catalog metadata and was not independently confirmed. **[inference]** is
 reasoning, not measurement.
 
-**No application was installed, built, or benchmarked on Txt Xpander's target
+**No application was installed, built, or benchmarked on Sniptype's target
 machines.** The model comparison now includes reproducible measurements from
 the model authors and portable runtimes, but those results come from other
 hardware. Before committing to an engine, run the same models on the supported
@@ -255,7 +255,7 @@ their own rankings. Treat as marketing. All findings here come from the repos.
 Forking imports an entire application to obtain one subsystem, and commits us to
 its upgrade path indefinitely. Concretely:
 
-- **Handy** is Rust + Tauri. Consuming it means either rewriting Txt Xpander in
+- **Handy** is Rust + Tauri. Consuming it means either rewriting Sniptype in
   Rust or shipping and maintaining a Rust sidecar process.
 - **OpenWhispr** is Electron + JavaScript, and open-core.
 - **Buzz** is the only stack match (Python, MIT) and is the wrong product
@@ -266,14 +266,14 @@ still needs its own recording lifecycle, microphone permission flow, target-app
 tracking, transcript routing, model delivery, and failure handling; none of
 those should be imported by forking a second desktop application.
 
-## What Txt Xpander already provides
+## What Sniptype already provides
 
 Several useful integration seams are already built and shipping. **[verified]**
 They reduce the work, but they are not a push-to-talk implementation.
 
 | Dictation requirement | Existing implementation |
 |---|---|
-| Global keyboard event source | `pynput` listener, `txt_xpander.pyw:3593`; currently `on_press` only, with no chord/release lifecycle |
+| Global keyboard event source | `pynput` listener, `sniptype.pyw:3593`; currently `on_press` only, with no chord/release lifecycle |
 | Inject text into focused app | `clipboard_support.py` paste path, incl. rich text |
 | Capture / restore frontmost app | macOS dialog path only: `platform_support.capture_frontmost_application()` |
 | macOS keyboard/paste permissions | `macos_permissions.py` covers Input Monitoring and Accessibility, not microphone access |
@@ -282,7 +282,7 @@ They reduce the work, but they are not a push-to-talk implementation.
 Missing: configurable push-to-talk input, press/release state, audio capture,
 VAD, inference, microphone permissions, target tracking, transcript routing,
 model delivery, cancellation, and packaged native-library verification. This is
-still a bounded feature inside Txt Xpander, not a reason to fork another app.
+still a bounded feature inside Sniptype, not a reason to fork another app.
 
 ## Proposed shape
 
@@ -309,7 +309,7 @@ sign-off per the global dependency policy.
 
 OpenWhispr uses sherpa-onnx for Parakeet. Handy has moved across native runtimes
 and remains a useful product and download-security reference, not proof that
-any particular Python/native packaging path works for Txt Xpander.
+any particular Python/native packaging path works for Sniptype.
 
 ### Recording lifecycle
 
@@ -396,7 +396,7 @@ voice-result dispatcher with three explicit modes:
    transcript, require an exact match to an effective direct or mapping trigger,
    and invoke expansion without erasing characters. No fuzzy trigger execution
    in the first version.
-3. **Form input** — when the captured target is a Txt Xpander form field, marshal
+3. **Form input** — when the captured target is a Sniptype form field, marshal
    the value through `GuiThread` and update that widget directly. Never synthesize
    a global paste into the app's own Tk window.
 
@@ -444,7 +444,7 @@ genuinely painful part. Take nothing else from it.
 
 ### Licensing constraint
 
-Txt Xpander is closed-source. Handy, Buzz, and OpenWhispr are MIT; code copied
+Sniptype is MIT-licensed. Handy, Buzz, and OpenWhispr are MIT; code copied
 from them must retain the applicable license and attribution and record the
 source commit. **FluidVoice is GPL-3.0** and VoiceInk's license is non-standard
 — do not copy from either. **[verified]**
@@ -483,7 +483,7 @@ in a separate app running alongside.
 
 Unrelated to voice, found while measuring bundle weight. **[verified]**
 
-`dist/Txt Xpander/_internal` contains:
+`dist/Sniptype/_internal` contains:
 
 ```
 torch          365 MB
@@ -497,7 +497,7 @@ torchvision     12 MB
 No source file imports `torch`, `cv2`, `transformers`, `onnxruntime`, `scipy`,
 `numpy`, or `pandas` directly — `pandas`/`numpy` arrive legitimately via
 `yfinance`, but `torch`, `cv2`, `transformers`, and `torchvision` do not appear
-to be reachable at all. `Txt Xpander.spec` has `excludes=[]`. PyInstaller is
+to be reachable at all. `Sniptype.spec` has `excludes=[]`. PyInstaller is
 collecting the modules through some reachable import or analysis hook in the
 current host environment; which edge causes each collection is not yet
 established. **[inference]** on the cause; the import absence and sizes are
@@ -507,7 +507,7 @@ Effect: roughly 520 MB of apparent dead weight in the 215 MB installer / 821 MB
 unpacked bundle, present since at least 3.0.0. The estimate that the installer
 could approach 40 MB is **[inference]** until a clean build proves it.
 
-Fix this independently of voice, but do not hand-edit `Txt Xpander.spec`: both
+Fix this independently of voice, but do not hand-edit `Sniptype.spec`: both
 release scripts generate their specs. Rebuild from an isolated environment
 containing only the declared runtime dependencies plus PyInstaller, inspect the
 analysis graph and warnings, and identify the importing module or hook for each
@@ -518,7 +518,7 @@ and startup before accepting the size reduction.
 
 ## Open questions
 
-1. Does Handy-alongside-Txt-Xpander already solve the need? Untested; cheapest
+1. Does Handy alongside Sniptype already solve the need? Untested; cheapest
    possible outcome. **Test before writing code.**
 2. Does `transcribe.cpp` package and behave reliably on Windows x64 and macOS
    ARM64 through its Python binding, including cancellation and Unicode paths?

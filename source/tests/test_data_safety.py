@@ -11,31 +11,31 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import backup_support as bs
 import runtime_support
-from app_module import txt_xpander as tx  # .pyw is not importable off Windows
+from app_module import sniptype as tx  # .pyw is not importable off Windows
 
 
 def make_expander(base_dir, snippets_content=None, resource_dir=None):
-    """Construct a TextExpander rooted at base_dir without touching real data.
+    """Construct a Sniptype rooted at base_dir without touching real data.
 
-    Pins the data dir to base_dir via TXT_XPANDER_HOME so nothing is written to
-    the real ~/.txt_xpander during tests. ``resource_dir`` separates the bundled
+    Pins the data dir to base_dir via SNIPTYPE_HOME so nothing is written to
+    the real ~/.sniptype during tests. ``resource_dir`` separates the bundled
     resources from the data dir, which matters when a test writes a user override
     of a bundled file.
     """
     if snippets_content is not None:
         with open(os.path.join(base_dir, "snippets.json"), "w", encoding="utf-8") as handle:
             handle.write(snippets_content)
-    previous_home = os.environ.get("TXT_XPANDER_HOME")
-    os.environ["TXT_XPANDER_HOME"] = base_dir
+    previous_home = os.environ.get("SNIPTYPE_HOME")
+    os.environ["SNIPTYPE_HOME"] = base_dir
     try:
         with mock.patch.object(tx, "get_runtime_base_dir", return_value=base_dir), \
                 mock.patch.object(tx, "get_runtime_resource_dir", return_value=resource_dir or base_dir):
-            return tx.TextExpander()
+            return tx.Sniptype()
     finally:
         if previous_home is None:
-            os.environ.pop("TXT_XPANDER_HOME", None)
+            os.environ.pop("SNIPTYPE_HOME", None)
         else:
-            os.environ["TXT_XPANDER_HOME"] = previous_home
+            os.environ["SNIPTYPE_HOME"] = previous_home
 
 
 class SaveSnippetsTests(unittest.TestCase):
@@ -90,7 +90,7 @@ class ShadowedStaticSnippetTests(unittest.TestCase):
             {"xhi": {"provider": "datetime", "category": "datetime", "format": "%Y-%m-%d"}}
         )
         self.app = make_expander(
-            self.tmp, '{"xhi": "meu texto importante", "xname": "Example User"}', resource_dir=resources
+            self.tmp, '{"xhi": "meu texto importante", "xname": "Alex"}', resource_dir=resources
         )
 
     def _on_disk(self):
@@ -104,7 +104,7 @@ class ShadowedStaticSnippetTests(unittest.TestCase):
     def test_save_of_the_merged_map_keeps_the_shadowed_static(self):
         self.assertTrue(self.app.save_snippets(self.app.snippets))
         self.assertEqual(
-            {"xhi": "meu texto importante", "xname": "Example User"}, self._on_disk()
+            {"xhi": "meu texto importante", "xname": "Alex"}, self._on_disk()
         )
 
     def test_reload_then_save_keeps_the_shadowed_static(self):
@@ -133,7 +133,7 @@ class StaticEditorGuardTests(unittest.TestCase):
             {"xhi": {"provider": "datetime", "category": "datetime", "format": "%Y-%m-%d"}}
         )
         self.app = make_expander(
-            self.tmp, '{"xhi": "meu texto importante", "xname": "Example User"}', resource_dir=resources
+            self.tmp, '{"xhi": "meu texto importante", "xname": "Alex"}', resource_dir=resources
         )
 
     def _on_disk(self):
@@ -580,23 +580,23 @@ class MigrationTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
         self.base_dir = os.path.join(self.tmp, "app")   # legacy exe-side location
-        self.data_dir = os.path.join(self.tmp, "home")  # ~/.txt_xpander stand-in
+        self.data_dir = os.path.join(self.tmp, "home")  # ~/.sniptype stand-in
         os.makedirs(self.base_dir)
         with open(os.path.join(self.base_dir, "snippets.json"), "w", encoding="utf-8") as handle:
             handle.write('{"xhi": "legacy value"}')
-        self._saved_home = os.environ.get("TXT_XPANDER_HOME")
-        os.environ["TXT_XPANDER_HOME"] = self.data_dir
+        self._saved_home = os.environ.get("SNIPTYPE_HOME")
+        os.environ["SNIPTYPE_HOME"] = self.data_dir
 
     def tearDown(self):
         if self._saved_home is None:
-            os.environ.pop("TXT_XPANDER_HOME", None)
+            os.environ.pop("SNIPTYPE_HOME", None)
         else:
-            os.environ["TXT_XPANDER_HOME"] = self._saved_home
+            os.environ["SNIPTYPE_HOME"] = self._saved_home
 
     def _construct(self):
         with mock.patch.object(tx, "get_runtime_base_dir", return_value=self.base_dir), \
                 mock.patch.object(tx, "get_runtime_resource_dir", return_value=self.base_dir):
-            return tx.TextExpander()
+            return tx.Sniptype()
 
     def test_first_launch_migrates_legacy_into_data_dir(self):
         app = self._construct()

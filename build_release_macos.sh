@@ -1,11 +1,11 @@
 #!/bin/bash
-# Build the macOS release: a menu-bar-only "Txt Xpander.app" bundle.
+# Build the macOS release: a menu-bar-only "Sniptype.app" bundle.
 #
 # Mirrors build_release.bat where it applies (stage into a temp dist first, swap
 # the shipping bundle only on success, keep the previous one until the swap is
 # done) and drops the Windows-only steps: there is no Startup shortcut here (the
 # tray toggle writes a LaunchAgent) and no dist-side snippets.json to preserve
-# (user data lives in ~/.txt_xpander).
+# (user data lives in ~/.sniptype).
 #
 # Usage:
 #   ./build_release_macos.sh
@@ -18,29 +18,29 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-APP_NAME="Txt Xpander"
-BUNDLE_ID="com.txt-xpander"
+APP_NAME="Sniptype"
+BUNDLE_ID="com.sniptype"
 # A stable signing identity is what lets the bundle keep its TCC grants across
 # rebuilds: ad-hoc signing has no identity, so macOS pins Input Monitoring and
 # Accessibility to the binary's cdhash and every build silently revokes them.
 # Any code-signing identity works; this is the name the README's self-signed
 # certificate uses. Ad-hoc stays the fallback so a fresh checkout still builds.
-DEFAULT_SIGN_IDENTITY="Txt Xpander Dev"
+DEFAULT_SIGN_IDENTITY="Sniptype Dev"
 DIST_ROOT="$REPO_DIR/dist"
 TARGET_APP="$DIST_ROOT/$APP_NAME.app"
 PREVIOUS_APP="$DIST_ROOT/$APP_NAME.app.previous"
 PYTHON="${PYTHON:-python3}"
 APP_VERSION="$(sed -n '/^Version:[[:space:]]*/ { s/^Version:[[:space:]]*//; p; q; }' \
-    "$REPO_DIR/source/txt_xpander.pyw")"
+    "$REPO_DIR/source/sniptype.pyw")"
 RELEASE_CHANNEL="$(sed -n '/^Channel:[[:space:]]*/ { s/^Channel:[[:space:]]*//; p; q; }' \
-    "$REPO_DIR/source/txt_xpander.pyw")"
+    "$REPO_DIR/source/sniptype.pyw")"
 
 if [[ ! "$APP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    echo "Invalid or missing app version in source/txt_xpander.pyw: '$APP_VERSION'" >&2
+    echo "Invalid or missing app version in source/sniptype.pyw: '$APP_VERSION'" >&2
     exit 1
 fi
 if [[ "$RELEASE_CHANNEL" != "stable" && "$RELEASE_CHANNEL" != "beta" ]]; then
-    echo "Invalid or missing release channel in source/txt_xpander.pyw: '$RELEASE_CHANNEL'" >&2
+    echo "Invalid or missing release channel in source/sniptype.pyw: '$RELEASE_CHANNEL'" >&2
     exit 1
 fi
 
@@ -61,7 +61,7 @@ if pgrep -f "$APP_NAME.app/Contents/MacOS/" >/dev/null 2>&1; then
     exit 1
 fi
 
-WORK_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/txt_xpander_build.XXXXXX")"
+WORK_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/sniptype_build.XXXXXX")"
 trap 'rm -rf "$WORK_ROOT"' EXIT
 
 STAGING_ROOT="$WORK_ROOT/dist"
@@ -72,7 +72,7 @@ STAGED_APP="$STAGING_ROOT/$APP_NAME.app"
 # of constructing a partial iconset: current iconutil rejects iconsets without
 # the 512px slots, and upscaling the source would only manufacture fake detail.
 ICNS="$WORK_ROOT/$APP_NAME.icns"
-sips -s format icns "$REPO_DIR/source/txt_xpander.ico" --out "$ICNS" >/dev/null
+sips -s format icns "$REPO_DIR/source/sniptype.ico" --out "$ICNS" >/dev/null
 
 # --- Package --------------------------------------------------------------
 echo "Packaging $APP_NAME $APP_VERSION ($RELEASE_CHANNEL) ..."
@@ -92,7 +92,7 @@ VOICE_COLLECT_ARGS=(--collect-all sounddevice --collect-all transcribe_cpp --col
     --osx-bundle-identifier "$BUNDLE_ID" \
     --add-data "$REPO_DIR/source/snippets.json:." \
     --add-data "$REPO_DIR/source/dynamic_snippets.json:." \
-    --add-data "$REPO_DIR/source/txt_xpander.ico:." \
+    --add-data "$REPO_DIR/source/sniptype.ico:." \
     --hidden-import pystray._darwin \
     "${VOICE_COLLECT_ARGS[@]}" \
     --exclude-module torch \
@@ -102,7 +102,7 @@ VOICE_COLLECT_ARGS=(--collect-all sounddevice --collect-all transcribe_cpp --col
     --exclude-module transformers \
     --exclude-module onnxruntime \
     --exclude-module scipy \
-    "$REPO_DIR/source/txt_xpander.pyw"
+    "$REPO_DIR/source/sniptype.pyw"
 
 if [[ ! -d "$STAGED_APP" ]]; then
     echo "Packaging failed: no app bundle was produced. The existing dist was left unchanged." >&2
@@ -131,13 +131,13 @@ plutil -replace CFBundleVersion -string "$APP_VERSION" \
     "$STAGED_APP/Contents/Info.plist" 2>/dev/null \
     || plutil -insert CFBundleVersion -string "$APP_VERSION" \
         "$STAGED_APP/Contents/Info.plist"
-plutil -replace TxtXpanderReleaseChannel -string "$RELEASE_CHANNEL" \
+plutil -replace SniptypeReleaseChannel -string "$RELEASE_CHANNEL" \
     "$STAGED_APP/Contents/Info.plist" 2>/dev/null \
-    || plutil -insert TxtXpanderReleaseChannel -string "$RELEASE_CHANNEL" \
+    || plutil -insert SniptypeReleaseChannel -string "$RELEASE_CHANNEL" \
         "$STAGED_APP/Contents/Info.plist"
-plutil -replace NSMicrophoneUsageDescription -string "O Txt Xpander usa o microfone só para o ditado local, e só quando a entrada por voz está ligada." \
+plutil -replace NSMicrophoneUsageDescription -string "O Sniptype usa o microfone só para o ditado local, e só quando a entrada por voz está ligada." \
     "$STAGED_APP/Contents/Info.plist" 2>/dev/null \
-    || plutil -insert NSMicrophoneUsageDescription -string "O Txt Xpander usa o microfone só para o ditado local, e só quando a entrada por voz está ligada." \
+    || plutil -insert NSMicrophoneUsageDescription -string "O Sniptype usa o microfone só para o ditado local, e só quando a entrada por voz está ligada." \
         "$STAGED_APP/Contents/Info.plist"
 
 SIGN_IDENTITY="${CODESIGN_IDENTITY:-}"
@@ -201,7 +201,7 @@ rm -rf "$PREVIOUS_APP"
 
 echo
 echo "Packaging complete: $TARGET_APP"
-echo "User data lives in ~/.txt_xpander (override with TXT_XPANDER_HOME)."
+echo "User data lives in ~/.sniptype (override with SNIPTYPE_HOME)."
 echo
 if [[ "$SIGN_IDENTITY" == "-" ]]; then
     echo "The bundle is ad-hoc signed. If Gatekeeper blocks its first launch,"

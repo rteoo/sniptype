@@ -27,7 +27,7 @@ This refactor should not change how the app behaves for the user today. All exis
 
 ### 2. Split the monolith without changing behavior
 
-- Keep `txt_xpander.pyw` as the executable entry point only.
+- Keep `sniptype.pyw` as the executable entry point only.
 - Extract the current responsibilities into modules:
   - app bootstrap and runtime wiring
   - snippet repository and validation

@@ -1,6 +1,6 @@
 # macOS tray + Tk threading model
 
-Investigation spike for [issue #24](https://github.com/rteoo/txt_xpander/issues/24):
+Investigation spike for [issue #24](https://github.com/rteoo/sniptype/issues/24):
 resolve how the pystray tray loop and the Tcl/Tk root coexist on macOS, where
 both frameworks demand the main thread.
 
@@ -15,8 +15,8 @@ both frameworks demand the main thread.
 
 On Windows the process runs two event loops on two threads and it works:
 
-- `main()` → `TextExpander.run()` → `pystray.Icon.run()` **blocks the main
-  thread** with the win32 message loop (`txt_xpander.pyw`, end of `run()`).
+- `main()` → `Sniptype.run()` → `pystray.Icon.run()` **blocks the main
+  thread** with the win32 message loop (`sniptype.pyw`, end of `run()`).
 - The process's only `tk.Tk()` root lives on a **dedicated worker thread**
   (`gui_thread.py`, class `GuiThread`). Workers marshal onto it with
   `call`/`submit`; a `root.after(40ms, …)` pump drains the queue. Tk on Windows
@@ -147,7 +147,7 @@ Option 1, behind three seams — no `sys.platform` checks were scattered:
   spawning a thread — silently spawning one is the exact configuration that
   aborts the process on macOS, so it fails loudly instead.
 
-`TextExpander.run()` branches once, at the end:
+`Sniptype.run()` branches once, at the end:
 
 ```python
 if platform_support.tk_runs_on_main_thread():
@@ -182,7 +182,7 @@ pyobjc-framework-Cocoa 12.2.1. Three prototypes, escalating:
    (`PETR4`) after blocking ~520 ms while the pump ran the dialog; a raising
    `call` re-raised `boom` in the caller; `submit` ran on the main thread;
    tray visible with a menu; `stop()` from a worker ended the loop; exit 0.
-3. **The real app.** `TextExpander.run()` with `TXT_XPANDER_HOME` pointed at a
+3. **The real app.** `Sniptype.run()` with `SNIPTYPE_HOME` pointed at a
    scratch dir: tray icon visible with its menu, "Gerenciar Snippets" opened
    the manager `Toplevel` through the real tray action, an expansion-style
    dialog was shown and answered through `GuiThread.call`, and
@@ -234,7 +234,7 @@ the tray surface, and it does not dissolve the one-`NSApplication` collision.
 
 - `source/gui_thread.py` — the pump + marshaling contract to preserve.
 - `source/platform_support.py` — where the OS seam belongs.
-- `source/txt_xpander.pyw` — `TextExpander.run()` (tray + listener startup) and
+- `source/sniptype.pyw` — `Sniptype.run()` (tray + listener startup) and
   `main()`.
 - pystray 0.19.5 `Icon.run_detached` docstring — the `darwin_nsapplication`
   integration contract this design rests on.

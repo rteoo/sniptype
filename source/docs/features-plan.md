@@ -15,7 +15,7 @@ Four additions to the existing architecture:
 
 ## Feature 1 — Tray Double-Click
 
-**File:** `txt_xpander.pyw` (menu setup, ~line 1755)
+**File:** `sniptype.pyw` (menu setup, ~line 1755)
 
 `pystray` supports `default=True` on a `MenuItem`, which becomes the action triggered by
 double-clicking the tray icon on Windows.
@@ -107,17 +107,17 @@ Callable snippets (dynamic/slow) are **not** resolved as snippet refs — too co
 
 ```python
 snippets = {
-    "xadds": "Rua Pais Leme, 215",
+    "xadds": "Rua Exemplo, 100",
     "xaddc": "%%xadds%%, São Paulo - SP",
 }
 
 # resolve_inline("%%xadds%%, São Paulo - SP", snippets, ...)
-# → "Rua Pais Leme, 215, São Paulo - SP"
+# → "Rua Exemplo, 100, Cidade Exemplo - SP"
 ```
 
 ---
 
-### Changes to `txt_xpander.pyw`
+### Changes to `sniptype.pyw`
 
 #### A. Import
 
@@ -341,7 +341,7 @@ Cover:
 
 | File | Change |
 |------|--------|
-| `txt_xpander.pyw` | `MenuItem default=True`; variable resolution in `on_press`, `expand_snippet`, `run_slow_snippet`; new `_show_form_dialog`; 3 toolbar buttons |
+| `sniptype.pyw` | `MenuItem default=True`; variable resolution in `on_press`, `expand_snippet`, `run_slow_snippet`; new `_show_form_dialog`; 3 toolbar buttons |
 | `rich_text_support.py` | New `rebuild_rich_text(original, new_text)` helper |
 | `source/variable_support.py` | **New file** — all variable parsing and resolution logic |
 | `tests/test_variable_support.py` | **New file** — unit tests |

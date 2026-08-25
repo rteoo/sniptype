@@ -1,6 +1,6 @@
 # Local voice model comparison
 
-Status: research note, 2026-08-13. Scope: Txt Xpander push-to-talk and optional
+Status: research note, 2026-08-13. Scope: Sniptype push-to-talk and optional
 streaming on Windows x64 (Core i7-13620H, 32 GB RAM) and macOS ARM64. No model
 was installed or benchmarked on the target machines.
 
@@ -35,7 +35,7 @@ apples-to-apples; the dataset/runtime is named in each cell.
 | **Nemotron 3.5 ASR Streaming 0.6B Q8_0 / INT8** | NVIDIA at 560 ms, language supplied: **5.65%** FLEURS; auto: 5.57%. A separate Core ML conversion at 2.24 s reports **6.14%** pt-BR. | NVIDIA at 560 ms, supplied: **7.99%**; auto: 8.80%. At the 1.12 s offline tier, transcribe.cpp Q8 scores **7.88%** versus reference 7.99% on FLEURS English. | **716 MB Q8 GGUF**; sherpa INT8 components total about **650 MB**. | M4 Max CPU: **28–30x realtime**. Ryzen 7 4750U CPU: **7–8x**. | Exact RSS unpublished. Stateful streaming uses bounded caches rather than a growing LLM KV cache. | **Best for live partials; weaker dictation accuracy.** |
 | **Qwen3-ASR-1.7B Q8_0** | Qwen publishes no per-language Portuguese result. It scores **4.90% FLEURS aggregate**, **8.55% MLS**, and **9.18% CommonVoice** across multilingual sets that include Portuguese. | Qwen FLEURS English: **3.35%**. transcribe.cpp LibriSpeech test-clean Q8: **1.61%**, versus BF16 1.62%. | **2.08 GB Q8 GGUF**; **3.89 GB BF16 GGUF**; official repository about 4.7 GB. | M4 Max CPU: **8x realtime**. Ryzen 7 4750U CPU: **1.9–2.1x**. This is about 3.5–4x slower than Parakeet/Nemotron in the same runtime. | Q8 transcribe.cpp RSS is unpublished. A different BF16 C runtime measured **6.57 GiB peak RSS for 10 s** and about 6.7 GiB in segmented long-audio mode on M3 Max. | **Highest likely accuracy, with the largest CPU/RAM cost.** |
 
-## Interpretation for Txt Xpander
+## Interpretation for Sniptype
 
 - On the i7-13620H/32 GB Windows machine, all four should fit. Qwen's latency,
   thermals, and sustained CPU use are the practical risks, not capacity.

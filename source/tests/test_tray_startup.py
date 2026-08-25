@@ -21,12 +21,12 @@ from unittest import mock
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from app_module import txt_xpander as tx  # .pyw is not importable off Windows
+from app_module import sniptype as tx  # .pyw is not importable off Windows
 
 
 def make_startup_app():
-    """A TextExpander with only what ``run()`` touches, and nothing real behind it."""
-    app = tx.TextExpander.__new__(tx.TextExpander)
+    """A Sniptype with only what ``run()`` touches, and nothing real behind it."""
+    app = tx.Sniptype.__new__(tx.Sniptype)
     app.logger = mock.Mock()
     app.gui = mock.Mock()
     app.task_runner = mock.Mock()
@@ -91,6 +91,66 @@ class RunStartupTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, 0)
         probe.assert_called_once_with()
         acquire.assert_not_called()
+
+
+class StartupAndSingleInstanceCompatibilityTests(unittest.TestCase):
+    class Kernel32:
+        def __init__(self, errors):
+            self.errors = iter(errors)
+            self.last_error = 0
+            self.created = []
+            self.closed = []
+
+        def CreateMutexW(self, _security, _owner, name):
+            self.created.append(name)
+            handle, self.last_error = next(self.errors)
+            return handle
+
+        def GetLastError(self):
+            return self.last_error
+
+        def CloseHandle(self, handle):
+            self.closed.append(handle)
+
+    def setUp(self):
+        tx.APP_MUTEX_HANDLES = []
+
+    def _run(self, main_thread, options=None):
+        return RunStartupTests._run(self, main_thread, options)
+
+    def _acquire(self, errors):
+        kernel32 = self.Kernel32(errors)
+        windll = types.SimpleNamespace(kernel32=kernel32)
+        with mock.patch.object(tx.ctypes, "windll", windll):
+            acquired = tx.acquire_single_instance_mutex()
+        return acquired, kernel32
+
+    def test_holds_both_names_so_an_old_build_cannot_start_later(self):
+        acquired, kernel32 = self._acquire([(101, 0), (102, 0)])
+
+        self.assertTrue(acquired)
+        self.assertEqual(
+            kernel32.created,
+            [tx.LEGACY_APP_MUTEX_NAME, tx.APP_MUTEX_NAME],
+        )
+        self.assertEqual(tx.APP_MUTEX_HANDLES, [101, 102])
+        self.assertEqual(kernel32.closed, [])
+
+    def test_refuses_startup_when_the_legacy_mutex_already_exists(self):
+        acquired, kernel32 = self._acquire([(101, tx.ERROR_ALREADY_EXISTS)])
+
+        self.assertFalse(acquired)
+        self.assertEqual(kernel32.created, [tx.LEGACY_APP_MUTEX_NAME])
+        self.assertEqual(kernel32.closed, [101])
+
+    def test_closes_legacy_handle_when_new_mutex_already_exists(self):
+        acquired, kernel32 = self._acquire(
+            [(101, 0), (102, tx.ERROR_ALREADY_EXISTS)]
+        )
+
+        self.assertFalse(acquired)
+        self.assertEqual(kernel32.closed, [102, 101])
+        self.assertEqual(tx.APP_MUTEX_HANDLES, [])
 
     def test_tray_menu_and_tooltip_show_the_running_version(self):
         menu = object()
@@ -237,19 +297,19 @@ class AppVersionFormattingTests(unittest.TestCase):
     def test_stable_version_has_no_channel_suffix(self):
         self.assertEqual(
             tx.format_app_version("3.2.1", "stable"),
-            "Txt Xpander v3.2.1",
+            "Sniptype v3.2.1",
         )
 
     def test_beta_version_has_an_explicit_channel_suffix(self):
         self.assertEqual(
             tx.format_app_version("3.3.0", "beta"),
-            "Txt Xpander v3.3.0 beta",
+            "Sniptype v3.3.0 beta",
         )
 
     def test_running_build_is_the_3_4_0_stable_release(self):
         self.assertEqual(tx.APP_VERSION, "3.4.0")
         self.assertEqual(tx.RELEASE_CHANNEL, "stable")
-        self.assertEqual(tx.APP_DISPLAY_NAME, "Txt Xpander v3.4.0")
+        self.assertEqual(tx.APP_DISPLAY_NAME, "Sniptype v3.4.0")
 
     def test_older_source_without_a_channel_is_treated_as_stable(self):
         with mock.patch.object(tx, "__doc__", "Version: 9.8.7"):
@@ -263,18 +323,18 @@ class AppVersionFormattingTests(unittest.TestCase):
     def test_missing_version_has_a_clear_fallback(self):
         self.assertEqual(
             tx.format_app_version(None),
-            "Txt Xpander — versão desconhecida",
+            "Sniptype — versão desconhecida",
         )
 
     def test_windows_installer_matches_the_stable_metadata(self):
         repo_root = Path(__file__).resolve().parents[2]
-        installer = (repo_root / "installer" / "txt_xpander.iss").read_text(
+        installer = (repo_root / "installer" / "sniptype.iss").read_text(
             encoding="utf-8-sig"
         )
         self.assertIn('#define MyAppVersion "3.4.0"', installer)
         self.assertIn('#define MyAppChannel "stable"', installer)
         self.assertIn(
-            "OutputBaseFilename=TxtXpanderSetup-{#MyInstallerVersion}",
+            "OutputBaseFilename=SniptypeSetup-{#MyInstallerVersion}",
             installer,
         )
         self.assertIn('MyInstallerVersion MyAppVersion + "-beta"', installer)
@@ -292,14 +352,14 @@ class AppVersionFormattingTests(unittest.TestCase):
         tmp_root = Path(__file__).parent / "tmp"
         tmp_root.mkdir(exist_ok=True)
         with tempfile.TemporaryDirectory(dir=tmp_root) as temp_dir:
-            output = Path(temp_dir) / "Txt Xpander.icns"
+            output = Path(temp_dir) / "Sniptype.icns"
             result = subprocess.run(
                 [
                     "sips",
                     "-s",
                     "format",
                     "icns",
-                    str(repo_root / "source" / "txt_xpander.ico"),
+                    str(repo_root / "source" / "sniptype.ico"),
                     "--out",
                     str(output),
                 ],

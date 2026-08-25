@@ -1,7 +1,7 @@
-# Txt Xpander — Audit Report
+# Sniptype — Audit Report
 
 Date: 2026-07-16
-Scope: full source review (`source/*.py`, `txt_xpander.pyw`, `build_release.bat`, `Txt Xpander.spec`, `snippets.json` in source and dist), focused on data safety, performance, UI, and cross-platform portability.
+Scope: full source review (`source/*.py`, `sniptype.pyw`, `build_release.bat`, `Sniptype.spec`, `snippets.json` in source and dist), focused on data safety, performance, UI, and cross-platform portability.
 
 Severity legend: **P0** = data loss / silent failure risk, fix first · **P1** = real user-facing impact · **P2** = quality / maintainability · **P3** = nice to have.
 
@@ -11,17 +11,17 @@ Severity legend: **P0** = data loss / silent failure risk, fix first · **P1** =
 
 ### 1.1 [P0] The live snippets file is unversioned, unbacked, and drifting
 
-The runtime file is `dist/Txt Xpander/snippets.json`. It is gitignored (`dist/`), only synced back into `source/snippets.json` when `build_release.bat` runs, and has **no backup of any kind** between builds. Measured drift as of today:
+The runtime file is `dist/Sniptype/snippets.json`. It is gitignored (`dist/`), only synced back into `source/snippets.json` when `build_release.bat` runs, and has **no backup of any kind** between builds. Measured drift as of today:
 
-- 6 keys exist **only in dist**: `_fasa_codes`, `brewupdt`, `ccupdt`, `psupdt`, `x9gm`, `x@ac`
-- 4 keys exist only in source (stale): `_fict3_codes`, `brewupd`, `psupdate`, `x.ac`
-- 6 keys have **different values**: `_openclaw_codes`, `saptu`, `_strateo_codes`, `xgm`, `_prompt_codes`, `_acrn_codes`
+- 6 keys exist **only in dist**, including private mapping containers and command aliases.
+- 4 keys exist only in source (stale), including another private mapping container.
+- 6 keys have **different values**, including private service/client mapping containers.
 
 A disk failure, a bad OneDrive sync, or an accidental delete in the GUI loses everything created since the last build. This confirms the concern that motivated this audit.
 
 ### 1.2 [P0] Corrupted JSON on load is overwritten with defaults
 
-`load_snippets()` ([txt_xpander.pyw:208](../txt_xpander.pyw)) does this on a parse error:
+`load_snippets()` ([sniptype.pyw:208](../sniptype.pyw)) does this on a parse error:
 
 ```python
 except Exception as e:
@@ -59,7 +59,7 @@ There is no way from the UI to export the library, import one, or restore a prev
 
 ### 2.1 [P1] Network snippets run synchronously on the keyboard listener thread
 
-Only the stock/WhatsApp triggers are in `slow_snippets`. All BCB triggers (`xdolar`, `xselic`, `xipcam`, `xipca12`, `xcdi`, `xptax`, `xeconomia`) are plain callables, so `expand_snippet()` executes them **inside `on_press()`** ([txt_xpander.pyw:664-668](../txt_xpander.pyw)). On a cache miss:
+Only the stock/WhatsApp triggers are in `slow_snippets`. All BCB triggers (`xdolar`, `xselic`, `xipcam`, `xipca12`, `xcdi`, `xptax`, `xeconomia`) are plain callables, so `expand_snippet()` executes them **inside `on_press()`** ([sniptype.pyw:664-668](../sniptype.pyw)). On a cache miss:
 
 - each SGS fetch has a 3 s timeout;
 - `xeconomia` performs **5 sequential fetches** — up to ~15 s worst case;
@@ -80,7 +80,7 @@ Initial load and "Recarregar Snippets" call `refresh_runtime_indexes()` with `in
 
 ### 2.5 [P2] Per-keystroke work that could be precomputed
 
-- `has_form_variables(extract_plain_text(raw_value))` runs a regex scan on the snippet body on every direct-trigger hit ([txt_xpander.pyw:951](../txt_xpander.pyw)). The trigger index already exists — precompute a `needs_slow` flag per trigger at compile time.
+- `has_form_variables(extract_plain_text(raw_value))` runs a regex scan on the snippet body on every direct-trigger hit ([sniptype.pyw:951](../sniptype.pyw)). The trigger index already exists — precompute a `needs_slow` flag per trigger at compile time.
 - `find_dynamic_trigger` does a substring scan per prefix per keystroke. Fine at the current scale (<10 prefixes); becomes a candidate for last-char bucketing only if prefixes grow.
 
 ### 2.6 [P2] Backspace erase loop blocks ~10–20 ms per character
@@ -114,7 +114,7 @@ Resolved by `gui_thread.GuiThread`: one hidden root on a dedicated GUI thread, e
 - `self._manager_lock` / `self._manager_open` are set but never actually used to gate anything (`manage_snippets_gui` relies on `FindWindowW` instead).
 - `bcb_consultor.py` lines 194–223 are a stale "how to integrate" comment block from when the module was pasted in.
 - `markdown>=3.4.0` in requirements.txt is not imported anywhere.
-- ~40 blank lines at the tail of `txt_xpander.pyw`.
+- ~40 blank lines at the tail of `sniptype.pyw`.
 
 ### 3.5 [P2] GUI allows shadowed/invalid triggers
 
@@ -179,7 +179,7 @@ Current hard Windows couplings, in order of migration effort:
 
 | Area | Where | Portable replacement |
 |---|---|---|
-| Data location | beside the exe (inside OneDrive) | `~/.txt_xpander/` (works verbatim on all three OSes), `TXT_XPANDER_HOME` env override |
+| Data location | beside the exe (inside OneDrive) | `~/.sniptype/` (works verbatim on all three OSes), `SNIPTYPE_HOME` env override |
 | Clipboard | ctypes user32/kernel32 (`WindowsClipboard`) | platform adapter; pynput stays cross-platform |
 | Single instance | `CreateMutexW` | lockfile with PID in the data dir |
 | Ticker input dialog | `mshta` VBScript | Tk dialog on the shared GUI thread (also removes an odd dependency on mshta) |
@@ -202,7 +202,7 @@ Measured against the global agent guidelines (fail loudly, no dead code, English
 
 ### 7.2 [P2] Portuguese comments and docstrings
 
-The guideline is English for code and comments (user-facing strings exempt). `txt_xpander.pyw`, `bcb_consultor.py`, and `yf_stocks.py` are mostly Portuguese; the newer support modules are English — the codebase drifted toward compliance but was never brought fully in line.
+The guideline is English for code and comments (user-facing strings exempt). `sniptype.pyw`, `bcb_consultor.py`, and `yf_stocks.py` are mostly Portuguese; the newer support modules are English — the codebase drifted toward compliance but was never brought fully in line.
 
 ### 7.3 [P2] "Changed this" comments
 
@@ -214,7 +214,7 @@ Several deliberate simplifications carry no marker naming their limit and upgrad
 
 ### 7.5 [P2] Version metadata drift
 
-`txt_xpander.pyw` header says `Versão: 2.6`; CHANGELOG and README describe 2.7.
+`sniptype.pyw` header says `Versão: 2.6`; CHANGELOG and README describe 2.7.
 
 ### 7.6 Already covered elsewhere
 

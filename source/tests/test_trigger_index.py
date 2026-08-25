@@ -8,13 +8,13 @@ class TriggerIndexTests(unittest.TestCase):
         self.snippets = {
             "abc": "first",
             "xbc": "second",
-            "xname": "Example User",
+            "xname": "Alex",
             "_cpf_numbers": {
                 "fulano": "123.456.789-00",
             },
-            "_openclaw_codes": {
+            "_service_codes": {
                 "__prefix__": "clw",
-                "gtw": "openclaw gateway restart",
+                "gtw": "service gateway restart",
             },
         }
         self.slow_triggers = {"xname"}
@@ -44,7 +44,7 @@ class TriggerIndexTests(unittest.TestCase):
         trigger, value = find_dynamic_trigger(self.snippets, "abcclwgtw", self.index)
 
         self.assertEqual("clwgtw", trigger)
-        self.assertEqual("openclaw gateway restart", value)
+        self.assertEqual("service gateway restart", value)
 
     def test_find_dynamic_trigger_returns_none_for_non_match(self):
         trigger, value = find_dynamic_trigger(self.snippets, "clwmissing", self.index)

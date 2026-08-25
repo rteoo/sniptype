@@ -1,15 +1,15 @@
 @echo off
 setlocal EnableExtensions
 REM Compile the Windows installer (Setup.exe) from the packaged dist folder.
-REM Prerequisite: run build_release.bat first so dist\Txt Xpander exists.
+REM Prerequisite: run build_release.bat first so dist\Sniptype exists.
 
 set "REPO_DIR=%~dp0"
 if "%REPO_DIR:~-1%"=="\" set "REPO_DIR=%REPO_DIR:~0,-1%"
-set "ISS=%REPO_DIR%\installer\txt_xpander.iss"
-set "DIST=%REPO_DIR%\dist\Txt Xpander"
+set "ISS=%REPO_DIR%\installer\sniptype.iss"
+set "DIST=%REPO_DIR%\dist\Sniptype"
 
-if not exist "%DIST%\Txt Xpander.exe" (
-    echo Packaged app not found: "%DIST%\Txt Xpander.exe"
+if not exist "%DIST%\Sniptype.exe" (
+    echo Packaged app not found: "%DIST%\Sniptype.exe"
     echo Run build_release.bat first, then re-run this script.
     pause
     exit /b 1

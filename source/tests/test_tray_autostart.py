@@ -15,16 +15,16 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import platform_support as ps
-from app_module import txt_xpander as tx  # .pyw is not importable off Windows
+from app_module import sniptype as tx  # .pyw is not importable off Windows
 
 
 def make_tray_app():
-    """A TextExpander with only what the autostart path touches.
+    """A Sniptype with only what the autostart path touches.
 
     Bypasses __init__: constructing the real app loads snippets, starts the GUI
     thread and installs a keyboard listener, none of which this policy involves.
     """
-    app = tx.TextExpander.__new__(tx.TextExpander)
+    app = tx.Sniptype.__new__(tx.Sniptype)
     app._autostart_lock = threading.Lock()
     app._autostart_state = tx.AUTOSTART_ABSENT
     app.logger = mock.Mock()
@@ -71,7 +71,7 @@ class ResolveStateTests(unittest.TestCase):
     def test_dead_target_is_repaired(self):
         """Case 1/3: a deleted dist folder or a removed interpreter."""
         gone = [os.path.join(os.path.dirname(__file__), "no-such-dir", "app.exe")]
-        install = self._resolve(gone, install=lambda *a, **k: r"C:\Startup\Txt Xpander.lnk")
+        install = self._resolve(gone, install=lambda *a, **k: r"C:\Startup\Sniptype.lnk")
         self.assertEqual(self.app._autostart_state, tx.AUTOSTART_CURRENT)
         install.assert_called_once()
 
@@ -95,8 +95,8 @@ class ResolveStateTests(unittest.TestCase):
         """Case 1 from the source side: the checkout is gone but its
         interpreter survives — the entry is just as dead at login."""
         gone = [sys.executable,
-                os.path.join(os.path.dirname(__file__), "no-such-dir", "txt_xpander.pyw")]
-        install = self._resolve(gone, install=lambda *a, **k: r"C:\Startup\Txt Xpander.lnk")
+                os.path.join(os.path.dirname(__file__), "no-such-dir", "sniptype.pyw")]
+        install = self._resolve(gone, install=lambda *a, **k: r"C:\Startup\Sniptype.lnk")
         self.assertEqual(self.app._autostart_state, tx.AUTOSTART_CURRENT)
         install.assert_called_once()
 

@@ -6,7 +6,7 @@ so adding a macOS/Linux backend is additive and Windows behavior stays unchanged
 
 Pure helpers here are unit-tested; the clipboard backends live in
 ``clipboard_support`` (selected from :func:`current_os`) and the single-instance
-mutex remains in ``txt_xpander`` (see README "Cross-platform status").
+mutex remains in ``sniptype`` (see README "Cross-platform status").
 """
 
 import ctypes
@@ -19,7 +19,7 @@ import sys
 import threading
 
 
-APP_NAME = "Txt Xpander"
+APP_NAME = "Sniptype"
 APPLICATION_ACTIVATION_TIMEOUT_SECONDS = 2.0
 
 
@@ -198,9 +198,9 @@ def hide_dock_icon():
 def capture_frontmost_application():
     """Return the external macOS app active before an expansion dialog opens.
 
-    Tk activates Txt Xpander when a modal expansion dialog takes focus. The
+    Tk activates Sniptype when a modal expansion dialog takes focus. The
     generated Cmd+V must go back to the editor that owned focus before that
-    dialog, not to Txt Xpander's hidden root. Call this on the macOS GUI/main
+    dialog, not to Sniptype's hidden root. Call this on the macOS GUI/main
     thread immediately before building the dialog.
     """
     if not IS_MAC:
@@ -247,7 +247,7 @@ def capture_text_target():
 
     macOS reuses the AppKit application handle already used by expansion
     dialogs. Windows stores the foreground HWND. The caller must invoke this
-    on hotkey press, before any Txt Xpander UI can take focus. Returns None
+    on hotkey press, before any Sniptype UI can take focus. Returns None
     when the foreground owner is this process or cannot be read.
     """
     if IS_MAC:
@@ -417,7 +417,7 @@ def activate_application_when_ready(
         timer = threading.Timer(
             timeout_seconds,
             fail,
-            args=("Timed out waiting for Txt Xpander to receive keyboard focus",),
+            args=("Timed out waiting for Sniptype to receive keyboard focus",),
         )
         timer.daemon = True
         state["timer"] = timer
@@ -431,10 +431,10 @@ def activate_application_when_ready(
         if app.isActive():
             complete()
         elif not activation_accepted:
-            fail("macOS refused to activate Txt Xpander")
+            fail("macOS refused to activate Sniptype")
         return cancel
     except Exception as exc:
-        fail(f"Could not activate Txt Xpander: {exc}")
+        fail(f"Could not activate Sniptype: {exc}")
         return cancel
 
 
@@ -795,12 +795,12 @@ def default_autostart_command():
     """Return the argv that starts this app: packaged exe, or the source launcher.
 
     Mirrors ``build_release.bat``: the frozen build points straight at the
-    executable, a source checkout at ``pythonw txt_xpander.pyw``.
+    executable, a source checkout at ``pythonw sniptype.pyw``.
     """
     if getattr(sys, "frozen", False):
         return [sys.executable]
 
-    launcher = os.path.join(os.path.dirname(os.path.abspath(__file__)), "txt_xpander.pyw")
+    launcher = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sniptype.pyw")
     interpreter = sys.executable
     if current_os() == "windows":
         windowless = os.path.join(os.path.dirname(interpreter), "pythonw.exe")

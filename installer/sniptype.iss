@@ -1,12 +1,13 @@
-﻿; Inno Setup script for Txt Xpander — per-user install, no admin required.
+; Inno Setup script for Sniptype — per-user install, no admin required.
 ;
-; Build: run build_release.bat first (produces dist\Txt Xpander), then
+; Build: run build_release.bat first (produces dist\Sniptype), then
 ; build_installer.bat (compiles this script into installer\).
 ;
-; User data lives in %USERPROFILE%\.txt_xpander and is intentionally NOT removed
+; User data lives in %USERPROFILE%\.sniptype and is intentionally NOT removed
 ; on uninstall — the installer only manages the program files under {app}.
+; The running app owns migration from the legacy .txt_xpander data directory.
 
-#define MyAppName "Txt Xpander"
+#define MyAppName "Sniptype"
 #define MyAppVersion "3.4.0"
 #define MyAppChannel "stable"
 #if MyAppChannel == "beta"
@@ -17,9 +18,9 @@
   #define MyInstallerVersion MyAppVersion
 #endif
 #define MyAppPublisher "Project Contributors"
-#define MyAppExeName "Txt Xpander.exe"
-#define MyAppIcon "..\source\txt_xpander.ico"
-#define MyDistDir "..\dist\Txt Xpander"
+#define MyAppExeName "Sniptype.exe"
+#define MyAppIcon "..\source\sniptype.ico"
+#define MyDistDir "..\dist\Sniptype"
 
 [Setup]
 ; Stable AppId so future versions upgrade in place instead of installing twice.
@@ -35,16 +36,16 @@ DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 OutputDir=Output
-OutputBaseFilename=TxtXpanderSetup-{#MyInstallerVersion}
+OutputBaseFilename=SniptypeSetup-{#MyInstallerVersion}
 Compression=lzma2
 SolidCompression=yes
 SetupIconFile={#MyAppIcon}
 UninstallDisplayIcon={app}\{#MyAppExeName}
 UninstallDisplayName={#MyAppName} {#MyAppDisplayVersion}
 WizardStyle=modern
-; Detect a running instance (matches the app's Local\TxtXpanderSingleton mutex)
-; so install/uninstall can ask the user to close it first.
-AppMutex=TxtXpanderSingleton
+; Detect either the current or legacy mutex so an upgrade cannot race a
+; previously installed Txt Xpander process.
+AppMutex=SniptypeSingleton,TxtXpanderSingleton
 
 [Languages]
 Name: "brazilianportuguese"; MessagesFile: "compiler:Languages\BrazilianPortuguese.isl"
@@ -56,6 +57,13 @@ Name: "startup"; Description: "Iniciar o {#MyAppName} automaticamente com o Wind
 
 [Files]
 Source: "{#MyDistDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
+
+[InstallDelete]
+; Remove obsolete app-owned files and shortcuts when upgrading the same AppId.
+Type: files; Name: "{app}\Txt Xpander.exe"
+Type: files; Name: "{group}\Txt Xpander.lnk"
+Type: files; Name: "{autodesktop}\Txt Xpander.lnk"
+Type: files; Name: "{userstartup}\Txt Xpander.lnk"
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

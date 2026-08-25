@@ -47,6 +47,15 @@ class PackagingExcludeTests(unittest.TestCase):
             self.assertIn("--collect-all transcribe_cpp_native", text)
             self.assertIn("--voice-runtime-probe", text)
 
+    def test_windows_build_fails_early_when_tcl_tk_cannot_initialize(self):
+        path = os.path.join(ROOT, "build_release.bat")
+        with open(path, encoding="utf-8") as handle:
+            text = handle.read()
+
+        tcl_preflight = 'python -c "import tkinter; tkinter.Tcl()"'
+        self.assertIn(tcl_preflight, text)
+        self.assertLess(text.index(tcl_preflight), text.index("python -m PyInstaller"))
+
     def test_runtime_probe_covers_the_desktop_and_voice_imports(self):
         path = os.path.join(ROOT, "source", "voice_runtime_probe.py")
         with open(path, encoding="utf-8") as handle:
@@ -55,7 +64,7 @@ class PackagingExcludeTests(unittest.TestCase):
             self.assertIn(f"import {package}", text)
 
     def test_entrypoint_runs_the_probe_before_desktop_imports(self):
-        path = os.path.join(ROOT, "source", "txt_xpander.pyw")
+        path = os.path.join(ROOT, "source", "sniptype.pyw")
         with open(path, encoding="utf-8") as handle:
             text = handle.read()
         probe_call = "\nrun_voice_runtime_probe_if_requested()\n"

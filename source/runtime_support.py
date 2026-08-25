@@ -13,7 +13,7 @@ from rich_text_support import extract_plain_text
 from snippet_utils import write_json_atomic
 
 
-LOGGER_NAME = "txt_xpander"
+LOGGER_NAME = "sniptype"
 NOTIFICATION_HISTORY_LIMIT = 120
 
 
@@ -38,7 +38,7 @@ def save_notification_history(path, history, limit=NOTIFICATION_HISTORY_LIMIT):
         return True
     except Exception:
         return False
-LOG_FILE_NAME = "txt_xpander.log"
+LOG_FILE_NAME = "sniptype.log"
 _LOG_FORMAT = "%(asctime)s %(levelname)s %(message)s"
 _LOG_MAX_BYTES = 1_000_000
 _LOG_BACKUP_COUNT = 3

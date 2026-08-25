@@ -39,9 +39,9 @@ from snippet_utils import (
 from variable_support import classify_variable, find_variable_names
 
 SCHEMA_VERSION = 1
-BUNDLE_FILENAME = "txt_xpander_bundle.json"
+BUNDLE_FILENAME = "sniptype_bundle.json"
 STATE_FILENAME = "sync_export.state"
-GENERATOR_NAME = "txt_xpander"
+GENERATOR_NAME = "sniptype"
 
 # The phone holds the whole decoded library in a keyboard extension running under
 # a hard memory ceiling, so a very large bundle breaks there first (§5.3).

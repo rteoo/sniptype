@@ -18,7 +18,7 @@ from unittest import mock
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from app_module import txt_xpander as tx  # .pyw is not importable off Windows
+from app_module import sniptype as tx  # .pyw is not importable off Windows
 from gui_thread import GuiThread
 from platform_support import IS_MAC
 
@@ -50,18 +50,18 @@ else:
 def _make_app(base_dir):
     with open(os.path.join(base_dir, "snippets.json"), "w", encoding="utf-8") as handle:
         handle.write('{"xhi": "hello"}')
-    previous_home = os.environ.get("TXT_XPANDER_HOME")
-    os.environ["TXT_XPANDER_HOME"] = base_dir
+    previous_home = os.environ.get("SNIPTYPE_HOME")
+    os.environ["SNIPTYPE_HOME"] = base_dir
     try:
         with mock.patch.object(tx, "get_runtime_base_dir", return_value=base_dir), \
                 mock.patch.object(tx, "get_runtime_resource_dir",
                                   return_value=os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))):
-            return tx.TextExpander()
+            return tx.Sniptype()
     finally:
         if previous_home is None:
-            os.environ.pop("TXT_XPANDER_HOME", None)
+            os.environ.pop("SNIPTYPE_HOME", None)
         else:
-            os.environ["TXT_XPANDER_HOME"] = previous_home
+            os.environ["SNIPTYPE_HOME"] = previous_home
 
 
 def _descendants(widget):
@@ -383,7 +383,7 @@ class ModalDialogSerializationTests(unittest.TestCase):
 
     Stacked dialogs block their workers in nested event loops that unwind
     strictly LIFO: answering the older one first stranded its caller and lost
-    its result. See TextExpander._run_modal_dialog.
+    its result. See Sniptype._run_modal_dialog.
     """
 
     def setUp(self):
@@ -453,7 +453,7 @@ class ModalDialogSerializationTests(unittest.TestCase):
 # GuiThread's own marshaling contract (call/submit/stop, exceptions, reentrancy,
 # stranded callers) is covered directly and adversarially in test_gui_thread.py.
 # This file keeps only the manager-GUI construction and dialog-serialization
-# smoke tests that genuinely exercise TextExpander widgets on the shared root.
+# smoke tests that genuinely exercise Sniptype widgets on the shared root.
 
 
 if __name__ == "__main__":

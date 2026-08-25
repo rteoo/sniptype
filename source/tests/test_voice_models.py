@@ -32,7 +32,7 @@ class VoiceCachePathTests(unittest.TestCase):
 
     def test_windows_uses_localappdata_not_roaming(self):
         path = default_voice_cache_dir(system="windows")
-        self.assertIn("Txt Xpander", path)
+        self.assertIn("Sniptype", path)
         self.assertIn("voice-models", path)
         self.assertNotIn("Roaming", path)
 

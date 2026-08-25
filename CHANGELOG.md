@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to Txt Xpander are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
+All notable changes to Sniptype are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [3.4.0] — 2026-08-24
 
@@ -122,7 +122,7 @@ tests pass.
 ### Added
 
 - **Explicit stable and beta channels**: the app now identifies the running version and non-stable channel in the tray tooltip, tray menu and manager title. Windows beta installers include `-beta` in the filename and installed-app display name; macOS bundles carry the version and channel in `Info.plist`.
-- **macOS build**: `build_release_macos.sh` produces `dist/Txt Xpander.app`, a menu-bar-only bundle (`LSUIElement` plus an accessory activation policy applied after Tk starts, since Tk otherwise forces the app into the Dock) with the icon converted to `.icns` at build time. The tray autostart toggle writes a LaunchAgent pointing at the bundle's binary.
+- **macOS build**: `build_release_macos.sh` produces `dist/Sniptype.app`, a menu-bar-only bundle (`LSUIElement` plus an accessory activation policy applied after Tk starts, since Tk otherwise forces the app into the Dock) with the icon converted to `.icns` at build time. The tray autostart toggle writes a LaunchAgent pointing at the bundle's binary.
 - **macOS permission onboarding**: the app checks Input Monitoring and Accessibility at startup, links to the correct System Settings panes and requires a restart after grants change rather than claiming a refused listener recovered in-process.
 - **macOS rich-text clipboard support**: rich snippets write plain text, HTML and RTF through an injection-safe AppleScript pasteboard record, with a logged plain-text fallback.
 - **Mobile sync export**: the optional `sync_export_dir` setting compiles the static library and dynamic registry into a deterministic, versioned mobile bundle without invoking dynamic providers.
@@ -137,8 +137,8 @@ tests pass.
 
 ### Fixed
 
-- **macOS dialog-backed snippets own and return keyboard focus correctly**: ticker and form dialogs stay transparent until macOS confirms both that Txt Xpander is active and that the exact native popup window is receiving keyboard events; after submission, expansion waits until macOS confirms the original editor is frontmost before sending Cmd+V. Every handoff fails visibly after a bounded wait instead of dropping input or pasting into the wrong app. Previously `xfund` could ignore the first several ticker keystrokes, then paste into the hidden Tk root instead of the editor.
-- **macOS: using the menu-bar menu no longer kills the app**: clicking the tray icon made AppKit run a nested menu-tracking loop on the main thread, where a Tk timer fired into Python with no valid thread state and aborted the process (`PyEval_RestoreThread`, "Txt Xpander quit unexpectedly"). Opening the menu, opening the snippet manager and quitting all work now. Windows behaviour is unchanged.
+- **macOS dialog-backed snippets own and return keyboard focus correctly**: ticker and form dialogs stay transparent until macOS confirms both that Sniptype is active and that the exact native popup window is receiving keyboard events; after submission, expansion waits until macOS confirms the original editor is frontmost before sending Cmd+V. Every handoff fails visibly after a bounded wait instead of dropping input or pasting into the wrong app. Previously `xfund` could ignore the first several ticker keystrokes, then paste into the hidden Tk root instead of the editor.
+- **macOS: using the menu-bar menu no longer kills the app**: clicking the tray icon made AppKit run a nested menu-tracking loop on the main thread, where a Tk timer fired into Python with no valid thread state and aborted the process (`PyEval_RestoreThread`, "Sniptype quit unexpectedly"). Opening the menu, opening the snippet manager and quitting all work now. Windows behaviour is unchanged.
 - Secure Keyboard Entry is checked before a trigger is erased and outside the listener hot path, so password fields keep the original typed text without adding per-keystroke framework calls.
 - Static snippets and composed mapping triggers are preserved or confirmed before a dynamic trigger shadows them; editor delete/overwrite paths no longer discard a shadowed static value.
 - Empty trigger keys are excluded consistently from every compiled index set.
@@ -215,27 +215,27 @@ tests pass.
 
 ## [3.0.0] — 2026-07-16
 
-Major release: user data now lives in a stable per-user directory, and Txt Xpander
+Major release: user data now lives in a stable per-user directory, and Sniptype
 ships as a proper per-user Windows installer. The library is migrated automatically
 on first launch, but because the on-disk data location changes, this is a breaking
 behavioral change and warrants a major version bump.
 
 ### Added
 
-- **Per-user Windows installer** (Inno Setup, `installer/txt_xpander.iss`):
-  - Installs to `%LOCALAPPDATA%\Programs\Txt Xpander` with **no administrator/UAC prompt** (`PrivilegesRequired=lowest`)
+- **Per-user Windows installer** (Inno Setup, `installer/sniptype.iss`):
+  - Installs to `%LOCALAPPDATA%\Programs\Sniptype` with **no administrator/UAC prompt** (`PrivilegesRequired=lowest`)
   - Stable `AppId` so future versions upgrade in place; detects a running instance via the app mutex
   - Optional desktop icon and "start with Windows" startup shortcut
-  - **Uninstall never touches `~/.txt_xpander`** — user data survives uninstall by design
+  - **Uninstall never touches `~/.sniptype`** — user data survives uninstall by design
   - `build_installer.bat` compiles the packaged `dist` folder into `installer/Output/`
-- **Stable per-user data directory** (`app_paths.py`): snippets, settings, backups, and logs now live under `~/.txt_xpander` instead of beside the executable (which, in the packaged build, sat inside OneDrive and was hostile to atomic writes)
-  - `TXT_XPANDER_HOME` environment variable overrides the location
+- **Stable per-user data directory** (`app_paths.py`): snippets, settings, backups, and logs now live under `~/.sniptype` instead of beside the executable (which, in the packaged build, sat inside OneDrive and was hostile to atomic writes)
+  - `SNIPTYPE_HOME` environment variable overrides the location
   - **Automatic one-time migration** copies a legacy exe-side `snippets.json` into the data dir on first launch, leaving the original untouched as a safety copy and dropping a breadcrumb
 - **Rotating backups and corrupt-file recovery** (`backup_support.py`):
   - Backup before every save plus a once-daily startup backup, keeping the newest 30
   - Corrupt `snippets.json` is quarantined aside (never overwritten) and restored from the newest valid backup, falling back to sample defaults only as a last resort
   - Backups tab in the manager: restore, export, and import the library
-- **File logging** to `~/.txt_xpander/logs`
+- **File logging** to `~/.sniptype/logs`
 - **JSON-driven dynamic snippet registry** (`dynamic_registry.py` + `dynamic_snippets.json`): dynamic triggers are configured from JSON with named providers instead of being hardcoded
 - **Snippet manager improvements**: save-time validation, rename and duplicate actions, `Ctrl+S` to save, DPI awareness, and a notification-history viewer
 - **Cross-platform seam** (`platform_support.py`) isolating OS-specific behavior behind a Windows backend
@@ -243,7 +243,7 @@ behavioral change and warrants a major version bump.
 
 ### Changed
 
-- **User data location moved** out of the packaged app directory to `~/.txt_xpander` — migrated automatically, but a breaking change to where data is stored
+- **User data location moved** out of the packaged app directory to `~/.sniptype` — migrated automatically, but a breaking change to where data is stored
 - **Hot path** (`trigger_index.py`, `runtime_support.py`): expansion now runs off the keyboard-listener thread with deterministic matching, reducing input latency and race risk
 - **`build_release.bat`** no longer syncs `dist` → `source`; the bundled `snippets.json` is an anonymized seed only, since real data lives in the per-user directory
 - Comments and docstrings translated to English; `AGENTS.md` established as the canonical agent contract
@@ -327,7 +327,7 @@ behavioral change and warrants a major version bump.
 - Manual WhatsApp popup fallback when clipboard content is not a valid phone number
 - WhatsApp reference tab in the snippet manager GUI showing trigger usage and examples
 - `build_release.bat` improvements:
-  - Safely stages builds to temporary directory before replacing `dist\Txt Xpander`
+  - Safely stages builds to temporary directory before replacing `dist\Sniptype`
   - Preserves the packaged app's existing `snippets.json` during distribution updates
   - Adds optional Windows Startup shortcut creation after successful build
 
@@ -335,7 +335,7 @@ behavioral change and warrants a major version bump.
 
 ### Added
 
-- **Working PyInstaller standalone build** in `dist\Txt Xpander`:
+- **Working PyInstaller standalone build** in `dist\Sniptype`:
   - Single-directory bundle with bundled Python runtime and all dependencies
   - User-editable `snippets.json` beside the executable (seeded on first run)
   - Standalone `.exe` with packaged icon and resources

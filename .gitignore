@@ -7,9 +7,11 @@ build/
 source/build/
 dist/
 installer/Output/
-installer/TxtXpanderSetup-*.exe
+installer/SniptypeSetup-*.exe
 *.spec
 *.log
 /tests/
 source/tests/tmp/
 *.DS_Store
+.claude/settings.local.json
+private-history-backup-*.bundle
