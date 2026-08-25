@@ -9,7 +9,7 @@ Date: 2026-03-09
 - Keep `xwapp` behavior unchanged.
 
 ## Implementation Changes
-- Refactor the WhatsApp handling in `txt_xpander.pyw` into one shared internal flow that separates:
+- Refactor the WhatsApp handling in `sniptype.pyw` into one shared internal flow that separates:
   - phone source: `clipboard-first` vs `force-popup`
   - side effects: `copy_url`, `open_browser`, `return_url_for_insertion`
 - Register `xlwapp` and `xpwapp` as built-in dynamic snippets and include them in `slow_snippets` so the typed trigger is erased before popup/browser work starts.

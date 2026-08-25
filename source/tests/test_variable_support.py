@@ -67,7 +67,7 @@ class TestClassifyVariable(unittest.TestCase):
         self.assertEqual(classify_variable("clipboard-paste", {}), "clipboard")
 
     def test_snippet_ref(self):
-        snippets = {"xname": "Example User"}
+        snippets = {"xname": "Alex"}
         self.assertEqual(classify_variable("xname", snippets), "snippet_ref")
 
     def test_callable_snippet_is_dynamic_ref(self):
@@ -86,7 +86,7 @@ class TestClassifyVariable(unittest.TestCase):
         self.assertEqual(classify_variable("nome", {}), "form_field")
 
     def test_nonexistent_key_is_form_field(self):
-        snippets = {"xname": "Example User"}
+        snippets = {"xname": "Alex"}
         self.assertEqual(classify_variable("data", snippets), "form_field")
 
 
@@ -99,7 +99,7 @@ class TestHasFormVariables(unittest.TestCase):
         self.assertFalse(has_form_variables("%%clipboard-paste%%", {}))
 
     def test_only_snippet_ref(self):
-        snippets = {"xname": "Example User"}
+        snippets = {"xname": "Alex"}
         self.assertFalse(has_form_variables("Olá %%xname%%", snippets))
 
     def test_only_mapping_ref(self):
@@ -113,7 +113,7 @@ class TestHasFormVariables(unittest.TestCase):
         self.assertTrue(has_form_variables("Olá %%nome%%", {}))
 
     def test_mixed_with_form_field(self):
-        snippets = {"xname": "Example User"}
+        snippets = {"xname": "Alex"}
         self.assertTrue(has_form_variables("%%xname%% e %%data%%", snippets))
 
 

@@ -2,7 +2,7 @@
 setlocal
 
 REM ============================================================
-REM Text Expander - Launch shortcut
+REM Sniptype - Launch shortcut
 REM ============================================================
 
 REM Move to the directory where this script is located
@@ -10,15 +10,15 @@ cd /d "%~dp0"
 
 echo.
 echo ============================================================
-echo   Starting Text Expander - checking environment...
+echo   Starting Sniptype - checking environment...
 echo ============================================================
 echo.
 
 REM ------------------------------------------------------------
-REM Verify that txt_xpander.pyw exists
+REM Verify that sniptype.pyw exists
 REM ------------------------------------------------------------
-if not exist "txt_xpander.pyw" (
-    echo [ERROR] File txt_xpander.pyw not found.
+if not exist "sniptype.pyw" (
+    echo [ERROR] File sniptype.pyw not found.
     echo Make sure this .bat file is in the same folder.
     echo.
     pause
@@ -40,23 +40,12 @@ if %errorlevel% equ 9009 (
 
 if %errorlevel% neq 0 (
     echo.
-    echo [WARNING] Missing dependencies. Installing...
+    echo [ERROR] Required dependencies are missing.
+    echo Install them in your chosen environment, then run this launcher again:
+    echo     python -m pip install -r requirements.txt
     echo.
-
-    python -m pip install pynput pystray pillow yfinance --quiet
-
-    if %errorlevel% neq 0 (
-        echo.
-        echo [ERROR] Failed to install dependencies.
-        echo Run this manually:
-        echo     pip install pynput pystray pillow yfinance
-        echo.
-        pause
-        exit /b 1
-    )
-
-    echo [OK] Dependencies installed successfully.
-    echo.
+    pause
+    exit /b 1
 ) else (
     echo Dependencies already installed.
     echo.
@@ -65,6 +54,6 @@ if %errorlevel% neq 0 (
 REM ------------------------------------------------------------
 REM Silent launch with pythonw
 REM ------------------------------------------------------------
-echo Starting Text Expander silently...
-start "" pythonw txt_xpander.pyw
+echo Starting Sniptype silently...
+start "" pythonw sniptype.pyw
 exit /b 0

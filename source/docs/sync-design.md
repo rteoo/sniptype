@@ -5,7 +5,7 @@ Status: decided (v1). Implemented by #31 (desktop export), consumed by #32/#34 (
 
 ## Summary
 
-- **Format**: a versioned, *compiled* bundle — `txt_xpander_bundle.json` — not a copy of `snippets.json`. Mapping containers are expanded to concrete triggers, static snippet references are resolved, rich text is flattened to plain text plus optional HTML, and the dynamic registry ships as metadata only.
+- **Format**: a versioned, *compiled* bundle — `sniptype_bundle.json` — not a copy of `snippets.json`. Mapping containers are expanded to concrete triggers, static snippet references are resolved, rich text is flattened to plain text plus optional HTML, and the dynamic registry ships as metadata only.
 - **Transport**: the desktop writes the bundle into a **user-owned cloud folder** (iCloud Drive for Windows, Google Drive, Dropbox, Syncthing — any local path). iOS reads it through the document picker and a security-scoped bookmark. No server, no new dependency, no account.
 - **Conflicts**: none by construction. Desktop is the source of truth; the bundle is a full snapshot; mobile is read-only and replaces wholesale. Two-way sync is explicitly v2.
 - **Privacy**: the bundle is plaintext personal data (CPFs, CNPJs, addresses, phones) sitting in a folder a cloud provider can read. That exposure is real and is documented, not waved away. Encryption at rest is a named v2 door.
@@ -33,7 +33,7 @@ Compiling on the desktop keeps all of it in one language, in the code that alrea
 
 The bundle carries the trigger **vocabulary** — every snippet the desktop can expand, keyed by the text the user would type. It deliberately does **not** model the desktop's *matching* behaviour:
 
-`trigger_index.find_direct_trigger` matches the **longest direct trigger that is a suffix of the typed buffer**, and `find_dynamic_trigger` only runs when no direct trigger matched (`txt_xpander.pyw:1247-1253`). So a desktop trigger can be unreachable by typing, via two distinct mechanisms:
+`trigger_index.find_direct_trigger` matches the **longest direct trigger that is a suffix of the typed buffer**, and `find_dynamic_trigger` only runs when no direct trigger matched (`sniptype.pyw:1247-1253`). So a desktop trigger can be unreachable by typing, via two distinct mechanisms:
 
 - **Direct vs direct.** X is unreachable when another direct trigger Y is a suffix of a *proper prefix* of X, because Y fires mid-word before X is finished — a static `abc` makes `xabcz` unreachable, since `"xabc".endswith("abc")` matches at the `c` keystroke. (A trigger that is merely a suffix of a longer one is *not* affected: the longest-first bucket sort at `trigger_index.py:56` exists precisely to keep both reachable.)
 - **Direct vs mapping-composed.** A composed trigger is unreachable when *any* direct trigger is a suffix of it — including a suffix of the whole string — because `find_direct_trigger` runs at every keystroke and `find_dynamic_trigger` is consulted only on a miss. A static `ano` therefore makes the composed `cpffulano` unreachable.
@@ -44,8 +44,8 @@ That is correct, because **the phone is a picker, not a matcher**: v1 is a snipp
 
 ### 1.3 File identity
 
-- **Name**: `txt_xpander_bundle.json`, fixed. The version lives *inside* the file, never in the filename — an iOS security-scoped bookmark points at a specific file, and renaming on a schema bump would silently break every phone that already picked the old name.
-- **Location**: `<sync_export_dir>/txt_xpander_bundle.json`, where `sync_export_dir` is the new optional `settings.json` key introduced by #31. Absent key = feature off.
+- **Name**: `sniptype_bundle.json`, fixed. The version lives *inside* the file, never in the filename — an iOS security-scoped bookmark points at a specific file, and renaming on a schema bump would silently break every phone that already picked the old name.
+- **Location**: `<sync_export_dir>/sniptype_bundle.json`, where `sync_export_dir` is the new optional `settings.json` key introduced by #31. Absent key = feature off.
 - **Encoding**: written with `snippet_utils.write_json_atomic` — UTF-8, `ensure_ascii=False`, `indent=2`, same-directory temp + `os.replace`. The file is user-inspectable by design and its size doesn't justify minification. JSON line endings are platform-native (`write_json_atomic` opens in text mode); string contents are unaffected, since `json.dump` escapes embedded newlines.
 
 ### 1.4 Top-level shape
@@ -54,7 +54,7 @@ That is correct, because **the phone is a picker, not a matcher**: v1 is a snipp
 {
   "schema_version": 1,
   "exported_at": "2026-07-21T13:45:02Z",
-  "generator": {"name": "txt_xpander", "version": "3.2.0", "platform": "win32"},
+  "generator": {"name": "sniptype", "version": "3.2.0", "platform": "win32"},
   "entries": [ ... ],
   "dynamic": [ ... ]
 }
@@ -64,7 +64,7 @@ That is correct, because **the phone is a picker, not a matcher**: v1 is a snipp
 | --- | --- | --- | --- |
 | `schema_version` | integer | yes | Starts at `1`. Bumped **only** for changes a v1 consumer cannot survive. |
 | `exported_at` | string | yes | UTC ISO-8601, `Z` suffix, second resolution. **Content-change time**, not write time — see §1.11's skip-if-unchanged rule. Display only; it is never a sync cursor (§3). |
-| `generator.name` | string | yes | Always `"txt_xpander"`. Lets a future importer distinguish sources. |
+| `generator.name` | string | yes | Always `"sniptype"`. Lets a future importer distinguish sources. |
 | `generator.version` | string \| null | yes | Desktop app version, for support and bug reports. See §5.1 — no importable constant exists today, so `null` is legal and #31 is not blocked on introducing one. |
 | `generator.platform` | string | yes | `sys.platform`. Diagnostics only. |
 | `entries` | array | yes | Insertable snippets. May be empty, never `null`. |
@@ -106,8 +106,8 @@ The split matters: "update the iOS app" is only truthful for the forward-version
 ```json
 {
   "trigger": "xassinatura",
-  "text": "Project Contributors\nDiretor",
-  "html": "<div>Project Contributors<br><b>Diretor</b></div>",
+  "text": "Example User\nDirector",
+  "html": "<div>Example User<br><b>Director</b></div>",
   "kind": "rich_text",
   "source": "static"
 }
@@ -167,15 +167,15 @@ The split matters: "update the iOS app" is only truthful for the forward-version
 3. **Re-scans the resolved text** and classifies any name that was not in the raw list, merging the results into the same three lists.
 4. Emits `input` when `clipboard` is true or any of `fields`, `dynamic_refs`, `residual` is non-empty.
 
-Step 3 is not optional, and the reason is a genuine asymmetry in the runtime. Routing is decided from the **raw** value (`trigger_index._compute_form_triggers` classifies `extract_plain_text(value)`), but the form dialog's field list is built from the **resolved** text: `run_slow_snippet` calls `resolve_inline` and only then computes `form_names` (`txt_xpander.pyw:944-955`). So a form token injected by a one-level ref *is* prompted for on the desktop, and a raw-only scan would omit it from `input.fields`.
+Step 3 is not optional, and the reason is a genuine asymmetry in the runtime. Routing is decided from the **raw** value (`trigger_index._compute_form_triggers` classifies `extract_plain_text(value)`), but the form dialog's field list is built from the **resolved** text: `run_slow_snippet` calls `resolve_inline` and only then computes `form_names` (`sniptype.pyw:944-955`). So a form token injected by a one-level ref *is* prompted for on the desktop, and a raw-only scan would omit it from `input.fields`.
 
 **`residual`** covers what step 3 cannot fix. Resolution is one level deep and non-recursive — `resolve_inline` computes its name list once and substitutes ref bodies verbatim (`variable_support.py:95-97`) — so a ref whose body contains `%%xc%%` injects that token and never chases it. The export stays one level deep too, faithfully, which means `text` can still contain a token. Formally — and the framing matters — **`residual` is every name in `names(resolved)` not already accounted for by `clipboard`, `fields` or `dynamic_refs`.** Define it by *survival*, not by *provenance*: an earlier draft defined it as `names(resolved) − names(raw)`, which silently excluded a token that was in the raw text and deliberately left unsubstituted (the unexportable-target case below). That entry would then carry no `input` block at all, and the phone would insert `Olá %%xbad%%` verbatim into a customer's message — exactly the outcome §1.5's non-insertable rule exists to prevent. The survival definition covers the injected-ref case, the unexportable-target case, and anything neither of us enumerated, with no enumeration at all.
 
-On the desktop those injected refs are pasted literally (the fast path in `txt_xpander.pyw:889-903` resolves once and inserts). Mobile instead refuses the entry, because a non-empty `residual` forces an `input` block. That is the one place the two platforms deliberately differ, and refusing is the safer half.
+On the desktop those injected refs are pasted literally (the fast path in `sniptype.pyw:889-903` resolves once and inserts). Mobile instead refuses the entry, because a non-empty `residual` forces an `input` block. That is the one place the two platforms deliberately differ, and refusing is the safer half.
 
 **References to unexportable values are not resolved.** A `snippet_ref` or `mapping_ref` whose target is neither a string nor a valid rich-text payload is left as a token — which puts its name in `residual` by the survival rule above — rather than substituted — `extract_plain_text` would otherwise stringify a list or dict and inject a literal `"['a']"` into another entry's text.
 
-**Rich text plus variables.** When a rich-text payload's raw text contains any variable token, `html` is **omitted** and only `text` is exported. Resolving into `text` while copying `html` verbatim would ship `text: "Olá, Example User"` next to `html: "<div>Olá, %%xname%%</div>"`; regenerating the HTML would mean re-deriving spans against a changed string. Dropping the HTML for that (rare) case costs formatting, not content, and never lies.
+**Rich text plus variables.** When a rich-text payload's raw text contains any variable token, `html` is **omitted** and only `text` is exported. Resolving into `text` while copying `html` verbatim would ship `text: "Hello, Alex"` next to `html: "<div>Hello, %%xname%%</div>"`; regenerating the HTML would mean re-deriving spans against a changed string. Dropping the HTML for that (rare) case costs formatting, not content, and never lies.
 
 `html` is otherwise copied from the stored payload as-is. Note that app-generated payloads always have non-empty `html` and non-empty `spans` (`rich_text_support.build_rich_text_payload` returns a plain string when normalisation yields no spans), so the empty-`html` case only arises for hand-edited files.
 
@@ -185,11 +185,11 @@ On the desktop those injected refs are pasted literally (the fast path in `txt_x
 
 **Inputs.** The export is a pure function — `build_bundle(static_snippets, registry, app_version=None, now=None)` — taking the static snippet dict and the raw dynamic registry as explicit arguments. `now` and `app_version` are injectable so tests can assert an exact `exported_at`.
 
-It must **never** read `self.snippets`, for three reasons: `self.snippets` holds bound callables and no registry metadata; `save_snippets` is called from inside `load_snippets` (`txt_xpander.pyw:336`) **before** `self.snippets` is assigned, so touching it raises `AttributeError` on first run and on corrupt-file recovery; and after startup it can be *stale* — `restore_backup` and `import_library` write the file and only then call `reload_snippets_from_disk`, so a reader in between gets the pre-change library, which is a silent wrong-data bug rather than a loud one.
+It must **never** read `self.snippets`, for three reasons: `self.snippets` holds bound callables and no registry metadata; `save_snippets` is called from inside `load_snippets` (`sniptype.pyw:336`) **before** `self.snippets` is assigned, so touching it raises `AttributeError` on first run and on corrupt-file recovery; and after startup it can be *stale* — `restore_backup` and `import_library` write the file and only then call `reload_snippets_from_disk`, so a reader in between gets the pre-change library, which is a silent wrong-data bug rather than a loud one.
 
 **Where the arguments come from, at every call site: re-read both files.** The thin wrapper `export_sync_bundle()` reads `validate_static_snippets(load_json_file(self.snippets_file))` **and** re-runs `load_registry(self.resolve_resource_path("dynamic_snippets.json"), self.dynamic_registry_file)` rather than reading `self.dynamic_registry`.
 
-Re-reading the registry is not symmetry for its own sake. `_toggle_registry_entry` and `_rename_registry_entry` reassign `self.dynamic_registry` **after** their `write_json_atomic` (`txt_xpander.pyw:2670-2674` and `:2752-2756`), so a wrapper reading the attribute and hooked at or near the write would compile the **pre-toggle / pre-rename** registry — the bundle is written, the state hash advances, and the change never reaches the phone with no error anywhere. That is exactly the failure §1.10 exists to prevent. Re-reading makes the hook's placement within those methods irrelevant.
+Re-reading the registry is not symmetry for its own sake. `_toggle_registry_entry` and `_rename_registry_entry` reassign `self.dynamic_registry` **after** their `write_json_atomic` (`sniptype.pyw:2670-2674` and `:2752-2756`), so a wrapper reading the attribute and hooked at or near the write would compile the **pre-toggle / pre-rename** registry — the bundle is written, the state hash advances, and the change never reaches the phone with no error anywhere. That is exactly the failure §1.10 exists to prevent. Re-reading makes the hook's placement within those methods irrelevant.
 
 This is the only argument rule that works at all five sites in §1.10, and it is deliberately uniform:
 
@@ -260,7 +260,7 @@ This set is computed **once per export** and is the single predicate behind thre
 
 **`local` and `render`.** Only `provider == "datetime"` is local in v1; `bcb`, `stock` and `whatsapp` need network, dialogs, a browser, or the desktop clipboard, none of which the extension has. Mobile lists non-local entries greyed with a "desktop only" hint — the issue's "knows what else exists".
 
-There is exactly **one** `render.kind`: `date_format`. An earlier draft had a second `long_date` kind for `method == "extenso"`, which was wrong — `data_extenso` (`txt_xpander.pyw:567-580`) is hand-rolled with hardcoded PT-BR arrays and a **zero-padded** day (`{dia:02d}` → `segunda-feira, 02 de março de 2026`), and no `DateFormatter` style reproduces that (`.full` gives `2 de março`, unpadded). A second render kind would have guaranteed a desktop/phone mismatch. Both datetime paths therefore compile to a TR35 pattern:
+There is exactly **one** `render.kind`: `date_format`. An earlier draft had a second `long_date` kind for `method == "extenso"`, which was wrong — `data_extenso` (`sniptype.pyw:567-580`) is hand-rolled with hardcoded PT-BR arrays and a **zero-padded** day (`{dia:02d}` → `segunda-feira, 02 de março de 2026`), and no `DateFormatter` style reproduces that (`.full` gives `2 de março`, unpadded). A second render kind would have guaranteed a desktop/phone mismatch. Both datetime paths therefore compile to a TR35 pattern:
 
 | Registry entry | `unicode_pattern` |
 | --- | --- |
@@ -269,7 +269,7 @@ There is exactly **one** `render.kind`: `date_format`. An earlier draft had a se
 
 `method == "extenso"` wins over any `format` key, matching `_datetime_provider`.
 
-That pattern reproduces `data_extenso` component by component — weekday, comma, zero-padded day, both `de` literals, lowercase month — **verified against CLDR pt-BR as shipped with iOS 18, 2026-07-21**. Date the claim, because the two sides age differently: the desktop's arrays are a frozen Python literal (`txt_xpander.pyw:569-572`) while the phone's month and weekday names come from a locale database Apple revises. §5.2's test asserts the *pattern string* and can never catch a rendering drift, so #34 carries a **snapshot test** rendering a fixed date and comparing it to the desktop's expected output. Without it, this equivalence is a claim no test in either repo covers.
+That pattern reproduces `data_extenso` component by component — weekday, comma, zero-padded day, both `de` literals, lowercase month — **verified against CLDR pt-BR as shipped with iOS 18, 2026-07-21**. Date the claim, because the two sides age differently: the desktop's arrays are a frozen Python literal (`sniptype.pyw:569-572`) while the phone's month and weekday names come from a locale database Apple revises. §5.2's test asserts the *pattern string* and can never catch a rendering drift, so #34 carries a **snapshot test** rendering a fixed date and comparing it to the desktop's expected output. Without it, this equivalence is a claim no test in either repo covers.
 
 **strftime → Unicode TR35 conversion is a desktop responsibility.** The registry stores C `strftime`; iOS `DateFormatter` speaks TR35. Converting on the phone would put a second parser in a second language.
 
@@ -303,8 +303,8 @@ Given `snippets.json`:
 
 ```json
 {
-  "xname": "Project Contributors",
-  "xsaudacao": "Olá, aqui é %%xname%%.",
+  "xname": "Example User",
+  "xsaudacao": "Hello, this is %%xname%%.",
   "_cpf_numbers": {"fulano": "123.456.789-00"},
   "_custom_codes": {"__prefix__": "cod", "nf": "NF-4471"}
 }
@@ -316,10 +316,10 @@ and a registry containing only `xhj` (enabled) and `xdolar` (disabled by the use
 {
   "schema_version": 1,
   "exported_at": "2026-07-21T13:45:02Z",
-  "generator": {"name": "txt_xpander", "version": "3.2.0", "platform": "win32"},
+  "generator": {"name": "sniptype", "version": "3.2.0", "platform": "win32"},
   "entries": [
-    {"trigger": "xname", "text": "Project Contributors", "kind": "text", "source": "static"},
-    {"trigger": "xsaudacao", "text": "Olá, aqui é Project Contributors.", "kind": "text", "source": "static"},
+    {"trigger": "xname", "text": "Example User", "kind": "text", "source": "static"},
+    {"trigger": "xsaudacao", "text": "Hello, this is Example User.", "kind": "text", "source": "static"},
     {"trigger": "cpffulano", "text": "123.456.789-00", "kind": "text", "source": "mapping",
      "group": {"container": "_cpf_numbers", "prefix": "cpf", "item": "fulano"}},
     {"trigger": "codnf", "text": "NF-4471", "kind": "text", "source": "mapping",
@@ -339,7 +339,7 @@ and a registry containing only `xhj` (enabled) and `xdolar` (disabled by the use
 
 **Five call sites, not two.** Every path that changes the live library must export, or the phone silently keeps stale data with no error anywhere:
 
-| `txt_xpander.pyw` | Path | Currently mirrors? |
+| `sniptype.pyw` | Path | Currently mirrors? |
 | --- | --- | --- |
 | `save_snippets` (~:443) | manager edits | yes |
 | `restore_backup` (~:512) | restore from backup | yes |
@@ -353,10 +353,10 @@ Note that `save_snippets` can also fire at startup, from either of two mutually 
 
 ### 1.11 Write discipline
 
-- **Skip-if-unchanged, via a local state file — never by reading the bundle back.** After each successful export, write `{"path": <absolute destination>, "sha256": <digest>}` to `~/.txt_xpander/sync_export.state`. The digest is over the serialised bundle with **`exported_at` and `generator` both excluded** — i.e. over `entries`, `dynamic` and `schema_version` only. Pin the exact bytes so a fixture author can reproduce them: `hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8"))`, with both keys **popped**, not blanked.
+- **Skip-if-unchanged, via a local state file — never by reading the bundle back.** After each successful export, write `{"path": <absolute destination>, "sha256": <digest>}` to `~/.sniptype/sync_export.state`. The digest is over the serialised bundle with **`exported_at` and `generator` both excluded** — i.e. over `entries`, `dynamic` and `schema_version` only. Pin the exact bytes so a fixture author can reproduce them: `hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8"))`, with both keys **popped**, not blanked.
   Excluding `generator` is what keeps `exported_at` honest. Include it and every app upgrade rewrites every user's bundle with a fresh "library last changed" timestamp for a change that is not in the library. Excluded, an upgrade simply leaves the old `generator.version` in the file until the library next changes, which is exactly right: the field is diagnostic, not content.
-  The next export skips the write only when **all three** hold: the digest matches, the recorded `path` matches the current destination, and `os.path.exists(<dest>/txt_xpander_bundle.json)`. All three are load-bearing. Without the existence check, deleting the bundle or repointing `sync_export_dir` at a fresh folder means it is **never written again** until the library happens to change — a silent dead end, and it would make §4.3 rule 3's guarantee false. Without the path check, switching the destination A → B → A leaves A holding a stale bundle. The existence check is a local `stat`, which a dehydrated placeholder answers from local metadata, so it does not reintroduce the read hazard this design exists to avoid. The obvious alternative — read the existing bundle and diff it — would read a file **inside the cloud folder on every save**, and OneDrive/Dropbox on-demand storage can dehydrate an infrequently-touched file to a placeholder, turning that read into a blocking network download on the GUI thread (the same hazard §2.3 flags for iOS). The state file lives in the data dir, which is not a sync target by default (`TXT_XPANDER_HOME` can point it anywhere, and `docs/audit-report.md` §1.4 records that it once lived inside OneDrive — the reason the default is now `~/.txt_xpander`). Losing the state file costs one unconditional export, nothing more. A missing or unreadable state file simply means "export unconditionally".
-  This keeps `exported_at` meaningful — it becomes "when the library last actually changed", which is what §2.3 shows the user — and stops every save from pushing a full new revision through the cloud client. **One accepted limitation**: losing the state file (a cleared data dir, a fresh machine, a `TXT_XPANDER_HOME` change) forces one unconditional rewrite with a fresh `exported_at`, so the phone reports a change that did not happen. There is no prior timestamp left to reuse, and inventing one from the destination file would mean reading it — the exact thing this design exists to avoid. One spurious "library last changed" after a machine migration is the cheaper trade.
+  The next export skips the write only when **all three** hold: the digest matches, the recorded `path` matches the current destination, and `os.path.exists(<dest>/sniptype_bundle.json)`. All three are load-bearing. Without the existence check, deleting the bundle or repointing `sync_export_dir` at a fresh folder means it is **never written again** until the library happens to change — a silent dead end, and it would make §4.3 rule 3's guarantee false. Without the path check, switching the destination A → B → A leaves A holding a stale bundle. The existence check is a local `stat`, which a dehydrated placeholder answers from local metadata, so it does not reintroduce the read hazard this design exists to avoid. The obvious alternative — read the existing bundle and diff it — would read a file **inside the cloud folder on every save**, and OneDrive/Dropbox on-demand storage can dehydrate an infrequently-touched file to a placeholder, turning that read into a blocking network download on the GUI thread (the same hazard §2.3 flags for iOS). The state file lives in the data dir, which is not a sync target by default (`SNIPTYPE_HOME` can point it anywhere, and `docs/audit-report.md` §1.4 records that it once lived inside OneDrive — the reason the default is now `~/.sniptype`). Losing the state file costs one unconditional export, nothing more. A missing or unreadable state file simply means "export unconditionally".
+  This keeps `exported_at` meaningful — it becomes "when the library last actually changed", which is what §2.3 shows the user — and stops every save from pushing a full new revision through the cloud client. **One accepted limitation**: losing the state file (a cleared data dir, a fresh machine, a `SNIPTYPE_HOME` change) forces one unconditional rewrite with a fresh `exported_at`, so the phone reports a change that did not happen. There is no prior timestamp left to reuse, and inventing one from the destination file would mean reading it — the exact thing this design exists to avoid. One spurious "library last changed" after a machine migration is the cheaper trade.
 - **Do not create `sync_export_dir`.** Unlike `mirror_snippets_file`, which calls `os.makedirs(..., exist_ok=True)`, a missing export directory logs a warning and skips. A typo'd path under `makedirs` semantics silently creates a directory and writes the user's full plaintext CPF/CNPJ library into it — the directory already existing is the user's confirmation that they meant that path. Path handling is deliberately minimal: `os.path.expanduser` only (no environment-variable expansion), **relative paths are rejected with a warning** (the packaged app's cwd is not predictable, and an unpredictable destination is exactly what this rule exists to prevent), and a path that exists but is a file logs a warning and skips.
 - **Temp file.** `write_json_atomic` creates its temp in the destination directory, which here is a synced folder — cloud clients will index, upload, and retain that temp file (§4.2). Same-directory is nonetheless required for `os.replace` atomicity, and atomicity for the phone wins. On `PermissionError` (documented in `docs/audit-report.md` §1.4 for OneDrive-style lock contention), retry **once after 0.5 s**, then warn and give up. **No orphan sweep**: `write_json_atomic` removes its own temp in its `except` branch (`snippet_utils.py:55-59`), so the only orphan sources left are that cleanup itself failing, or the process dying outright — a force-quit of the tray app, or power loss. Rare, and not worth the cure: a glob-and-delete loop in the user's cloud folder is unattended deletion of files this app cannot prove it owns.
 - **Best-effort, always.** The export runs *after* the save succeeded, and any failure logs a warning and returns. It must never turn a persisted save into a reported failure.
@@ -455,7 +455,7 @@ Per-snippet last-writer-wins is the likely v2 policy, but it is a real design ta
 
 ### 4.1 What the file contains
 
-Everything the user's library contains, in plaintext: CPFs, CNPJs, addresses, phone numbers, client names, email signatures, internal codes. `source/snippets.json` in the repo is an anonymized seed — the real library at `~/.txt_xpander/snippets.json` is not, and the bundle is a faithful compilation of it.
+Everything the user's library contains, in plaintext: CPFs, CNPJs, addresses, phone numbers, client names, email signatures, internal codes. `source/snippets.json` in the repo is an anonymized seed — the real library at `~/.sniptype/snippets.json` is not, and the bundle is a faithful compilation of it.
 
 ### 4.2 What an interceptor gets
 
@@ -478,7 +478,7 @@ What it does **not** get: clipboard contents (never baked — §1.6), form-field
 
 ### 4.3 Rules
 
-1. **User-owned storage only.** No Txt Xpander server, no third-party service the user did not already choose, no telemetry, no phone-home. The bundle is written to a local path; whether that path is synced, and by whom, is the user's decision.
+1. **User-owned storage only.** No Sniptype server, no third-party service the user did not already choose, no telemetry, no phone-home. The bundle is written to a local path; whether that path is synced, and by whom, is the user's decision.
 2. **Be honest about the cloud provider.** iCloud, Google Drive and Dropbox encrypt in transit and at rest, but they hold the keys and can read the file. This is a real exposure, not a resolved one — §2.1 scores it as such, and two transports in §2.2 avoid it: **(c) in its LAN-only form** and **(d) delivered over USB**. Syncthing is discussed there too but is not a third candidate for this rule: on iOS it needs a paid, third-party File Provider app that handles the plaintext library itself.
 3. **The export dir is a deliberate act.** No default value, ever; absent key = no bundle is written; a missing directory is not created (§1.11). **Turning the feature off does not turn the exposure off**: clearing `sync_export_dir` leaves the last bundle — and the cloud provider's version history of it — in place. The settings UI must say so, and must give the steps **in order**: clear the key *first*, then delete the file. Delete first and the next save recreates it, guaranteed — skip-if-unchanged always treats a missing file as changed.
 4. **Warn on shared folders.** #31 should not attempt to *detect* sharing (unreliable across providers), but the settings UI and documentation must state that anyone with access to that folder gets the full library.
@@ -495,7 +495,7 @@ Encrypting the bundle at rest (passphrase-derived key, symmetric, entered once p
 
 ### 5.1 App version constant (#31)
 
-`generator.version` needs the app version. It exists today in exactly two hand-maintained, non-importable places — the `txt_xpander.pyw` module docstring (`Version: 3.2.0`) and `installer/txt_xpander.iss` (`MyAppVersion`). `generator.version` is therefore nullable and #31 is not blocked. Introducing a single importable constant would make it a *third* place unless the docstring is derived from it; that is a scope call for #31, not a requirement of this design.
+`generator.version` needs the app version. It exists today in exactly two hand-maintained, non-importable places — the `sniptype.pyw` module docstring (`Version: 3.2.0`) and `installer/sniptype.iss` (`MyAppVersion`). `generator.version` is therefore nullable and #31 is not blocked. Introducing a single importable constant would make it a *third* place unless the docstring is derived from it; that is a scope call for #31, not a requirement of this design.
 
 ### 5.2 Test surface implied by this document (#31)
 
@@ -508,7 +508,7 @@ Beyond #31's own acceptance criteria:
 - Rich text: `html` copied when clean, **omitted** when the raw value had variables; non-string/non-payload values skipped with a warning; callables skipped **silently**.
 - strftime→TR35: every directive in the table; the exact string `dd/MM/yyyy' às 'HH:mm` for `"%d/%m/%Y às %H:%M"`; `EEEE, dd' de 'MMMM' de 'yyyy` for `method: "extenso"`; the `format`-absent default; an unknown directive producing `local: false` with no `render`.
 - `dynamic[]` mirrors `build_dynamic_snippets`'s skips (unknown provider, invalid method/mode, non-dict, disabled, duplicate effective trigger); `enabled: true` present on survivors; rename reaches `trigger` while `id` stays the stable key.
-- Write discipline: deterministic ordering (byte-identical bundle for identical input); skip-if-unchanged driven by `~/.txt_xpander/sync_export.state`, requiring all three of matching digest, matching recorded `path`, and an existing destination file — a deleted bundle, a repointed `sync_export_dir`, and an A→B→A round trip each force a rewrite, while a missing or unreadable state file forces one and an `app_version` change alone forces **none** (the digest excludes `generator`); missing export dir warns without creating it; relative `sync_export_dir` rejected; atomic replace with a single 0.5 s `PermissionError` retry and **no** temp sweep; unwritable-dir warning path; `mirror_dir`-equals-`sync_export_dir` warning that never blocks the export.
+- Write discipline: deterministic ordering (byte-identical bundle for identical input); skip-if-unchanged driven by `~/.sniptype/sync_export.state`, requiring all three of matching digest, matching recorded `path`, and an existing destination file — a deleted bundle, a repointed `sync_export_dir`, and an A→B→A round trip each force a rewrite, while a missing or unreadable state file forces one and an `app_version` change alone forces **none** (the digest excludes `generator`); missing export dir warns without creating it; relative `sync_export_dir` rejected; atomic replace with a single 0.5 s `PermissionError` retry and **no** temp sweep; unwritable-dir warning path; `mirror_dir`-equals-`sync_export_dir` warning that never blocks the export.
 - All five call sites in §1.10 export, including the two registry writers and the two that bypass `save_snippets`. A toggle and a rename each reach the bundle — the regression test for the wrapper re-reading the registry file instead of `self.dynamic_registry`.
 - `generator.version`: the test asserts the **injected value round-trips**, not a literal — §5.1 leaves the constant itself undecided, and `null` is legal.
 

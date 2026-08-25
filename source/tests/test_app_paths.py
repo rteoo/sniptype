@@ -2,6 +2,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -12,15 +13,25 @@ class DataDirTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
         self._saved = os.environ.get(app_paths.ENV_HOME)
+        self._saved_legacy = os.environ.get(app_paths.LEGACY_ENV_HOME)
 
     def tearDown(self):
         if self._saved is None:
             os.environ.pop(app_paths.ENV_HOME, None)
         else:
             os.environ[app_paths.ENV_HOME] = self._saved
+        if self._saved_legacy is None:
+            os.environ.pop(app_paths.LEGACY_ENV_HOME, None)
+        else:
+            os.environ[app_paths.LEGACY_ENV_HOME] = self._saved_legacy
 
     def test_env_override_wins(self):
         os.environ[app_paths.ENV_HOME] = self.tmp
+        self.assertEqual(app_paths.get_data_dir(), os.path.abspath(self.tmp))
+
+    def test_legacy_env_override_is_a_compatibility_fallback(self):
+        os.environ.pop(app_paths.ENV_HOME, None)
+        os.environ[app_paths.LEGACY_ENV_HOME] = self.tmp
         self.assertEqual(app_paths.get_data_dir(), os.path.abspath(self.tmp))
 
     def test_default_is_home_dotdir(self):
@@ -90,19 +101,45 @@ class MigrationHelperTests(unittest.TestCase):
         self.assertTrue(os.path.isdir(self.data_dir))
         self.assertEqual(dest, app_paths.get_snippets_path(self.data_dir))
 
+    def test_default_legacy_directory_is_copied_without_being_modified(self):
+        # The first Sniptype launch migrates the old per-user directory into
+        # the canonical one, leaving the old tree as a recovery copy.
+        home = os.path.join(self.tmp, "home")
+        legacy_dir = os.path.join(home, app_paths.LEGACY_DIR_NAME)
+        os.makedirs(legacy_dir)
+        legacy_file = os.path.join(legacy_dir, "snippets.json")
+        with open(legacy_file, "w", encoding="utf-8") as handle:
+            handle.write('{"legacy": "value"}')
+
+        with mock.patch.object(app_paths.os.path, "expanduser", return_value=home):
+            with mock.patch.dict(os.environ, {}, clear=True):
+                destination = app_paths.ensure_data_dir()
+
+        self.assertEqual(destination, os.path.join(home, app_paths.DIR_NAME))
+        with open(os.path.join(destination, "snippets.json"), encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), '{"legacy": "value"}')
+        with open(legacy_file, encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), '{"legacy": "value"}')
+        self.assertTrue(os.path.exists(os.path.join(destination, app_paths.LEGACY_MIGRATION_BREADCRUMB)))
+
 
 class EnvOverrideAdversarialTests(unittest.TestCase):
-    """TXT_XPANDER_HOME edge cases: empty, relative, tilde, unicode, a file."""
+    """SNIPTYPE_HOME edge cases: empty, relative, tilde, unicode, a file."""
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
         self._saved = os.environ.get(app_paths.ENV_HOME)
+        self._saved_legacy = os.environ.get(app_paths.LEGACY_ENV_HOME)
 
     def tearDown(self):
         if self._saved is None:
             os.environ.pop(app_paths.ENV_HOME, None)
         else:
             os.environ[app_paths.ENV_HOME] = self._saved
+        if self._saved_legacy is None:
+            os.environ.pop(app_paths.LEGACY_ENV_HOME, None)
+        else:
+            os.environ[app_paths.LEGACY_ENV_HOME] = self._saved_legacy
 
     def test_empty_env_falls_back_to_default(self):
         # An empty string is falsy: the override must not win over the default.

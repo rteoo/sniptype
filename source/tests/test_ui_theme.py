@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 import ui_theme
 
 
-# The literals that were hardcoded across txt_xpander.pyw before the palette
+# The literals that were hardcoded across sniptype.pyw before the palette
 # was centralized. Copied here on purpose: the point is to fail loudly if the
 # module's own table drifts.
 SHIPPED_WINDOWS_COLORS = {
@@ -369,7 +369,7 @@ class GuiSourceTests(unittest.TestCase):
     """The GUI must go through the seam; a literal here is the bug returning."""
 
     SOURCE = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "..", "txt_xpander.pyw"
+        os.path.dirname(os.path.abspath(__file__)), "..", "sniptype.pyw"
     )
 
     def _source(self):

@@ -1,8 +1,8 @@
 # macOS insertion path: paste timings, erase, secure input
 
-Notes for [issue #27](https://github.com/rteoo/txt_xpander/issues/27): the
+Notes for [issue #27](https://github.com/rteoo/sniptype/issues/27): the
 expansion insertion path (`TextInserter._paste_value`,
-`TextExpander._erase_chars`) was tuned entirely against Windows timing. This
+`Sniptype._erase_chars`) was tuned entirely against Windows timing. This
 documents what the delays are for, which values macOS uses and why, and what a
 real-host pass still has to confirm by hand.
 
@@ -116,18 +116,18 @@ them fails *silently* — the app starts, the tray appears, and nothing expands.
 All four were hit on a real host; this is the order that works.
 
 **1. Launch the bundle through LaunchServices, never its binary directly.**
-Running `Txt Xpander.app/Contents/MacOS/Txt Xpander` from a shell makes macOS
+Running `Sniptype.app/Contents/MacOS/Sniptype` from a shell makes macOS
 attribute TCC to the *responsible process* — the terminal — so the app reports
 both grants `denied` no matter what is ticked in System Settings. `open` gives
 the process the bundle's own identity. To point a launch at a throwaway library
 without losing that:
 
 ```bash
-open --env TXT_XPANDER_HOME=/tmp/matrix-home ~/Applications/Txt\ Xpander.app
+open --env SNIPTYPE_HOME=/tmp/matrix-home ~/Applications/Sniptype.app
 ```
 
 That is the only way to run the matrix against test snippets while the real
-`~/.txt_xpander` library stays untouched.
+`~/.sniptype` library stays untouched.
 
 **2. Install the bundle somewhere permanent before granting anything.** A grant
 is pinned to the bundle it was given to; granting a copy inside a git worktree
@@ -167,7 +167,7 @@ the app's own startup probe rather than trusting the System Settings checkbox,
 which can be a stale row:
 
 ```bash
-grep "Permissões do macOS:" ~/.txt_xpander/logs/txt_xpander.log | tail -1
+grep "Permissões do macOS:" ~/.sniptype/logs/sniptype.log | tail -1
 ```
 
 For each target — **TextEdit**, a **browser textarea** (Safari or Chrome),

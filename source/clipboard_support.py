@@ -25,7 +25,7 @@ from rich_text_support import get_clipboard_payload
 
 # Same logger tree as runtime_support.LOGGER_NAME; importing it here would make
 # the dependency circular (runtime_support imports this module).
-_LOGGER = logging.getLogger("txt_xpander")
+_LOGGER = logging.getLogger("sniptype")
 
 CF_UNICODETEXT = 13
 GMEM_MOVEABLE = 0x0002

@@ -56,7 +56,7 @@ _STATE_LABELS = {
 
 
 class VoiceController:
-    """Owns the voice feature for one TextExpander process."""
+    """Owns the voice feature for one Sniptype process."""
 
     def __init__(
         self,
