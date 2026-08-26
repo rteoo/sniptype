@@ -14,6 +14,7 @@ import tempfile
 import threading
 import time
 import unittest
+from contextlib import ExitStack
 from unittest import mock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -371,24 +372,43 @@ class ManagerGuiSmokeTests(unittest.TestCase):
         self._on_gui(build)
 
     def test_manager_window_is_tracked_and_reused(self):
-        self.app.gui.call(self.app._show_manager_window, timeout=30)
-        first = self.app.manager_window
-        self.assertIsNotNone(first)
-        self.assertEqual(
-            first.title(),
-            f"{tx.APP_DISPLAY_NAME} - Gerenciador de Snippets",
-        )
+        """Track/reuse the manager where a real window manager is available.
 
-        self.app.gui.call(self.app._show_manager_window, timeout=30)
-        self.assertIs(self.app.manager_window, first, "second open should reuse the window")
+        GitHub's Xvfb display has no window manager.  Its ``deiconify``/``lift``
+        /``focus_force`` calls can wait for a focus event that Xvfb never
+        delivers, wedging the whole suite.  Keep the tracking/reuse assertion
+        active there while leaving the focus handoff itself to desktop smoke
+        coverage.
+        """
+        with ExitStack() as patches:
+            if sys.platform.startswith("linux") and os.environ.get("CI"):
+                # Bare Xvfb has no window manager to complete these requests.
+                patches.enter_context(mock.patch.object(tk.Misc, "tkraise"))
+                patches.enter_context(mock.patch.object(tk.Wm, "wm_deiconify"))
+                patches.enter_context(mock.patch.object(tk.Misc, "focus_force"))
 
-        def close(_root):
-            first.protocol  # window still alive
-            self.app._manager_voice_refresher = None
-            self.app.manager_window = None
-            first.destroy()
+            self.app.gui.call(self.app._show_manager_window, timeout=30)
+            first = self.app.manager_window
+            self.assertIsNotNone(first)
+            self.assertEqual(
+                first.title(),
+                f"{tx.APP_DISPLAY_NAME} - Gerenciador de Snippets",
+            )
 
-        self.app.gui.call(close, timeout=30)
+            self.app.gui.call(self.app._show_manager_window, timeout=30)
+            self.assertIs(
+                self.app.manager_window,
+                first,
+                "second open should reuse the window",
+            )
+
+            def close(_root):
+                first.protocol  # window still alive
+                self.app._manager_voice_refresher = None
+                self.app.manager_window = None
+                first.destroy()
+
+            self.app.gui.call(close, timeout=30)
 
     def test_voice_tab_embeds_settings_and_delegates_enable(self):
         voice = mock.Mock()
