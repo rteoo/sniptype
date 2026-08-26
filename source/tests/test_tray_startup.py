@@ -114,6 +114,13 @@ class StartupAndSingleInstanceCompatibilityTests(unittest.TestCase):
 
     def setUp(self):
         tx.APP_MUTEX_HANDLES = []
+        # These tests exercise ``run()`` through the helper above but do not
+        # inherit RunStartupTests.setUp.  Keep the startup banner out of the
+        # test runner: the Windows Actions console uses cp1252 and cannot
+        # encode the banner's Unicode glyphs.
+        patcher = mock.patch("builtins.print")
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def _run(self, main_thread, options=None):
         return RunStartupTests._run(self, main_thread, options)
@@ -121,7 +128,10 @@ class StartupAndSingleInstanceCompatibilityTests(unittest.TestCase):
     def _acquire(self, errors):
         kernel32 = self.Kernel32(errors)
         windll = types.SimpleNamespace(kernel32=kernel32)
-        with mock.patch.object(tx.ctypes, "windll", windll):
+        # ctypes exposes ``windll`` only on Windows.  This test supplies the
+        # fake Win32 surface on every runner to exercise the compatibility
+        # logic without requiring the host platform to provide the attribute.
+        with mock.patch.object(tx.ctypes, "windll", windll, create=True):
             acquired = tx.acquire_single_instance_mutex()
         return acquired, kernel32
 
