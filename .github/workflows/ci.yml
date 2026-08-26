@@ -9,6 +9,9 @@ on:
 jobs:
   tests:
     name: tests (${{ matrix.os }}, py${{ matrix.python-version }})
+    # A headless Tk regression must fail boundedly instead of consuming the
+    # runner's six-hour cap while orphaning xvfb/python processes.
+    timeout-minutes: 10
     # Windows-first app, but the POSIX backends (clipboard, autostart,
     # single-instance lockfile) are only honestly covered if they run on a real
     # macOS/Linux host. The GUI tests self-skip where Tk has no display.
