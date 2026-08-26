@@ -24,18 +24,39 @@ An optional terminator mode waits for a following space or punctuation mark.
 - Static plain-text and rich-text snippets.
 - Variables for snippet references, clipboard content, and fill-in forms.
 - Built-in date/time, Brazilian Central Bank, market-data, and WhatsApp actions.
-- Automatic rotating backups, corrupt-file quarantine, import, and export.
+- One manager for static snippets, dynamic mappings, built-in actions, backups,
+  and optional voice controls.
+- Dynamic actions can be enabled, disabled, and renamed without editing the
+  bundled registry.
+- Automatic rotating backups, corrupt-file quarantine, library import/export,
+  and an optional deterministic mobile sync bundle.
 - Per-user installation with no administrator rights required.
 - Optional local voice dictation and spoken-trigger mode, disabled by default.
 - No telemetry or keystroke logging.
 
-## Install
+## Quick start
+
+Sniptype currently runs from source or from a locally built package. On Windows
+with Python installed:
+
+```powershell
+git clone https://github.com/rteoo/sniptype.git
+cd sniptype\source
+python -m pip install -r requirements.txt
+python sniptype.pyw
+```
+
+Use `pythonw sniptype.pyw` after setup when you do not need console output.
+Ordinary text expansion does not require the optional voice dependencies.
+
+### Releases and installer
 
 The current stable source tag is
 [`v3.4.0`](https://github.com/rteoo/sniptype/tree/v3.4.0). Public binary releases
-have not yet been published from this repository. To use Sniptype now, clone the
-repository and follow the [source setup](source/docs/development.md#source-setup),
-or build the Windows package and installer locally.
+have not yet been published from this repository. The default branch contains
+post-`v3.4.0` maintenance work; use the tag when you need the exact stable source.
+See the [development guide](source/docs/development.md) to build the Windows
+package and installer or the macOS app locally.
 
 The installer is currently unsigned, so Windows SmartScreen may show
 **More info → Run anyway** on first launch. It installs for the current user in
@@ -44,7 +65,7 @@ The installer is currently unsigned, so Windows SmartScreen may show
 
 ## First use
 
-1. Start Sniptype and find its icon in the system tray.
+1. Start Sniptype and find its icon in the system tray or macOS menu bar.
 2. Open **Gerenciar Snippets** from the tray menu.
 3. Add a trigger and its replacement text, then save.
 4. Type the trigger in another application.
@@ -59,9 +80,18 @@ The bundled sample library includes examples such as:
 | `xselic` | Current Selic target |
 | `xwapp` | A WhatsApp link generated from a phone number |
 
-The tray menu also exposes backup, reload, autostart, enable/disable, and data
-folder actions. The manager's **Backups** tab can restore, import, or export a
-library.
+The tray menu also exposes reload, autostart, enable/disable, voice, backup, and
+data-folder actions when those features are available.
+
+The manager is organized around the work being done:
+
+| Tab | Purpose |
+| --- | --- |
+| **Snippets Estáticos** | Create and edit plain or rich-text expansions |
+| **Mapeamentos Dinâmicos** | Maintain prefixed collections such as CPF/CNPJ mappings |
+| **Snippets Dinâmicos** | Enable, disable, rename, and inspect built-in actions |
+| **Backups** | Restore, import, or export the snippet library |
+| **Entrada por voz** | Enable voice, choose a profile/language, and configure hotkeys |
 
 ## Variables
 
@@ -74,6 +104,23 @@ Snippet payloads can compose other values at expansion time:
 For example, `Hello, %%name%%` asks for `name` and inserts the completed text.
 Variables also work in rich-text snippets; style spans are normalized after
 substitution.
+
+## Configuration
+
+Optional settings live in `%USERPROFILE%\.sniptype\settings.json` by default,
+or under the directory selected by `SNIPTYPE_HOME`. Most voice settings are
+managed from **Gerenciar Snippets → Entrada por voz**.
+
+| Setting | Behavior |
+| --- | --- |
+| `terminator_mode` | Wait for space or punctuation before expanding; Enter is not a terminator |
+| `mirror_dir` | Copy `snippets.json` after each successful save |
+| `sync_export_dir` | Write the compiled `sniptype_bundle.json` for mobile consumers |
+| `bcb_timeout`, `bcb_cache_seconds` | Tune Central Bank request timeout and cache duration |
+| `stock_cache_seconds` | Tune market-data cache duration |
+
+`sync_export_dir` must already exist; Sniptype deliberately does not create it.
+Both mirror and sync output contain plaintext user data.
 
 ## Data safety and privacy
 
@@ -96,7 +143,8 @@ therefore expose sensitive library content to that provider.
 ## Platform status and limitations
 
 Sniptype is Windows-first. CI runs the unit suite on Windows, macOS, and Linux,
-but packaged desktop behavior is verified most deeply on Windows.
+with Python 3.12 and 3.14, but packaged desktop behavior is verified most deeply
+on Windows.
 
 - **Windows password fields:** Sniptype does not currently detect password or
   other protected fields. Disable expansion from the tray before entering a
@@ -118,6 +166,19 @@ Voice input is disabled by default and isolated from normal expansion. Balanced
 uses Parakeet; Accuracy uses Qwen with automatic language detection. Live
 streaming is not available. Missing voice dependencies leave ordinary snippet
 expansion unchanged.
+
+From the repository root, install the pinned optional runtime, restart Sniptype,
+then configure voice from **Gerenciar Snippets → Entrada por voz**:
+
+```powershell
+python -m pip install -r source\requirements-voice.txt
+```
+
+The manager and tray stay synchronized for enable/disable state, model status,
+profile, language, and dictation/command hotkeys. Dictation is literal; the
+separate voice-command hotkey expands only an exact spoken trigger. Failed
+insertion reports whether the transcript was actually preserved on the
+clipboard instead of claiming recovery unconditionally.
 
 Model downloads require HTTPS, follow only verified redirects, validate SHA256,
 and resume only when the server confirms the requested byte range. See the
