@@ -16,6 +16,7 @@ from voice_dispatch import (
     OUTCOME_NO_MATCH,
     OUTCOME_SECURE_INPUT,
     OUTCOME_TARGET_LOST,
+    VoiceDispatchResult,
     VoiceTarget,
     dispatch_voice_result,
     match_voice_command,
@@ -73,36 +74,82 @@ class DispatchTests(unittest.TestCase):
             apply_form=(lambda value: self.forms.append(value)) if form else None,
             restore_target=lambda target: restore,
             secure_input_blocks=lambda: secure,
-            leave_on_clipboard=lambda value: self.clip.append(value),
+            leave_on_clipboard=lambda value: self.clip.append(value) or True,
         )
 
     def test_empty_is_ignored(self):
-        self.assertEqual(self._dispatch("  "), OUTCOME_EMPTY)
+        self.assertEqual(self._dispatch("  ").outcome, OUTCOME_EMPTY)
 
     def test_dictation_is_literal(self):
-        self.assertEqual(self._dispatch("xadds"), OUTCOME_INSERTED)
+        self.assertEqual(self._dispatch("xadds").outcome, OUTCOME_INSERTED)
         self.assertEqual(self.inserted, ["xadds"])
         self.assertEqual(self.expanded, [])
 
     def test_command_expands_exact_trigger(self):
-        self.assertEqual(self._dispatch("xadds", mode=MODE_COMMAND), OUTCOME_EXPANDED)
+        self.assertEqual(self._dispatch("xadds", mode=MODE_COMMAND).outcome, OUTCOME_EXPANDED)
         self.assertEqual(self.expanded, ["xadds"])
 
     def test_unknown_command(self):
-        self.assertEqual(self._dispatch("nope", mode=MODE_COMMAND), OUTCOME_NO_MATCH)
+        self.assertEqual(self._dispatch("nope", mode=MODE_COMMAND).outcome, OUTCOME_NO_MATCH)
 
     def test_form_updates_widget(self):
-        self.assertEqual(self._dispatch("João", form=True), OUTCOME_FORM)
+        self.assertEqual(self._dispatch("João", form=True).outcome, OUTCOME_FORM)
         self.assertEqual(self.forms, ["João"])
         self.assertEqual(self.inserted, [])
 
     def test_secure_input_uses_clipboard(self):
-        self.assertEqual(self._dispatch("hi", secure=True), OUTCOME_SECURE_INPUT)
+        self.assertEqual(
+            self._dispatch("hi", secure=True),
+            VoiceDispatchResult(OUTCOME_SECURE_INPUT, clipboard_saved=True),
+        )
         self.assertEqual(self.clip, ["hi"])
 
     def test_lost_target_uses_clipboard(self):
-        self.assertEqual(self._dispatch("hi", restore=False), OUTCOME_TARGET_LOST)
+        self.assertEqual(
+            self._dispatch("hi", restore=False),
+            VoiceDispatchResult(OUTCOME_TARGET_LOST, clipboard_saved=True),
+        )
         self.assertEqual(self.clip, ["hi"])
+
+    def test_secure_input_reports_clipboard_failure(self):
+        result = dispatch_voice_result(
+            "hi",
+            MODE_DICTATION,
+            VoiceTarget("window"),
+            snippets=self.snippets,
+            trigger_index=self.index,
+            insert_text=lambda value: True,
+            expand_trigger=lambda trigger: True,
+            apply_form=None,
+            restore_target=lambda target: True,
+            secure_input_blocks=lambda: True,
+            leave_on_clipboard=lambda value: False,
+        )
+
+        self.assertEqual(
+            result,
+            VoiceDispatchResult(OUTCOME_SECURE_INPUT, clipboard_saved=False),
+        )
+
+    def test_failed_insertion_reports_successful_clipboard_recovery(self):
+        result = dispatch_voice_result(
+            "hi",
+            MODE_DICTATION,
+            VoiceTarget("window"),
+            snippets=self.snippets,
+            trigger_index=self.index,
+            insert_text=lambda value: False,
+            expand_trigger=lambda trigger: True,
+            apply_form=None,
+            restore_target=lambda target: True,
+            secure_input_blocks=lambda: False,
+            leave_on_clipboard=lambda value: True,
+        )
+
+        self.assertEqual(
+            result,
+            VoiceDispatchResult(OUTCOME_FAILED, clipboard_saved=True),
+        )
 
 
 if __name__ == "__main__":

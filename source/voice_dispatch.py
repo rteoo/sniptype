@@ -5,6 +5,8 @@ effective trigger. Form input updates a registered widget through GuiThread
 and never synthesizes a global paste into the app's own window.
 """
 
+from dataclasses import dataclass
+
 from trigger_index import find_direct_trigger, find_dynamic_trigger
 
 
@@ -21,6 +23,14 @@ OUTCOME_CANCELLED = "cancelled"
 OUTCOME_SECURE_INPUT = "secure_input"
 OUTCOME_TARGET_LOST = "target_lost"
 OUTCOME_FAILED = "failed"
+
+
+@dataclass(frozen=True)
+class VoiceDispatchResult:
+    """Outcome plus the result of any attempted clipboard recovery."""
+
+    outcome: str
+    clipboard_saved: bool | None = None
 
 
 def normalize_command_transcript(text):
@@ -101,10 +111,10 @@ def dispatch_voice_result(
     This function must not call ``_dispatch_expansion``.
     """
     if cancelled:
-        return OUTCOME_CANCELLED
+        return VoiceDispatchResult(OUTCOME_CANCELLED)
     text = transcript if isinstance(transcript, str) else ""
     if not text.strip():
-        return OUTCOME_EMPTY
+        return VoiceDispatchResult(OUTCOME_EMPTY)
 
     resolved_mode = classify_voice_target(target, apply_form is not None and mode != MODE_COMMAND)
     if resolved_mode is None:
@@ -112,31 +122,41 @@ def dispatch_voice_result(
 
     if resolved_mode == MODE_FORM:
         if apply_form is None:
-            return OUTCOME_FAILED
+            return VoiceDispatchResult(OUTCOME_FAILED)
         apply_form(text)
-        return OUTCOME_FORM
+        return VoiceDispatchResult(OUTCOME_FORM)
 
     if resolved_mode == MODE_COMMAND:
         trigger = match_voice_command(text, snippets, trigger_index)
         if trigger is None:
-            return OUTCOME_NO_MATCH
+            return VoiceDispatchResult(OUTCOME_NO_MATCH)
         if secure_input_blocks():
-            leave_on_clipboard(text)
-            return OUTCOME_SECURE_INPUT
+            return VoiceDispatchResult(
+                OUTCOME_SECURE_INPUT,
+                clipboard_saved=bool(leave_on_clipboard(text)),
+            )
         if not restore_target(target):
-            leave_on_clipboard(text)
-            return OUTCOME_TARGET_LOST
+            return VoiceDispatchResult(
+                OUTCOME_TARGET_LOST,
+                clipboard_saved=bool(leave_on_clipboard(text)),
+            )
         if expand_trigger(trigger):
-            return OUTCOME_EXPANDED
-        return OUTCOME_FAILED
+            return VoiceDispatchResult(OUTCOME_EXPANDED)
+        return VoiceDispatchResult(OUTCOME_FAILED)
 
     if secure_input_blocks():
-        leave_on_clipboard(text)
-        return OUTCOME_SECURE_INPUT
+        return VoiceDispatchResult(
+            OUTCOME_SECURE_INPUT,
+            clipboard_saved=bool(leave_on_clipboard(text)),
+        )
     if not restore_target(target):
-        leave_on_clipboard(text)
-        return OUTCOME_TARGET_LOST
+        return VoiceDispatchResult(
+            OUTCOME_TARGET_LOST,
+            clipboard_saved=bool(leave_on_clipboard(text)),
+        )
     if insert_text(text):
-        return OUTCOME_INSERTED
-    leave_on_clipboard(text)
-    return OUTCOME_FAILED
+        return VoiceDispatchResult(OUTCOME_INSERTED)
+    return VoiceDispatchResult(
+        OUTCOME_FAILED,
+        clipboard_saved=bool(leave_on_clipboard(text)),
+    )

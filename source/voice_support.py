@@ -660,9 +660,18 @@ class VoiceController:
 
     def _leave_on_clipboard(self, text):
         try:
-            Clipboard.set_content(text)
-        except Exception:
-            pass
+            saved = bool(Clipboard.set_content(text))
+        except Exception as exc:
+            self._warn(
+                "Falha ao copiar a transcrição de voz para a área de "
+                f"transferência: {exc}"
+            )
+            return False
+        if not saved:
+            self._warn(
+                "Falha ao copiar a transcrição de voz para a área de transferência."
+            )
+        return saved
 
     def _complete_session(self, generation, outcome):
         """Return True when this session still owns the controller state."""
@@ -684,26 +693,52 @@ class VoiceController:
         self._emit_status()
         return True
 
-    def _finish_outcome(self, outcome, generation):
+    def _finish_outcome(self, result, generation):
+        outcome = result.outcome
         if not self._complete_session(generation, outcome):
             return
         if outcome == OUTCOME_NO_MATCH:
             self._notify("Nenhum atalho corresponde ao que foi falado.", key="voice-nomatch")
         elif outcome == OUTCOME_SECURE_INPUT:
-            self._notify(
-                "Entrada segura do macOS ativa. O texto ficou na área de transferência.",
-                key="voice-secure",
-            )
+            if result.clipboard_saved:
+                message = (
+                    "Entrada segura do macOS ativa. "
+                    "O texto ficou na área de transferência."
+                )
+            else:
+                message = (
+                    "Entrada segura do macOS ativa. Não foi possível copiar o texto "
+                    "para a área de transferência."
+                )
+            self._notify(message, key="voice-secure")
         elif outcome == OUTCOME_TARGET_LOST:
-            self._notify(
-                "O aplicativo de destino não está mais na frente. "
-                "O texto ficou na área de transferência.",
-                key="voice-target",
-            )
+            if result.clipboard_saved:
+                message = (
+                    "O aplicativo de destino não está mais na frente. "
+                    "O texto ficou na área de transferência."
+                )
+            else:
+                message = (
+                    "O aplicativo de destino não está mais na frente e não foi "
+                    "possível copiar o texto para a área de transferência."
+                )
+            self._notify(message, key="voice-target")
         elif outcome == OUTCOME_EMPTY:
             self._notify("Nenhuma fala foi reconhecida.", key="voice-empty")
         elif outcome == OUTCOME_FAILED:
-            self._notify("Não foi possível inserir o texto de voz.", key="voice-insert")
+            if result.clipboard_saved is True:
+                message = (
+                    "Não foi possível inserir o texto de voz automaticamente. "
+                    "Ele está na área de transferência."
+                )
+            elif result.clipboard_saved is False:
+                message = (
+                    "Não foi possível inserir o texto de voz nem copiá-lo "
+                    "para a área de transferência."
+                )
+            else:
+                message = "Não foi possível inserir o texto de voz."
+            self._notify(message, key="voice-insert")
 
     def _fail_to_idle(self, message, generation=None):
         if generation is None:
