@@ -97,7 +97,8 @@ root, because `LSUIElement` alone does not keep an Aqua Tk app out of the Dock.
 
 `.github/workflows/ci.yml` runs the unittest suite on Windows, macOS, and Ubuntu
 with Python 3.12 and 3.14. Linux uses Xvfb because pynput and pystray bind to Xorg
-at import time.
+at import time. Each matrix job has a 10-minute timeout, and a newer commit
+cancels older validation for the same branch or pull request.
 
 The workflow does not currently build PyInstaller artifacts, run a linter or
 type checker, audit transitive dependencies, or execute real desktop paste and
