@@ -18,10 +18,14 @@ product surface.
 | ARM64 macOS package probe and physical focus check for the non-activating recording panel | Signed macOS build from an interactive keychain session and granted-TCC paste smoke |
 | Failed backend import, controller construction, or profile swap leaves normal expansion available | Nemotron live streaming and its OpenMDW-1.1 review |
 | Cancellation stops capture, calls `session.cancel()`, and boundedly joins workers | iOS (on hold) |
+| Manager **Entrada por voz** tab mirrors tray enable, live status, and settings | Physical manager/tray synchronization smoke on supported desktops |
 
 Enabling **Entrada por voz** without the optional native backend reports
 unavailable. That is expected. iOS is out of scope until this Windows-first
 path is proven.
+
+The manager tab is a discoverability surface for the existing voice controls;
+it does not change the packaged-runtime and live-ASR release gates.
 
 Remaining work is measurement and physical packaged-runtime validation, not
 more product surface. Do not add `sherpa-onnx` until there is a pinned ONNX

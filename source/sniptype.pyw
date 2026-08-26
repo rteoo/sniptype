@@ -17,6 +17,7 @@ Libraries used:
 
 import time
 import threading
+import gc
 import os
 import sys
 import shutil
@@ -276,6 +277,10 @@ class Sniptype:
         self.manager_window = None
         self.macos_permission_window = None
         self.voice_status_indicator = None
+        self._manager_voice_refresher = None
+        self._manager_notebook = None
+        self._manager_voice_tab = None
+        self._manager_voice_tk_vars = []
         # Cached macOS TCC probe. Like the autostart cache, the tray menu only
         # ever reads this: pystray re-evaluates `visible=` on every render and
         # the probe is a TCC round-trip. Empty (all unknown) off macOS.
@@ -1782,6 +1787,17 @@ class Sniptype:
         if self.voice_status_indicator is None:
             self.voice_status_indicator = VoiceStatusIndicator(root)
         self.voice_status_indicator.update(snapshot["state"], snapshot["mode"])
+        self._refresh_manager_voice_tab()
+
+    def _refresh_manager_voice_tab(self):
+        """Update manager voice widgets. GUI thread only; no-op after close."""
+        refresher = self._manager_voice_refresher
+        if refresher is None:
+            return
+        try:
+            refresher()
+        except Exception as exc:
+            self.logger.warning(f"Falha ao atualizar a aba de voz: {exc}")
 
     def _voice_menu_checked(self, _item=None):
         return bool(self.voice is not None and self.voice.is_enabled())
@@ -1793,8 +1809,10 @@ class Sniptype:
         if self.voice is None:
             return
         if self.voice.is_enabled():
-            self.voice.disable()
-            self.refresh_tray_menu()
+            try:
+                self.task_runner.start(self._disable_voice, name="voice-disable")
+            except Exception:
+                self._disable_voice()
             return
         if not self.voice._backend.available() and not getattr(
             self.voice._backend, "loaded_path", None
@@ -1808,6 +1826,13 @@ class Sniptype:
             self.voice.enable()
         self.refresh_tray_menu()
 
+    def _disable_voice(self):
+        """Join capture workers off the Tk/Cocoa callback that requested disable."""
+        if self.voice is None:
+            return
+        self.voice.disable()
+        self.refresh_tray_menu()
+
     def _confirm_and_enable_voice(self, _root=None):
         from voice_catalog import catalog_entry, format_size
 
@@ -1818,6 +1843,7 @@ class Sniptype:
                 key="voice-mic",
             )
             macos_permissions.open_settings_pane(macos_permissions.MICROPHONE)
+            self._refresh_manager_voice_tab()
             return
         entry = catalog_entry(self.voice.settings.profile)
         if entry is not None and not self.voice.model_installed():
@@ -1830,12 +1856,14 @@ class Sniptype:
                 "O arquivo fica num cache local, não na pasta de snippets."
             )
             if not messagebox.askyesno("Entrada por voz", message):
+                self._refresh_manager_voice_tab()
                 return
         self.voice.enable()
         self.refresh_tray_menu()
+        self._refresh_manager_voice_tab()
 
     def open_voice_settings(self, icon=None, item=None):
-        """Open the voice profile/license dialog on the GUI thread."""
+        """Open the voice profile/license controls on the GUI thread."""
         if self.voice is None:
             return
         try:
@@ -1849,9 +1877,19 @@ class Sniptype:
             )
 
     def _show_voice_settings(self, root):
-        import tkinter as tk
-        from tkinter import messagebox
+        """Open the manager on the voice tab. Tray shortcut; no extra dialog."""
+        self._show_manager_window(root)
+        notebook = self._manager_notebook
+        tab = self._manager_voice_tab
+        if notebook is None or tab is None:
+            return
+        try:
+            notebook.select(tab)
+        except tk.TclError:
+            pass
 
+    def _build_voice_settings_controls(self, parent, owner):
+        """Build profile, language, shortcut, and model controls."""
         from voice_catalog import (
             LANGUAGES,
             available_languages,
@@ -1861,51 +1899,69 @@ class Sniptype:
             third_party_notices,
         )
         from voice_hotkey import parse_chord
-        from voice_models import model_is_installed
+        import voice_models
 
-        ui = ui_theme.bind(root)
-        dialog = tk.Toplevel(root)
-        dialog.title("Entrada por voz")
-        dialog.configure(bg=ui.surface)
-        self._set_window_icon(dialog)
+        ui = ui_theme.theme()
+        wrap = 640
+        visible = selectable_catalog()
+        selected = tk.StringVar(master=owner, value=self.voice.settings.profile)
+        language = tk.StringVar(master=owner, value=self.voice.settings.language)
+        hotkey = tk.StringVar(master=owner, value=self.voice.settings.hotkey)
+        command_hotkey = tk.StringVar(
+            master=owner, value=self.voice.settings.command_hotkey
+        )
+        self._manager_voice_tk_vars = [
+            selected,
+            language,
+            hotkey,
+            command_hotkey,
+        ]
+        profile_buttons = []
 
         tk.Label(
-            dialog,
+            parent,
             text="Modelos baixados sob demanda. Nada é enviado para a nuvem.",
             font=ui.font(9),
             bg=ui.surface,
             fg=ui.text,
-            wraplength=460,
+            wraplength=wrap,
             justify="left",
-        ).pack(anchor="w", padx=16, pady=(16, 8))
+        ).pack(anchor="w", pady=(8, 8))
 
-        selected = tk.StringVar(value=self.voice.settings.profile)
-        visible = selectable_catalog()
-        profile_buttons = []
-        for entry in visible:
-            installed = model_is_installed(entry, self.voice.cache_dir)
+        def profile_label(entry):
+            installed = voice_models.model_is_installed(entry, self.voice.cache_dir)
             status = "instalado" if installed else "não baixado"
-            text = (
+            return (
                 f"{entry['purpose']}\n"
                 f"Download {format_size(entry['size_bytes'])} · "
                 f"{entry['license_id']} · {status}"
             )
-            profile_button = tk.Radiobutton(
-                dialog,
-                text=text,
+
+        def refresh_profile_labels():
+            for button, entry in profile_buttons:
+                try:
+                    if not button.winfo_exists():
+                        continue
+                except tk.TclError:
+                    continue
+                button.configure(text=profile_label(entry))
+
+        for entry in visible:
+            button = tk.Radiobutton(
+                parent,
+                text=profile_label(entry),
                 variable=selected,
                 value=entry["profile"],
                 anchor="w",
                 justify="left",
-                wraplength=440,
+                wraplength=wrap - 20,
                 **ui.checkbutton_colors(ui.surface),
             )
-            profile_button.pack(anchor="w", padx=16, pady=4)
-            profile_buttons.append(profile_button)
+            button.pack(anchor="w", pady=4)
+            profile_buttons.append((button, entry))
 
-        language = tk.StringVar(value=self.voice.settings.language)
-        lang_row = tk.Frame(dialog, bg=ui.surface)
-        lang_row.pack(anchor="w", padx=16, pady=(8, 4))
+        lang_row = tk.Frame(parent, bg=ui.surface)
+        lang_row.pack(anchor="w", pady=(8, 4))
         language_label = tk.Label(
             lang_row,
             text="Idioma:",
@@ -1926,11 +1982,6 @@ class Sniptype:
                 text=language_labels.get(lang, lang),
                 variable=language,
                 value=lang,
-                state=(
-                    tk.NORMAL
-                    if lang in available_languages(selected.get())
-                    else tk.DISABLED
-                ),
                 **ui.checkbutton_colors(ui.surface),
             )
             button.pack(side=tk.LEFT, padx=4)
@@ -1950,15 +2001,12 @@ class Sniptype:
             else:
                 language_label.configure(text="Idioma:")
 
-        for button in profile_buttons:
+        for button, _entry in profile_buttons:
             button.configure(command=update_language_options)
         selected.trace_add("write", update_language_options)
-        update_language_options()
 
-        hotkey = tk.StringVar(value=self.voice.settings.hotkey)
-        command_hotkey = tk.StringVar(value=self.voice.settings.command_hotkey)
-        shortcut_frame = tk.Frame(dialog, bg=ui.surface)
-        shortcut_frame.pack(fill=tk.X, padx=16, pady=(8, 4))
+        shortcut_frame = tk.Frame(parent, bg=ui.surface)
+        shortcut_frame.pack(fill=tk.X, pady=(8, 4))
         shortcut_frame.grid_columnconfigure(1, weight=1)
         tk.Label(
             shortcut_frame,
@@ -1997,14 +2045,25 @@ class Sniptype:
         ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(2, 0))
 
         tk.Label(
-            dialog,
+            parent,
             text="\n".join(third_party_notices()),
             font=ui.font(8),
             bg=ui.surface,
             fg=ui.text_muted,
-            wraplength=460,
+            wraplength=wrap,
             justify="left",
-        ).pack(anchor="w", padx=16, pady=(8, 0))
+        ).pack(anchor="w", pady=(8, 0))
+
+        def refresh_form():
+            refresh_profile_labels()
+            voice = self.voice
+            if voice is None:
+                return
+            selected.set(voice.settings.profile)
+            language.set(voice.settings.language)
+            hotkey.set(voice.settings.hotkey)
+            command_hotkey.set(voice.settings.command_hotkey)
+            update_language_options()
 
         def apply_voice_settings():
             profile = selected.get()
@@ -2015,7 +2074,7 @@ class Sniptype:
                     "Atalho inválido",
                     "O atalho de ditado precisa de um modificador e uma tecla.\n\n"
                     "Exemplo: ctrl+alt+space",
-                    parent=dialog,
+                    parent=owner,
                 )
                 return
             try:
@@ -2025,23 +2084,30 @@ class Sniptype:
                     "Atalho inválido",
                     "O atalho de comando precisa de um modificador e uma tecla.\n\n"
                     "Exemplo: ctrl+alt+shift+space",
-                    parent=dialog,
+                    parent=owner,
                 )
                 return
             if command_chord == dictation_chord:
                 messagebox.showerror(
                     "Atalhos em conflito",
                     "Escolha atalhos diferentes para ditado e comando por voz.",
-                    parent=dialog,
+                    parent=owner,
                 )
                 return
-            entry = next((item for item in visible if item["profile"] == profile), None)
-            if entry is not None and not model_is_installed(entry, self.voice.cache_dir):
+            entry = next(
+                (item for item in visible if item["profile"] == profile),
+                None,
+            )
+            if entry is not None and not voice_models.model_is_installed(
+                entry, self.voice.cache_dir
+            ):
                 warning = (
                     f"Isso vai baixar {format_size(entry['size_bytes'])} "
                     f"({entry['license_id']}).\n\n{entry['attribution']}"
                 )
-                if not messagebox.askokcancel("Baixar modelo de voz", warning, parent=dialog):
+                if not messagebox.askokcancel(
+                    "Baixar modelo de voz", warning, parent=owner
+                ):
                     return
             self.voice.apply_options(
                 profile=profile,
@@ -2051,40 +2117,37 @@ class Sniptype:
             )
             if not self.voice.is_enabled():
                 self.voice.enable()
-            dialog.destroy()
             self.refresh_tray_menu()
+            self._refresh_manager_voice_tab()
 
         def remove_model():
             if not messagebox.askokcancel(
                 "Remover modelo",
                 "A entrada por voz será desligada e só o modelo deste perfil será apagado.",
-                parent=dialog,
+                parent=owner,
             ):
                 return
             self.voice.delete_active_model()
-            dialog.destroy()
             self.refresh_tray_menu()
+            self._refresh_manager_voice_tab()
 
-        buttons = tk.Frame(dialog, bg=ui.surface)
-        buttons.pack(fill=tk.X, padx=16, pady=(8, 16))
-        tk.Button(
-            buttons,
-            text="Cancelar",
-            command=dialog.destroy,
-            **ui.button_colors(),
-        ).pack(side=tk.RIGHT, padx=(4, 0))
+        buttons = tk.Frame(parent, bg=ui.surface)
+        buttons.pack(fill=tk.X, pady=(12, 0))
         tk.Button(
             buttons,
             text="Salvar e usar",
             command=apply_voice_settings,
             **ui.button_colors(accent=True),
-        ).pack(side=tk.RIGHT)
+        ).pack(side=tk.LEFT)
         tk.Button(
             buttons,
             text="Remover modelo",
             command=remove_model,
             **ui.button_colors(),
-        ).pack(side=tk.LEFT)
+        ).pack(side=tk.LEFT, padx=(8, 0))
+
+        refresh_form()
+        return refresh_form
 
     # =====================================================================
     # SNIPPET MANAGEMENT GUI
@@ -2176,6 +2239,8 @@ class Sniptype:
 
             notebook = ttk.Notebook(root, style="Manager.TNotebook")
             notebook.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 12))
+            self._manager_notebook = notebook
+            self._manager_voice_tab = None
 
             tab_static = tk.Frame(notebook, bg=ui.surface)
             notebook.add(tab_static, text="Snippets Estáticos")
@@ -2195,16 +2260,29 @@ class Sniptype:
             # Tabs are rebuilt with the window; drop the previous window's
             # callbacks so they can't fire against destroyed widgets.
             self._manager_refreshers = []
+            self._manager_voice_refresher = None
             self._create_static_snippets_tab(
                 tab_static, root, set_count=tab_counter(tab_static, "Snippets Estáticos"))
             self._create_dynamic_mappings_tab(
                 tab_dynamic, root, set_count=tab_counter(tab_dynamic, "Mapeamentos Dinâmicos"))
             self._create_dynamic_snippets_tab(tab_builtin, root)
             self._create_backups_tab(tab_backups, root)
+            if self.voice is not None:
+                tab_voice = tk.Frame(notebook, bg=ui.surface)
+                notebook.add(tab_voice, text="Entrada por voz")
+                self._manager_voice_tab = tab_voice
+                self._create_voice_tab(tab_voice, root)
 
             def on_close():
+                self._manager_voice_refresher = None
+                self._manager_notebook = None
+                self._manager_voice_tab = None
+                self._manager_voice_tk_vars = []
                 self.manager_window = None
                 root.destroy()
+                # StringVars from the voice tab must be collected on this
+                # thread; a later GC on the tray thread can abort Tcl.
+                gc.collect()
 
             root.protocol("WM_DELETE_WINDOW", on_close)
             self.manager_window = root
@@ -2212,6 +2290,10 @@ class Sniptype:
             root.focus_force()
 
         except Exception as e:
+            self._manager_voice_refresher = None
+            self._manager_notebook = None
+            self._manager_voice_tab = None
+            self._manager_voice_tk_vars = []
             self.manager_window = None
             self.logger.error(f"Erro na GUI de gerenciamento: {e}")
             self.notify_error(
@@ -2219,6 +2301,85 @@ class Sniptype:
                 key="gui-open-error",
                 cooldown_seconds=5,
             )
+
+    def _create_voice_tab(self, parent, root):
+        """Build manager voice controls backed by the existing tray actions."""
+        ui = ui_theme.theme()
+        main = tk.Frame(parent, bg=ui.surface, padx=14, pady=14)
+        main.pack(fill=tk.BOTH, expand=True)
+
+        tk.Label(
+            main,
+            text="Entrada por voz",
+            font=ui.font(11, "bold"),
+            bg=ui.surface,
+            fg=ui.text,
+        ).pack(anchor="w")
+        tk.Label(
+            main,
+            text="Ative a entrada por voz e escolha o modelo, o idioma e os atalhos.",
+            font=ui.font(9),
+            bg=ui.surface,
+            fg=ui.text_muted,
+            wraplength=640,
+            justify="left",
+        ).pack(anchor="w", pady=(4, 12))
+
+        enabled = bool(self.voice is not None and self.voice.is_enabled())
+        status_text = (
+            self.voice.status_label() if self.voice is not None else "Entrada por voz"
+        )
+
+        def refresh():
+            voice = self.voice
+            if voice is None:
+                return
+            try:
+                if not checkbox.winfo_exists() or not status_label.winfo_exists():
+                    return
+            except tk.TclError:
+                return
+            if voice.is_enabled():
+                checkbox.select()
+            else:
+                checkbox.deselect()
+            status_label.configure(text=voice.status_label())
+            refresh_form()
+
+        def on_toggle():
+            was_enabled = bool(self.voice is not None and self.voice.is_enabled())
+            self.toggle_voice()
+            # Disable is asynchronous; controller callbacks own that state.
+            # A cancelled enable still needs an immediate checkbox reset.
+            if not was_enabled:
+                refresh()
+
+        checkbox = tk.Checkbutton(
+            main,
+            text="Ativar entrada por voz",
+            command=on_toggle,
+            **ui.checkbutton_colors(ui.surface),
+        )
+        checkbox.pack(anchor="w")
+        if enabled:
+            checkbox.select()
+        else:
+            checkbox.deselect()
+
+        status_label = tk.Label(
+            main,
+            text=status_text,
+            font=ui.font(9),
+            bg=ui.surface,
+            fg=ui.text_muted,
+            wraplength=640,
+            justify="left",
+        )
+        status_label.pack(anchor="w", pady=(4, 12))
+
+        refresh_form = self._build_voice_settings_controls(main, root)
+        self._manager_voice_refresher = refresh
+        refresh()
 
     def _create_backups_tab(self, parent, root):
         """Backups tab: list backups and expose restore/export/import actions."""
