@@ -8,7 +8,15 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from trigger_index import compile_trigger_index
 from voice_audio import VoiceAudioError
-from voice_dispatch import MODE_COMMAND, MODE_DICTATION, OUTCOME_INSERTED, VoiceTarget
+from voice_dispatch import (
+    MODE_COMMAND,
+    MODE_DICTATION,
+    OUTCOME_FAILED,
+    OUTCOME_INSERTED,
+    OUTCOME_SECURE_INPUT,
+    OUTCOME_TARGET_LOST,
+    VoiceTarget,
+)
 from voice_runtime import FakeAsrBackend, VoiceRuntimeError
 from voice_support import (
     STATE_IDLE,
@@ -110,6 +118,65 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(self.inserted, ["xadds"])
         self.assertEqual(self.expanded, [])
         self.assertEqual(self.controller.last_outcome, OUTCOME_INSERTED)
+
+    def test_clipboard_exception_reports_that_dictation_was_not_recovered(self):
+        self._ready()
+        self.controller._insert_text = lambda text: False
+        with mock.patch("voice_support.Clipboard.set_content", side_effect=OSError("busy")):
+            self.controller.handle_hotkey_press(MODE_DICTATION)
+            self.controller.handle_hotkey_release(MODE_DICTATION)
+
+        self.assertEqual(self.controller.last_outcome, OUTCOME_FAILED)
+        self.notify.assert_called_with(
+            "Não foi possível inserir o texto de voz nem copiá-lo "
+            "para a área de transferência.",
+            key="voice-insert",
+        )
+        self.logger.warning.assert_called_once()
+
+    def test_failed_insertion_reports_successful_clipboard_recovery(self):
+        self._ready()
+        self.controller._insert_text = lambda text: False
+        with mock.patch("voice_support.Clipboard.set_content", return_value=True):
+            self.controller.handle_hotkey_press(MODE_DICTATION)
+            self.controller.handle_hotkey_release(MODE_DICTATION)
+
+        self.assertEqual(self.controller.last_outcome, OUTCOME_FAILED)
+        self.notify.assert_called_with(
+            "Não foi possível inserir o texto de voz automaticamente. "
+            "Ele está na área de transferência.",
+            key="voice-insert",
+        )
+
+    def test_secure_input_reports_clipboard_failure_truthfully(self):
+        self._ready()
+        self.controller._secure_input_blocks = lambda: True
+        with mock.patch("voice_support.Clipboard.set_content", return_value=False):
+            self.controller.handle_hotkey_press(MODE_DICTATION)
+            self.controller.handle_hotkey_release(MODE_DICTATION)
+
+        self.assertEqual(self.controller.last_outcome, OUTCOME_SECURE_INPUT)
+        self.notify.assert_called_with(
+            "Entrada segura do macOS ativa. Não foi possível copiar o texto "
+            "para a área de transferência.",
+            key="voice-secure",
+        )
+        self.logger.warning.assert_called_once()
+
+    def test_lost_target_reports_clipboard_failure_truthfully(self):
+        self._ready()
+        self.controller._restore_target = lambda target: False
+        with mock.patch("voice_support.Clipboard.set_content", return_value=False):
+            self.controller.handle_hotkey_press(MODE_DICTATION)
+            self.controller.handle_hotkey_release(MODE_DICTATION)
+
+        self.assertEqual(self.controller.last_outcome, OUTCOME_TARGET_LOST)
+        self.notify.assert_called_with(
+            "O aplicativo de destino não está mais na frente e não foi "
+            "possível copiar o texto para a área de transferência.",
+            key="voice-target",
+        )
+        self.logger.warning.assert_called_once()
 
     def test_status_callback_covers_interactive_session_states(self):
         self._ready()
