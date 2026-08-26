@@ -512,6 +512,118 @@ class VoiceIsolationTests(unittest.TestCase):
         app._voice_status_changed()
         app.refresh_tray_menu.assert_called_once_with()
 
+    def test_gui_thread_status_path_refreshes_manager_tab(self):
+        app = make_app(self.tmp, {"xhi": "hello"})
+        app.voice = mock.Mock()
+        app.voice.status_snapshot.return_value = {
+            "state": "recording",
+            "mode": "dictation",
+            "partial": "",
+        }
+        app.voice_status_indicator = mock.Mock()
+        refresher = mock.Mock()
+        app._manager_voice_refresher = refresher
+        submitted = []
+        app.gui.submit = submitted.append
+        app.refresh_tray_menu = mock.Mock()
+
+        app._voice_status_changed()
+
+        self.assertEqual(len(submitted), 1)
+        app.refresh_tray_menu.assert_not_called()
+        submitted[0](mock.Mock())
+        refresher.assert_called_once_with()
+        app.voice_status_indicator.update.assert_called_once_with(
+            "recording", "dictation"
+        )
+
+    def test_cancelled_enable_restores_manager_checked_state(self):
+        app = make_app(self.tmp, {"xhi": "hello"})
+        app.voice = mock.Mock()
+        app.voice.is_enabled.return_value = False
+        app.voice.model_installed.return_value = False
+        app.voice.settings.profile = "balanced"
+        refresher = mock.Mock()
+        app._manager_voice_refresher = refresher
+        entry = {
+            "id": "parakeet",
+            "size_bytes": 1000,
+            "purpose": "test",
+            "license_id": "MIT",
+            "attribution": "x",
+        }
+
+        with mock.patch("voice_catalog.catalog_entry", return_value=entry), \
+                mock.patch("voice_catalog.format_size", return_value="1 KB"), \
+                mock.patch.object(tx.messagebox, "askyesno", return_value=False):
+            app._confirm_and_enable_voice()
+
+        app.voice.enable.assert_not_called()
+        refresher.assert_called_once_with()
+
+    def test_denied_microphone_restores_manager_checked_state(self):
+        app = make_app(self.tmp, {"xhi": "hello"})
+        app.voice = mock.Mock()
+        app.notify_error = mock.Mock()
+        refresher = mock.Mock()
+        app._manager_voice_refresher = refresher
+
+        with mock.patch.object(
+            tx.macos_permissions,
+            "check_microphone",
+            return_value=tx.macos_permissions.DENIED,
+        ), mock.patch.object(tx.macos_permissions, "open_settings_pane"):
+            app._confirm_and_enable_voice()
+
+        app.voice.enable.assert_not_called()
+        refresher.assert_called_once_with()
+
+    def test_missing_voice_leaves_manager_refresher_unset(self):
+        with mock.patch.object(tx, "VoiceController", side_effect=RuntimeError("boom")):
+            app = make_app(self.tmp, {"xhi": "hello"})
+        self.assertIsNone(app.voice)
+        self.assertIsNone(app._manager_voice_refresher)
+        app._voice_status_changed()
+
+    def test_stale_manager_voice_callback_after_close_is_noop(self):
+        app = make_app(self.tmp, {"xhi": "hello"})
+        app.voice_status_indicator = mock.Mock()
+        app._manager_voice_refresher = None
+        app._render_voice_status(
+            mock.Mock(), {"state": "idle", "mode": None, "partial": ""}
+        )
+        app.voice_status_indicator.update.assert_called_once_with("idle", None)
+
+    def test_destroyed_manager_voice_widgets_do_not_raise(self):
+        app = make_app(self.tmp, {"xhi": "hello"})
+        app.voice_status_indicator = mock.Mock()
+        app._manager_voice_refresher = mock.Mock(
+            side_effect=RuntimeError("widget destroyed")
+        )
+        app._render_voice_status(
+            mock.Mock(), {"state": "loading", "mode": None, "partial": ""}
+        )
+        app.voice_status_indicator.update.assert_called_once_with("loading", None)
+
+    def test_disable_runs_on_a_worker_not_the_caller(self):
+        app = make_app(self.tmp, {"xhi": "hello"})
+        app.voice = mock.Mock()
+        app.voice.is_enabled.return_value = True
+        app.task_runner = mock.Mock()
+        app.refresh_tray_menu = mock.Mock()
+
+        app.toggle_voice()
+
+        app.voice.disable.assert_not_called()
+        app.task_runner.start.assert_called_once()
+        self.assertEqual(
+            app.task_runner.start.call_args.kwargs.get("name"), "voice-disable"
+        )
+        worker = app.task_runner.start.call_args.args[0]
+        worker()
+        app.voice.disable.assert_called_once_with()
+        app.refresh_tray_menu.assert_called_once_with()
+
 
 class BufferMarginDispatchTests(unittest.TestCase):
     """The typed-text buffer must be sized so a trigger longer than the default,
