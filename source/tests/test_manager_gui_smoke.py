@@ -9,6 +9,7 @@ app's worker-thread Tk root is not something AppKit permits at all.
 
 import os
 import sys
+import gc
 import tempfile
 import threading
 import time
@@ -77,6 +78,24 @@ class ManagerGuiSmokeTests(unittest.TestCase):
         self.app.gui.ensure_started()
 
     def tearDown(self):
+        def cleanup(root):
+            self.app._manager_voice_refresher = None
+            self.app._manager_notebook = None
+            self.app._manager_voice_tab = None
+            self.app._manager_voice_tk_vars = []
+            self.app.manager_window = None
+            for child in list(root.winfo_children()):
+                try:
+                    child.destroy()
+                except Exception:
+                    pass
+            gc.collect()
+
+        try:
+            if self.app.gui.running:
+                self.app.gui.call(cleanup, timeout=10)
+        except Exception:
+            self.app._manager_voice_refresher = None
         self.app.gui.stop()
 
     def _on_gui(self, func):
@@ -89,12 +108,19 @@ class ManagerGuiSmokeTests(unittest.TestCase):
             root.withdraw()
             self.app._configure_manager_styles(root)
             frames = {name: tk.Frame(root) for name in
-                      ("static", "dyn", "builtin", "backups")}
+                      ("static", "dyn", "builtin", "backups", "voice")}
             self.app._create_static_snippets_tab(frames["static"], root)
             self.app._create_dynamic_mappings_tab(frames["dyn"], root)
             self.app._create_dynamic_snippets_tab(frames["builtin"], root)
             self.app._create_backups_tab(frames["backups"], root)
+            _ensure_voice(self.app)
+            self.app._create_voice_tab(frames["voice"], root)
             root.update_idletasks()
+            self.assertIsNotNone(self.app._manager_voice_refresher)
+            self.assertNotIn(
+                self.app._manager_voice_refresher,
+                self.app._manager_refreshers,
+            )
 
         self._on_gui(build)
 
@@ -358,10 +384,180 @@ class ManagerGuiSmokeTests(unittest.TestCase):
 
         def close(_root):
             first.protocol  # window still alive
+            self.app._manager_voice_refresher = None
             self.app.manager_window = None
             first.destroy()
 
         self.app.gui.call(close, timeout=30)
+
+    def test_voice_tab_embeds_settings_and_delegates_enable(self):
+        voice = mock.Mock()
+        voice.is_enabled.return_value = True
+        voice.status_label.return_value = "Entrada por voz (pronta)"
+        voice.settings.profile = "balanced"
+        voice.settings.language = "auto"
+        voice.settings.hotkey = "ctrl+alt+space"
+        voice.settings.command_hotkey = "ctrl+alt+shift+space"
+        voice.cache_dir = tempfile.mkdtemp()
+        self.app.voice = voice
+        self.app.toggle_voice = mock.Mock()
+
+        def build(shared_root):
+            root = tk.Toplevel(shared_root)
+            root.withdraw()
+            frame = tk.Frame(root)
+            self.app._create_voice_tab(frame, root)
+            root.update_idletasks()
+            checkbox = [
+                widget for widget in _descendants(frame)
+                if isinstance(widget, tk.Checkbutton)
+            ][0]
+            buttons = [
+                str(widget.cget("text")) for widget in _descendants(frame)
+                if isinstance(widget, tk.Button)
+            ]
+            radios = [
+                widget for widget in _descendants(frame)
+                if isinstance(widget, tk.Radiobutton)
+            ]
+            labels = [
+                str(widget.cget("text")) for widget in _descendants(frame)
+                if isinstance(widget, tk.Label)
+            ]
+            checked = bool(int(checkbox.getvar(checkbox.cget("variable"))))
+            checkbox.invoke()
+            return checked, labels, buttons, len(radios)
+
+        checked, labels, buttons, radio_count = self._on_gui(build)
+        self.assertTrue(checked)
+        self.assertIn("Entrada por voz (pronta)", labels)
+        self.assertIn("Salvar e usar", buttons)
+        self.assertIn("Remover modelo", buttons)
+        self.assertFalse(any(text.startswith("Configurar voz") for text in buttons))
+        self.assertGreaterEqual(radio_count, 2)
+        self.app.toggle_voice.assert_called_once_with()
+
+    def test_voice_tab_refresh_updates_install_labels_and_normalized_settings(self):
+        voice = mock.Mock()
+        voice.is_enabled.return_value = False
+        voice.status_label.return_value = "Entrada por voz"
+        voice.settings.profile = "balanced"
+        voice.settings.language = "pt-BR"
+        voice.settings.hotkey = "ctrl+alt+space"
+        voice.settings.command_hotkey = "ctrl+alt+shift+space"
+        voice.cache_dir = tempfile.mkdtemp()
+        self.app.voice = voice
+
+        def build_and_refresh(shared_root):
+            root = tk.Toplevel(shared_root)
+            root.withdraw()
+            frame = tk.Frame(root)
+            with mock.patch("voice_models.model_is_installed", return_value=False):
+                self.app._create_voice_tab(frame, root)
+            root.update_idletasks()
+            before = [
+                str(widget.cget("text")) for widget in _descendants(frame)
+                if isinstance(widget, tk.Radiobutton)
+            ]
+            selected, language, _hotkey, _command = self.app._manager_voice_tk_vars
+            before_state = (selected.get(), language.get())
+            voice.settings.profile = "accuracy"
+            voice.settings.language = "auto"
+            with mock.patch("voice_models.model_is_installed", return_value=True):
+                self.app._manager_voice_refresher()
+            after = [
+                str(widget.cget("text")) for widget in _descendants(frame)
+                if isinstance(widget, tk.Radiobutton)
+            ]
+            after_state = (selected.get(), language.get())
+            return before, before_state, after, after_state
+
+        before, before_state, after, after_state = self._on_gui(build_and_refresh)
+        self.assertTrue(any("não baixado" in text for text in before), before)
+        self.assertEqual(before_state, ("balanced", "pt-BR"))
+        self.assertTrue(any("instalado" in text for text in after), after)
+        self.assertEqual(after_state, ("accuracy", "auto"))
+
+    def test_open_voice_settings_selects_the_manager_tab(self):
+        _ensure_voice(self.app)
+
+        def open_settings(shared_root):
+            self.app._show_voice_settings(shared_root)
+            notebook = self.app._manager_notebook
+            selected = notebook.select()
+            return notebook.tab(selected, "text")
+
+        title = self._on_gui(open_settings)
+        self.assertIn("Entrada por voz", title)
+
+    def test_voice_tab_absent_when_controller_missing(self):
+        self.app.voice = None
+
+        def open_manager(shared_root):
+            self.app._show_manager_window(shared_root)
+            return _notebook_titles(self.app.manager_window)
+
+        titles = self._on_gui(open_manager)
+        self.assertTrue(titles, "expected manager notebook tabs")
+        self.assertTrue(
+            all("Entrada por voz" not in title for title in titles),
+            titles,
+        )
+        self.assertIsNone(self.app._manager_voice_refresher)
+
+    def test_manager_reopen_rebinds_voice_refresher(self):
+        _ensure_voice(self.app)
+
+        def cycle(shared_root):
+            self.app._show_manager_window(shared_root)
+            first = self.app._manager_voice_refresher
+            window = self.app.manager_window
+            handler = window.protocol("WM_DELETE_WINDOW")
+            window.tk.call(handler)
+            closed_refresher = self.app._manager_voice_refresher
+            self.app._show_manager_window(shared_root)
+            second = self.app._manager_voice_refresher
+            titles = _notebook_titles(self.app.manager_window)
+            return (
+                first is not None,
+                closed_refresher is None,
+                second is not None,
+                first is second,
+                titles,
+            )
+
+        bound, cleared, rebound, same, titles = self._on_gui(cycle)
+        self.assertTrue(bound)
+        self.assertTrue(cleared)
+        self.assertTrue(rebound)
+        self.assertFalse(same, "reopen must register a new refresher")
+        self.assertTrue(any("Entrada por voz" in title for title in titles), titles)
+
+
+def _ensure_voice(app):
+    if app.voice is not None:
+        return app.voice
+    voice = mock.Mock()
+    voice.is_enabled.return_value = False
+    voice.status_label.return_value = "Entrada por voz"
+    voice.settings.profile = "balanced"
+    voice.settings.language = "auto"
+    voice.settings.hotkey = "ctrl+alt+space"
+    voice.settings.command_hotkey = "ctrl+alt+shift+space"
+    voice.cache_dir = tempfile.mkdtemp()
+    app.voice = voice
+    return voice
+
+
+def _notebook_titles(window):
+    notebooks = [
+        widget for widget in _descendants(window)
+        if isinstance(widget, ttk.Notebook)
+    ]
+    if not notebooks:
+        return []
+    notebook = notebooks[0]
+    return [notebook.tab(tab_id, "text") for tab_id in notebook.tabs()]
 
 
 def _form_windows(root):
