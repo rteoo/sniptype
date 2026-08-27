@@ -316,10 +316,10 @@ class AppVersionFormattingTests(unittest.TestCase):
             "Sniptype v3.3.0 beta",
         )
 
-    def test_running_build_is_the_3_4_0_stable_release(self):
-        self.assertEqual(tx.APP_VERSION, "3.4.0")
-        self.assertEqual(tx.RELEASE_CHANNEL, "stable")
-        self.assertEqual(tx.APP_DISPLAY_NAME, "Sniptype v3.4.0")
+    def test_running_build_is_the_3_5_0_beta_release(self):
+        self.assertEqual(tx.APP_VERSION, "3.5.0")
+        self.assertEqual(tx.RELEASE_CHANNEL, "beta")
+        self.assertEqual(tx.APP_DISPLAY_NAME, "Sniptype v3.5.0 beta")
 
     def test_older_source_without_a_channel_is_treated_as_stable(self):
         with mock.patch.object(tx, "__doc__", "Version: 9.8.7"):
@@ -336,13 +336,13 @@ class AppVersionFormattingTests(unittest.TestCase):
             "Sniptype — versão desconhecida",
         )
 
-    def test_windows_installer_matches_the_stable_metadata(self):
+    def test_windows_installer_matches_the_beta_metadata(self):
         repo_root = Path(__file__).resolve().parents[2]
         installer = (repo_root / "installer" / "sniptype.iss").read_text(
             encoding="utf-8-sig"
         )
-        self.assertIn('#define MyAppVersion "3.4.0"', installer)
-        self.assertIn('#define MyAppChannel "stable"', installer)
+        self.assertIn('#define MyAppVersion "3.5.0"', installer)
+        self.assertIn('#define MyAppChannel "beta"', installer)
         self.assertIn(
             "OutputBaseFilename=SniptypeSetup-{#MyInstallerVersion}",
             installer,
