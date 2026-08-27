@@ -336,6 +336,7 @@ class Sniptype:
                     secure_input_blocks=self._secure_input_blocks_expansion,
                     microphone_status=macos_permissions.check_microphone,
                     on_status_change=self._voice_status_changed,
+                    history_dir=os.path.join(self.data_dir, "voice-history"),
                 )
                 self.voice.bind_library(lambda: self.snippets, lambda: self.trigger_index)
             except Exception as exc:
@@ -1814,9 +1815,7 @@ class Sniptype:
             except Exception:
                 self._disable_voice()
             return
-        if not self.voice._backend.available() and not getattr(
-            self.voice._backend, "loaded_path", None
-        ):
+        if not self.voice.provider_available():
             # A missing native runtime still lets the user enable so the
             # download/load worker can report the concrete failure.
             pass
@@ -1917,6 +1916,7 @@ class Sniptype:
             command_hotkey,
         ]
         profile_buttons = []
+        download_buttons = []
 
         tk.Label(
             parent,
@@ -1945,20 +1945,49 @@ class Sniptype:
                 except tk.TclError:
                     continue
                 button.configure(text=profile_label(entry))
+            for button, entry in download_buttons:
+                try:
+                    if not button.winfo_exists():
+                        continue
+                except tk.TclError:
+                    continue
+                installed = voice_models.model_is_installed(
+                    entry, self.voice.cache_dir
+                )
+                downloading = self.voice.model_download_in_progress(
+                    entry["profile"]
+                )
+                if installed:
+                    button.configure(text="Baixado", state=tk.DISABLED)
+                elif downloading:
+                    button.configure(text="Baixando…", state=tk.DISABLED)
+                else:
+                    button.configure(text="Baixar", state=tk.NORMAL)
 
         for entry in visible:
+            row = tk.Frame(parent, bg=ui.surface)
+            row.pack(fill=tk.X, anchor="w", pady=4)
             button = tk.Radiobutton(
-                parent,
+                row,
                 text=profile_label(entry),
                 variable=selected,
                 value=entry["profile"],
                 anchor="w",
                 justify="left",
-                wraplength=wrap - 20,
+                wraplength=wrap - 110,
                 **ui.checkbutton_colors(ui.surface),
             )
-            button.pack(anchor="w", pady=4)
+            button.pack(side=tk.LEFT, fill=tk.X, expand=True, anchor="w")
             profile_buttons.append((button, entry))
+            download_button = tk.Button(
+                row,
+                text="Baixar",
+                width=ui.button_width(10),
+                command=lambda item=entry: download_model(item),
+                **ui.button_colors(),
+            )
+            download_button.pack(side=tk.RIGHT, padx=(8, 0))
+            download_buttons.append((download_button, entry))
 
         lang_row = tk.Frame(parent, bg=ui.surface)
         lang_row.pack(anchor="w", pady=(8, 4))
@@ -1996,7 +2025,7 @@ class Sniptype:
                 button.configure(
                     state=tk.NORMAL if lang in allowed else tk.DISABLED
                 )
-            if profile == "accuracy":
+            if allowed == {"auto"}:
                 language_label.configure(text="Idioma: detecção automática (Qwen)")
             else:
                 language_label.configure(text="Idioma:")
@@ -2119,6 +2148,26 @@ class Sniptype:
                 self.voice.enable()
             self.refresh_tray_menu()
             self._refresh_manager_voice_tab()
+
+        def download_model(entry):
+            if voice_models.model_is_installed(entry, self.voice.cache_dir):
+                refresh_profile_labels()
+                return
+            warning = (
+                f"Baixar {entry['purpose']} "
+                f"({format_size(entry['size_bytes'])})?\n\n"
+                f"Licença: {entry['license_id']}\n{entry['attribution']}\n\n"
+                "O arquivo fica no cache local de modelos. A entrada por voz "
+                "não será ativada automaticamente."
+            )
+            if not messagebox.askokcancel(
+                "Baixar modelo de voz", warning, parent=owner
+            ):
+                return
+            if not self.voice.download_profile(entry["profile"]):
+                refresh_profile_labels()
+                return
+            refresh_profile_labels()
 
         def remove_model():
             if not messagebox.askokcancel(
@@ -2378,6 +2427,12 @@ class Sniptype:
         status_label.pack(anchor="w", pady=(4, 12))
 
         refresh_form = self._build_voice_settings_controls(main, root)
+        tk.Button(
+            main,
+            text="Histórico de voz…",
+            command=lambda: self._open_voice_history(root),
+            **ui.button_colors(),
+        ).pack(anchor="w", pady=(12, 0))
         self._manager_voice_refresher = refresh
         refresh()
 
@@ -2697,6 +2752,113 @@ class Sniptype:
                     values=(entry.get("time", "--:--:--"), entry.get("kind", "info"), entry.get("message", "")),
                 )
 
+        self._bind_mousewheel(tree, tree)
+        center_dialog(history_window, root)
+
+    def _open_voice_history(self, root):
+        """Show recoverable recordings without replaying them into stale targets."""
+        ui = ui_theme.theme()
+        history_window = tk.Toplevel(root)
+        history_window.title("Histórico de Voz")
+        history_window.geometry("760x400")
+        history_window.minsize(620, 300)
+        history_window.configure(bg=ui.surface)
+        history_window.transient(root)
+        self._set_window_icon(history_window)
+
+        outer = tk.Frame(history_window, bg=ui.surface, padx=14, pady=14)
+        outer.pack(fill=tk.BOTH, expand=True)
+        outer.grid_columnconfigure(0, weight=1)
+        outer.grid_rowconfigure(1, weight=1)
+
+        tk.Label(
+            outer,
+            text="Gravações recuperáveis",
+            font=ui.font(11, "bold"),
+            bg=ui.surface,
+            fg=ui.text,
+        ).grid(row=0, column=0, sticky="w")
+
+        frame = tk.Frame(
+            outer,
+            bg=ui.card,
+            highlightbackground=ui.border,
+            highlightthickness=1,
+        )
+        frame.grid(row=1, column=0, sticky="nsew", pady=(10, 8))
+        frame.grid_columnconfigure(0, weight=1)
+        frame.grid_rowconfigure(0, weight=1)
+
+        columns = ("time", "status", "provider", "transcript")
+        tree = ttk.Treeview(frame, columns=columns, show="headings", height=12)
+        tree.heading("time", text="Data")
+        tree.heading("status", text="Estado")
+        tree.heading("provider", text="Provedor")
+        tree.heading("transcript", text="Transcrição / erro")
+        tree.column("time", width=145, anchor="center", stretch=False)
+        tree.column("status", width=95, anchor="center", stretch=False)
+        tree.column("provider", width=80, anchor="center", stretch=False)
+        tree.column("transcript", width=400, anchor="w")
+
+        scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=tree.yview)
+        tree.configure(yscrollcommand=scrollbar.set)
+        tree.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
+
+        def refresh_rows():
+            tree.delete(*tree.get_children())
+            voice = self.voice
+            entries = voice.history_entries() if voice is not None else []
+            if not entries:
+                tree.insert("", tk.END, values=("—", "vazio", "—", "Nenhuma gravação."))
+                return
+            for entry in entries:
+                summary = entry.get("transcript") or entry.get("error") or ""
+                tree.insert(
+                    "",
+                    tk.END,
+                    iid=entry["id"],
+                    values=(
+                        entry.get("created_at", "—"),
+                        entry.get("status", "—"),
+                        entry.get("provider", "—"),
+                        summary,
+                    ),
+                )
+
+        def selected_id():
+            selection = tree.selection()
+            return selection[0] if selection and self.voice is not None else None
+
+        def retry_selected():
+            record_id = selected_id()
+            if record_id and self.voice.retry_history(record_id):
+                history_window.after(500, refresh_rows)
+
+        def copy_selected():
+            record_id = selected_id()
+            if record_id and not self.voice.copy_history_transcript(record_id):
+                self.notify_error(
+                    "Esta gravação ainda não tem uma transcrição para copiar.",
+                    key="voice-history-copy",
+                )
+
+        actions = tk.Frame(outer, bg=ui.surface)
+        actions.grid(row=2, column=0, sticky="w")
+        tk.Button(
+            actions,
+            text="Tentar novamente",
+            command=retry_selected,
+            **ui.button_colors(accent=True),
+        ).pack(side=tk.LEFT)
+        tk.Button(
+            actions,
+            text="Copiar transcrição",
+            command=copy_selected,
+            **ui.button_colors(),
+        ).pack(side=tk.LEFT, padx=(8, 0))
+
+        refresh_rows()
         self._bind_mousewheel(tree, tree)
         center_dialog(history_window, root)
 

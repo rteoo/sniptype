@@ -5,6 +5,7 @@ Hotkey callbacks only flip guarded state and enqueue work. Capture, download,
 inference, Tk, and disk stay off the keyboard threads.
 """
 
+import os
 import threading
 import time
 
@@ -24,6 +25,11 @@ from voice_dispatch import (
     dispatch_voice_result,
 )
 from voice_hotkey import VoiceHotkeyMonitor, parse_chord
+from voice_history import (
+    STATUS_CANCELLED,
+    STATUS_FAILED,
+    VoiceHistoryStore,
+)
 from voice_models import (
     VoiceModelError,
     default_voice_cache_dir,
@@ -32,7 +38,8 @@ from voice_models import (
     installed_model_path,
     model_is_installed,
 )
-from voice_runtime import AsrBackend, VoiceRuntimeError, create_backend
+from voice_provider import create_provider
+from voice_runtime import VoiceRuntimeError
 from voice_settings import resolve_voice_settings, voice_settings_payload
 
 
@@ -73,10 +80,13 @@ class VoiceController:
         secure_input_blocks=None,
         microphone_status=None,
         on_status_change=None,
+        provider=None,
         backend=None,
         capture_factory=None,
         cache_dir=None,
         download=None,
+        history_store=None,
+        history_dir=None,
     ):
         warnings = []
         self.settings = resolve_voice_settings(settings, warnings)
@@ -94,10 +104,24 @@ class VoiceController:
         self._on_status_change = on_status_change
         self._download_done = 0
         self._download_total = 0
-        self._backend = backend if backend is not None else create_backend()
+        self._model_download_active = False
+        self._model_download_profile = None
+        self._model_download_cancel = threading.Event()
         self._capture_factory = capture_factory or AudioCapture
         self._download = download or download_model
         self.cache_dir = cache_dir or self.settings.cache_dir or default_voice_cache_dir()
+        self._provider = provider or create_provider(
+            self.cache_dir,
+            backend=backend,
+            download=lambda *args, **kwargs: self._download(*args, **kwargs),
+            is_installed=lambda entry, directory: model_is_installed(entry, directory),
+            installed_path=lambda entry, directory: installed_model_path(entry, directory),
+            delete=lambda entry, directory: delete_model(entry, directory),
+        )
+        if history_store is None:
+            resolved_history_dir = history_dir or os.path.join(self.cache_dir, "history")
+            history_store = VoiceHistoryStore(resolved_history_dir)
+        self._history = history_store
         self._lock = threading.Lock()
         self._state = STATE_UNAVAILABLE
         self._session_generation = 0
@@ -107,6 +131,7 @@ class VoiceController:
         self._active_target = None
         self._session_form_apply = None
         self._capture = None
+        self._history_recording = None
         self._form_apply = None
         self._partial = ""
         self._monitor = None
@@ -139,6 +164,11 @@ class VoiceController:
 
     def status_label(self):
         with self._lock:
+            if self._model_download_active:
+                if self._download_total:
+                    percent = min(100, int(100 * self._download_done / self._download_total))
+                    return f"Entrada por voz (baixando {percent}%)"
+                return "Entrada por voz (baixando modelo…)"
             if not self.settings.enabled:
                 return "Entrada por voz"
             if self._state == STATE_LOADING and self._download_total:
@@ -173,8 +203,77 @@ class VoiceController:
             self.disable()
 
     def model_installed(self):
-        entry = catalog_entry(self.settings.profile)
-        return bool(entry and model_is_installed(entry, self.cache_dir))
+        return self._provider.profile_installed(self.settings.profile)
+
+    def model_download_in_progress(self, profile=None):
+        with self._lock:
+            if not self._model_download_active:
+                return False
+            return profile is None or profile == self._model_download_profile
+
+    def download_profile(self, profile):
+        """Download and verify one profile without enabling or loading voice."""
+        entry = catalog_entry(profile)
+        if entry is None or self._shutdown.is_set():
+            return False
+        if self._provider.profile_installed(profile):
+            self._emit_status()
+            return False
+        with self._lock:
+            if self._model_download_active or self._state == STATE_LOADING:
+                return False
+            self._model_download_active = True
+            self._model_download_profile = profile
+            self._download_done = 0
+            self._download_total = entry["size_bytes"]
+            self._model_download_cancel.clear()
+        self._emit_status()
+        self._start_worker(
+            self._download_profile_worker,
+            profile,
+            name="voice-model-download",
+        )
+        return True
+
+    def provider_available(self):
+        return self._provider.available()
+
+    def history_entries(self):
+        return self._history.list_entries()
+
+    def history_entry(self, record_id):
+        return self._history.get(record_id)
+
+    def retry_history(self, record_id):
+        """Retry saved audio without pasting into a potentially stale target."""
+        if not self._history.is_retryable(record_id):
+            return False
+        with self._lock:
+            if self._state != STATE_IDLE or not self.settings.enabled:
+                self._notify(
+                    "Ative a entrada por voz e aguarde ela ficar pronta para tentar novamente.",
+                    key="voice-history",
+                )
+                return False
+            self._session_generation += 1
+            generation = self._session_generation
+            self._cancel.clear()
+            self._state = STATE_TRANSCRIBING
+        self._emit_status()
+        self._start_worker(
+            self._retry_history_worker,
+            generation,
+            record_id,
+            name="voice-history-retry",
+        )
+        return True
+
+    def copy_history_transcript(self, record_id):
+        entry = self._history.get(record_id)
+        transcript = entry.get("transcript", "") if entry else ""
+        if not transcript:
+            return False
+        return self._leave_on_clipboard(transcript)
 
     def set_language(self, language):
         self.apply_options(language=language)
@@ -281,17 +380,27 @@ class VoiceController:
         if self._shutdown.is_set():
             return
         with self._lock:
-            self.settings.enabled = True
-            if self._state in (STATE_LOADING, STATE_IDLE):
-                return
-            if self._state in (STATE_RECORDING, STATE_TRANSCRIBING, STATE_ROUTING):
-                return
-            # disable()/cancel() leave this set; a later enable must start clean.
-            self._cancel.clear()
-            self._state = STATE_LOADING
-            self._load_error = None
-            self._download_done = 0
-            self._download_total = 0
+            if self._model_download_active:
+                blocked_by_download = True
+            else:
+                blocked_by_download = False
+                self.settings.enabled = True
+                if self._state in (STATE_LOADING, STATE_IDLE):
+                    return
+                if self._state in (STATE_RECORDING, STATE_TRANSCRIBING, STATE_ROUTING):
+                    return
+                # disable()/cancel() leave this set; a later enable must start clean.
+                self._cancel.clear()
+                self._state = STATE_LOADING
+                self._load_error = None
+                self._download_done = 0
+                self._download_total = 0
+        if blocked_by_download:
+            self._notify(
+                "Aguarde o download do modelo terminar antes de ativar a voz.",
+                key="voice-model-download",
+            )
+            return
         self._persist()
         self._emit_status()
         self._start_worker(self._load_worker, name="voice-load")
@@ -304,7 +413,7 @@ class VoiceController:
             self._state = STATE_UNAVAILABLE
         self._stop_monitor()
         try:
-            self._backend.unload()
+            self._provider.unload()
         except Exception:
             pass
         self._persist()
@@ -312,6 +421,7 @@ class VoiceController:
 
     def shutdown(self, timeout=_SHUTDOWN_JOIN_SECONDS):
         self._shutdown.set()
+        self._model_download_cancel.set()
         self._cancel_session_locked(reason="shutdown")
         self._stop_monitor()
         with self._lock:
@@ -324,7 +434,7 @@ class VoiceController:
         if not joined:
             self._warn("Encerramento da voz atingiu o tempo limite; descarregando mesmo assim.")
         try:
-            self._backend.unload()
+            self._provider.unload()
         except Exception:
             pass
 
@@ -354,12 +464,32 @@ class VoiceController:
             target = VoiceTarget("form", handle=form_apply)
             session_form = form_apply
         try:
+            recording = self._history.begin(
+                mode=mode,
+                provider=self._provider.provider_id,
+                profile=self.settings.profile,
+                language=self.settings.language,
+                target_kind=getattr(target, "kind", "unknown"),
+            )
+        except Exception as exc:
+            self._warn(f"Não foi possível preparar o histórico de voz: {exc}")
+            self._notify(
+                "Não foi possível iniciar uma gravação recuperável.",
+                key="voice-history",
+            )
+            return False
+        try:
             capture = self._capture_factory()
+            set_journal = getattr(capture, "set_journal", None)
+            if set_journal is not None:
+                set_journal(recording)
             capture.start()
         except VoiceAudioError as exc:
+            recording.close_as(STATUS_FAILED, exc)
             self._notify(str(exc), key="voice-audio")
             return False
         except Exception as exc:
+            recording.close_as(STATUS_FAILED, exc)
             self._notify(f"Não foi possível gravar: {exc}", key="voice-audio")
             return False
         with self._lock:
@@ -368,6 +498,7 @@ class VoiceController:
                     capture.stop()
                 except Exception:
                     pass
+                recording.close_as(STATUS_CANCELLED)
                 return False
             self._session_generation += 1
             self._cancel.clear()
@@ -375,6 +506,7 @@ class VoiceController:
             self._active_target = target
             self._session_form_apply = session_form
             self._capture = capture
+            self._history_recording = recording
             self._partial = ""
             self._state = STATE_RECORDING
             generation = self._session_generation
@@ -392,12 +524,14 @@ class VoiceController:
             generation = self._session_generation
             capture = self._capture
             self._capture = None
+            recording = self._history_recording
             self._state = STATE_TRANSCRIBING
         self._emit_status()
         self._start_worker(
             self._finish_worker,
             generation,
             capture,
+            recording,
             name="voice-finish",
         )
         return True
@@ -408,14 +542,17 @@ class VoiceController:
     def _cancel_session_locked(self, reason):
         self._cancel.set()
         try:
-            self._backend.cancel()
+            self._provider.cancel()
         except Exception:
             pass
         capture = None
+        recording = None
         with self._lock:
             if self._state in (STATE_RECORDING, STATE_TRANSCRIBING, STATE_ROUTING):
                 capture = self._capture
                 self._capture = None
+                recording = self._history_recording
+                self._history_recording = None
                 self._active_mode = None
                 self._active_target = None
                 self._session_form_apply = None
@@ -436,21 +573,20 @@ class VoiceController:
                 capture.stop()
             except Exception:
                 pass
+        if recording is not None:
+            try:
+                recording.close_as(STATUS_CANCELLED)
+            except Exception as exc:
+                self._warn(f"Não foi possível encerrar o histórico de voz: {exc}")
         self._emit_status()
 
     def _load_worker(self):
         if self._shutdown.is_set():
             return
         try:
-            if not self._backend.available() and not self._backend.is_loaded():
-                raise VoiceRuntimeError(
-                    "O runtime transcribe.cpp não está instalado. "
-                    "A voz fica desligada até o pacote nativo estar disponível."
-                )
-            path = self._ensure_model()
+            self._prepare_provider()
             if self._cancel.is_set() or self._shutdown.is_set():
                 return
-            self._backend.load(path, self.settings.profile, self.settings.language)
         except (VoiceModelError, VoiceRuntimeError) as exc:
             with self._lock:
                 self._state = STATE_UNAVAILABLE
@@ -490,23 +626,22 @@ class VoiceController:
         # The aborted session set this; a new download/load must not inherit it.
         self._cancel.clear()
         try:
-            self._backend.unload()
-            path = self._ensure_model()
-            self._backend.load(path, self.settings.profile, self.settings.language)
+            self._provider.unload()
+            self._prepare_provider()
+            if self._cancel.is_set() or self._shutdown.is_set():
+                return
         except Exception as exc:
             self._warn(f"Falha ao trocar o perfil de voz; mantendo o anterior: {exc}")
             self.settings = previous
             self._persist()
             try:
-                path = installed_model_path(
-                    catalog_entry(previous.profile), self.cache_dir
-                )
-                if path:
-                    self._backend.load(path, previous.profile, previous.language)
-                    with self._lock:
-                        self._state = STATE_IDLE
-                    self._emit_status()
-                    return
+                if not self._provider.profile_installed(previous.profile):
+                    raise VoiceRuntimeError("O modelo anterior não está mais instalado.")
+                self._provider.prepare(previous.profile, previous.language)
+                with self._lock:
+                    self._state = STATE_IDLE
+                self._emit_status()
+                return
             except Exception:
                 pass
             with self._lock:
@@ -519,27 +654,57 @@ class VoiceController:
         self._start_monitor()
         self._emit_status()
 
-    def _ensure_model(self):
-        entry = catalog_entry(self.settings.profile)
-        if entry is None:
-            raise VoiceModelError("Perfil de voz desconhecido.")
-        if model_is_installed(entry, self.cache_dir):
-            return installed_model_path(entry, self.cache_dir)
-
+    def _prepare_provider(self):
         def progress(done, total):
             with self._lock:
                 self._download_done = done
-                self._download_total = total or entry["size_bytes"]
+                self._download_total = total or 0
             self._emit_status()
 
-        return self._download(
-            entry,
-            self.cache_dir,
+        self._provider.prepare(
+            self.settings.profile,
+            self.settings.language,
             progress=progress,
             cancel_event=self._cancel,
         )
 
-    def _finish_worker(self, generation, capture):
+    def _download_profile_worker(self, profile):
+        def progress(done, total):
+            with self._lock:
+                self._download_done = done
+                self._download_total = total or self._download_total
+            self._emit_status()
+
+        try:
+            self._provider.download_profile(
+                profile,
+                progress=progress,
+                cancel_event=self._model_download_cancel,
+            )
+            if not self._model_download_cancel.is_set() and not self._shutdown.is_set():
+                self._notify(
+                    "Modelo de voz baixado e verificado.",
+                    key="voice-model-download",
+                )
+        except (VoiceModelError, VoiceRuntimeError) as exc:
+            if not self._model_download_cancel.is_set():
+                self._notify(str(exc), key="voice-model-download")
+        except Exception as exc:
+            if not self._model_download_cancel.is_set():
+                self._warn(f"Falha ao baixar o modelo de voz: {exc}")
+                self._notify(
+                    f"Falha ao baixar o modelo de voz: {exc}",
+                    key="voice-model-download",
+                )
+        finally:
+            with self._lock:
+                self._model_download_active = False
+                self._model_download_profile = None
+                self._download_done = 0
+                self._download_total = 0
+            self._emit_status()
+
+    def _finish_worker(self, generation, capture, recording):
         if self._shutdown.is_set():
             return
         pcm = []
@@ -548,31 +713,46 @@ class VoiceController:
             try:
                 pcm, overflow = capture.stop()
             except Exception as exc:
+                self._recording_failed(recording, exc)
                 self._fail_to_idle(f"Falha ao encerrar a gravação: {exc}", generation)
                 return
+        try:
+            recording.finish_capture(pcm)
+        except Exception as exc:
+            self._recording_failed(recording, exc)
+            self._fail_to_idle(
+                f"Falha ao salvar a gravação recuperável: {exc}", generation
+            )
+            return
         if overflow:
+            self._recording_failed(recording, "A captura de áudio excedeu o limite.")
             self._fail_to_idle(
                 "A gravação de voz estourou o limite e foi cancelada.",
                 generation,
             )
             return
         if self._cancel.is_set() or self._shutdown.is_set():
+            self._history.cancel(recording.record_id)
             self._complete_session(generation, OUTCOME_CANCELLED)
             return
         try:
-            if self.settings.profile == PROFILE_STREAMING and self._backend.supports_stream():
-                transcript = self._backend.finalize_stream()
+            if self.settings.profile == PROFILE_STREAMING and self._provider.supports_stream():
+                transcript = self._provider.finalize_stream()
             else:
-                transcript = self._backend.transcribe(pcm, cancel_event=self._cancel)
+                transcript = self._provider.transcribe(pcm, cancel_event=self._cancel)
         except VoiceRuntimeError as exc:
+            self._recording_failed(recording, exc)
             self._fail_to_idle(str(exc), generation)
             return
         except Exception as exc:
+            self._recording_failed(recording, exc)
             self._fail_to_idle(f"Falha na transcrição: {exc}", generation)
             return
         if self._cancel.is_set() or self._shutdown.is_set():
+            self._history.cancel(recording.record_id)
             self._complete_session(generation, OUTCOME_CANCELLED)
             return
+        self._history.mark_transcribed(recording.record_id, transcript)
         with self._lock:
             if generation != self._session_generation:
                 return
@@ -586,6 +766,7 @@ class VoiceController:
         if self._shutdown.is_set():
             return
         if getattr(target, "kind", None) == "form" and form_apply is None:
+            self._history.cancel(recording.record_id)
             self._complete_session(generation, OUTCOME_CANCELLED)
             return
         outcome = dispatch_voice_result(
@@ -606,13 +787,13 @@ class VoiceController:
             leave_on_clipboard=self._leave_on_clipboard,
             cancelled=self._cancel.is_set(),
         )
-        self._finish_outcome(outcome, generation)
+        self._finish_outcome(outcome, generation, recording, transcript)
 
     def _stream_worker(self, generation):
-        if not self._backend.supports_stream():
+        if not self._provider.supports_stream():
             return
         try:
-            self._backend.start_stream()
+            self._provider.start_stream()
         except VoiceRuntimeError:
             return
         # Display-only partials. The release path finalizes.
@@ -628,7 +809,7 @@ class VoiceController:
             except Exception:
                 continue
             try:
-                partial = self._backend.feed(_flatten(chunk))
+                partial = self._provider.feed(_flatten(chunk))
             except Exception:
                 return
             with self._lock:
@@ -688,15 +869,18 @@ class VoiceController:
             self._active_mode = None
             self._active_target = None
             self._session_form_apply = None
+            self._history_recording = None
             self._partial = ""
             self._state = STATE_IDLE if self.settings.enabled else STATE_UNAVAILABLE
         self._emit_status()
         return True
 
-    def _finish_outcome(self, result, generation):
+    def _finish_outcome(self, result, generation, recording, transcript):
         outcome = result.outcome
         if not self._complete_session(generation, outcome):
+            self._history.cancel(recording.record_id)
             return
+        self._history.complete(recording.record_id, transcript, outcome)
         if outcome == OUTCOME_NO_MATCH:
             self._notify("Nenhum atalho corresponde ao que foi falado.", key="voice-nomatch")
         elif outcome == OUTCOME_SECURE_INPUT:
@@ -739,6 +923,56 @@ class VoiceController:
             else:
                 message = "Não foi possível inserir o texto de voz."
             self._notify(message, key="voice-insert")
+
+    def _recording_failed(self, recording, error):
+        try:
+            self._history.fail(recording.record_id, error)
+        except Exception as exc:
+            self._warn(f"Não foi possível atualizar o histórico de voz: {exc}")
+
+    def _retry_history_worker(self, generation, record_id):
+        try:
+            pcm = self._history.load_samples(record_id)
+            if not pcm:
+                raise ValueError("A gravação salva está vazia.")
+            self._history.update(
+                record_id,
+                status="pending",
+                retry_provider=self._provider.provider_id,
+                retry_profile=self.settings.profile,
+                retry_language=self.settings.language,
+            )
+            transcript = self._provider.transcribe(pcm, cancel_event=self._cancel)
+            if not str(transcript or "").strip():
+                raise ValueError("Nenhuma fala foi reconhecida na gravação.")
+            if self._cancel.is_set() or self._shutdown.is_set():
+                self._history.cancel(record_id)
+                return
+            self._history.complete(record_id, transcript, "recovered")
+            copied = self._leave_on_clipboard(transcript)
+            if copied:
+                message = (
+                    "A gravação foi recuperada. O texto está na área de transferência."
+                )
+            else:
+                message = (
+                    "A gravação foi recuperada no histórico, mas não foi possível "
+                    "copiar o texto."
+                )
+            self._notify(message, key="voice-history")
+        except Exception as exc:
+            if self._cancel.is_set() or self._shutdown.is_set():
+                self._history.cancel(record_id)
+                return
+            self._history.fail(record_id, exc)
+            self._notify(f"Não foi possível recuperar a gravação: {exc}", key="voice-history")
+        finally:
+            with self._lock:
+                if generation == self._session_generation:
+                    self._state = (
+                        STATE_IDLE if self.settings.enabled else STATE_UNAVAILABLE
+                    )
+            self._emit_status()
 
     def _fail_to_idle(self, message, generation=None):
         if generation is None:
@@ -834,11 +1068,9 @@ class VoiceController:
 
     def delete_active_model(self):
         """Disable voice, then remove only the catalog directory of the profile."""
-        entry = catalog_entry(self.settings.profile)
+        profile = self.settings.profile
         self.disable()
-        if entry is None:
-            return
-        delete_model(entry, self.cache_dir)
+        self._provider.delete_profile(profile)
 
 
 def _flatten(chunk):

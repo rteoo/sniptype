@@ -12,13 +12,15 @@ product surface.
 |---|---|
 | Default-off push-to-talk with dedicated observer and exact end-of-hold semantics | Live microphone-to-paste ASR on Windows x64 and macOS ARM64 |
 | Dictation, spoken-trigger, and form-field dispatch without `_dispatch_expansion` | Parakeet and Qwen latency/accuracy adoption-gate measurements on target hardware |
-| User-selectable Balanced/Parakeet and Accuracy/Qwen profiles; Qwen forces automatic language detection | Handy-alongside shortcut and focus composition test |
+| User-selectable Balanced/Parakeet, Compact/Qwen 0.6B, and Accuracy/Qwen 1.7B profiles; Qwen forces automatic language detection | Handy-alongside shortcut and focus composition test |
 | SHA256 catalog and range-validated resumable model downloads | Hosted Windows/macOS/Linux matrix after Actions billing is restored |
 | Exact pinned release dependencies plus packaged native-runtime probe and Windows package smoke | Windows installer install/upgrade/uninstall smoke test |
 | ARM64 macOS package probe and physical focus check for the non-activating recording panel | Signed macOS build from an interactive keychain session and granted-TCC paste smoke |
 | Failed backend import, controller construction, or profile swap leaves normal expansion available | Nemotron live streaming and its OpenMDW-1.1 review |
 | Cancellation stops capture, calls `session.cancel()`, and boundedly joins workers | iOS (on hold) |
 | Manager **Entrada por voz** tab mirrors tray enable, live status, and settings | Physical manager/tray synchronization smoke on supported desktops |
+| Provider boundary owns runtime/model lifecycle; local transcribe.cpp behavior remains unchanged | Additional providers only after an explicit product decision |
+| Append-only audio journal, atomic history metadata, startup recovery, and safe manual retry | User-controlled retention and deletion policy |
 
 Enabling **Entrada por voz** without the optional native backend reports
 unavailable. That is expected. iOS is out of scope until this Windows-first
@@ -58,11 +60,12 @@ Do not fork any of the three candidates. Build voice as an opt-in module with
 download-on-demand models and explicit routes into the existing insertion,
 trigger-expansion, and form-input paths.
 
-The product exposes three explicit model profiles:
+The product exposes four explicit model profiles:
 
 1. **Balanced — default:** Parakeet TDT 0.6B v3 Q8/INT8.
-2. **Maximum accuracy — optional:** Qwen3-ASR-1.7B Q8.
-3. **Live streaming — optional:** Nemotron 3.5 ASR Streaming 0.6B Q8/INT8.
+2. **Compact Qwen — optional:** Qwen3-ASR-0.6B Q8.
+3. **Maximum accuracy — optional:** Qwen3-ASR-1.7B Q8.
+4. **Live streaming — optional:** Nemotron 3.5 ASR Streaming 0.6B Q8/INT8.
 
 The user selects a profile; the app never changes profiles or downloads a
 larger model automatically. Only one ASR model is resident at a time. The
@@ -70,7 +73,7 @@ default first release remains push-to-talk with completed-utterance decoding;
 the live-streaming profile adds partial transcripts without changing transcript
 routing or insertion semantics.
 
-Prefer one native inference runtime for all three profiles. `transcribe.cpp`
+Prefer one native inference runtime for all four profiles. `transcribe.cpp`
 currently supports their Q8 GGUF builds through a common C API and publishes
 same-runtime CPU benchmarks. Benchmark its Python binding and packaged native
 library first. Retain `sherpa-onnx` as the fallback for Parakeet and Nemotron if
@@ -91,13 +94,13 @@ Rationale in [Why not a fork](#why-not-a-fork) and
 Set up a repeatable corpus and measurement harness before changing project
 dependencies. The provisional go/no-go gates are:
 
-| Dimension | Balanced default | Maximum accuracy | Live streaming |
-|---|---|---|---|
-| Result latency | Warm end-of-speech → paste p95 ≤ 1.5 s for utterances up to 15 s | Warm end-of-speech → paste p95 ≤ 3.0 s; UI labels the slower profile | First stable partial p95 ≤ 1.0 s; final paste p95 ≤ 1.5 s after release |
-| Cold model load | ≤ 10 s, with visible non-blocking progress | ≤ 20 s, with visible non-blocking progress | ≤ 10 s, with visible non-blocking progress |
-| Inference speed | real-time factor ≤ 0.5 | real-time factor ≤ 0.8 | sustained real-time factor ≤ 0.5 |
-| Peak process RSS | ≤ 1.5 GB | ≤ 6 GB and never selected automatically | ≤ 1.5 GB |
-| Accuracy | pt-BR and en-US each no worse than 10% relative WER above Whisper Medium Q8; named entities separate | Must beat Balanced materially on the same corpus: ≥10% relative WER reduction overall or ≥15% named-entity error reduction | Must remain within 20% relative WER of Balanced while meeting partial-latency gate |
+| Dimension | Balanced default | Compact Qwen | Maximum accuracy | Live streaming |
+|---|---|---|---|---|
+| Result latency | Warm end-of-speech → paste p95 ≤ 1.5 s for utterances up to 15 s | Warm end-of-speech → paste p95 ≤ 2.0 s | Warm end-of-speech → paste p95 ≤ 3.0 s; UI labels the slower profile | First stable partial p95 ≤ 1.0 s; final paste p95 ≤ 1.5 s after release |
+| Cold model load | ≤ 10 s, with visible non-blocking progress | ≤ 12 s, with visible non-blocking progress | ≤ 20 s, with visible non-blocking progress | ≤ 10 s, with visible non-blocking progress |
+| Inference speed | real-time factor ≤ 0.5 | real-time factor ≤ 0.5 | real-time factor ≤ 0.8 | sustained real-time factor ≤ 0.5 |
+| Peak process RSS | ≤ 1.5 GB | ≤ 3 GB and never selected automatically | ≤ 6 GB and never selected automatically | ≤ 1.5 GB |
+| Accuracy | pt-BR and en-US each no worse than 10% relative WER above Whisper Medium Q8; named entities separate | Must remain within 15% relative WER of Balanced and offer a corpus-specific robustness win | Must beat Balanced materially on the same corpus: ≥10% relative WER reduction overall or ≥15% named-entity error reduction | Must remain within 20% relative WER of Balanced while meeting partial-latency gate |
 
 Common gates apply to every profile:
 
@@ -125,8 +128,16 @@ in [voice-model-value-research.md](voice-model-value-research.md).
 | Profile | Model | Accuracy evidence | Q8 footprint | Portable CPU evidence | Product definition |
 |---|---|---|---:|---|---|
 | **Balanced (default)** | Parakeet TDT 0.6B v3 Q8/INT8 | NVIDIA FLEURS: pt 4.76%, en 4.85% on the reference checkpoint. In transcribe.cpp, English LibriSpeech test-clean is 1.94% Q8 versus 1.95% F32. Quantized pt-BR WER is unmeasured. | 740 MB GGUF; about 640 MB sherpa ONNX | 27–29x realtime on M4 Max CPU; 7–8x on Ryzen 4750U CPU | Completed-utterance push-to-talk. Smallest accuracy-oriented default. No live partials. |
+| **Compact Qwen** | Qwen3-ASR-0.6B Q8 | transcribe.cpp Q8 scores 2.11% on LibriSpeech test-clean. No isolated pt-BR result exists, so the local corpus remains the adoption gate. | 850 MB GGUF | About 16–17x realtime on M4 Max CPU; 4.1–4.6x on Ryzen 4750U CPU | Explicit opt-in alternative between Parakeet and Qwen 1.7B. Completed-utterance decoding with automatic language detection. |
 | **Maximum accuracy** | Qwen3-ASR-1.7B Q8 | Qwen reports FLEURS-en 3.35% and 4.90% multilingual FLEURS across a set including Portuguese; no isolated pt-BR WER. transcribe.cpp Q8 scores 1.61% on LibriSpeech test-clean versus BF16 1.62%. | 2.08 GB GGUF | About 8x realtime on M4 Max CPU; 1.9–2.1x on Ryzen 4750U CPU | Explicit opt-in download with resource warning. Completed-utterance decoding in v1. Use only after it proves a material corpus win. |
 | **Live streaming** | Nemotron 3.5 ASR Streaming 0.6B Q8/INT8 | NVIDIA at 560 ms with language supplied: pt 5.65%, en 7.99%. transcribe.cpp Q8 at the 1.12 s tier scores 7.88% English versus reference 7.99%. Quantized pt-BR WER at 560 ms is unmeasured. | 716 MB GGUF; about 650 MB sherpa ONNX | 28–30x realtime on M4 Max CPU; 7–8x on Ryzen 4750U CPU | Stateful partial transcripts. Default to 560 ms and an explicit `pt-BR` or `en-US` language hint; auto-detect remains optional because published English accuracy is weaker. |
+
+Whisper large-v3-turbo Q8 remains a benchmark candidate, not a user profile.
+Its transcribe.cpp build is 845 MB and scores 2.01% on LibriSpeech test-clean,
+but published CPU throughput is only 0.6–0.9x realtime on Ryzen 4750U and
+1.4–2.3x on M4 Max. Add it only if the shared pt-BR/code-switching corpus shows
+a material accuracy or robustness win; using transcribe.cpp avoids a second
+CTranslate2/faster-whisper dependency path.
 
 Reference-precision Parakeet is a benchmark control, not a product profile: its
 2.51 GB artifact has no demonstrated accuracy advantage over Q8 sufficient to
@@ -323,10 +334,10 @@ Voice is a single-owner state machine:
 unavailable --enable/install--> loading --model ready--> idle
 loading --cancel/error--> unavailable
 idle --hotkey press--> recording
-recording --live audio chunks--> recording (display-only partials)
+recording --live audio chunks--> append-only journal + recording (display-only partials)
 recording --hotkey release/VAD--> transcribing/finalizing
 transcribing/finalizing --result--> routing --insert/expand/update--> idle
-recording/transcribing/finalizing/routing --cancel/error/shutdown--> idle
+recording/transcribing/finalizing/routing --cancel/error/shutdown--> history + idle
 ```
 
 Download and load the selected profile's model on a worker when the user
@@ -360,14 +371,33 @@ Rules:
    devices, load models, run inference, touch Tk, or write files.
 2. One session lock owns recording through insertion. Auto-repeat and a second
    hotkey press are ignored while a session is active.
-3. The audio callback only copies frames into a bounded queue. A worker owns the
-   stream, resampling, VAD, inference, and cleanup. Queue overflow fails loudly
-   and cancels the session instead of growing memory without bound.
+3. The audio callback only copies frames into bounded inference and journal
+   queues. A journal worker appends float32 audio to disk while a session is
+   active; the capture/inference workers own the stream, VAD, inference, and
+   cleanup. Queue overflow or journal failure fails loudly instead of growing
+   memory or pretending the recording is recoverable.
 4. Escape cancels. App shutdown closes the stream, signals workers, joins them
    with a bound, and performs no paste after shutdown begins.
 5. Device disappearance, empty speech, inference failure, and insertion failure
-   leave no stuck state. Audio and transcripts are not written to disk or logged
-   by default.
+   leave no stuck state. Audio and lifecycle metadata live in
+   `voice-history/`; transcript text is stored there after successful inference
+   but is never written to application logs.
+6. Retry is explicit and target-safe: it re-runs the recorded audio through the
+   selected provider and copies the result. It never pastes into the target
+   captured by an earlier process or session.
+
+### Provider boundary
+
+`voice_provider.py` owns provider readiness, model/runtime preparation,
+transcription, streaming, cancellation, and profile deletion. The controller
+owns the hotkey session and dispatch only. `LocalVoiceProvider` is the sole
+provider: it wraps transcribe.cpp and the SHA256-pinned model catalog. This seam
+does not add a network provider or alter the local model profiles.
+
+`voice_history.py` owns append-only audio, atomic metadata transitions, startup
+classification of interrupted sessions, and retry eligibility. History is not
+automatically pruned because retention/deletion needs an explicit user-facing
+policy rather than silent loss of recorded audio.
 
 ### Target and permission handling
 
@@ -418,8 +448,8 @@ Patterns to copy from Handy (MIT permits reuse with attribution):
    Pin the archive URL, compressed size, archive digest, expected extracted
    files, product profile, upstream model id and commit, runtime format,
    quantization, capabilities, minimum/recommended memory, license,
-   attribution, and source URL. The initial catalog contains exactly the three
-   approved Q8 profiles; F32 Parakeet is a benchmark fixture, not a user option.
+   attribution, and source URL. The catalog contains four Q8 profiles; F32
+   Parakeet is a benchmark fixture, not a user option.
 2. **Download models on first use into a dedicated non-roaming cache**, never
    the installer or `%APPDATA%`. Resolve it through a support module with an
    explicit override for tests and power users; do not silently place 640 MB to
@@ -462,7 +492,7 @@ The application licenses do not cover the proposed runtime and model artifacts:
 | `sounddevice` / PortAudio | verify and ship their license notices for the exact approved versions |
 | `silero_vad.onnx` | verify the model asset's MIT provenance and retain attribution |
 | Parakeet TDT 0.6B v3 | CC-BY-4.0; provide credit, license link, source, and modification/quantization disclosure |
-| Qwen3-ASR-1.7B | Apache-2.0; ship the license, source link, model identity, and Q8 conversion attribution |
+| Qwen3-ASR-0.6B and 1.7B | Apache-2.0; ship the license, source link, model identity, and Q8 conversion attribution |
 | Nemotron 3.5 ASR Streaming 0.6B | Open Model Derivative Works License 1.1; legal/package review must confirm redistribution, attribution, and quantized-derivative obligations before enabling download |
 
 Before distribution, add a third-party notices surface covering every bundled

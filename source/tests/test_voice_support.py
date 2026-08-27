@@ -118,6 +118,64 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(self.inserted, ["xadds"])
         self.assertEqual(self.expanded, [])
         self.assertEqual(self.controller.last_outcome, OUTCOME_INSERTED)
+        entry = self.controller.history_entries()[0]
+        self.assertEqual(entry["status"], "completed")
+        self.assertEqual(entry["transcript"], "xadds")
+        self.assertEqual(entry["provider"], "local")
+
+    def test_failed_transcription_stays_retryable_in_history(self):
+        self._ready()
+        self.backend.transcribe = mock.Mock(side_effect=VoiceRuntimeError("falhou"))
+
+        self.controller.handle_hotkey_press(MODE_DICTATION)
+        self.controller.handle_hotkey_release(MODE_DICTATION)
+
+        entry = self.controller.history_entries()[0]
+        self.assertEqual(entry["status"], "failed")
+        self.assertTrue(self.controller._history.is_retryable(entry["id"]))
+
+    def test_history_retry_copies_recovered_text_without_pasting(self):
+        self._ready()
+        recording = self.controller._history.begin(
+            mode=MODE_DICTATION,
+            provider="local",
+            profile="balanced",
+            language="pt-BR",
+            target_kind="window",
+        )
+        recording.finish_capture([0.1, 0.2])
+        self.controller._history.fail(recording.record_id, "offline")
+        self.backend.transcript = "texto recuperado"
+
+        with mock.patch("voice_support.Clipboard.set_content", return_value=True) as copied:
+            self.assertTrue(self.controller.retry_history(recording.record_id))
+
+        self.assertEqual(self.inserted, [])
+        copied.assert_called_once_with("texto recuperado")
+        entry = self.controller.history_entry(recording.record_id)
+        self.assertEqual(entry["status"], "completed")
+        self.assertEqual(entry["outcome"], "recovered")
+
+    def test_cancelled_history_retry_is_not_mislabeled_as_failed(self):
+        self._ready()
+        recording = self.controller._history.begin(
+            mode=MODE_DICTATION,
+            provider="local",
+            profile="balanced",
+            language="pt-BR",
+            target_kind="window",
+        )
+        recording.finish_capture([0.1])
+        self.controller._history.fail(recording.record_id, "offline")
+        self.controller._cancel.set()
+
+        self.controller._retry_history_worker(
+            self.controller._session_generation,
+            recording.record_id,
+        )
+
+        entry = self.controller.history_entry(recording.record_id)
+        self.assertEqual(entry["status"], "cancelled")
 
     def test_clipboard_exception_reports_that_dictation_was_not_recovered(self):
         self._ready()
@@ -354,6 +412,38 @@ class ControllerTests(unittest.TestCase):
                 mock.patch.object(self.controller, "_start_monitor"):
             self.controller.enable()
         self.assertTrue(any("baixando" in label for label in seen))
+
+    def test_explicit_model_download_does_not_enable_or_load_voice(self):
+        seen = []
+        downloaded = []
+        self.controller._on_status_change = lambda: seen.append(
+            self.controller.status_label()
+        )
+
+        def fake_download(entry, cache_dir, progress=None, cancel_event=None):
+            downloaded.append(entry["profile"])
+            if progress is not None:
+                progress(50, 100)
+            return os.path.join(self.tmp, "model.gguf")
+
+        self.controller._download = fake_download
+        with mock.patch("voice_support.model_is_installed", return_value=False):
+            started = self.controller.download_profile("compact")
+
+        self.assertTrue(started)
+        self.assertEqual(downloaded, ["compact"])
+        self.assertFalse(self.controller.is_enabled())
+        self.assertFalse(self.backend.is_loaded())
+        self.assertTrue(any("baixando" in label for label in seen))
+        self.notify.assert_called_with(
+            "Modelo de voz baixado e verificado.", key="voice-model-download"
+        )
+
+    def test_duplicate_explicit_download_is_rejected_while_active(self):
+        self.controller._model_download_active = True
+        self.controller._model_download_profile = "compact"
+
+        self.assertFalse(self.controller.download_profile("compact"))
 
     def test_enable_after_disable_returns_to_idle(self):
         self._ready()
