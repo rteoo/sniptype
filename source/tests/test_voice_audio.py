@@ -71,6 +71,27 @@ class AudioCaptureTests(unittest.TestCase):
         self.assertEqual(samples, [])
         self.assertTrue(overflow)
 
+    def test_capture_journals_each_audio_chunk_before_stop(self):
+        stream = mock.Mock()
+        options = {}
+        journal = mock.Mock()
+
+        def input_stream(**kwargs):
+            options.update(kwargs)
+            return stream
+
+        sounddevice = mock.Mock(InputStream=mock.Mock(side_effect=input_stream))
+        capture = AudioCapture()
+        capture.set_journal(journal)
+        with mock.patch.dict("sys.modules", {"sounddevice": sounddevice}):
+            capture.start()
+            options["callback"]([0.25] * BLOCK_SIZE, BLOCK_SIZE, None, None)
+            samples, overflow = capture.stop()
+
+        journal.write_chunk.assert_called_once()
+        self.assertEqual(len(samples), BLOCK_SIZE)
+        self.assertFalse(overflow)
+
 
 if __name__ == "__main__":
     unittest.main()
