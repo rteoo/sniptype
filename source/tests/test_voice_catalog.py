@@ -15,6 +15,7 @@ from voice_catalog import (
     MODEL_CATALOG,
     PROFILE_ACCURACY,
     PROFILE_BALANCED,
+    PROFILE_COMPACT,
     PROFILE_STREAMING,
     catalog_entry,
     available_languages,
@@ -68,9 +69,12 @@ class _FakeResponse:
 
 
 class CatalogTests(unittest.TestCase):
-    def test_three_user_profiles_and_no_f32(self):
+    def test_four_profiles_and_no_f32(self):
         profiles = {entry["profile"] for entry in MODEL_CATALOG}
-        self.assertEqual(profiles, {PROFILE_BALANCED, PROFILE_ACCURACY, PROFILE_STREAMING})
+        self.assertEqual(
+            profiles,
+            {PROFILE_BALANCED, PROFILE_COMPACT, PROFILE_ACCURACY, PROFILE_STREAMING},
+        )
         self.assertEqual(DEFAULT_PROFILE, PROFILE_BALANCED)
         for entry in MODEL_CATALOG:
             self.assertEqual(entry["quantization"], "Q8_0")
@@ -79,7 +83,9 @@ class CatalogTests(unittest.TestCase):
 
     def test_qwen_cannot_take_a_language_hint(self):
         self.assertEqual(catalog_entry(PROFILE_ACCURACY)["language_hint"], "unsupported")
+        self.assertEqual(catalog_entry(PROFILE_COMPACT)["language_hint"], "unsupported")
         self.assertEqual(available_languages(PROFILE_ACCURACY), (LANGUAGE_AUTO,))
+        self.assertEqual(available_languages(PROFILE_COMPACT), (LANGUAGE_AUTO,))
         self.assertEqual(
             available_languages(PROFILE_BALANCED),
             (LANGUAGE_AUTO, LANGUAGE_PT_BR, LANGUAGE_EN_US),
@@ -88,6 +94,21 @@ class CatalogTests(unittest.TestCase):
             default_language_for_profile(PROFILE_ACCURACY, "pt-BR"),
             LANGUAGE_AUTO,
         )
+        self.assertEqual(
+            default_language_for_profile(PROFILE_COMPACT, "pt-BR"),
+            LANGUAGE_AUTO,
+        )
+
+    def test_compact_profile_pins_qwen_0_6b_q8(self):
+        entry = catalog_entry(PROFILE_COMPACT)
+        self.assertEqual(entry["id"], "qwen3-asr-0.6b-q8")
+        self.assertEqual(entry["filename"], "Qwen3-ASR-0.6B-Q8_0.gguf")
+        self.assertEqual(entry["size_bytes"], 850423456)
+        self.assertEqual(
+            entry["sha256"],
+            "f081b2d5e23bd669d92cc331d722a8a0681943b8e6f34b48996fd5c319b5acd8",
+        )
+        self.assertTrue(entry["user_selectable"])
 
     def test_streaming_defaults_auto_to_pt_br(self):
         self.assertEqual(
@@ -110,12 +131,12 @@ class CatalogTests(unittest.TestCase):
         self.assertIn("Qwen3-ASR", text)
         self.assertNotIn("OpenMDW-1.1", text)
 
-    def test_balanced_and_accuracy_are_user_selectable(self):
+    def test_balanced_compact_and_accuracy_are_user_selectable(self):
         from voice_catalog import selectable_catalog
         visible = selectable_catalog()
         self.assertEqual(
             [entry["profile"] for entry in visible],
-            ["balanced", "accuracy"],
+            ["balanced", "compact", "accuracy"],
         )
 
     def test_accuracy_copy_identifies_optional_resource_cost(self):

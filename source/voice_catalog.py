@@ -8,10 +8,16 @@ Cloud post-processing is intentionally absent. Capture stays local.
 """
 
 PROFILE_BALANCED = "balanced"
+PROFILE_COMPACT = "compact"
 PROFILE_ACCURACY = "accuracy"
 PROFILE_STREAMING = "streaming"
 
-PROFILES = (PROFILE_BALANCED, PROFILE_ACCURACY, PROFILE_STREAMING)
+PROFILES = (
+    PROFILE_BALANCED,
+    PROFILE_COMPACT,
+    PROFILE_ACCURACY,
+    PROFILE_STREAMING,
+)
 
 LANGUAGE_AUTO = "auto"
 LANGUAGE_PT_BR = "pt-BR"
@@ -49,6 +55,42 @@ _PARAKEET_Q8 = {
     ),
     "source_url": "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3",
     "purpose": "Perfil equilibrado (padrão): ditado após soltar o atalho.",
+    "user_selectable": True,
+}
+
+_QWEN_06_Q8 = {
+    "id": "qwen3-asr-0.6b-q8",
+    "profile": PROFILE_COMPACT,
+    "filename": "Qwen3-ASR-0.6B-Q8_0.gguf",
+    "url": (
+        "https://huggingface.co/handy-computer/Qwen3-ASR-0.6B-gguf/resolve/"
+        "e4e16599b900eb0cb36e524514756bb92eb092b7/"
+        "Qwen3-ASR-0.6B-Q8_0.gguf"
+    ),
+    "sha256": "f081b2d5e23bd669d92cc331d722a8a0681943b8e6f34b48996fd5c319b5acd8",
+    "size_bytes": 850423456,
+    "upstream_model": "Qwen/Qwen3-ASR-0.6B",
+    "upstream_commit": "5eb144179a02acc5e5ba31e748d22b0cf3e303b0",
+    "quant_source": "handy-computer/Qwen3-ASR-0.6B-gguf",
+    "runtime": RUNTIME_TRANSCRIBE_CPP,
+    "quantization": "Q8_0",
+    "format": "gguf",
+    "streaming": False,
+    "language_hint": "unsupported",
+    "min_memory_bytes": 3 * 1024 * 1024 * 1024,
+    "recommended_memory_bytes": 4 * 1024 * 1024 * 1024,
+    "license_id": "Apache-2.0",
+    "license_url": "https://www.apache.org/licenses/LICENSE-2.0",
+    "attribution": (
+        "Qwen3-ASR-0.6B by Alibaba, quantized to Q8_0 by handy-computer "
+        "for transcribe.cpp. Language hints are not supported; decoding is "
+        "auto-detect only."
+    ),
+    "source_url": "https://huggingface.co/Qwen/Qwen3-ASR-0.6B",
+    "purpose": (
+        "Perfil compacto (Qwen 0,6B): menor e mais rápido que o Qwen 1,7B; "
+        "usa detecção automática de idioma."
+    ),
     "user_selectable": True,
 }
 
@@ -119,7 +161,7 @@ _NEMOTRON_Q8 = {
     "user_selectable": False,
 }
 
-MODEL_CATALOG = (_PARAKEET_Q8, _QWEN_Q8, _NEMOTRON_Q8)
+MODEL_CATALOG = (_PARAKEET_Q8, _QWEN_06_Q8, _QWEN_Q8, _NEMOTRON_Q8)
 
 DEFAULT_PROFILE = PROFILE_BALANCED
 
@@ -207,7 +249,8 @@ def default_language_for_profile(profile, requested=LANGUAGE_AUTO):
     """
     if requested not in LANGUAGES or not is_language_available(profile, requested):
         requested = LANGUAGE_AUTO
-    if profile == PROFILE_ACCURACY:
+    entry = catalog_entry(profile)
+    if entry and entry.get("language_hint") == "unsupported":
         return LANGUAGE_AUTO
     if profile == PROFILE_STREAMING and requested == LANGUAGE_AUTO:
         return LANGUAGE_PT_BR

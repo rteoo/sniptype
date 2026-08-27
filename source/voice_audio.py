@@ -6,6 +6,7 @@ sounddevice is imported lazily so the rest of the app starts without it.
 """
 
 import queue
+import threading
 
 
 SAMPLE_RATE = 16000
@@ -42,6 +43,16 @@ class AudioCapture:
         self._sample_count = 0
         self._stream = None
         self._started = False
+        self._journal = None
+        self._journal_queue = queue.Queue(maxsize=queue_max)
+        self._journal_thread = None
+        self._journal_error = None
+
+    def set_journal(self, journal):
+        """Attach an append-only recording journal before ``start()``."""
+        if self._started:
+            raise VoiceAudioError("A gravação já começou.")
+        self._journal = journal
 
     def start(self):
         if self._started:
@@ -54,11 +65,25 @@ class AudioCapture:
             ) from exc
         self._overflow = False
         self._sample_count = 0
+        self._journal_error = None
         while True:
             try:
                 self._queue.get_nowait()
             except queue.Empty:
                 break
+        while True:
+            try:
+                self._journal_queue.get_nowait()
+            except queue.Empty:
+                break
+
+        if self._journal is not None:
+            self._journal_thread = threading.Thread(
+                target=self._write_journal,
+                name="voice-audio-journal",
+                daemon=True,
+            )
+            self._journal_thread.start()
 
         def callback(indata, frames, time_info, status):
             if status:
@@ -68,7 +93,10 @@ class AudioCapture:
                 self._overflow = True
                 return
             try:
-                self._queue.put_nowait(indata.copy())
+                chunk = indata.copy()
+                self._queue.put_nowait(chunk)
+                if self._journal is not None:
+                    self._journal_queue.put_nowait(chunk)
             except queue.Full:
                 self._overflow = True
 
@@ -99,6 +127,20 @@ class AudioCapture:
                 stream.stop()
             except Exception:
                 pass
+        journal_thread = self._journal_thread
+        self._journal_thread = None
+        if journal_thread is not None:
+            try:
+                # The stream is stopped, so the writer can drain without new
+                # chunks racing this bounded sentinel insertion.
+                self._journal_queue.put(None, timeout=1.0)
+            except queue.Full:
+                self._overflow = True
+            journal_thread.join(1.0)
+            if journal_thread.is_alive():
+                self._overflow = True
+            if self._journal_error is not None:
+                self._overflow = True
             try:
                 stream.close()
             except Exception:
@@ -119,6 +161,17 @@ class AudioCapture:
         if overflow:
             return [], True
         return samples, False
+
+    def _write_journal(self):
+        while True:
+            chunk = self._journal_queue.get()
+            if chunk is None:
+                return
+            try:
+                self._journal.write_chunk(chunk)
+            except Exception as exc:
+                self._journal_error = exc
+                self._overflow = True
 
 
 def _as_floats(chunk):

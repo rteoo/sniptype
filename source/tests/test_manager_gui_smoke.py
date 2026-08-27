@@ -413,6 +413,7 @@ class ManagerGuiSmokeTests(unittest.TestCase):
         voice.settings.hotkey = "ctrl+alt+space"
         voice.settings.command_hotkey = "ctrl+alt+shift+space"
         voice.cache_dir = tempfile.mkdtemp()
+        voice.model_download_in_progress.return_value = False
         self.app.voice = voice
         self.app.toggle_voice = mock.Mock()
 
@@ -460,6 +461,7 @@ class ManagerGuiSmokeTests(unittest.TestCase):
         voice.settings.hotkey = "ctrl+alt+space"
         voice.settings.command_hotkey = "ctrl+alt+shift+space"
         voice.cache_dir = tempfile.mkdtemp()
+        voice.model_download_in_progress.return_value = False
         self.app.voice = voice
 
         def build_and_refresh(shared_root):
@@ -491,6 +493,39 @@ class ManagerGuiSmokeTests(unittest.TestCase):
         self.assertEqual(before_state, ("balanced", "pt-BR"))
         self.assertTrue(any("instalado" in text for text in after), after)
         self.assertEqual(after_state, ("accuracy", "auto"))
+
+    def test_voice_tab_download_button_downloads_its_model_without_enabling(self):
+        voice = mock.Mock()
+        voice.is_enabled.return_value = False
+        voice.status_label.return_value = "Entrada por voz"
+        voice.settings.profile = "balanced"
+        voice.settings.language = "auto"
+        voice.settings.hotkey = "ctrl+alt+space"
+        voice.settings.command_hotkey = "ctrl+alt+shift+space"
+        voice.cache_dir = tempfile.mkdtemp()
+        voice.model_download_in_progress.return_value = False
+        voice.download_profile.return_value = True
+        self.app.voice = voice
+
+        def build_and_download(shared_root):
+            root = tk.Toplevel(shared_root)
+            root.withdraw()
+            frame = tk.Frame(root)
+            with mock.patch("voice_models.model_is_installed", return_value=False), \
+                    mock.patch.object(tx.messagebox, "askokcancel", return_value=True):
+                self.app._create_voice_tab(frame, root)
+                root.update_idletasks()
+                rows = [
+                    widget for widget in _descendants(frame)
+                    if isinstance(widget, tk.Button)
+                    and str(widget.cget("text")) == "Baixar"
+                ]
+                self.assertTrue(rows)
+                rows[1].invoke()
+
+        self._on_gui(build_and_download)
+        voice.download_profile.assert_called_once_with("compact")
+        voice.enable.assert_not_called()
 
     def test_open_voice_settings_selects_the_manager_tab(self):
         _ensure_voice(self.app)
@@ -559,6 +594,7 @@ def _ensure_voice(app):
     voice.settings.hotkey = "ctrl+alt+space"
     voice.settings.command_hotkey = "ctrl+alt+shift+space"
     voice.cache_dir = tempfile.mkdtemp()
+    voice.model_download_in_progress.return_value = False
     app.voice = voice
     return voice
 

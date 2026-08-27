@@ -10,8 +10,8 @@ from voice_catalog import (
     LANGUAGE_AUTO,
     LANGUAGE_EN_US,
     LANGUAGE_PT_BR,
-    PROFILE_ACCURACY,
     PROFILE_STREAMING,
+    catalog_entry,
 )
 
 
@@ -160,7 +160,8 @@ class TranscribeCppBackend(AsrBackend):
             self.unload()
             raise VoiceRuntimeError(f"Falha ao carregar o modelo de voz: {exc}") from exc
         self._profile = profile
-        if profile == PROFILE_ACCURACY:
+        entry = catalog_entry(profile)
+        if entry and entry.get("language_hint") == "unsupported":
             self._language = LANGUAGE_AUTO
         else:
             self._language = language
@@ -200,7 +201,7 @@ class TranscribeCppBackend(AsrBackend):
         return self._session is not None
 
     def _language_kw(self):
-        if self._language in (None, LANGUAGE_AUTO) or self._profile == PROFILE_ACCURACY:
+        if self._language in (None, LANGUAGE_AUTO):
             return {}
         return {"language": _MODEL_LANGUAGE_CODES.get(self._language, self._language)}
 

@@ -163,9 +163,10 @@ on Windows.
 ## Optional voice input
 
 Voice input is disabled by default and isolated from normal expansion. Balanced
-uses Parakeet; Accuracy uses Qwen with automatic language detection. Live
-streaming is not available. Missing voice dependencies leave ordinary snippet
-expansion unchanged.
+uses Parakeet; Compact uses Qwen3-ASR 0.6B; Accuracy uses Qwen3-ASR 1.7B. Both
+Qwen profiles use automatic language detection. Live streaming is not
+available. Missing voice dependencies leave ordinary snippet expansion
+unchanged.
 
 From the repository root, install the pinned optional runtime, restart Sniptype,
 then configure voice from **Gerenciar Snippets → Entrada por voz**:
@@ -179,6 +180,17 @@ profile, language, and dictation/command hotkeys. Dictation is literal; the
 separate voice-command hotkey expands only an exact spoken trigger. Failed
 insertion reports whether the transcript was actually preserved on the
 clipboard instead of claiming recovery unconditionally.
+
+Every missing model has a **Baixar** button in the voice settings. It downloads
+and verifies that model in the background without enabling voice or changing
+the selected profile; installed models are marked **Baixado**.
+
+Each enabled voice session writes crash-recoverable audio and atomic metadata
+under `~/.sniptype/voice-history/` (or `SNIPTYPE_HOME`). Interrupted and failed
+recordings appear in **Entrada por voz → Histórico de voz**, where retry runs
+the selected local provider again and copies the recovered transcript without
+pasting into a stale application target. Successful recordings are retained as
+history too; Sniptype does not prune voice history automatically yet.
 
 Model downloads require HTTPS, follow only verified redirects, validate SHA256,
 and resume only when the server confirms the requested byte range. See the
