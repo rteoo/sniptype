@@ -52,11 +52,11 @@ Ordinary text expansion does not require the optional voice dependencies.
 ### Releases and installer
 
 The current stable source tag is
-[`v3.4.0`](https://github.com/rteoo/sniptype/tree/v3.4.0). Public binary releases
-have not yet been published from this repository. The default branch contains
-post-`v3.4.0` maintenance work; use the tag when you need the exact stable source.
-See the [development guide](source/docs/development.md) to build the Windows
-package and installer or the macOS app locally.
+[`v3.4.0`](https://github.com/rteoo/sniptype/tree/v3.4.0). The current preview is
+[`v3.5.0-beta.1`](https://github.com/rteoo/sniptype/releases/tag/v3.5.0-beta.1),
+which adds recoverable voice history, the local-provider boundary, and the Qwen
+Compact profile. See the [development guide](source/docs/development.md) to build
+the Windows package and installer or the macOS app locally.
 
 The installer is currently unsigned, so Windows SmartScreen may show
 **More info → Run anyway** on first launch. It installs for the current user in
