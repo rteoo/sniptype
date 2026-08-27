@@ -448,9 +448,101 @@ class ManagerGuiSmokeTests(unittest.TestCase):
         self.assertIn("Entrada por voz (pronta)", labels)
         self.assertIn("Salvar e usar", buttons)
         self.assertIn("Remover modelo", buttons)
+        self.assertIn("Histórico de voz…", buttons)
+        self.assertIn("Licenças e atribuições…", buttons)
+        self.assertFalse(any("transcribe.cpp — MIT" in text for text in labels))
         self.assertFalse(any(text.startswith("Configurar voz") for text in buttons))
         self.assertGreaterEqual(radio_count, 2)
         self.app.toggle_voice.assert_called_once_with()
+
+    def test_voice_licenses_open_in_a_bounded_scrollable_window(self):
+        _ensure_voice(self.app)
+
+        def open_notices(shared_root):
+            root = tk.Toplevel(shared_root)
+            root.withdraw()
+            frame = tk.Frame(root)
+            self.app._create_voice_tab(frame, root)
+            button = next(
+                widget for widget in _descendants(frame)
+                if isinstance(widget, tk.Button)
+                and str(widget.cget("text")) == "Licenças e atribuições…"
+            )
+            button.invoke()
+            dialog = next(
+                child for child in root.winfo_children()
+                if isinstance(child, tk.Toplevel)
+                and child.title() == "Licenças e atribuições"
+            )
+            dialog.update_idletasks()
+            text_widget = next(
+                widget for widget in _descendants(dialog)
+                if isinstance(widget, tk.Text)
+            )
+            scrollbars = [
+                widget for widget in _descendants(dialog)
+                if isinstance(widget, ttk.Scrollbar)
+            ]
+            return (
+                dialog.winfo_width(),
+                dialog.winfo_height(),
+                str(text_widget.cget("state")),
+                text_widget.get("1.0", tk.END),
+                len(scrollbars),
+            )
+
+        width, height, state, notices, scrollbar_count = self._on_gui(open_notices)
+        self.assertGreaterEqual(width, 520)
+        self.assertGreaterEqual(height, 300)
+        self.assertEqual(state, tk.DISABLED)
+        self.assertIn("transcribe.cpp — MIT", notices)
+        self.assertIn("Qwen/Qwen3-ASR-0.6B", notices)
+        self.assertEqual(scrollbar_count, 1)
+
+    def test_voice_actions_fit_inside_the_default_manager_height(self):
+        _ensure_voice(self.app)
+
+        def measure(shared_root):
+            root = tk.Toplevel(shared_root)
+            root.geometry("960x660")
+            try:
+                root.attributes("-alpha", 0.0)
+            except tk.TclError:
+                pass
+            frame = tk.Frame(root)
+            frame.pack(fill=tk.BOTH, expand=True)
+            self.app._create_voice_tab(frame, root)
+            root.deiconify()
+            root.update()
+            actions = {
+                str(widget.cget("text")): widget
+                for widget in _descendants(frame)
+                if isinstance(widget, tk.Button)
+            }
+            expected = {
+                "Salvar e usar",
+                "Remover modelo",
+                "Histórico de voz…",
+                "Licenças e atribuições…",
+            }
+            self.assertTrue(expected.issubset(actions), actions)
+            result = frame.winfo_height(), {
+                name: widget.winfo_rooty() - frame.winfo_rooty()
+                + widget.winfo_height()
+                for name, widget in actions.items()
+                if name in expected
+            }
+            root.destroy()
+            return result
+
+        available_height, action_bottoms = self._on_gui(measure)
+        self.assertGreater(available_height, 1)
+        for name, bottom in action_bottoms.items():
+            self.assertLessEqual(
+                bottom,
+                available_height,
+                f"{name!r} is clipped below the voice tab",
+            )
 
     def test_voice_tab_refresh_updates_install_labels_and_normalized_settings(self):
         voice = mock.Mock()
