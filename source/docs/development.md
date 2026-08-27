@@ -25,8 +25,8 @@ affecting ordinary expansion.
 
 ## Release channels
 
-The current stable source tag is `v3.4.0`; no public binary release has been
-published from this repository yet. Stable tags use
+The current stable source tag is `v3.4.0`; the current preview release is
+`v3.5.0-beta.1`. Stable tags use
 `vMAJOR.MINOR.PATCH`; beta tags use `vMAJOR.MINOR.PATCH-beta.N` and their GitHub
 Releases are prereleases. Both channels share the same user-data directory and
 installer identity, so they must not run simultaneously.
