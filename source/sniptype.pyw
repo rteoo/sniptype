@@ -1887,6 +1887,66 @@ class Sniptype:
         except tk.TclError:
             pass
 
+    def _show_voice_third_party_notices(self, owner, notices):
+        """Show model licenses in a bounded, scrollable child window."""
+        ui = ui_theme.theme()
+        dialog = tk.Toplevel(owner)
+        dialog.title("Licenças e atribuições")
+        dialog.geometry("700x420")
+        dialog.minsize(520, 300)
+        dialog.configure(bg=ui.surface)
+        dialog.transient(owner)
+        self._set_window_icon(dialog)
+
+        container = tk.Frame(dialog, bg=ui.surface, padx=16, pady=16)
+        container.pack(fill=tk.BOTH, expand=True)
+        container.grid_columnconfigure(0, weight=1)
+        container.grid_rowconfigure(1, weight=1)
+
+        tk.Label(
+            container,
+            text="Licenças e atribuições",
+            font=ui.font(11, "bold"),
+            bg=ui.surface,
+            fg=ui.text,
+        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 10))
+
+        notice_text = tk.Text(
+            container,
+            wrap=tk.WORD,
+            font=ui.font(9),
+            relief=tk.FLAT,
+            highlightthickness=1,
+            highlightbackground=ui.border,
+            padx=10,
+            pady=8,
+            **ui.text_colors(),
+        )
+        scrollbar = ttk.Scrollbar(
+            container,
+            orient=tk.VERTICAL,
+            command=notice_text.yview,
+        )
+        notice_text.configure(yscrollcommand=scrollbar.set)
+        notice_text.grid(row=1, column=0, sticky="nsew")
+        scrollbar.grid(row=1, column=1, sticky="ns")
+        notice_text.insert("1.0", "\n\n".join(notices))
+        notice_text.configure(state=tk.DISABLED)
+
+        tk.Button(
+            container,
+            text="Fechar",
+            width=ui.button_width(10),
+            command=dialog.destroy,
+            **ui.button_colors(),
+        ).grid(row=2, column=0, columnspan=2, sticky="e", pady=(12, 0))
+
+        dialog.bind("<Escape>", lambda _event: dialog.destroy())
+        center_on_screen(dialog)
+        dialog.lift()
+        dialog.focus_force()
+        return dialog
+
     def _build_voice_settings_controls(self, parent, owner):
         """Build profile, language, shortcut, and model controls."""
         from voice_catalog import (
@@ -2073,16 +2133,6 @@ class Sniptype:
             font=ui.font(8),
         ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(2, 0))
 
-        tk.Label(
-            parent,
-            text="\n".join(third_party_notices()),
-            font=ui.font(8),
-            bg=ui.surface,
-            fg=ui.text_muted,
-            wraplength=wrap,
-            justify="left",
-        ).pack(anchor="w", pady=(8, 0))
-
         def refresh_form():
             refresh_profile_labels()
             voice = self.voice
@@ -2194,6 +2244,20 @@ class Sniptype:
             command=remove_model,
             **ui.button_colors(),
         ).pack(side=tk.LEFT, padx=(8, 0))
+        tk.Button(
+            buttons,
+            text="Licenças e atribuições…",
+            command=lambda: self._show_voice_third_party_notices(
+                owner, third_party_notices()
+            ),
+            **ui.button_colors(),
+        ).pack(side=tk.RIGHT)
+        tk.Button(
+            buttons,
+            text="Histórico de voz…",
+            command=lambda: self._open_voice_history(owner),
+            **ui.button_colors(),
+        ).pack(side=tk.RIGHT, padx=(0, 8))
 
         refresh_form()
         return refresh_form
@@ -2427,12 +2491,6 @@ class Sniptype:
         status_label.pack(anchor="w", pady=(4, 12))
 
         refresh_form = self._build_voice_settings_controls(main, root)
-        tk.Button(
-            main,
-            text="Histórico de voz…",
-            command=lambda: self._open_voice_history(root),
-            **ui.button_colors(),
-        ).pack(anchor="w", pady=(12, 0))
         self._manager_voice_refresher = refresh
         refresh()
 
