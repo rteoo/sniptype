@@ -288,16 +288,20 @@ class ListenerFilterTests(unittest.TestCase):
         self.assertNotIn("darwin_intercept", kwargs)
 
     def test_windows_filter_suppresses_all_parseable_final_key_events(self):
-        final_keys = {
-            "1": 0x31,
-            "f5": 0x74,
-            "enter": 0x0D,
-            "tab": 0x09,
-            "esc": 0x1B,
-            ";": 0xBA,
-        }
-        for final_key, vk in final_keys.items():
-            with self.subTest(final_key=final_key):
+        final_keys = (
+            ("main-row 1", "1", 0x31),
+            ("numpad 1", "1", 0x61),
+            ("numpad subtract", "-", 0x6D),
+            ("numpad decimal", ".", 0x6E),
+            ("numpad divide", "/", 0x6F),
+            ("function key", "f5", 0x74),
+            ("enter", "enter", 0x0D),
+            ("tab", "tab", 0x09),
+            ("escape", "esc", 0x1B),
+            ("punctuation", ";", 0xBA),
+        )
+        for case, final_key, vk in final_keys:
+            with self.subTest(case=case):
                 monitor = VoiceHotkeyMonitor(
                     parse_chord(f"ctrl+alt+{final_key}"),
                     parse_chord("ctrl+alt+shift+space"),
