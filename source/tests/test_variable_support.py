@@ -7,6 +7,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from variable_support import (
+    VariableResolutionError,
     classify_variable,
     find_variable_names,
     has_form_variables,
@@ -127,9 +128,21 @@ class TestResolveInline(unittest.TestCase):
         result = resolve_inline("cmd %%clipboard-paste%%", {}, lambda: "meu texto")
         self.assertEqual(result, "cmd meu texto")
 
-    def test_clipboard_empty_becomes_empty_string(self):
-        result = resolve_inline("cmd %%clipboard-paste%%", {}, lambda: None)
+    def test_clipboard_unavailable_fails_instead_of_deleting_token(self):
+        with self.assertRaisesRegex(VariableResolutionError, "transferência"):
+            resolve_inline("cmd %%clipboard-paste%%", {}, lambda: None)
+
+    def test_clipboard_valid_empty_text_is_substituted(self):
+        result = resolve_inline("cmd %%clipboard-paste%%", {}, lambda: "")
         self.assertEqual(result, "cmd ")
+
+    def test_clipboard_read_exception_is_wrapped_truthfully(self):
+        def unavailable():
+            raise OSError("clipboard busy")
+
+        with self.assertRaises(VariableResolutionError) as caught:
+            resolve_inline("cmd %%clipboard-paste%%", {}, unavailable)
+        self.assertIsInstance(caught.exception.__cause__, OSError)
 
     def test_snippet_ref_plain(self):
         snippets = {"xaddr": "Rua das Flores, 10"}

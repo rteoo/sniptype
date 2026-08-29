@@ -120,6 +120,18 @@ class TerminatorReemitTests(unittest.TestCase):
             self.app._run_expansion("xhi", append_text=" ")
         self.app.keyboard_controller.type.assert_not_called()
 
+    def test_unavailable_clipboard_variable_inserts_nothing_and_notifies(self):
+        self.app.snippets["xclip"] = "before %%clipboard-paste%% after"
+        self.app.refresh_runtime_indexes()
+        self.app.notify_error = mock.Mock()
+
+        with mock.patch.object(tx.Clipboard, "get_text", return_value=None):
+            self.app._run_expansion("xclip")
+
+        self.app.text_inserter.insert_text.assert_not_called()
+        self.app.notify_error.assert_called_once()
+        self.assertIn("transferência", self.app.notify_error.call_args.args[0])
+
     def test_terminator_reemitted_when_inserted(self):
         with mock.patch.object(self.app, "expand_snippet", return_value=True):
             self.app._run_expansion("xhi", append_text=" ")
