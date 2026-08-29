@@ -587,9 +587,15 @@ class Sniptype:
             # become the newest backup and defeat recovery.
             if self.snippets_file_is_valid():
                 create_backup(self.snippets_file, self.backups_dir)
-                prune_backups(self.backups_dir)
+        except Exception as e:
+            self.logger.error(f"Falha ao criar backup antes de salvar: {e}")
+            return False
+        try:
+            prune_backups(self.backups_dir)
         except OSError as e:
-            self.logger.warning(f"Falha ao criar backup antes de salvar: {e}")
+            # The prior library is already safe. Retention cleanup is best-effort
+            # and must not turn a successful backup into a failed save.
+            self.logger.warning(f"Falha ao remover backups antigos: {e}")
 
         try:
             write_json_atomic(self.snippets_file, saveable)
@@ -677,14 +683,19 @@ class Sniptype:
         self.refresh_runtime_indexes()
 
     def _backup_current_library(self):
-        """Force a backup of the current file before a destructive operation."""
+        """Back up the current valid file; return False if protection failed."""
         try:
             if self.snippets_file_is_valid() and create_backup(
                 self.snippets_file, self.backups_dir, force=True
             ):
-                prune_backups(self.backups_dir)
-        except OSError as e:
-            self.logger.warning(f"Falha ao criar backup de segurança: {e}")
+                try:
+                    prune_backups(self.backups_dir)
+                except OSError as e:
+                    self.logger.warning(f"Falha ao remover backups antigos: {e}")
+            return True
+        except Exception as e:
+            self.logger.error(f"Falha ao criar backup de segurança: {e}")
+            return False
 
     def backup_now(self):
         """Create an explicit backup on demand. Returns the path, or None."""
@@ -710,7 +721,8 @@ class Sniptype:
         if data is None:
             return False, "Backup inválido: formato inesperado."
 
-        self._backup_current_library()
+        if not self._backup_current_library():
+            return False, "Falha ao criar backup de segurança; restauração cancelada."
         try:
             shutil.copyfile(backup_path, self.snippets_file)
         except OSError as e:
@@ -742,7 +754,8 @@ class Sniptype:
         if data is None:
             return False, "Arquivo inválido: o JSON precisa ser um objeto."
 
-        self._backup_current_library()
+        if not self._backup_current_library():
+            return False, "Falha ao criar backup de segurança; importação cancelada."
         if mode == "merge":
             merged = {**build_saveable_snippets(self.snippets, self.shadowed_static_snippets), **data}
         else:
