@@ -38,6 +38,8 @@ from platform_support import IS_MAC
 
 TK_AVAILABLE = False
 TK_SKIP_REASON = "Tk display not available"
+MAIN_TK_CHILD_ENV = "SNIPTYPE_MAIN_TK_TEST_CHILD"
+IN_MAIN_TK_CHILD = os.environ.get(MAIN_TK_CHILD_ENV) == "1"
 
 if IS_MAC:
     TK_SKIP_REASON = "macOS requires AppKit on the main thread; the Tk root runs on a worker thread"
@@ -423,7 +425,10 @@ class MainThreadModeHeadlessTests(unittest.TestCase):
         self.assertFalse(gui.running)
 
 
-@unittest.skipUnless(MAIN_TK_AVAILABLE, "Tk display not available")
+@unittest.skipUnless(
+    MAIN_TK_AVAILABLE and (not IS_MAC or IN_MAIN_TK_CHILD),
+    "real macOS Tk contracts run in an isolated subprocess",
+)
 class MainThreadModeTkTests(unittest.TestCase):
     """Main-thread mode against a real root — the macOS model, portable to run.
 
@@ -555,6 +560,42 @@ class MainThreadModeTkTests(unittest.TestCase):
         self.assertEqual(early_box.get("value"), "in time")
         self.assertTrue(late_done.is_set(), "stranded caller was never woken")
         self.assertIsInstance(late_box.get("error"), RuntimeError)
+
+
+@unittest.skipUnless(
+    IS_MAC and MAIN_TK_AVAILABLE and not IN_MAIN_TK_CHILD,
+    "needs macOS Tk in the parent test process",
+)
+class MainThreadModeMacIsolationTests(unittest.TestCase):
+    def test_real_tk_contracts_run_in_an_isolated_process(self):
+        """Keep Aqua interpreter teardown out of the full-suite process.
+
+        Python 3.14 can defer Tcl async-handler cleanup until a later test. If
+        that test uses a worker thread, Aqua aborts with ``Tcl_AsyncDelete``
+        even though every real-Tk contract already passed. The application has
+        one root for one process lifetime; this boundary mirrors that lifecycle.
+        """
+        env = os.environ.copy()
+        env[MAIN_TK_CHILD_ENV] = "1"
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "unittest",
+                "tests.test_gui_thread.MainThreadModeTkTests",
+                "-v",
+            ],
+            cwd=os.path.abspath(os.path.join(os.path.dirname(__file__), "..")),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        self.assertEqual(
+            result.returncode,
+            0,
+            f"stdout:\n{result.stdout}\n\nstderr:\n{result.stderr}",
+        )
 
 
 def _raise(exc):
