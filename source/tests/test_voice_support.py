@@ -206,6 +206,23 @@ class ControllerTests(unittest.TestCase):
             key="voice-insert",
         )
 
+    def test_dispatch_exception_marks_history_failed_and_returns_to_idle(self):
+        self._ready()
+        self.controller._insert_text = mock.Mock(
+            side_effect=RuntimeError("insert exploded")
+        )
+
+        self.assertTrue(self.controller.handle_hotkey_press(MODE_DICTATION))
+        self.assertTrue(self.controller.handle_hotkey_release(MODE_DICTATION))
+
+        self.assertEqual(self.controller.state, STATE_IDLE)
+        entry = self.controller.history_entries()[0]
+        self.assertEqual(entry["status"], "failed")
+        self.notify.assert_called_with(
+            "Falha ao processar o texto de voz: insert exploded",
+            key="voice-error",
+        )
+
     def test_secure_input_reports_clipboard_failure_truthfully(self):
         self._ready()
         self.controller._secure_input_blocks = lambda: True
