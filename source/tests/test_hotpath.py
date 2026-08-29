@@ -773,5 +773,42 @@ class InsertionTimingWiringTests(unittest.TestCase):
         )
 
 
+class RuntimeSettingWiringTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_malformed_known_settings_reach_runtime_as_safe_defaults(self):
+        with open(
+            os.path.join(self.tmp, "settings.json"), "w", encoding="utf-8"
+        ) as handle:
+            json.dump({
+                "terminator_mode": "false",
+                "bcb_timeout": "3",
+                "bcb_cache_seconds": "300",
+                "stock_cache_seconds": "600",
+            }, handle)
+        logger = mock.Mock()
+
+        with mock.patch.object(tx, "AppLogger", return_value=logger):
+            app = make_app(self.tmp, {"xhi": "hello"})
+
+        self.assertFalse(app.terminator_mode)
+        self.assertEqual(app.bcb.timeout, 3)
+        self.assertEqual(app.bcb.cache_seconds, 300)
+        self.assertEqual(app.b3_consultor.cache_seconds, 600)
+        for key in (
+            "terminator_mode",
+            "bcb_timeout",
+            "bcb_cache_seconds",
+            "stock_cache_seconds",
+        ):
+            self.assertTrue(
+                any(key in str(call) for call in logger.warning.call_args_list)
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

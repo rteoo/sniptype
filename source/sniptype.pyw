@@ -90,7 +90,7 @@ from app_paths import (
     migrate_snippets,
     needs_migration,
 )
-from settings_support import load_settings, save_settings
+from settings_support import load_settings, normalize_runtime_settings, save_settings
 from validation_support import validate_trigger
 import macos_permissions
 import ui_theme
@@ -317,7 +317,9 @@ class Sniptype:
         self.settings_file = get_settings_path(self.data_dir)
         self.notification_history_file = os.path.join(self.data_dir, "notifications.json")
         self.notification_history = load_notification_history(self.notification_history_file)
-        self.settings = load_settings(self.settings_file)
+        self.settings, invalid_runtime_settings = normalize_runtime_settings(
+            load_settings(self.settings_file)
+        )
         self.voice = None
         if VoiceController is None:
             self.logger.warning(f"Entrada por voz indisponível: {_VOICE_IMPORT_ERROR}")
@@ -345,7 +347,7 @@ class Sniptype:
                 self.logger.warning(f"Entrada por voz indisponível: {exc}")
         # Opt-in: expand only after a terminator (space/punctuation). Default off
         # to preserve the existing expand-on-last-character muscle memory.
-        self.terminator_mode = bool(self.settings.get("terminator_mode", False))
+        self.terminator_mode = self.settings.get("terminator_mode", False)
         # Clipboard/erase delays: per-OS defaults, overridable per key from
         # settings.json. Resolved once — they are read on the listener thread.
         timings = insertion_timings(self.settings)
@@ -358,6 +360,11 @@ class Sniptype:
             notify=self.notify_error,
         )
         configure_logging(self.logs_dir)
+        for key, default in invalid_runtime_settings.items():
+            self.logger.warning(
+                f"settings.json: valor inválido para '{key}'; usando o padrão "
+                f"({default!r})."
+            )
         for key in invalid_timing_overrides(self.settings):
             self.logger.warning(
                 f"settings.json: valor inválido para '{key}'; usando o padrão "
