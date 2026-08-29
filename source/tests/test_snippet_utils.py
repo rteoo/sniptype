@@ -212,6 +212,24 @@ class GetDynamicPrefixesEdgeTests(unittest.TestCase):
         # resolution against the bogus container yields no value (no crash).
         self.assertIsNone(check_dynamic_pattern({"_bad_numbers": "notadict"}, "badx", prefixes)[0])
 
+    def test_invalid_custom_prefix_falls_back_to_derived_prefix(self):
+        for invalid in (None, 42, []):
+            snippets = {"_service_codes": {"__prefix__": invalid, "restart": "ok"}}
+            prefixes = get_dynamic_prefixes(snippets)
+            self.assertEqual("_service_codes", prefixes["service"])
+            self.assertTrue(all(isinstance(prefix, str) for prefix in prefixes))
+            self.assertEqual(
+                ("ok", len("servicerestart")),
+                check_dynamic_pattern(snippets, "servicerestart", prefixes),
+            )
+
+    def test_invalid_custom_prefix_does_not_break_max_length(self):
+        snippets = {"_service_codes": {"__prefix__": None, "restart": "ok"}}
+        self.assertEqual(
+            len("servicerestart"),
+            calculate_max_trigger_length_with_mappings(snippets),
+        )
+
 
 class MergeAndShadowRoundTripTests(unittest.TestCase):
     def test_full_save_round_trip_keeps_shadow_and_strips_all_callables(self):
