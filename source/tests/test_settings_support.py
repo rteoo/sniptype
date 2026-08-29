@@ -5,7 +5,7 @@ import unittest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from settings_support import load_settings, save_settings
+from settings_support import load_settings, normalize_runtime_settings, save_settings
 
 
 class SettingsSupportTests(unittest.TestCase):
@@ -65,6 +65,52 @@ class SettingsSupportTests(unittest.TestCase):
         bad_path = os.path.join(self.tmp, "no-such-dir", "settings.json")
         self.assertFalse(save_settings(bad_path, {"mirror_dir": "x"}))
         self.assertFalse(os.path.exists(bad_path))
+
+
+class RuntimeSettingsNormalizationTests(unittest.TestCase):
+    def test_malformed_known_values_fall_back_without_dropping_unknown_keys(self):
+        normalized, invalid = normalize_runtime_settings({
+            "terminator_mode": "false",
+            "bcb_timeout": "3",
+            "bcb_cache_seconds": True,
+            "stock_cache_seconds": float("inf"),
+            "mirror_dir": 5,
+            "future_key": {"kept": True},
+        })
+
+        self.assertFalse(normalized["terminator_mode"])
+        self.assertEqual(normalized["bcb_timeout"], 3)
+        self.assertEqual(normalized["bcb_cache_seconds"], 300)
+        self.assertEqual(normalized["stock_cache_seconds"], 600)
+        self.assertIsNone(normalized["mirror_dir"])
+        self.assertEqual(normalized["future_key"], {"kept": True})
+        self.assertEqual(
+            set(invalid),
+            {
+                "terminator_mode",
+                "bcb_timeout",
+                "bcb_cache_seconds",
+                "stock_cache_seconds",
+                "mirror_dir",
+            },
+        )
+
+    def test_valid_runtime_values_are_preserved(self):
+        settings = {
+            "terminator_mode": True,
+            "bcb_timeout": 0.5,
+            "bcb_cache_seconds": 0,
+            "stock_cache_seconds": 3600,
+            "sync_export_dir": " C:/sync ",
+        }
+        normalized, invalid = normalize_runtime_settings(settings)
+
+        self.assertEqual(invalid, {})
+        self.assertTrue(normalized["terminator_mode"])
+        self.assertEqual(normalized["bcb_timeout"], 0.5)
+        self.assertEqual(normalized["bcb_cache_seconds"], 0)
+        self.assertEqual(normalized["stock_cache_seconds"], 3600)
+        self.assertEqual(normalized["sync_export_dir"], "C:/sync")
 
 
 if __name__ == "__main__":
