@@ -769,24 +769,31 @@ class VoiceController:
             self._history.cancel(recording.record_id)
             self._complete_session(generation, OUTCOME_CANCELLED)
             return
-        outcome = dispatch_voice_result(
-            transcript,
-            mode,
-            target,
-            snippets=self._snippets(),
-            trigger_index=self._trigger_index(),
-            insert_text=self._insert_text,
-            expand_trigger=self._expand_trigger,
-            apply_form=(
-                self._invoke_session_form
-                if form_apply is not None and mode != MODE_COMMAND
-                else None
-            ),
-            restore_target=self._restore_target,
-            secure_input_blocks=self._secure_input_blocks,
-            leave_on_clipboard=self._leave_on_clipboard,
-            cancelled=self._cancel.is_set(),
-        )
+        try:
+            outcome = dispatch_voice_result(
+                transcript,
+                mode,
+                target,
+                snippets=self._snippets(),
+                trigger_index=self._trigger_index(),
+                insert_text=self._insert_text,
+                expand_trigger=self._expand_trigger,
+                apply_form=(
+                    self._invoke_session_form
+                    if form_apply is not None and mode != MODE_COMMAND
+                    else None
+                ),
+                restore_target=self._restore_target,
+                secure_input_blocks=self._secure_input_blocks,
+                leave_on_clipboard=self._leave_on_clipboard,
+                cancelled=self._cancel.is_set(),
+            )
+        except Exception as exc:
+            self._recording_failed(recording, exc)
+            self._fail_to_idle(
+                f"Falha ao processar o texto de voz: {exc}", generation
+            )
+            return
         self._finish_outcome(outcome, generation, recording, transcript)
 
     def _stream_worker(self, generation):
