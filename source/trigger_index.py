@@ -87,12 +87,25 @@ def compile_trigger_index(snippets, slow_snippets):
         bucket.sort(key=len, reverse=True)  # stable: equal lengths keep source order
 
     dynamic_prefixes = get_dynamic_prefixes(snippets)
+    bare_mapping_by_last_char = {}
+    bare_mapping_key = dynamic_prefixes.get("")
+    bare_mapping = snippets.get(bare_mapping_key)
+    if isinstance(bare_mapping, dict):
+        for item_name in bare_mapping:
+            if item_name == "__prefix__" or not isinstance(item_name, str) or not item_name:
+                continue
+            bare_mapping_by_last_char.setdefault(item_name[-1], []).append(item_name)
+        for bucket in bare_mapping_by_last_char.values():
+            bucket.sort(key=len, reverse=True)
 
     return {
         "direct_triggers": tuple(direct_triggers),
         "direct_by_last_char": {key: tuple(value) for key, value in direct_by_last_char.items()},
         "dynamic_prefixes": dynamic_prefixes,
         "ordered_prefixes": tuple(dynamic_prefixes.keys()),
+        "bare_mapping_by_last_char": {
+            key: tuple(value) for key, value in bare_mapping_by_last_char.items()
+        },
         "slow_triggers": frozenset(slow_snippets) | _compute_slow_ref_triggers(snippets, slow_snippets),
         "form_triggers": frozenset(_compute_form_triggers(snippets, dynamic_prefixes)),
     }
@@ -118,6 +131,17 @@ def find_dynamic_trigger(snippets, typed_text, trigger_index):
 
     dynamic_prefixes = trigger_index["dynamic_prefixes"]
     for prefix in trigger_index["ordered_prefixes"]:
+        if prefix == "":
+            mapping = snippets.get(dynamic_prefixes[prefix])
+            candidates = trigger_index["bare_mapping_by_last_char"].get(
+                typed_text[-1], ()
+            )
+            for item_name in candidates:
+                if typed_text.endswith(item_name):
+                    value = mapping.get(item_name)
+                    if value is not None:
+                        return item_name, value
+            continue
         if prefix in typed_text:
             prefix_start = typed_text.rfind(prefix)
             potential_trigger = typed_text[prefix_start:]

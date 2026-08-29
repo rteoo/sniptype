@@ -98,10 +98,13 @@ def get_dynamic_prefixes(snippets):
 
     for key, mapping in snippets.items():
         if key.startswith("_") and key.endswith(("_numbers", "_codes")) and key not in BUILTIN_DYNAMIC_PREFIXES:
-            if isinstance(mapping, dict) and "__prefix__" in mapping:
-                prefix = mapping["__prefix__"]
-            else:
-                prefix = key[1:].replace("_numbers", "").replace("_codes", "")
+            derived_prefix = key[1:].replace("_numbers", "").replace("_codes", "")
+            prefix = mapping.get("__prefix__") if isinstance(mapping, dict) else None
+            # A malformed override must not become a non-string key (breaking
+            # startswith/concatenation). Empty strings deliberately create bare
+            # triggers, so only non-string values fall back to the default.
+            if not isinstance(prefix, str):
+                prefix = derived_prefix
             prefixes[prefix] = key
 
     return prefixes
