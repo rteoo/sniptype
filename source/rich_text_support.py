@@ -1,3 +1,4 @@
+import difflib
 import html
 import tkinter as tk
 from tkinter import font as tkfont
@@ -372,13 +373,51 @@ def serialize_text_widget_content(text_widget):
 def rebuild_rich_text(original, new_text):
     """
     Return a new rich-text dict with updated plain text.
-    Spans are clipped to the new text length; HTML and RTF are regenerated.
+    Spans are remapped through the text diff; HTML and RTF are regenerated.
     Returns a plain string if no valid spans remain after clipping.
     """
     if not is_rich_text_payload(original):
         return new_text
 
-    clipped_spans = normalize_style_spans(original.get("spans", []), len(new_text))
+    original_text = original["text"]
+    original_spans = normalize_style_spans(
+        original.get("spans", []), len(original_text)
+    )
+    if not original_spans:
+        return new_text
+
+    # Map every boundary in the old text to its corresponding boundary in
+    # the new text. Equal runs map one-to-one; replacement starts map to the
+    # replacement start while interior boundaries map to its end, deletions
+    # collapse to their start, and insertions are placed after the inserted
+    # run. This keeps spans around and after a changed token aligned while
+    # making insertion/deletion/replacement behavior deterministic.
+    boundaries = [0] * (len(original_text) + 1)
+    matcher = difflib.SequenceMatcher(
+        None, original_text, new_text, autojunk=False
+    )
+    for tag, old_start, old_end, new_start, new_end in matcher.get_opcodes():
+        if tag == "equal":
+            for boundary in range(old_start, old_end + 1):
+                boundaries[boundary] = new_start + (boundary - old_start)
+        elif tag == "replace":
+            boundaries[old_start] = new_start
+            for boundary in range(old_start + 1, old_end + 1):
+                boundaries[boundary] = new_end
+        elif tag == "delete":
+            for boundary in range(old_start, old_end + 1):
+                boundaries[boundary] = new_start
+        else:  # insert: no old characters, so place the boundary after it.
+            boundaries[old_start] = new_end
+
+    remapped_spans = []
+    for span in original_spans:
+        start = boundaries[span["start"]]
+        end = boundaries[span["end"]]
+        if end > start:
+            remapped_spans.append({**span, "start": start, "end": end})
+
+    clipped_spans = normalize_style_spans(remapped_spans, len(new_text))
     if not clipped_spans:
         return new_text
 
