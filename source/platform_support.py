@@ -17,10 +17,19 @@ import shlex
 import subprocess
 import sys
 import threading
+import time
+
+try:
+    import fcntl as _fcntl
+except ImportError:  # Windows uses the named mutex in the real app.
+    _fcntl = None
 
 
 APP_NAME = "Sniptype"
 APPLICATION_ACTIVATION_TIMEOUT_SECONDS = 2.0
+_LOCKFILE_HANDLES = {}
+_LOCKFILE_HANDLES_LOCK = threading.Lock()
+_EMPTY_LOCK_STALE_SECONDS = 1.0
 
 
 def current_os():
@@ -700,25 +709,144 @@ def acquire_lockfile(path):
     named mutex.
     """
     try:
-        if os.path.exists(path):
-            try:
-                with open(path, "r", encoding="utf-8") as handle:
-                    existing_pid = int((handle.read().strip() or "0"))
-            except (ValueError, OSError):
-                existing_pid = 0
-            if existing_pid and existing_pid != os.getpid() and _pid_is_running(existing_pid):
-                return False
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        with open(path, "w", encoding="utf-8") as handle:
-            handle.write(str(os.getpid()))
-        return True
     except OSError:
         # If we cannot manage the lockfile, do not block startup.
         return True
 
+    pid = os.getpid()
+    absolute_path = os.path.abspath(path)
+
+    # macOS/Linux have an advisory kernel lock. It is the actual ownership
+    # primitive: it is acquired atomically, survives PID-file rewrites, and is
+    # released automatically if the process crashes. The file itself may remain
+    # after exit; its PID is diagnostic only and is overwritten by the next owner.
+    if _fcntl is not None:
+        with _LOCKFILE_HANDLES_LOCK:
+            existing = _LOCKFILE_HANDLES.get(absolute_path)
+            if existing is not None:
+                return existing[0] == pid
+            try:
+                descriptor = os.open(path, os.O_CREAT | os.O_RDWR, 0o644)
+            except OSError:
+                return True
+            try:
+                _fcntl.flock(
+                    descriptor,
+                    _fcntl.LOCK_EX | _fcntl.LOCK_NB,
+                )
+            except (BlockingIOError, OSError):
+                os.close(descriptor)
+                return False
+            try:
+                os.ftruncate(descriptor, 0)
+                os.write(descriptor, str(pid).encode("ascii"))
+                os.fsync(descriptor)
+            except OSError:
+                # The kernel lock still guarantees exclusivity. Keep it rather
+                # than fail open and admit a second global listener.
+                pass
+            _LOCKFILE_HANDLES[absolute_path] = (pid, descriptor)
+            return True
+
+    # Test-only/defensive fallback for hosts without fcntl. Sniptype uses a
+    # named mutex on Windows, so production non-Windows ownership never reaches
+    # this PID-based compatibility path.
+    for _ in range(3):
+        try:
+            descriptor = os.open(
+                path,
+                os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                0o644,
+            )
+        except FileExistsError:
+            try:
+                with open(path, "r", encoding="utf-8") as handle:
+                    raw_pid = handle.read().strip()
+            except OSError:
+                # A concurrent stale-lock cleanup may have removed the file;
+                # retry the atomic create instead of treating it as held.
+                continue
+
+            # A newly-created lock can be observed between os.open() and the
+            # owner's PID write. Fail closed during that short window, but
+            # reclaim an old empty file left by a creator that crashed before
+            # publishing its PID.
+            if not raw_pid:
+                try:
+                    age = max(0.0, time.time() - os.path.getmtime(path))
+                except OSError:
+                    continue
+                if age < _EMPTY_LOCK_STALE_SECONDS:
+                    return False
+                try:
+                    os.remove(path)
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    return False
+                continue
+            try:
+                existing_pid = int(raw_pid)
+            except ValueError:
+                existing_pid = 0
+
+            if existing_pid == pid:
+                return True
+            if existing_pid > 0 and _pid_is_running(existing_pid):
+                return False
+
+            # Only a lock whose recorded owner is not running is stale. The
+            # atomic create below arbitrates with another contender after the
+            # unlink, so a replacement cannot be overwritten accidentally.
+            try:
+                os.remove(path)
+            except FileNotFoundError:
+                pass
+            except OSError:
+                return False
+            continue
+        except OSError:
+            # Preserve the historical fail-open behavior for an unreadable data
+            # directory or another filesystem error unrelated to contention.
+            return True
+
+        try:
+            os.write(descriptor, str(pid).encode("ascii"))
+        except OSError:
+            try:
+                os.close(descriptor)
+            finally:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+            return True
+        os.close(descriptor)
+        return True
+
+    return False
+
 
 def release_lockfile(path):
     """Remove our lockfile if it still holds our PID. Best effort."""
+    if _fcntl is not None:
+        absolute_path = os.path.abspath(path)
+        with _LOCKFILE_HANDLES_LOCK:
+            existing = _LOCKFILE_HANDLES.get(absolute_path)
+            if existing is None or existing[0] != os.getpid():
+                return
+            _owner_pid, descriptor = _LOCKFILE_HANDLES.pop(absolute_path)
+        try:
+            _fcntl.flock(descriptor, _fcntl.LOCK_UN)
+        except OSError:
+            pass
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+        return
+
     try:
         with open(path, "r", encoding="utf-8") as handle:
             if int((handle.read().strip() or "0")) != os.getpid():
