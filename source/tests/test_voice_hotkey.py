@@ -35,6 +35,30 @@ class ParseChordTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_chord("hyper+space")
 
+    def test_function_key_range_matches_windows_virtual_keys(self):
+        self.assertEqual(parse_chord("ctrl+f24").key, "f24")
+        for key in ("f0", "f25"):
+            with self.subTest(key=key):
+                with self.assertRaises(ValueError):
+                    parse_chord(f"ctrl+{key}")
+
+    def test_rejects_single_keys_the_windows_filter_cannot_suppress(self):
+        with mock.patch("voice_hotkey.current_os", return_value="windows"):
+            for key in ("é", "!", "@"):
+                with self.subTest(key=key):
+                    with self.assertRaises(ValueError):
+                        parse_chord(f"ctrl+{key}")
+
+    def test_macos_and_linux_accept_unicode_single_keys(self):
+        for system in ("darwin", "linux"):
+            with self.subTest(system=system), mock.patch(
+                "voice_hotkey.current_os", return_value=system
+            ):
+                self.assertEqual(parse_chord("ctrl+é").key, "é")
+
+    def test_escape_alias_is_canonicalized(self):
+        self.assertEqual(parse_chord("ctrl+escape").spec, "ctrl+esc")
+
 
 class ChordMatchTests(unittest.TestCase):
     def test_requires_every_modifier(self):
@@ -59,6 +83,27 @@ class MonitorTests(unittest.TestCase):
         monitor._handle_press(Key.alt)
         monitor._handle_press(Key.space)
         monitor._handle_release(Key.space)
+        self.assertEqual(
+            events,
+            [("press", MODE_DICTATION), ("release", MODE_DICTATION)],
+        )
+
+    def test_configured_escape_chord_starts_voice_instead_of_cancelling(self):
+        events = []
+        monitor = VoiceHotkeyMonitor(
+            parse_chord("ctrl+alt+esc"),
+            parse_chord("ctrl+alt+shift+space"),
+            on_press=lambda mode: events.append(("press", mode)),
+            on_release=lambda mode: events.append(("release", mode)),
+            on_escape=lambda: events.append(("cancel", None)),
+        )
+        from pynput.keyboard import Key
+
+        monitor._handle_press(Key.ctrl)
+        monitor._handle_press(Key.alt)
+        monitor._handle_press(Key.esc)
+        monitor._handle_release(Key.esc)
+
         self.assertEqual(
             events,
             [("press", MODE_DICTATION), ("release", MODE_DICTATION)],
@@ -241,6 +286,41 @@ class ListenerFilterTests(unittest.TestCase):
         kwargs = listener.call_args.kwargs
         self.assertIs(kwargs["win32_event_filter"].__self__, monitor)
         self.assertNotIn("darwin_intercept", kwargs)
+
+    def test_windows_filter_suppresses_all_parseable_final_key_events(self):
+        final_keys = {
+            "1": 0x31,
+            "f5": 0x74,
+            "enter": 0x0D,
+            "tab": 0x09,
+            "esc": 0x1B,
+            ";": 0xBA,
+        }
+        for final_key, vk in final_keys.items():
+            with self.subTest(final_key=final_key):
+                monitor = VoiceHotkeyMonitor(
+                    parse_chord(f"ctrl+alt+{final_key}"),
+                    parse_chord("ctrl+alt+shift+space"),
+                    on_press=lambda mode: None,
+                    on_release=lambda mode: None,
+                )
+                monitor._listener = mock.Mock()
+                monitor._held.update({"ctrl", "alt"})
+                data = mock.Mock(vkCode=vk)
+
+                monitor._win32_filter(0x100, data)
+                monitor._win32_filter(0x101, data)
+
+                self.assertEqual(monitor._listener.suppress_event.call_count, 2)
+
+    def test_stop_clears_pending_windows_suppression(self):
+        monitor = self._monitor()
+        monitor._listener = mock.Mock()
+        monitor._win32_suppressed_key = "space"
+
+        monitor.stop()
+
+        self.assertIsNone(monitor._win32_suppressed_key)
 
     def test_darwin_intercept_suppresses_configured_final_key_down_and_up(self):
         monitor = self._monitor()
