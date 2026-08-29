@@ -1,12 +1,15 @@
 import hashlib
+import json
 import os
 import sys
 import tempfile
 import threading
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+import voice_models
 from voice_catalog import (
     DEFAULT_PROFILE,
     LANGUAGE_AUTO,
@@ -206,6 +209,54 @@ class DownloadTests(unittest.TestCase):
         self.assertTrue(model_is_installed(self.entry, self.tmp))
         with open(path, "rb") as handle:
             self.assertEqual(hashlib.sha256(handle.read()).hexdigest(), self.digest)
+
+    def test_same_size_corruption_with_changed_stat_is_rehashed_and_rejected(self):
+        path = download_model(self.entry, self.tmp, opener=self._opener())
+        verified_stat = os.stat(path)
+        with open(path, "wb") as handle:
+            handle.write(b"x" * len(self.payload))
+        os.utime(
+            path,
+            ns=(verified_stat.st_atime_ns, verified_stat.st_mtime_ns + 2_000_000_000),
+        )
+
+        self.assertFalse(model_is_installed(self.entry, self.tmp))
+
+    def test_manifest_identity_mismatch_is_rehashed_and_repaired(self):
+        download_model(self.entry, self.tmp, opener=self._opener())
+        manifest_file = os.path.join(
+            self.tmp, self.entry["id"], "manifest.json"
+        )
+        with open(manifest_file, "r", encoding="utf-8") as handle:
+            manifest = json.load(handle)
+        manifest["profile"] = "accuracy"
+        with open(manifest_file, "w", encoding="utf-8") as handle:
+            json.dump(manifest, handle)
+
+        self.assertTrue(model_is_installed(self.entry, self.tmp))
+        with open(manifest_file, "r", encoding="utf-8") as handle:
+            repaired = json.load(handle)
+        self.assertEqual(repaired["profile"], self.entry["profile"])
+
+    def test_old_manifest_is_rehashed_once_then_upgraded_for_stat_fast_path(self):
+        download_model(self.entry, self.tmp, opener=self._opener())
+        manifest_file = os.path.join(
+            self.tmp, self.entry["id"], "manifest.json"
+        )
+        with open(manifest_file, "r", encoding="utf-8") as handle:
+            manifest = json.load(handle)
+        manifest.pop("verified_stat", None)
+        with open(manifest_file, "w", encoding="utf-8") as handle:
+            json.dump(manifest, handle)
+
+        with mock.patch("voice_models._hash_file", wraps=voice_models._hash_file) as hashed:
+            self.assertTrue(model_is_installed(self.entry, self.tmp))
+            self.assertTrue(model_is_installed(self.entry, self.tmp))
+
+        self.assertEqual(hashed.call_count, 1)
+        with open(manifest_file, "r", encoding="utf-8") as handle:
+            upgraded = json.load(handle)
+        self.assertIn("verified_stat", upgraded)
 
     def test_second_download_is_a_no_op(self):
         calls = []
