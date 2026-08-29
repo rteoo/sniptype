@@ -30,6 +30,8 @@ APPLICATION_ACTIVATION_TIMEOUT_SECONDS = 2.0
 _LOCKFILE_HANDLES = {}
 _LOCKFILE_HANDLES_LOCK = threading.Lock()
 _EMPTY_LOCK_STALE_SECONDS = 1.0
+_FALLBACK_OWNER_NAME = "owner.pid"
+_FALLBACK_RECLAIM_NAME = ".reclaim"
 
 
 def current_os():
@@ -749,28 +751,32 @@ def acquire_lockfile(path):
             _LOCKFILE_HANDLES[absolute_path] = (pid, descriptor)
             return True
 
-    # Test-only/defensive fallback for hosts without fcntl. Sniptype uses a
-    # named mutex on Windows, so production non-Windows ownership never reaches
-    # this PID-based compatibility path.
-    for _ in range(3):
+    # Test-only/defensive fallback for hosts without fcntl. A directory is the
+    # ownership primitive because mkdir is atomic. Stale cleanup first claims a
+    # marker inside that directory and renames the exact claimed directory out
+    # of the way, so it cannot unlink a replacement created by another process.
+    for _ in range(5):
         try:
-            descriptor = os.open(
-                path,
-                os.O_CREAT | os.O_EXCL | os.O_WRONLY,
-                0o644,
-            )
+            os.mkdir(path, 0o755)
         except FileExistsError:
-            try:
-                with open(path, "r", encoding="utf-8") as handle:
-                    raw_pid = handle.read().strip()
-            except OSError:
-                # A concurrent stale-lock cleanup may have removed the file;
-                # retry the atomic create instead of treating it as held.
-                continue
+            if not os.path.isdir(path):
+                # Fail closed for a legacy file lock. Production POSIX hosts
+                # use fcntl, and deleting a file-format lock safely would need
+                # a compare-and-unlink primitive the standard library lacks.
+                return False
 
-            # A newly-created lock can be observed between os.open() and the
+            owner_path = os.path.join(path, _FALLBACK_OWNER_NAME)
+            try:
+                with open(owner_path, "r", encoding="utf-8") as handle:
+                    raw_pid = handle.read().strip()
+            except FileNotFoundError:
+                raw_pid = ""
+            except OSError:
+                return False
+
+            # A newly-created lock can be observed between mkdir() and the
             # owner's PID write. Fail closed during that short window, but
-            # reclaim an old empty file left by a creator that crashed before
+            # reclaim an old empty directory left by a creator that crashed before
             # publishing its PID.
             if not raw_pid:
                 try:
@@ -779,13 +785,6 @@ def acquire_lockfile(path):
                     continue
                 if age < _EMPTY_LOCK_STALE_SECONDS:
                     return False
-                try:
-                    os.remove(path)
-                except FileNotFoundError:
-                    pass
-                except OSError:
-                    return False
-                continue
             try:
                 existing_pid = int(raw_pid)
             except ValueError:
@@ -796,13 +795,60 @@ def acquire_lockfile(path):
             if existing_pid > 0 and _pid_is_running(existing_pid):
                 return False
 
-            # Only a lock whose recorded owner is not running is stale. The
-            # atomic create below arbitrates with another contender after the
-            # unlink, so a replacement cannot be overwritten accidentally.
+            reclaim_path = os.path.join(path, _FALLBACK_RECLAIM_NAME)
             try:
-                os.remove(path)
+                reclaim_descriptor = os.open(
+                    reclaim_path,
+                    os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                    0o644,
+                )
+            except FileExistsError:
+                return False
+            except OSError:
+                return False
+            try:
+                os.write(reclaim_descriptor, str(pid).encode("ascii"))
+            finally:
+                os.close(reclaim_descriptor)
+
+            # The original creator may have published its PID while this
+            # contender was deciding that the empty directory was stale.
+            try:
+                with open(owner_path, "r", encoding="utf-8") as handle:
+                    claimed_pid = int((handle.read().strip() or "0"))
+            except (FileNotFoundError, ValueError):
+                claimed_pid = 0
+            except OSError:
+                claimed_pid = -1
+            if claimed_pid > 0 and _pid_is_running(claimed_pid):
+                try:
+                    os.remove(reclaim_path)
+                except OSError:
+                    pass
+                return False
+
+            stale_path = (
+                f"{path}.stale-{pid}-{threading.get_ident()}-{time.time_ns()}"
+            )
+            try:
+                os.rename(path, stale_path)
             except FileNotFoundError:
-                pass
+                continue
+            except OSError:
+                try:
+                    os.remove(reclaim_path)
+                except OSError:
+                    pass
+                return False
+            for stale_name in (_FALLBACK_OWNER_NAME, _FALLBACK_RECLAIM_NAME):
+                try:
+                    os.remove(os.path.join(stale_path, stale_name))
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    return False
+            try:
+                os.rmdir(stale_path)
             except OSError:
                 return False
             continue
@@ -811,18 +857,18 @@ def acquire_lockfile(path):
             # directory or another filesystem error unrelated to contention.
             return True
 
+        owner_path = os.path.join(path, _FALLBACK_OWNER_NAME)
         try:
-            os.write(descriptor, str(pid).encode("ascii"))
+            with open(owner_path, "x", encoding="ascii") as handle:
+                handle.write(str(pid))
+                handle.flush()
+                os.fsync(handle.fileno())
         except OSError:
             try:
-                os.close(descriptor)
-            finally:
-                try:
-                    os.remove(path)
-                except OSError:
-                    pass
+                os.rmdir(path)
+            except OSError:
+                pass
             return True
-        os.close(descriptor)
         return True
 
     return False
@@ -844,6 +890,18 @@ def release_lockfile(path):
         try:
             os.close(descriptor)
         except OSError:
+            pass
+        return
+
+    if os.path.isdir(path):
+        owner_path = os.path.join(path, _FALLBACK_OWNER_NAME)
+        try:
+            with open(owner_path, "r", encoding="utf-8") as handle:
+                if int((handle.read().strip() or "0")) != os.getpid():
+                    return
+            os.remove(owner_path)
+            os.rmdir(path)
+        except (ValueError, OSError):
             pass
         return
 
