@@ -124,6 +124,32 @@ _DARWIN_KEYCODES = {
     122: "f1",
 }
 
+_WIN32_VK_NAMES = {
+    0x09: "tab",
+    0x0D: "enter",
+    0x1B: "esc",
+    0x20: "space",
+    **{0x30 + index: str(index) for index in range(10)},
+    **{0x41 + index: chr(0x61 + index) for index in range(26)},
+    **{0x70 + index: f"f{index + 1}" for index in range(24)},
+    0xBA: ";",
+    0xBB: "=",
+    0xBC: ",",
+    0xBD: "-",
+    0xBE: ".",
+    0xBF: "/",
+    0xC0: "`",
+    0xDB: "[",
+    0xDC: "\\",
+    0xDD: "]",
+    0xDE: "'",
+}
+
+_WIN32_KEYUP_MESSAGES = frozenset({0x0101, 0x0105})
+_SUPPORTED_SINGLE_KEYS = frozenset(
+    name for name in _WIN32_VK_NAMES.values() if len(name) == 1
+)
+
 try:
     _MODIFIER_KEYS[Key.cmd] = "cmd"
 except AttributeError:
@@ -159,10 +185,22 @@ def parse_chord(spec):
     if len(parts) < 2:
         raise ValueError("hotkey needs a modifier and a key")
     key = parts[-1]
+    if key == "escape":
+        key = "esc"
     if key in _MODIFIER_ALIASES:
         raise ValueError("hotkey cannot end on a modifier")
+    if (
+        len(key) == 1
+        and current_os() == "windows"
+        and key not in _SUPPORTED_SINGLE_KEYS
+    ):
+        raise ValueError(f"unsupported hotkey key: {key}")
     if len(key) != 1 and key not in {"space", "enter", "tab", "esc", "escape"}:
-        if not key.startswith("f") or not key[1:].isdigit():
+        if (
+            not key.startswith("f")
+            or not key[1:].isdigit()
+            or not 1 <= int(key[1:]) <= 24
+        ):
             raise ValueError(f"unsupported hotkey key: {key}")
     modifiers = []
     for part in parts[:-1]:
@@ -225,6 +263,7 @@ class VoiceHotkeyMonitor:
         self._held = set()
         self._active_mode = None
         self._darwin_suppressed_key = None
+        self._win32_suppressed_key = None
         self._listener = None
 
     def start(self):
@@ -253,6 +292,7 @@ class VoiceHotkeyMonitor:
         self._held.clear()
         self._active_mode = None
         self._darwin_suppressed_key = None
+        self._win32_suppressed_key = None
         if listener is not None:
             try:
                 listener.stop()
@@ -276,6 +316,13 @@ class VoiceHotkeyMonitor:
     def _handle_press(self, key):
         name = _key_name(key)
         if name in {"esc", "escape"}:
+            if self._active_mode is None:
+                mode = self._mode_for_key("esc")
+                if mode is not None:
+                    self._active_mode = mode
+                    self._darwin_suppressed_key = "esc"
+                    self._on_press(mode)
+                    return
             if self._on_escape is not None:
                 self._on_escape()
             return
@@ -373,14 +420,22 @@ class VoiceHotkeyMonitor:
     def _win32_filter(self, msg, data):
         # Swallow only the final key of an armed chord so it does not type.
         vk = getattr(data, "vkCode", None)
-        name = None
-        if vk == 0x20:
-            name = "space"
-        elif isinstance(vk, int) and 0x41 <= vk <= 0x5A:
-            name = chr(vk).lower()
-        if name and self._mode_for_key(name) is not None and self._listener is not None:
+        name = _WIN32_VK_NAMES.get(vk) if isinstance(vk, int) else None
+        listener = self._listener
+        if listener is None or name is None:
+            return True
+        if self._win32_suppressed_key == name:
             try:
-                self._listener.suppress_event()
+                listener.suppress_event()
+            except Exception:
+                pass
+            if msg in _WIN32_KEYUP_MESSAGES:
+                self._win32_suppressed_key = None
+            return True
+        if self._mode_for_key(name) is not None:
+            self._win32_suppressed_key = name
+            try:
+                listener.suppress_event()
             except Exception:
                 pass
         return True
