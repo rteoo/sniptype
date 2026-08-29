@@ -31,6 +31,15 @@ MAX_REDIRECTS = 5
 CHUNK_SIZE = 1024 * 1024
 # ceiling: single-file GGUF downloads only. A catalog entry that points at an
 # archive needs a path-safe extractor before it can be added.
+_MANIFEST_IDENTITY_FIELDS = (
+    "id",
+    "profile",
+    "filename",
+    "sha256",
+    "size_bytes",
+    "license_id",
+    "upstream_model",
+)
 
 
 class VoiceModelError(Exception):
@@ -87,19 +96,41 @@ def _read_manifest(path):
 
 
 def model_is_installed(entry, cache_dir):
-    """True when the pinned file exists and the recorded digest matches."""
+    """True when the pinned file exists and its verified manifest is current.
+
+    A matching manifest and file stat avoid re-reading multi-gigabyte models on
+    every tray/menu check. Older manifests, or files whose stat changed, are
+    hashed once and receive an atomic manifest upgrade when valid.
+    """
     path = model_path(cache_dir, entry)
     manifest = _read_manifest(manifest_path(cache_dir, entry))
     if manifest is None or not os.path.isfile(path):
         return False
-    if manifest.get("sha256") != entry["sha256"]:
-        return False
-    if manifest.get("size_bytes") != entry["size_bytes"]:
-        return False
     try:
-        return os.path.getsize(path) == entry["size_bytes"]
+        stat = os.stat(path)
     except OSError:
         return False
+    if stat.st_size != entry["size_bytes"]:
+        return False
+    identity_matches = all(
+        manifest.get(key) == entry.get(key) for key in _MANIFEST_IDENTITY_FIELDS
+    )
+    verified_stat = _stat_metadata(stat)
+    if identity_matches and manifest.get("verified_stat") == verified_stat:
+        return True
+    try:
+        digest = _hash_file(path)
+    except VoiceModelError:
+        return False
+    if digest != entry["sha256"]:
+        return False
+    try:
+        _write_manifest(entry, cache_dir, digest, verified_stat=verified_stat)
+    except OSError:
+        # The bytes are verified even if a read-only cache prevents upgrading
+        # the optimization metadata; the next check will hash again.
+        pass
+    return True
 
 
 def installed_model_path(entry, cache_dir):
@@ -213,6 +244,30 @@ def _rehash_partial(path, expected_size):
         _remove_file(path)
         raise VoiceModelError("O arquivo parcial é maior que o tamanho pinado.")
     return hasher, written
+
+
+def _stat_metadata(stat):
+    return {
+        "size_bytes": int(stat.st_size),
+        "mtime_ns": int(stat.st_mtime_ns),
+        "ctime_ns": int(stat.st_ctime_ns),
+        "device": int(stat.st_dev),
+        "inode": int(stat.st_ino),
+    }
+
+
+def _hash_file(path):
+    hasher = hashlib.sha256()
+    try:
+        with open(path, "rb") as handle:
+            while True:
+                chunk = handle.read(CHUNK_SIZE)
+                if not chunk:
+                    break
+                hasher.update(chunk)
+    except OSError as exc:
+        raise VoiceModelError(f"Falha ao verificar o modelo de voz: {exc}") from exc
+    return hasher.hexdigest()
 
 
 def download_model(entry, cache_dir, progress=None, cancel_event=None, opener=None):
@@ -344,7 +399,12 @@ def download_model(entry, cache_dir, progress=None, cancel_event=None, opener=No
         raise VoiceModelError(f"Falha ao baixar o modelo de voz: {exc}") from exc
 
 
-def _write_manifest(entry, cache_dir, digest):
+def _write_manifest(entry, cache_dir, digest, verified_stat=None):
+    if verified_stat is None:
+        try:
+            verified_stat = _stat_metadata(os.stat(model_path(cache_dir, entry)))
+        except OSError:
+            verified_stat = None
     payload = {
         "id": entry["id"],
         "profile": entry["profile"],
@@ -353,6 +413,7 @@ def _write_manifest(entry, cache_dir, digest):
         "size_bytes": entry["size_bytes"],
         "license_id": entry["license_id"],
         "upstream_model": entry["upstream_model"],
+        "verified_stat": verified_stat,
     }
     path = manifest_path(cache_dir, entry)
     _ensure_parent(path)
