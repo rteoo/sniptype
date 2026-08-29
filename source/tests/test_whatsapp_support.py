@@ -37,6 +37,7 @@ class WhatsAppSupportTests(unittest.TestCase):
 
     def test_normalize_phone_number_rejects_invalid_inputs(self):
         self.assertIsNone(normalize_phone_number("abc"))
+        self.assertIsNone(normalize_phone_number("https://example.com/5511999999999"))
         self.assertIsNone(normalize_phone_number("99999999"))
         self.assertIsNone(normalize_phone_number("999999999"))
         self.assertIsNone(normalize_phone_number("1234567890123456"))
@@ -77,16 +78,24 @@ class WhatsAppSupportTests(unittest.TestCase):
     def test_extract_phone_candidate_returns_plain_text_unchanged(self):
         self.assertEqual("meu contato", extract_phone_candidate("meu contato"))
 
+    def test_extract_phone_candidate_does_not_treat_email_domain_as_url(self):
+        self.assertEqual(
+            "contato@example.com",
+            extract_phone_candidate("contato@example.com"),
+        )
+
     def test_extract_phone_candidate_returns_none_for_query_link_without_phone(self):
         self.assertIsNone(
             extract_phone_candidate("https://api.whatsapp.com/send?text=Oi")
         )
 
-    def test_extract_phone_candidate_returns_raw_text_for_unknown_host(self):
-        # A non-WhatsApp URL is not a phone source; the whole text is handed back
-        # for the caller to sanitize (see whatsapp_support line 36).
+    def test_extract_phone_candidate_rejects_unknown_host(self):
+        # A non-WhatsApp URL must not be handed to digit normalization.
         text = "https://example.com/5511999999999"
-        self.assertEqual(text, extract_phone_candidate(text))
+        self.assertIsNone(extract_phone_candidate(text))
+
+    def test_extract_phone_candidate_rejects_unknown_bare_host(self):
+        self.assertIsNone(extract_phone_candidate("example.com/5511999999999"))
 
     def test_extract_phone_candidate_returns_none_for_empty_input(self):
         self.assertIsNone(extract_phone_candidate(""))
