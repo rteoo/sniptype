@@ -4,6 +4,10 @@ from urllib.parse import parse_qs, quote, urlparse
 
 WA_ME_HOSTS = {"wa.me", "www.wa.me"}
 WHATSAPP_QUERY_HOSTS = {"api.whatsapp.com", "web.whatsapp.com", "www.api.whatsapp.com", "www.web.whatsapp.com"}
+URL_CANDIDATE_RE = re.compile(
+    r"(https?://\S+|(?<![@\w])(?:(?:[a-z0-9-]+\.)+[a-z]{2,})(?::\d+)?(?:[/?#]\S*)?)",
+    re.IGNORECASE,
+)
 
 
 def extract_phone_candidate(raw_text):
@@ -12,7 +16,7 @@ def extract_phone_candidate(raw_text):
     if not text:
         return None
 
-    url_match = re.search(r"(https?://\S+|(?:wa\.me|api\.whatsapp\.com|web\.whatsapp\.com)\S*)", text, re.IGNORECASE)
+    url_match = URL_CANDIDATE_RE.search(text)
     if not url_match:
         return text
 
@@ -33,7 +37,9 @@ def extract_phone_candidate(raw_text):
             return f"+{phone}"
         return None
 
-    return text
+    # A URL from another host is not a phone candidate. Returning it here
+    # would let normalize_phone_number strip the URL down to its digits.
+    return None
 
 
 def normalize_phone_number(raw_text, default_country_code="55"):
