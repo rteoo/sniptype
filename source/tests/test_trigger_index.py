@@ -208,6 +208,32 @@ class DynamicTriggerEdgeTests(unittest.TestCase):
         self.assertEqual("cpfempty", trigger)
         self.assertEqual("", value)
 
+    def test_invalid_mapping_prefix_falls_back_before_indexing(self):
+        snippets = {
+            "_service_codes": {"__prefix__": None, "restart": "ok"},
+        }
+        index = compile_trigger_index(snippets, set())
+        self.assertEqual(("service",), index["ordered_prefixes"])
+        self.assertEqual(
+            ("servicerestart", "ok"),
+            find_dynamic_trigger(snippets, "servicerestart", index),
+        )
+
+    def test_empty_prefix_matches_bare_item_suffix(self):
+        snippets = {
+            "_service_codes": {
+                "__prefix__": "",
+                "start": "short",
+                "restart": "long",
+            },
+        }
+        index = compile_trigger_index(snippets, set())
+        self.assertEqual(("",), index["ordered_prefixes"])
+        self.assertEqual(
+            ("restart", "long"),
+            find_dynamic_trigger(snippets, "typed before restart", index),
+        )
+
 
 class EmptyKeyRegressionTests(unittest.TestCase):
     """An empty-string trigger key is excluded from *every* index set.
