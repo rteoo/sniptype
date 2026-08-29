@@ -60,6 +60,15 @@ class SaveSnippetsTests(unittest.TestCase):
         with mock.patch.object(tx, "write_json_atomic", side_effect=OSError("disk full")):
             self.assertFalse(self.app.save_snippets({"xhi": "x"}))
 
+    def test_backup_failure_aborts_before_replacing_live_library(self):
+        with mock.patch.object(tx, "create_backup", side_effect=OSError("locked")), \
+                mock.patch.object(tx, "write_json_atomic") as write:
+            self.assertFalse(self.app.save_snippets({"xhi": "changed"}))
+
+        write.assert_not_called()
+        with open(self.app.snippets_file, encoding="utf-8") as handle:
+            self.assertEqual(json.load(handle), {"xhi": "hello"})
+
     def test_save_strips_callables(self):
         self.app.snippets = {"xhi": "hello", "xnow": lambda: "dynamic"}
         self.assertTrue(self.app.save_snippets(self.app.snippets))
@@ -370,6 +379,28 @@ class BackupRestoreImportTests(unittest.TestCase):
             handle.write("[1, 2, 3]")
         ok, error = self.app.import_library(src)
         self.assertFalse(ok)
+
+    def test_restore_aborts_when_current_library_cannot_be_backed_up(self):
+        backup = self.app.backup_now()
+        with mock.patch.object(tx, "create_backup", side_effect=OSError("locked")), \
+                mock.patch.object(tx.shutil, "copyfile") as copy:
+            ok, error = self.app.restore_backup(backup)
+
+        self.assertFalse(ok)
+        self.assertIn("backup", error.lower())
+        copy.assert_not_called()
+
+    def test_import_aborts_when_current_library_cannot_be_backed_up(self):
+        src = os.path.join(self.tmp, "incoming.json")
+        with open(src, "w", encoding="utf-8") as handle:
+            json.dump({"xbye": "goodbye"}, handle)
+        with mock.patch.object(tx, "create_backup", side_effect=OSError("locked")), \
+                mock.patch.object(tx, "write_json_atomic") as write:
+            ok, error = self.app.import_library(src)
+
+        self.assertFalse(ok)
+        self.assertIn("backup", error.lower())
+        write.assert_not_called()
 
     def test_mirror_copies_on_save(self):
         mirror = os.path.join(self.tmp, "mirror")
