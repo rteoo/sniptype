@@ -210,10 +210,15 @@ class DownloadTests(unittest.TestCase):
         with open(path, "rb") as handle:
             self.assertEqual(hashlib.sha256(handle.read()).hexdigest(), self.digest)
 
-    def test_same_size_corruption_is_rehashed_and_rejected(self):
+    def test_same_size_corruption_with_changed_stat_is_rehashed_and_rejected(self):
         path = download_model(self.entry, self.tmp, opener=self._opener())
+        verified_stat = os.stat(path)
         with open(path, "wb") as handle:
             handle.write(b"x" * len(self.payload))
+        os.utime(
+            path,
+            ns=(verified_stat.st_atime_ns, verified_stat.st_mtime_ns + 2_000_000_000),
+        )
 
         self.assertFalse(model_is_installed(self.entry, self.tmp))
 
