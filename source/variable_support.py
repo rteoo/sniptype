@@ -24,6 +24,10 @@ from snippet_utils import check_dynamic_pattern, get_dynamic_prefixes
 VARIABLE_RE = re.compile(r'%%([^%\s]+)%%')
 
 
+class VariableResolutionError(RuntimeError):
+    """A required inline value could not be read without corrupting output."""
+
+
 def find_variable_names(text):
     """Return unique variable names in order of first appearance."""
     seen = set()
@@ -88,7 +92,20 @@ def resolve_inline(text, snippets, get_clipboard, _seen=None, prefixes=None, not
     for name in names:
         kind = classify_variable(name, snippets, prefixes)
         if kind == "clipboard":
-            value = get_clipboard() or ""
+            try:
+                value = get_clipboard()
+            except Exception as exc:
+                raise VariableResolutionError(
+                    "Não foi possível ler a área de transferência."
+                ) from exc
+            if value is None:
+                raise VariableResolutionError(
+                    "Não foi possível ler a área de transferência."
+                )
+            if not isinstance(value, str):
+                raise VariableResolutionError(
+                    "A área de transferência não retornou texto válido."
+                )
             text = text.replace(f"%%{name}%%", value)
         elif name in _seen:
             continue  # circular reference: leave unchanged
