@@ -139,6 +139,23 @@ class CatalogTests(unittest.TestCase):
             ["balanced", "compact", "accuracy"],
         )
 
+    def test_selectable_copy_leads_with_model_names_and_marks_default(self):
+        self.assertTrue(
+            catalog_entry(PROFILE_BALANCED)["purpose"].startswith(
+                "Parakeet TDT 0.6B v3 (padrão):"
+            )
+        )
+        self.assertTrue(
+            catalog_entry(PROFILE_COMPACT)["purpose"].startswith(
+                "Qwen3-ASR 0.6B:"
+            )
+        )
+        self.assertTrue(
+            catalog_entry(PROFILE_ACCURACY)["purpose"].startswith(
+                "Qwen3-ASR 1.7B (opcional):"
+            )
+        )
+
     def test_accuracy_copy_identifies_optional_resource_cost(self):
         purpose = catalog_entry(PROFILE_ACCURACY)["purpose"].lower()
         self.assertIn("opcional", purpose)

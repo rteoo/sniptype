@@ -54,7 +54,7 @@ _PARAKEET_Q8 = {
         "for transcribe.cpp."
     ),
     "source_url": "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3",
-    "purpose": "Perfil equilibrado (padrão): ditado após soltar o atalho.",
+    "purpose": "Parakeet TDT 0.6B v3 (padrão): ditado após soltar o atalho.",
     "user_selectable": True,
 }
 
@@ -88,8 +88,8 @@ _QWEN_06_Q8 = {
     ),
     "source_url": "https://huggingface.co/Qwen/Qwen3-ASR-0.6B",
     "purpose": (
-        "Perfil compacto (Qwen 0,6B): menor e mais rápido que o Qwen 1,7B; "
-        "usa detecção automática de idioma."
+        "Qwen3-ASR 0.6B: menor e mais rápido que o Qwen3-ASR 1.7B; usa "
+        "detecção automática de idioma."
     ),
     "user_selectable": True,
 }
@@ -123,8 +123,8 @@ _QWEN_Q8 = {
     ),
     "source_url": "https://huggingface.co/Qwen/Qwen3-ASR-1.7B",
     "purpose": (
-        "Perfil preciso opcional (Qwen): modelo grande, mais lento e com maior "
-        "uso de memória; nunca é selecionado automaticamente."
+        "Qwen3-ASR 1.7B (opcional): modelo maior, mais lento e com maior uso "
+        "de memória; nunca é selecionado automaticamente."
     ),
     "user_selectable": True,
 }
