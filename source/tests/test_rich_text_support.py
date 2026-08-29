@@ -439,6 +439,76 @@ class RebuildTests(unittest.TestCase):
         self.assertIn("<strong>hello</strong>", rebuilt["html"])
         self.assertIn("world!!!", rebuilt["html"])
 
+    def test_replacement_expands_span_for_wrapped_variable_token(self):
+        original = build_rich_text_payload(
+            "Hello %%name%%",
+            [{"tag": "bold", "start": 0, "end": len("Hello %%name%%")}],
+        )
+
+        rebuilt = rebuild_rich_text(original, "Hello Alexander")
+
+        self.assertEqual(
+            [{"tag": "bold", "start": 0, "end": len("Hello Alexander")}],
+            rebuilt["spans"],
+        )
+        self.assertIn("<strong>Hello Alexander</strong>", rebuilt["html"])
+
+    def test_replacement_shifts_span_after_changed_text(self):
+        original_text = "before %%name%% after"
+        after_start = original_text.index("after")
+        original = build_rich_text_payload(
+            original_text,
+            [{"tag": "italic", "start": after_start, "end": len(original_text)}],
+        )
+
+        rebuilt = rebuild_rich_text(original, "before Alexander after")
+
+        new_after_start = rebuilt["text"].index("after")
+        self.assertEqual(
+            [{"tag": "italic", "start": new_after_start, "end": len(rebuilt["text"])}],
+            rebuilt["spans"],
+        )
+        self.assertIn("<em>after</em>", rebuilt["html"])
+
+    def test_unchanged_text_preserves_span_boundaries(self):
+        original = build_rich_text_payload(
+            "keep these styles",
+            [
+                {"tag": "bold", "start": 0, "end": 4},
+                {"tag": "underline", "start": 5, "end": 10},
+            ],
+        )
+
+        rebuilt = rebuild_rich_text(original, original["text"])
+
+        self.assertEqual(original["spans"], rebuilt["spans"])
+
+    def test_insertion_shifts_following_span(self):
+        original = build_rich_text_payload(
+            "left right", [{"tag": "italic", "start": 5, "end": 10}]
+        )
+
+        rebuilt = rebuild_rich_text(original, "left  right")
+
+        self.assertEqual(
+            [{"tag": "italic", "start": 6, "end": 11}], rebuilt["spans"]
+        )
+
+    def test_deletion_shifts_following_span_and_drops_deleted_span(self):
+        original = build_rich_text_payload(
+            "left middle right",
+            [
+                {"tag": "bold", "start": 5, "end": 11},
+                {"tag": "italic", "start": 12, "end": 17},
+            ],
+        )
+
+        rebuilt = rebuild_rich_text(original, "left right")
+
+        self.assertEqual(
+            [{"tag": "italic", "start": 5, "end": 10}], rebuilt["spans"]
+        )
+
     def test_rebuild_regenerates_rtf_for_new_text(self):
         rebuilt = rebuild_rich_text(self._bold_hello_world(), "hey")
         self.assertIn("hey", rebuilt["rtf"])
