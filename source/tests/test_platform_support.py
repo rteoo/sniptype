@@ -3,6 +3,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -28,6 +29,28 @@ class LockfileTests(unittest.TestCase):
         self.tmp = tempfile.mkdtemp()
         self.path = os.path.join(self.tmp, "app.lock")
 
+    def _write_lock(self, pid=None):
+        if ps._fcntl is None:
+            os.mkdir(self.path)
+            if pid is not None:
+                with open(
+                    os.path.join(self.path, ps._FALLBACK_OWNER_NAME),
+                    "w",
+                    encoding="ascii",
+                ) as handle:
+                    handle.write(str(pid))
+            return
+        with open(self.path, "w", encoding="utf-8") as handle:
+            if pid is not None:
+                handle.write(str(pid))
+
+    def _read_lock_pid(self):
+        owner_path = self.path
+        if os.path.isdir(self.path):
+            owner_path = os.path.join(self.path, ps._FALLBACK_OWNER_NAME)
+        with open(owner_path, encoding="utf-8") as handle:
+            return int(handle.read().strip())
+
     def test_acquire_then_same_process_reacquires(self):
         self.assertTrue(ps.acquire_lockfile(self.path))
         # Same PID may re-acquire (idempotent for one process).
@@ -35,16 +58,131 @@ class LockfileTests(unittest.TestCase):
 
     def test_stale_lock_is_reclaimed(self):
         # A PID that is very unlikely to be running.
-        with open(self.path, "w", encoding="utf-8") as handle:
-            handle.write("2147483000")
+        self._write_lock(2147483000)
         self.assertTrue(ps.acquire_lockfile(self.path))
-        with open(self.path, encoding="utf-8") as handle:
-            self.assertEqual(int(handle.read().strip()), os.getpid())
+        self.assertEqual(self._read_lock_pid(), os.getpid())
+
+    def test_live_lock_owned_by_another_pid_is_not_reclaimed(self):
+        if ps._fcntl is None:
+            self._write_lock(1234)
+            with mock.patch.object(ps.os, "getpid", return_value=5678), \
+                    mock.patch.object(ps, "_pid_is_running", return_value=True):
+                self.assertFalse(ps.acquire_lockfile(self.path))
+            self.assertEqual(self._read_lock_pid(), 1234)
+            return
+
+        owner = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o644)
+        ps._fcntl.flock(owner, ps._fcntl.LOCK_EX | ps._fcntl.LOCK_NB)
+        try:
+            self.assertFalse(ps.acquire_lockfile(self.path))
+        finally:
+            ps._fcntl.flock(owner, ps._fcntl.LOCK_UN)
+            os.close(owner)
+
+    def test_fallback_reclaims_old_empty_lock_left_by_crashed_creator(self):
+        os.mkdir(self.path)
+        old_timestamp = ps.time.time() - ps._EMPTY_LOCK_STALE_SECONDS - 1
+        os.utime(self.path, (old_timestamp, old_timestamp))
+
+        with mock.patch.object(ps, "_fcntl", None):
+            self.assertTrue(ps.acquire_lockfile(self.path))
+
+        self.assertEqual(self._read_lock_pid(), os.getpid())
+
+    def test_fallback_does_not_reclaim_fresh_empty_lock(self):
+        os.mkdir(self.path)
+
+        with mock.patch.object(ps, "_fcntl", None):
+            self.assertFalse(ps.acquire_lockfile(self.path))
+
+    def test_concurrent_different_processes_only_one_acquires(self):
+        barrier = threading.Barrier(2)
+        results = []
+        thread_pids = {}
+
+        def fake_pid():
+            return thread_pids[threading.get_ident()]
+
+        def worker(pid):
+            thread_pids[threading.get_ident()] = pid
+            barrier.wait(timeout=2)
+            results.append(ps.acquire_lockfile(self.path))
+
+        with mock.patch.object(ps.os, "getpid", side_effect=fake_pid), \
+                mock.patch.object(ps, "_pid_is_running", return_value=True):
+            threads = [
+                threading.Thread(target=worker, args=(1111,)),
+                threading.Thread(target=worker, args=(2222,)),
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+
+        self.assertCountEqual(results, [True, False])
+
+    def test_fallback_stale_reclaim_cannot_remove_the_winner(self):
+        with mock.patch.object(ps, "_fcntl", None):
+            os.mkdir(self.path)
+            with open(
+                os.path.join(self.path, ps._FALLBACK_OWNER_NAME),
+                "w",
+                encoding="ascii",
+            ) as handle:
+                handle.write("9999")
+
+            barrier = threading.Barrier(2)
+            results = []
+            thread_pids = {}
+            synchronized_threads = set()
+            synchronization_lock = threading.Lock()
+
+            def fake_pid():
+                return thread_pids[threading.get_ident()]
+
+            def stale_owner(_pid):
+                thread_id = threading.get_ident()
+                with synchronization_lock:
+                    first_check = thread_id not in synchronized_threads
+                    synchronized_threads.add(thread_id)
+                if first_check:
+                    barrier.wait(timeout=2)
+                return False
+
+            def worker(pid):
+                thread_pids[threading.get_ident()] = pid
+                results.append(ps.acquire_lockfile(self.path))
+
+            with mock.patch.object(ps.os, "getpid", side_effect=fake_pid), \
+                    mock.patch.object(ps, "_pid_is_running", side_effect=stale_owner):
+                threads = [
+                    threading.Thread(target=worker, args=(1111,)),
+                    threading.Thread(target=worker, args=(2222,)),
+                ]
+                for thread in threads:
+                    thread.start()
+                for thread in threads:
+                    thread.join()
+
+        self.assertCountEqual(results, [True, False])
+        self.assertIn(self._read_lock_pid(), {1111, 2222})
 
     def test_release_removes_own_lock(self):
         ps.acquire_lockfile(self.path)
         ps.release_lockfile(self.path)
-        self.assertFalse(os.path.exists(self.path))
+        if ps._fcntl is None:
+            self.assertFalse(os.path.exists(self.path))
+        else:
+            # Kernel ownership is gone even though the diagnostic PID file stays.
+            self.assertTrue(os.path.exists(self.path))
+            self.assertTrue(ps.acquire_lockfile(self.path))
+            ps.release_lockfile(self.path)
+
+    def test_release_does_not_remove_another_process_lock(self):
+        self._write_lock(1234)
+        with mock.patch.object(ps.os, "getpid", return_value=5678):
+            ps.release_lockfile(self.path)
+        self.assertEqual(self._read_lock_pid(), 1234)
 
 
 class AutostartTests(unittest.TestCase):
