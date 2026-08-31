@@ -629,7 +629,7 @@ class ManagerGuiSmokeTests(unittest.TestCase):
             return notebook.tab(selected, "text")
 
         title = self._on_gui(open_settings)
-        self.assertIn("Entrada por voz", title)
+        self.assertIn("Voz", title)
 
     def test_voice_tab_absent_when_controller_missing(self):
         self.app.voice = None
@@ -641,7 +641,7 @@ class ManagerGuiSmokeTests(unittest.TestCase):
         titles = self._on_gui(open_manager)
         self.assertTrue(titles, "expected manager notebook tabs")
         self.assertTrue(
-            all("Entrada por voz" not in title for title in titles),
+            all("Voz" not in title for title in titles),
             titles,
         )
         self.assertIsNone(self.app._manager_voice_refresher)
@@ -672,7 +672,7 @@ class ManagerGuiSmokeTests(unittest.TestCase):
         self.assertTrue(cleared)
         self.assertTrue(rebound)
         self.assertFalse(same, "reopen must register a new refresher")
-        self.assertTrue(any("Entrada por voz" in title for title in titles), titles)
+        self.assertTrue(any("Voz" in title for title in titles), titles)
 
 
 def _ensure_voice(app):

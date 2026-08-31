@@ -1,8 +1,8 @@
 """Per-OS palette/font resolution for the manager GUI.
 
 The load-bearing guarantee is the first test class: on Windows every token must
-resolve to the literal the GUI shipped with, because the macOS dark-mode fix is
-only allowed to change macOS.
+resolve to the deliberate Fluent palette, while the macOS safety seam remains
+platform-native.
 """
 
 import os
@@ -14,38 +14,43 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 import ui_theme
 
 
-# The literals that were hardcoded across sniptype.pyw before the palette
-# was centralized. Copied here on purpose: the point is to fail loudly if the
-# module's own table drifts.
-SHIPPED_WINDOWS_COLORS = {
-    "surface": "#F4F6FA",
-    "surface_alt": "#E7ECF5",
-    "surface_alt_active": "#D9E2F2",
-    "surface_hover": "#E6E9EF",
+# Fluent-inspired Windows tokens are copied here on purpose: the point is to
+# fail loudly if the visual contract drifts accidentally.
+FLUENT_WINDOWS_COLORS = {
+    "surface": "#F3F3F3",
+    "surface_alt": "#FAFAFA",
+    "surface_alt_active": "#EDEDED",
+    "surface_hover": "#EBEBEB",
     "card": "#FFFFFF",
     "field": "#FFFFFF",
-    "field_hover": "#E8EEF9",
-    "text": "#1F2937",
-    "text_strong": "#374151",
-    "text_muted": "#5B6472",
+    "field_hover": "#F5F9FD",
+    "text": "#1B1B1B",
+    "text_strong": "#242424",
+    "text_muted": "#616161",
     "text_on_accent": "#FFFFFF",
-    "border": "#D7DEE8",
-    "divider": "#C8CDD6",
-    "accent": "#265CFF",
-    "accent_active": "#1a4fd4",
-    "link": "#2D5BD1",
-    "warning": "#B45309",
-    "success": "#166534",
-    "tab_unselected_fg": "#2F3A4A",
+    "border": "#E1E1E1",
+    "divider": "#D6D6D6",
+    "accent": "#0067C0",
+    "accent_active": "#005A9E",
+    "danger": "#C42B1C",
+    "danger_active": "#A4262C",
+    "focus_ring": "#005FB8",
+    "link": "#005FB8",
+    "warning": "#8A4B00",
+    "success": "#0F7B0F",
+    "select_bg": "#DCEEFF",
+    "select_fg": "#1B1B1B",
+    "text_native": "#1B1B1B",
+    "tab_unselected_fg": "#4A4A4A",
 }
 
 
-class WindowsUnchangedTests(unittest.TestCase):
-    """Windows must render exactly as it did before this module existed."""
+class WindowsPaletteTests(unittest.TestCase):
+    """Windows must keep the intentional Fluent palette stable."""
 
-    def test_every_token_keeps_its_shipped_literal(self):
+    def test_every_fluent_token_keeps_its_declared_literal(self):
         colors = ui_theme.palette("windows")
-        for token, expected in SHIPPED_WINDOWS_COLORS.items():
+        for token, expected in FLUENT_WINDOWS_COLORS.items():
             self.assertEqual(colors[token], expected, token)
 
     def test_windows_fonts_are_segoe_ui_at_the_original_sizes(self):
@@ -204,7 +209,7 @@ class WidgetOptionTests(unittest.TestCase):
             self.assertEqual(theme.text_colors(), {})
             self.assertEqual(theme.listbox_colors(), {})
             self.assertEqual(theme.checkbutton_colors("#FFFFFF")["bg"], "#FFFFFF")
-            self.assertEqual(theme.button_colors()["bg"], "#E7ECF5")
+            self.assertEqual(theme.button_colors()["bg"], "#FAFAFA")
 
     def test_added_foregrounds_resolve_to_each_platform_default(self):
         # `text_native` is for widgets the pre-change GUI left uncolored, so it
@@ -219,14 +224,23 @@ class WidgetOptionTests(unittest.TestCase):
         )
         # X11 has neither name.
         self.assertEqual(
-            ui_theme.build_theme("windows", system="linux").text_native, "#1F2937"
+            ui_theme.build_theme("windows", system="linux").text_native, "#1B1B1B"
         )
 
     def test_windows_keeps_its_button_widths_and_window_size(self):
         theme = ui_theme.build_theme("windows", system="windows")
         self.assertEqual(theme.button_width(12), 12)
-        self.assertEqual(theme.manager_window_size, ("960x660", 820, 540))
+        self.assertEqual(theme.manager_window_size, ("1080x720", 900, 580))
         self.assertFalse(theme.stacked_toolbar_status)
+
+    def test_fluent_spacing_and_tree_density_are_stable(self):
+        theme = ui_theme.build_theme("windows", system="windows")
+        self.assertEqual(
+            (theme.space_xs, theme.space_sm, theme.space_md,
+             theme.space_lg, theme.space_xl),
+            (4, 8, 12, 16, 24),
+        )
+        self.assertEqual(theme.tree_row_height, 30)
 
     def test_macos_sizes_buttons_to_their_text_and_widens_the_window(self):
         # Aqua's bezel has a minimum width the flat Win32 button does not, so
@@ -235,7 +249,7 @@ class WidgetOptionTests(unittest.TestCase):
         theme = ui_theme.build_theme("dark", system="darwin")
         self.assertEqual(theme.button_width(12), 0)
         geometry, min_width, _ = theme.manager_window_size
-        self.assertEqual(geometry, "1100x700")
+        self.assertEqual(geometry, "1140x760")
         self.assertGreater(min_width, 820)
         self.assertTrue(theme.stacked_toolbar_status)
 
@@ -275,33 +289,53 @@ class WidgetOptionTests(unittest.TestCase):
                     {"bg", "fg", "activebackground", "activeforeground"},
                 )
 
-    def test_toolbar_buttons_keep_the_shipped_windows_look(self):
+    def test_fluent_button_chrome_has_consistent_geometry_and_focus(self):
+        theme = ui_theme.build_theme("windows", system="windows")
+        self.assertEqual(
+            theme.button_chrome(),
+            {
+                "relief": "flat", "bd": 0, "padx": 12, "pady": 6,
+                "highlightthickness": 1, "highlightbackground": theme.border,
+                "highlightcolor": theme.focus_ring, "cursor": "hand2",
+            },
+        )
+        compact = theme.button_chrome(compact=True)
+        self.assertEqual(compact["padx"], 8)
+        self.assertEqual(compact["pady"], 4)
+
+    def test_danger_button_uses_distinct_semantic_tokens(self):
+        theme = ui_theme.build_theme("windows", system="windows")
+        colors = theme.button_colors(danger=True)
+        self.assertEqual(colors["bg"], theme.danger)
+        self.assertEqual(colors["activebackground"], theme.danger_active)
+        self.assertEqual(colors["fg"], theme.text_on_accent)
+
+    def test_toolbar_buttons_use_the_editor_surface_and_hover_token(self):
         colors = ui_theme.build_theme("windows", system="windows").toolbar_button_colors("#FFFFFF")
         self.assertEqual(colors["bg"], "#FFFFFF")
-        self.assertEqual(colors["activebackground"], "#E6E9EF")
+        self.assertEqual(colors["activebackground"], "#EBEBEB")
 
-    def test_accent_button_keeps_the_shipped_windows_look(self):
+    def test_accent_button_uses_the_fluent_windows_tokens(self):
         colors = ui_theme.build_theme("windows", system="windows").button_colors(accent=True)
-        self.assertEqual(colors["bg"], "#265CFF")
+        self.assertEqual(colors["bg"], "#0067C0")
         self.assertEqual(colors["fg"], "#FFFFFF")
-        self.assertEqual(colors["activebackground"], "#1a4fd4")
+        self.assertEqual(colors["activebackground"], "#005A9E")
 
-    def test_toolbar_frame_stays_uncolored_off_macos(self):
-        # The shipped toolbar was an uncolored tk.Frame on SystemButtonFace;
-        # painting it card-white was the regression (white-on-white buttons).
+    def test_toolbar_frame_uses_the_editor_card_surface(self):
         for system in ("windows", "linux"):
             theme = ui_theme.build_theme("windows", system=system)
-            self.assertEqual(theme.toolbar_frame_colors(), {})
+            self.assertEqual(theme.toolbar_frame_colors(), {"bg": theme.card})
 
     def test_toolbar_frame_keeps_the_card_surface_on_macos(self):
         theme = ui_theme.build_theme("dark", system="darwin")
         self.assertEqual(theme.toolbar_frame_colors(), {"bg": theme.card})
 
-    def test_status_label_keeps_the_shipped_windows_font_and_grey(self):
+    def test_status_label_uses_the_body_face_and_muted_grey(self):
         for system in ("windows", "linux"):
             options = ui_theme.build_theme("windows", system=system).status_label_options()
-            self.assertEqual(options["font"], ("Arial", 8))
-            self.assertEqual(options["fg"], "#555")
+            theme = ui_theme.build_theme("windows", system=system)
+            self.assertEqual(options["font"], theme.font(8))
+            self.assertEqual(options["fg"], theme.text_muted)
 
     def test_status_label_uses_the_body_face_and_muted_grey_on_macos(self):
         theme = ui_theme.build_theme("dark", system="darwin")
@@ -309,11 +343,11 @@ class WidgetOptionTests(unittest.TestCase):
         self.assertEqual(options["font"], theme.font(8))
         self.assertEqual(options["fg"], theme.text_muted)
 
-    def test_unselected_tab_foreground_keeps_its_shipped_windows_value(self):
+    def test_unselected_tab_foreground_uses_the_fluent_neutral(self):
         for system in ("windows", "linux"):
             self.assertEqual(
                 ui_theme.build_theme("windows", system=system).tab_unselected_fg,
-                "#2F3A4A",
+                "#4A4A4A",
             )
 
     def test_unselected_tab_foreground_follows_the_appearance_on_macos(self):
