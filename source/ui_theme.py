@@ -10,8 +10,8 @@ This module is the seam. Call sites ask for a semantic token
 (``theme().surface``, ``theme().text``) and a size (``ui_font(9, "bold")``)
 instead of naming a color or a font family:
 
-* **Windows** resolves to the exact literals the GUI shipped with, so the
-  Windows appearance is byte-for-byte unchanged (asserted in the tests).
+* **Windows** resolves to the app's Fluent-inspired opaque palette. It keeps
+  the native selection behavior of controls the app does not paint itself.
 * **macOS** resolves to Aqua's dynamic system colors (``systemTextColor`` and
   friends), which follow the light/dark appearance natively, plus a small set
   of derived grays for the tokens Aqua only exposes with an alpha channel --
@@ -39,11 +39,6 @@ BODY_FONT_SIZE = 9
 
 _WINDOWS_FAMILY = "Segoe UI"
 _WINDOWS_EMOJI_FAMILY = "Segoe UI Emoji"
-# The format-status label shipped with its own smaller face and dim gray,
-# distinct from the body ``Segoe UI``/``text_muted`` -- kept verbatim so the
-# Windows toolbar reads exactly as before the theme seam existed.
-_WINDOWS_STATUS_FAMILY = "Arial"
-_WINDOWS_STATUS_FG = "#555"
 # Not in ``font.families()`` -- it is the hidden system font Tk resolves
 # ``TkDefaultFont`` to -- but Tk accepts it by name in a font spec.
 _MAC_FAMILY = ".AppleSystemUIFont"
@@ -76,8 +71,11 @@ class Theme:
         "card", "field", "field_hover",
         "text", "text_strong", "text_muted", "text_on_accent",
         "border", "divider",
-        "accent", "accent_active", "link", "warning", "success",
+        "accent", "accent_active", "danger", "danger_active", "focus_ring",
+        "link", "warning", "success",
         "select_bg", "select_fg", "text_native", "tab_unselected_fg",
+        "space_xs", "space_sm", "space_md", "space_lg", "space_xl",
+        "tree_row_height",
     )
 
     def __init__(self, kind, system, family, emoji_family, mono_family,
@@ -91,6 +89,12 @@ class Theme:
         self.size_delta = size_delta
         for name, value in colors.items():
             setattr(self, name, value)
+        self.space_xs = 4
+        self.space_sm = 8
+        self.space_md = 12
+        self.space_lg = 16
+        self.space_xl = 24
+        self.tree_row_height = 30
 
     def font(self, size=BODY_FONT_SIZE, weight=None):
         """Return a font spec tuple for the GUI's shared family."""
@@ -175,28 +179,20 @@ class Theme:
     def toolbar_frame_colors(self):
         """``bg`` for the formatting-toolbar frame (and its stacked status row).
 
-        Empty off macOS, and that is the point: the shipped toolbar was an
-        uncolored ``tk.Frame`` that inherited ``SystemButtonFace``, and the
-        glyph buttons and status label sit on that gray. Painting it ``card``
-        (white) on Windows was the regression -- buttons then rendered
-        white-on-white. macOS keeps the white ``card`` surface it needs so the
-        toolbar matches the editor pane.
+        The toolbar belongs to the editor surface, so it always uses ``card``.
+        Toolbar buttons receive their own foreground and interaction colors,
+        avoiding the old Win32 white-on-white regression.
         """
-        if self.system != "darwin":
-            return {}
         return {"bg": self.card}
 
     def status_label_options(self):
         """Font and foreground for the format-status label.
 
-        Windows keeps the shipped ``("Arial", 8)`` / ``#555`` it always had;
-        macOS takes the body face at size 8 and the dim ``text_muted`` chosen
-        for legibility against both appearances. The label's ``bg`` is passed
-        by the caller (the toolbar's own background) and is correct on every OS.
+        The status is secondary UI, so it shares the app's body family and
+        muted semantic color on every platform. The label's ``bg`` is passed
+        by the caller (the toolbar's own background).
         """
-        if self.system == "darwin":
-            return {"font": self.font(8), "fg": self.text_muted}
-        return {"font": (_WINDOWS_STATUS_FAMILY, 8), "fg": _WINDOWS_STATUS_FG}
+        return {"font": self.font(8), "fg": self.text_muted}
 
     def toolbar_button_colors(self, bg):
         """Colors for the flat glyph buttons in the formatting toolbar."""
@@ -242,8 +238,8 @@ class Theme:
         formatting toolbar in 433px on Windows needs ~490px here.
         """
         if self.system == "darwin":
-            return ("1100x700", 960, 560)
-        return ("960x660", 820, 540)
+            return ("1140x760", 980, 600)
+        return ("1080x720", 900, 580)
 
     @property
     def stacked_toolbar_status(self):
@@ -254,10 +250,32 @@ class Theme:
         """
         return self.system == "darwin"
 
-    def button_colors(self, accent=False):
+    def button_chrome(self, compact=False):
+        """Platform-safe geometry and focus treatment for manager buttons."""
+        if self.system == "darwin":
+            return {}
+        return {
+            "relief": "flat",
+            "bd": 0,
+            "padx": 8 if compact else 12,
+            "pady": 4 if compact else 6,
+            "highlightthickness": 1,
+            "highlightbackground": self.border,
+            "highlightcolor": self.focus_ring,
+            "cursor": "hand2",
+        }
+
+    def button_colors(self, accent=False, danger=False):
         """Colors for the app's tinted buttons. Native on macOS."""
         if self.system == "darwin":
             return {}
+        if danger:
+            return {
+                "bg": self.danger,
+                "fg": self.text_on_accent,
+                "activebackground": self.danger_active,
+                "activeforeground": self.text_on_accent,
+            }
         if accent:
             return {
                 "bg": self.accent,
@@ -281,34 +299,38 @@ def _spec(family, size, weight=None):
 # Palettes
 # ---------------------------------------------------------------------------
 
-# The literals the manager GUI shipped with. Windows keeps these exactly.
+# Fluent-inspired opaque surfaces. Tk cannot reproduce Mica or Acrylic
+# reliably across platforms, so hierarchy comes from restrained contrast,
+# spacing and selection states instead.
 _LIGHT = {
-    "surface": "#F4F6FA",
-    "surface_alt": "#E7ECF5",
-    "surface_alt_active": "#D9E2F2",
-    "surface_hover": "#E6E9EF",
+    "surface": "#F3F3F3",
+    "surface_alt": "#FAFAFA",
+    "surface_alt_active": "#EDEDED",
+    "surface_hover": "#EBEBEB",
     "card": "#FFFFFF",
     "field": "#FFFFFF",
-    "field_hover": "#E8EEF9",
-    "text": "#1F2937",
-    "text_strong": "#374151",
-    "text_muted": "#5B6472",
+    "field_hover": "#F5F9FD",
+    "text": "#1B1B1B",
+    "text_strong": "#242424",
+    "text_muted": "#616161",
     "text_on_accent": "#FFFFFF",
-    "border": "#D7DEE8",
-    "divider": "#C8CDD6",
-    "accent": "#265CFF",
-    "accent_active": "#1a4fd4",
-    "link": "#2D5BD1",
-    "warning": "#B45309",
-    "success": "#166534",
-    "select_bg": "#265CFF",
-    "select_fg": "#FFFFFF",
+    "border": "#E1E1E1",
+    "divider": "#D6D6D6",
+    "accent": "#0067C0",
+    "accent_active": "#005A9E",
+    "danger": "#C42B1C",
+    "danger_active": "#A4262C",
+    "focus_ring": "#005FB8",
+    "link": "#005FB8",
+    "warning": "#8A4B00",
+    "success": "#0F7B0F",
+    "select_bg": "#DCEEFF",
+    "select_fg": "#1B1B1B",
     # Foreground for widgets the pre-change GUI left uncolored. Resolved to
     # each platform's own default so filling it in changes nothing there.
-    "text_native": "#1F2937",
-    # Unselected notebook-tab label. Shipped a touch darker than ``text_strong``
-    # (the selected tab); the selected tab keeps ``text``.
-    "tab_unselected_fg": "#2F3A4A",
+    "text_native": "#1B1B1B",
+    # Unselected notebook-tab label. The selected tab uses the accent token.
+    "tab_unselected_fg": "#4A4A4A",
 }
 
 # Win32's defaults for the widgets this GUI leaves uncolored (tkWinDefault.h).
@@ -354,16 +376,19 @@ _MAC_DARK_OVERRIDES = {
     "link": "#6BA0FF",
     "warning": "#E0A458",
     "success": "#4ADE80",
+    "danger": "#FF6961",
+    "danger_active": "#FF453A",
+    "focus_ring": "#6BA0FF",
 }
 
 
 def palette(kind, system=None):
     """Return the color token map for ``kind`` in {'windows', 'light', 'dark'}.
 
-    Pure: no Tk, no platform probing. ``'windows'`` returns the shipped
-    literals untouched; it is also what Linux gets, since Aqua's color names
-    do not resolve there. ``system`` only selects the platform's native
-    defaults for the ``*_native`` tokens.
+    Pure: no Tk, no platform probing. ``'windows'`` returns the opaque Fluent
+    palette; it is also what Linux gets, since Aqua's color names do not
+    resolve there. ``system`` only selects the platform's native defaults for
+    the ``*_native`` tokens.
     """
     colors = dict(_LIGHT)
     if kind == "windows":
