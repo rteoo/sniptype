@@ -2336,53 +2336,66 @@ class Sniptype:
             self._configure_manager_styles(root)
 
             root.grid_columnconfigure(0, weight=1)
-            root.grid_rowconfigure(1, weight=1)
+            root.grid_rowconfigure(2, weight=1)
 
-            header = tk.Frame(root, bg=ui.surface, padx=12, pady=10)
+            header = tk.Frame(
+                root,
+                bg=ui.surface,
+                padx=ui.space_xl,
+                pady=ui.space_lg,
+            )
             header.grid(row=0, column=0, sticky="ew")
             header.grid_columnconfigure(0, weight=1)
 
             tk.Label(
                 header,
-                text="Gerenciador de Snippets",
-                font=ui.font(12, "bold"),
+                text=APP_DISPLAY_NAME,
+                font=ui.font(16, "bold"),
                 bg=ui.surface,
                 fg=ui.text,
             ).grid(row=0, column=0, sticky="w")
             tk.Label(
                 header,
-                text="Edite snippets, mapeamentos e consulte notificações recentes.",
+                text="Sua biblioteca de textos, mapeamentos e ações rápidas.",
                 font=ui.font(9),
                 bg=ui.surface,
                 fg=ui.text_muted,
-            ).grid(row=1, column=0, sticky="w", pady=(2, 0))
+            ).grid(row=1, column=0, sticky="w", pady=(ui.space_xs, 0))
 
             bell_button = tk.Button(
                 header,
-                text="🔔",
-                font=ui.emoji_font(12),
-                width=3,
-                relief=tk.FLAT,
-                bd=0,
-                cursor="hand2",
+                text="🔔  Notificações",
+                font=ui.font(9),
+                width=ui.button_width(16),
+                **ui.button_chrome(compact=True),
                 **ui.button_colors(),
                 command=lambda: self._open_notification_history(root),
             )
             bell_button.grid(row=0, column=1, rowspan=2, sticky="e")
 
+            tk.Frame(root, bg=ui.divider, height=1).grid(
+                row=1, column=0, sticky="ew"
+            )
+
             notebook = ttk.Notebook(root, style="Manager.TNotebook")
-            notebook.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 12))
+            notebook.grid(
+                row=2,
+                column=0,
+                sticky="nsew",
+                padx=ui.space_lg,
+                pady=(ui.space_md, ui.space_lg),
+            )
             self._manager_notebook = notebook
             self._manager_voice_tab = None
 
             tab_static = tk.Frame(notebook, bg=ui.surface)
-            notebook.add(tab_static, text="Snippets Estáticos")
+            notebook.add(tab_static, text="Snippets")
 
             tab_dynamic = tk.Frame(notebook, bg=ui.surface)
-            notebook.add(tab_dynamic, text="Mapeamentos Dinâmicos")
+            notebook.add(tab_dynamic, text="Mapeamentos")
 
             tab_builtin = tk.Frame(notebook, bg=ui.surface)
-            notebook.add(tab_builtin, text="Snippets Dinâmicos")
+            notebook.add(tab_builtin, text="Dinâmicos")
 
             tab_backups = tk.Frame(notebook, bg=ui.surface)
             notebook.add(tab_backups, text="Backups")
@@ -2395,14 +2408,14 @@ class Sniptype:
             self._manager_refreshers = []
             self._manager_voice_refresher = None
             self._create_static_snippets_tab(
-                tab_static, root, set_count=tab_counter(tab_static, "Snippets Estáticos"))
+                tab_static, root, set_count=tab_counter(tab_static, "Snippets"))
             self._create_dynamic_mappings_tab(
-                tab_dynamic, root, set_count=tab_counter(tab_dynamic, "Mapeamentos Dinâmicos"))
+                tab_dynamic, root, set_count=tab_counter(tab_dynamic, "Mapeamentos"))
             self._create_dynamic_snippets_tab(tab_builtin, root)
             self._create_backups_tab(tab_backups, root)
             if self.voice is not None:
                 tab_voice = tk.Frame(notebook, bg=ui.surface)
-                notebook.add(tab_voice, text="Entrada por voz")
+                notebook.add(tab_voice, text="Voz")
                 self._manager_voice_tab = tab_voice
                 self._create_voice_tab(tab_voice, root)
 
@@ -2438,7 +2451,7 @@ class Sniptype:
     def _create_voice_tab(self, parent, root):
         """Build manager voice controls backed by the existing tray actions."""
         ui = ui_theme.theme()
-        main = tk.Frame(parent, bg=ui.surface, padx=14, pady=14)
+        main = tk.Frame(parent, bg=ui.surface, padx=ui.space_lg, pady=ui.space_lg)
         main.pack(fill=tk.BOTH, expand=True)
 
         tk.Label(
@@ -2517,7 +2530,7 @@ class Sniptype:
     def _create_backups_tab(self, parent, root):
         """Backups tab: list backups and expose restore/export/import actions."""
         ui = ui_theme.theme()
-        main = tk.Frame(parent, bg=ui.surface, padx=14, pady=14)
+        main = tk.Frame(parent, bg=ui.surface, padx=ui.space_lg, pady=ui.space_lg)
         main.pack(fill=tk.BOTH, expand=True)
         main.grid_columnconfigure(0, weight=1)
         main.grid_rowconfigure(2, weight=1)
@@ -2536,21 +2549,36 @@ class Sniptype:
             bg=ui.surface,
             fg=ui.text_muted,
         )
-        path_label.grid(row=1, column=0, sticky="w", pady=(2, 10))
+        path_label.grid(row=1, column=0, sticky="w", pady=(ui.space_xs, ui.space_md))
 
+        table_shell = tk.Frame(
+            main,
+            bg=ui.card,
+            highlightbackground=ui.border,
+            highlightthickness=1,
+        )
+        table_shell.grid(row=2, column=0, sticky="nsew")
+        table_shell.grid_columnconfigure(0, weight=1)
+        table_shell.grid_rowconfigure(0, weight=1)
         columns = ("backup", "size", "count")
-        tree = ttk.Treeview(main, columns=columns, show="headings", height=12)
+        tree = ttk.Treeview(
+            table_shell,
+            columns=columns,
+            show="headings",
+            height=12,
+            style="Manager.Treeview",
+        )
         tree.heading("backup", text="Backup")
         tree.heading("size", text="Tamanho")
         tree.heading("count", text="Snippets")
         tree.column("backup", width=260, anchor="w")
         tree.column("size", width=90, anchor="e")
         tree.column("count", width=90, anchor="e")
-        tree.grid(row=2, column=0, sticky="nsew")
+        tree.grid(row=0, column=0, sticky="nsew")
 
-        scrollbar = ttk.Scrollbar(main, orient=tk.VERTICAL, command=tree.yview)
+        scrollbar = ttk.Scrollbar(table_shell, orient=tk.VERTICAL, command=tree.yview)
         tree.configure(yscrollcommand=scrollbar.set)
-        scrollbar.grid(row=2, column=1, sticky="ns")
+        scrollbar.grid(row=0, column=1, sticky="ns")
 
         # Maps tree row id -> backup path.
         row_paths = {}
@@ -2658,13 +2686,37 @@ class Sniptype:
                 messagebox.showerror("Backups", "Falha ao criar backup. Verifique os logs.", parent=root)
 
         buttons = tk.Frame(main, bg=ui.surface)
-        buttons.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(10, 0))
-        tk.Button(buttons, text="Backup agora", width=ui.button_width(14), command=on_backup_now).pack(side=tk.LEFT, padx=(0, 6))
-        tk.Button(buttons, text="Restaurar", width=ui.button_width(12), command=on_restore).pack(side=tk.LEFT, padx=6)
-        tk.Button(buttons, text="Exportar…", width=ui.button_width(12), command=on_export).pack(side=tk.LEFT, padx=6)
-        tk.Button(buttons, text="Importar…", width=ui.button_width(12), command=on_import).pack(side=tk.LEFT, padx=6)
-        tk.Button(buttons, text="Abrir pasta", width=ui.button_width(12), command=self.open_data_folder).pack(side=tk.LEFT, padx=6)
-        tk.Button(buttons, text="Atualizar", width=ui.button_width(10), command=refresh_backups).pack(side=tk.RIGHT)
+        buttons.grid(row=3, column=0, sticky="ew", pady=(ui.space_md, 0))
+        tk.Button(
+            buttons,
+            text="Criar backup",
+            width=ui.button_width(14),
+            command=on_backup_now,
+            **ui.button_chrome(),
+            **ui.button_colors(accent=True),
+        ).pack(side=tk.LEFT, padx=(0, 6))
+        for label, width, command in (
+            ("Restaurar", 12, on_restore),
+            ("Exportar…", 12, on_export),
+            ("Importar…", 12, on_import),
+            ("Abrir pasta", 12, self.open_data_folder),
+        ):
+            tk.Button(
+                buttons,
+                text=label,
+                width=ui.button_width(width),
+                command=command,
+                **ui.button_chrome(),
+                **ui.button_colors(),
+            ).pack(side=tk.LEFT, padx=6)
+        tk.Button(
+            buttons,
+            text="Atualizar",
+            width=ui.button_width(10),
+            command=refresh_backups,
+            **ui.button_chrome(),
+            **ui.button_colors(),
+        ).pack(side=tk.RIGHT)
 
         refresh_backups()
 
@@ -2684,8 +2736,17 @@ class Sniptype:
         # happened to be active and then painted Windows colors over it.
         theme_name = ui_theme.apply_ttk_theme(style)
 
-        style.configure("Manager.TNotebook", background=ui.surface, borderwidth=0)
-        style.configure("Manager.TNotebook.Tab", padding=(14, 8), font=ui.font(9))
+        style.configure(
+            "Manager.TNotebook",
+            background=ui.surface,
+            borderwidth=0,
+            tabmargins=(0, 0, 0, ui.space_sm),
+        )
+        style.configure(
+            "Manager.TNotebook.Tab",
+            padding=(18, 10),
+            font=ui.font(9, "bold"),
+        )
         if theme_name != "aqua":
             # Aqua draws the tab strip natively and already follows the system
             # appearance; overriding its colors is what made the labels
@@ -2693,7 +2754,7 @@ class Sniptype:
             style.map(
                 "Manager.TNotebook.Tab",
                 background=[("selected", ui.card), ("!selected", ui.surface_alt)],
-                foreground=[("selected", ui.text), ("!selected", ui.tab_unselected_fg)],
+                foreground=[("selected", ui.accent), ("!selected", ui.tab_unselected_fg)],
             )
         style.configure(
             "Manager.Treeview",
@@ -2702,9 +2763,20 @@ class Sniptype:
             foreground=ui.text,
             font=ui.font(10),
             borderwidth=0,
-            rowheight=22,
+            rowheight=ui.tree_row_height,
         )
-        style.configure("Manager.Treeview.Heading", font=ui.font(9), padding=(6, 4))
+        style.map(
+            "Manager.Treeview",
+            background=[("selected", ui.select_bg)],
+            foreground=[("selected", ui.select_fg)],
+        )
+        style.configure(
+            "Manager.Treeview.Heading",
+            background=ui.surface_alt,
+            foreground=ui.text_strong,
+            font=ui.font(9, "bold"),
+            padding=(8, 6),
+        )
         style.layout("Manager.Treeview", style.layout("Treeview"))
 
     def _create_snippet_tree(self, shell, trigger_heading="Trigger",
@@ -2725,7 +2797,7 @@ class Sniptype:
         )
         tree.heading("trigger", text=trigger_heading, anchor="w")
         tree.heading("preview", text="Valor", anchor="w")
-        tree.heading("markers", text="", anchor="center")
+        tree.heading("markers", text="Tipo", anchor="center")
         # Widths are deliberately tight: the list shares the tab with the editor
         # pane, whose button row and format status get clipped if this grows.
         tree.column("trigger", width=trigger_width, minwidth=76, anchor="w", stretch=False)
@@ -3158,66 +3230,195 @@ class Sniptype:
         """
         ui = ui_theme.theme()
 
-        main = tk.Frame(parent, bg=ui.surface, padx=14, pady=14)
+        main = tk.Frame(
+            parent, bg=ui.surface, padx=ui.space_lg, pady=ui.space_lg
+        )
         main.pack(fill=tk.BOTH, expand=True)
-        main.grid_columnconfigure(1, weight=1)
+        main.grid_columnconfigure(0, weight=2, minsize=300)
+        main.grid_columnconfigure(1, weight=3, minsize=440)
         main.grid_rowconfigure(0, weight=1)
 
-        frame_left = tk.LabelFrame(main, text="Biblioteca de snippets", font=ui.font(9, "bold"), bg=ui.card, fg=ui.text_native, padx=12, pady=12)
-        frame_left.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        frame_left = tk.Frame(
+            main,
+            bg=ui.card,
+            padx=ui.space_lg,
+            pady=ui.space_lg,
+            highlightbackground=ui.border,
+            highlightthickness=1,
+        )
+        frame_left.grid(row=0, column=0, sticky="nsew", padx=(0, ui.space_md))
         frame_left.grid_columnconfigure(0, weight=1)
-        frame_left.grid_rowconfigure(2, weight=1)
+        frame_left.grid_rowconfigure(4, weight=1)
+
+        tk.Label(
+            frame_left,
+            text="Biblioteca",
+            font=ui.font(11, "bold"),
+            bg=ui.card,
+            fg=ui.text,
+        ).grid(row=0, column=0, sticky="w")
+        tk.Label(
+            frame_left,
+            text="Encontre um snippet pelo trigger ou conteúdo.",
+            font=ui.font(8),
+            bg=ui.card,
+            fg=ui.text_muted,
+        ).grid(row=1, column=0, sticky="w", pady=(ui.space_xs, 0))
 
         search_var = tk.StringVar()
-        tk.Label(frame_left, text="Buscar", font=ui.font(9), bg=ui.card, fg=ui.text_native).grid(row=0, column=0, sticky="w")
-        search_entry = tk.Entry(frame_left, textvariable=search_var, font=ui.font(9), relief=tk.FLAT, highlightthickness=1, highlightbackground=ui.border, **ui.entry_colors())
-        search_entry.grid(row=1, column=0, sticky="ew", pady=(4, 10))
+        tk.Label(
+            frame_left,
+            text="Pesquisar",
+            font=ui.font(9, "bold"),
+            bg=ui.card,
+            fg=ui.text_strong,
+        ).grid(row=2, column=0, sticky="w", pady=(ui.space_lg, 0))
+        search_entry = tk.Entry(
+            frame_left,
+            textvariable=search_var,
+            font=ui.font(10),
+            relief=tk.FLAT,
+            highlightthickness=1,
+            highlightbackground=ui.border,
+            highlightcolor=ui.focus_ring,
+            **ui.entry_colors(),
+        )
+        search_entry.grid(
+            row=3,
+            column=0,
+            sticky="ew",
+            pady=(ui.space_xs, ui.space_md),
+            ipady=5,
+        )
 
-        listbox_shell = tk.Frame(frame_left, bg=ui.card, highlightbackground=ui.border, highlightthickness=1)
-        listbox_shell.grid(row=2, column=0, sticky="nsew")
+        listbox_shell = tk.Frame(
+            frame_left,
+            bg=ui.card,
+            highlightbackground=ui.border,
+            highlightthickness=1,
+        )
+        listbox_shell.grid(row=4, column=0, sticky="nsew")
         listbox_shell.grid_columnconfigure(0, weight=1)
         listbox_shell.grid_rowconfigure(0, weight=1)
 
         tree = self._create_snippet_tree(listbox_shell, trigger_heading="Trigger")
+        empty_label = tk.Label(
+            listbox_shell,
+            text="Nenhum snippet encontrado.\nCrie um novo ou ajuste a pesquisa.",
+            font=ui.font(9),
+            bg=ui.card,
+            fg=ui.text_muted,
+            justify="center",
+        )
+        empty_label.grid(row=0, column=0, sticky="nsew")
 
-        frame_right = tk.LabelFrame(main, text="Editor de snippet", font=ui.font(9, "bold"), bg=ui.card, fg=ui.text_native, padx=12, pady=12)
+        frame_right = tk.Frame(
+            main,
+            bg=ui.card,
+            padx=ui.space_lg,
+            pady=ui.space_lg,
+            highlightbackground=ui.border,
+            highlightthickness=1,
+        )
         frame_right.grid(row=0, column=1, sticky="nsew")
         frame_right.grid_columnconfigure(0, weight=1)
-        frame_right.grid_rowconfigure(3, weight=1)
+        frame_right.grid_rowconfigure(5, weight=1)
 
-        tk.Label(frame_right, text="Trigger", font=ui.font(9), bg=ui.card, fg=ui.text_native).grid(row=0, column=0, sticky="w")
-        entry_trigger = tk.Entry(frame_right, font=ui.font(10), relief=tk.FLAT, highlightthickness=1, highlightbackground=ui.border, **ui.entry_colors())
-        entry_trigger.grid(row=1, column=0, sticky="ew", pady=(4, 10))
+        tk.Label(
+            frame_right,
+            text="Editor",
+            font=ui.font(11, "bold"),
+            bg=ui.card,
+            fg=ui.text,
+        ).grid(row=0, column=0, sticky="w")
+        tk.Label(
+            frame_right,
+            text="Crie um snippet ou ajuste o item selecionado.",
+            font=ui.font(8),
+            bg=ui.card,
+            fg=ui.text_muted,
+        ).grid(row=1, column=0, sticky="w", pady=(ui.space_xs, ui.space_lg))
 
-        tk.Label(frame_right, text="Valor do snippet", font=ui.font(9), bg=ui.card, fg=ui.text_native).grid(row=2, column=0, sticky="w")
+        tk.Label(
+            frame_right,
+            text="Trigger",
+            font=ui.font(9, "bold"),
+            bg=ui.card,
+            fg=ui.text_strong,
+        ).grid(row=2, column=0, sticky="w")
+        entry_trigger = tk.Entry(
+            frame_right,
+            font=ui.font(10),
+            relief=tk.FLAT,
+            highlightthickness=1,
+            highlightbackground=ui.border,
+            highlightcolor=ui.focus_ring,
+            **ui.entry_colors(),
+        )
+        entry_trigger.grid(
+            row=3,
+            column=0,
+            sticky="ew",
+            pady=(ui.space_xs, ui.space_md),
+            ipady=5,
+        )
+
+        tk.Label(
+            frame_right,
+            text="Conteúdo",
+            font=ui.font(9, "bold"),
+            bg=ui.card,
+            fg=ui.text_strong,
+        ).grid(row=4, column=0, sticky="w")
         editor_shell = tk.Frame(frame_right, bg=ui.card)
-        editor_shell.grid(row=3, column=0, sticky="nsew")
+        editor_shell.grid(row=5, column=0, sticky="nsew", pady=(ui.space_xs, 0))
         editor_shell.grid_columnconfigure(0, weight=1)
         editor_shell.grid_rowconfigure(1, weight=1)
 
-        text_value = tk.Text(editor_shell, wrap=tk.WORD, font=ui.font(10), relief=tk.FLAT, highlightthickness=1, highlightbackground=ui.border, **ui.text_colors())
+        text_value = tk.Text(
+            editor_shell,
+            wrap=tk.WORD,
+            font=ui.font(10),
+            relief=tk.FLAT,
+            highlightthickness=1,
+            highlightbackground=ui.border,
+            highlightcolor=ui.focus_ring,
+            padx=ui.space_sm,
+            pady=ui.space_sm,
+            **ui.text_colors(),
+        )
         update_format_status = self._create_formatting_toolbar(editor_shell, text_value)
         text_value.pack(fill=tk.BOTH, expand=True, pady=(0, 6))
         tk.Label(
             frame_right,
-            text="Texto simples continua funcionando igual. Formatação é opcional.",
+            text="Formatação opcional  •  Ctrl+S para salvar",
             font=ui.font(8),
             fg=ui.text_muted,
             bg=ui.card,
-        ).grid(row=4, column=0, sticky="w", pady=(2, 10))
+        ).grid(row=6, column=0, sticky="w", pady=(ui.space_xs, ui.space_md))
 
         btn_frame = tk.Frame(frame_right, bg=ui.card)
-        btn_frame.grid(row=5, column=0, sticky="e")
-        btn_new = tk.Button(btn_frame, text="Novo", width=ui.button_width(10))
-        btn_save = tk.Button(btn_frame, text="Salvar", width=ui.button_width(10))
-        btn_duplicate = tk.Button(btn_frame, text="Duplicar", width=ui.button_width(10))
-        btn_rename = tk.Button(btn_frame, text="Renomear", width=ui.button_width(10))
-        btn_delete = tk.Button(btn_frame, text="Excluir", width=ui.button_width(10))
+        btn_frame.grid(row=7, column=0, sticky="ew")
+
+        def editor_button(label, *, accent=False, danger=False):
+            return tk.Button(
+                btn_frame,
+                text=label,
+                width=ui.button_width(10),
+                **ui.button_chrome(),
+                **ui.button_colors(accent=accent, danger=danger),
+            )
+
+        btn_new = editor_button("Novo")
+        btn_save = editor_button("Salvar", accent=True)
+        btn_duplicate = editor_button("Duplicar")
+        btn_rename = editor_button("Renomear")
+        btn_delete = editor_button("Excluir", danger=True)
         btn_new.pack(side=tk.LEFT, padx=(0, 6))
-        btn_save.pack(side=tk.LEFT, padx=6)
         btn_duplicate.pack(side=tk.LEFT, padx=6)
         btn_rename.pack(side=tk.LEFT, padx=6)
-        btn_delete.pack(side=tk.LEFT, padx=(6, 0))
+        btn_delete.pack(side=tk.LEFT, padx=(ui.space_lg, 0))
+        btn_save.pack(side=tk.RIGHT)
 
         self._bind_mousewheel(text_value, text_value)
 
@@ -3237,6 +3438,7 @@ class Sniptype:
             for key in sorted(static_snips.keys()):
                 tree.insert("", tk.END, iid=key,
                             values=snippet_row_values(key, static_snips[key]))
+            (tree if static_snips else empty_label).tkraise()
             if set_count is not None:
                 set_count(len(static_snips))
 
@@ -3313,7 +3515,7 @@ class Sniptype:
                 # so refuse and point at the tab that manages the dynamic entry.
                 messagebox.showwarning(
                     "Aviso",
-                    f"'{trigger}' é um snippet dinâmico. Gerencie-o na aba Snippets Dinâmicos.",
+                    f"'{trigger}' é um snippet dinâmico. Gerencie-o na aba Dinâmicos.",
                 )
                 return
             if result == "error":
@@ -3349,7 +3551,7 @@ class Sniptype:
             if callable(self.snippets[old_trigger]):
                 messagebox.showwarning(
                     "Aviso",
-                    f"'{old_trigger}' é um snippet dinâmico. Renomeie-o na aba Snippets Dinâmicos.",
+                    f"'{old_trigger}' é um snippet dinâmico. Renomeie-o na aba Dinâmicos.",
                 )
                 return
             new_trigger = simpledialog.askstring("Renomear", "Novo trigger:", initialvalue=old_trigger, parent=root)
@@ -3411,7 +3613,9 @@ class Sniptype:
         """
         ui = ui_theme.theme()
 
-        main = tk.Frame(parent, bg=ui.surface, padx=14, pady=14)
+        main = tk.Frame(
+            parent, bg=ui.surface, padx=ui.space_lg, pady=ui.space_lg
+        )
         main.pack(fill=tk.BOTH, expand=True)
         main.grid_columnconfigure(0, weight=1)
         main.grid_rowconfigure(2, weight=1)
@@ -3481,23 +3685,58 @@ class Sniptype:
                 self.snippets[current_type] = mapping
             return mapping
 
-        lbl_example = tk.Label(main, text="", font=ui.font(8), fg=ui.text_muted, bg=ui.surface)
-        lbl_example.grid(row=1, column=0, sticky="w", pady=(0, 10))
+        tk.Label(
+            main,
+            text="Mapeamentos",
+            font=ui.font(11, "bold"),
+            fg=ui.text,
+            bg=ui.surface,
+        ).grid(row=0, column=0, sticky="w")
+        lbl_example = tk.Label(
+            main,
+            text="",
+            font=ui.font(8),
+            fg=ui.text_muted,
+            bg=ui.surface,
+        )
+        lbl_example.grid(row=1, column=0, sticky="w", pady=(ui.space_xs, ui.space_md))
 
         content = tk.Frame(main, bg=ui.surface)
         content.grid(row=2, column=0, sticky="nsew")
-        content.grid_columnconfigure(2, weight=1)
+        content.grid_columnconfigure(0, weight=0, minsize=150)
+        content.grid_columnconfigure(1, weight=2, minsize=250)
+        content.grid_columnconfigure(2, weight=3, minsize=380)
         content.grid_rowconfigure(0, weight=1)
 
         # Types live in a scrollable vertical list so any number of custom
         # mapping types stays reachable (a horizontal row clipped them).
-        frame_types = tk.LabelFrame(content, text="Tipos", font=ui.font(9, "bold"), bg=ui.card, fg=ui.text_native, padx=12, pady=12)
-        frame_types.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        frame_types = tk.Frame(
+            content,
+            bg=ui.card,
+            padx=ui.space_md,
+            pady=ui.space_md,
+            highlightbackground=ui.border,
+            highlightthickness=1,
+        )
+        frame_types.grid(row=0, column=0, sticky="nsew", padx=(0, ui.space_md))
         frame_types.grid_columnconfigure(0, weight=1)
-        frame_types.grid_rowconfigure(0, weight=1)
+        frame_types.grid_rowconfigure(1, weight=1)
 
-        types_list_frame = tk.Frame(frame_types, bg=ui.card, highlightbackground=ui.border, highlightthickness=1)
-        types_list_frame.grid(row=0, column=0, sticky="nsew")
+        tk.Label(
+            frame_types,
+            text="Tipos",
+            font=ui.font(10, "bold"),
+            bg=ui.card,
+            fg=ui.text,
+        ).grid(row=0, column=0, sticky="w", pady=(0, ui.space_sm))
+
+        types_list_frame = tk.Frame(
+            frame_types,
+            bg=ui.card,
+            highlightbackground=ui.border,
+            highlightthickness=1,
+        )
+        types_list_frame.grid(row=1, column=0, sticky="nsew")
         types_list_frame.grid_columnconfigure(0, weight=1)
         types_list_frame.grid_rowconfigure(0, weight=1)
 
@@ -3512,66 +3751,192 @@ class Sniptype:
             exportselection=False,
             **ui.listbox_colors(),
         )
-        scrollbar_types = tk.Scrollbar(types_list_frame, orient=tk.VERTICAL, command=listbox_types.yview)
+        scrollbar_types = tk.Scrollbar(
+            types_list_frame,
+            orient=tk.VERTICAL,
+            command=listbox_types.yview,
+        )
         listbox_types.config(yscrollcommand=scrollbar_types.set)
         listbox_types.grid(row=0, column=0, sticky="nsew")
         scrollbar_types.grid(row=0, column=1, sticky="ns")
 
         btn_types_frame = tk.Frame(frame_types, bg=ui.card)
-        btn_types_frame.grid(row=1, column=0, sticky="ew", pady=(8, 0))
+        btn_types_frame.grid(row=2, column=0, sticky="ew", pady=(ui.space_sm, 0))
 
-        frame_left = tk.LabelFrame(content, text="Itens do mapeamento", font=ui.font(9, "bold"), bg=ui.card, fg=ui.text_native, padx=12, pady=12)
-        frame_left.grid(row=0, column=1, sticky="nsew", padx=(0, 12))
+        frame_left = tk.Frame(
+            content,
+            bg=ui.card,
+            padx=ui.space_md,
+            pady=ui.space_md,
+            highlightbackground=ui.border,
+            highlightthickness=1,
+        )
+        frame_left.grid(row=0, column=1, sticky="nsew", padx=(0, ui.space_md))
         frame_left.grid_columnconfigure(0, weight=1)
-        frame_left.grid_rowconfigure(2, weight=1)
+        frame_left.grid_rowconfigure(3, weight=1)
+
+        tk.Label(
+            frame_left,
+            text="Itens",
+            font=ui.font(10, "bold"),
+            bg=ui.card,
+            fg=ui.text,
+        ).grid(row=0, column=0, sticky="w")
 
         map_search_var = tk.StringVar()
-        tk.Label(frame_left, text="Buscar", font=ui.font(9), bg=ui.card, fg=ui.text_native).grid(row=0, column=0, sticky="w")
-        tk.Entry(frame_left, textvariable=map_search_var, font=ui.font(9), relief=tk.FLAT, highlightthickness=1, highlightbackground=ui.border, **ui.entry_colors()).grid(row=1, column=0, sticky="ew", pady=(4, 10))
+        tk.Label(
+            frame_left,
+            text="Pesquisar",
+            font=ui.font(9, "bold"),
+            bg=ui.card,
+            fg=ui.text_strong,
+        ).grid(row=1, column=0, sticky="w", pady=(ui.space_md, 0))
+        tk.Entry(
+            frame_left,
+            textvariable=map_search_var,
+            font=ui.font(10),
+            relief=tk.FLAT,
+            highlightthickness=1,
+            highlightbackground=ui.border,
+            highlightcolor=ui.focus_ring,
+            **ui.entry_colors(),
+        ).grid(
+            row=2,
+            column=0,
+            sticky="ew",
+            pady=(ui.space_xs, ui.space_md),
+            ipady=5,
+        )
 
-        listbox_frame = tk.Frame(frame_left, bg=ui.card, highlightbackground=ui.border, highlightthickness=1)
-        listbox_frame.grid(row=2, column=0, sticky="nsew")
+        listbox_frame = tk.Frame(
+            frame_left,
+            bg=ui.card,
+            highlightbackground=ui.border,
+            highlightthickness=1,
+        )
+        listbox_frame.grid(row=3, column=0, sticky="nsew")
         listbox_frame.grid_columnconfigure(0, weight=1)
         listbox_frame.grid_rowconfigure(0, weight=1)
 
         tree_map = self._create_snippet_tree(
-            listbox_frame, trigger_heading="Identificador",
-            trigger_width=88, preview_width=118)
+            listbox_frame,
+            trigger_heading="Identificador",
+            trigger_width=88,
+            preview_width=118,
+        )
+        empty_mapping_label = tk.Label(
+            listbox_frame,
+            text="Nenhum item encontrado.\nCrie um novo ou ajuste a pesquisa.",
+            font=ui.font(9),
+            bg=ui.card,
+            fg=ui.text_muted,
+            justify="center",
+        )
+        empty_mapping_label.grid(row=0, column=0, sticky="nsew")
 
-        frame_right = tk.LabelFrame(content, text="Editor do item", font=ui.font(9, "bold"), bg=ui.card, fg=ui.text_native, padx=12, pady=12)
+        frame_right = tk.Frame(
+            content,
+            bg=ui.card,
+            padx=ui.space_lg,
+            pady=ui.space_lg,
+            highlightbackground=ui.border,
+            highlightthickness=1,
+        )
         frame_right.grid(row=0, column=2, sticky="nsew")
         frame_right.grid_columnconfigure(0, weight=1)
-        frame_right.grid_rowconfigure(3, weight=1)
+        frame_right.grid_rowconfigure(5, weight=1)
 
-        tk.Label(frame_right, text="Identificador", font=ui.font(9), bg=ui.card, fg=ui.text_native).grid(row=0, column=0, sticky="w")
-        entry_name = tk.Entry(frame_right, font=ui.font(10), relief=tk.FLAT, highlightthickness=1, highlightbackground=ui.border, **ui.entry_colors())
-        entry_name.grid(row=1, column=0, sticky="ew", pady=(4, 10))
+        tk.Label(
+            frame_right,
+            text="Editor",
+            font=ui.font(11, "bold"),
+            bg=ui.card,
+            fg=ui.text,
+        ).grid(row=0, column=0, sticky="w")
+        tk.Label(
+            frame_right,
+            text="O prefixo do tipo será combinado com este identificador.",
+            font=ui.font(8),
+            bg=ui.card,
+            fg=ui.text_muted,
+        ).grid(row=1, column=0, sticky="w", pady=(ui.space_xs, ui.space_lg))
 
-        tk.Label(frame_right, text="Valor", font=ui.font(9), bg=ui.card, fg=ui.text_native).grid(row=2, column=0, sticky="w")
+        tk.Label(
+            frame_right,
+            text="Identificador",
+            font=ui.font(9, "bold"),
+            bg=ui.card,
+            fg=ui.text_strong,
+        ).grid(row=2, column=0, sticky="w")
+        entry_name = tk.Entry(
+            frame_right,
+            font=ui.font(10),
+            relief=tk.FLAT,
+            highlightthickness=1,
+            highlightbackground=ui.border,
+            highlightcolor=ui.focus_ring,
+            **ui.entry_colors(),
+        )
+        entry_name.grid(
+            row=3,
+            column=0,
+            sticky="ew",
+            pady=(ui.space_xs, ui.space_md),
+            ipady=5,
+        )
+
+        tk.Label(
+            frame_right,
+            text="Conteúdo",
+            font=ui.font(9, "bold"),
+            bg=ui.card,
+            fg=ui.text_strong,
+        ).grid(row=4, column=0, sticky="w")
         editor_shell = tk.Frame(frame_right, bg=ui.card)
-        editor_shell.grid(row=3, column=0, sticky="nsew")
+        editor_shell.grid(row=5, column=0, sticky="nsew", pady=(ui.space_xs, 0))
         editor_shell.grid_columnconfigure(0, weight=1)
         editor_shell.grid_rowconfigure(1, weight=1)
 
-        text_value = tk.Text(editor_shell, wrap=tk.WORD, font=ui.font(10), relief=tk.FLAT, highlightthickness=1, highlightbackground=ui.border, **ui.text_colors())
+        text_value = tk.Text(
+            editor_shell,
+            wrap=tk.WORD,
+            font=ui.font(10),
+            relief=tk.FLAT,
+            highlightthickness=1,
+            highlightbackground=ui.border,
+            highlightcolor=ui.focus_ring,
+            padx=ui.space_sm,
+            pady=ui.space_sm,
+            **ui.text_colors(),
+        )
         update_format_status = self._create_formatting_toolbar(editor_shell, text_value)
         text_value.pack(fill=tk.BOTH, expand=True, pady=(0, 6))
         tk.Label(
             frame_right,
-            text="Mapeamentos também aceitam formatação opcional.",
+            text="Formatação opcional  •  Ctrl+S para salvar",
             font=ui.font(8),
             fg=ui.text_muted,
             bg=ui.card,
-        ).grid(row=4, column=0, sticky="w", pady=(2, 10))
+        ).grid(row=6, column=0, sticky="w", pady=(ui.space_xs, ui.space_md))
 
         btn_frame = tk.Frame(frame_right, bg=ui.card)
-        btn_frame.grid(row=5, column=0, sticky="e")
-        btn_new_map = tk.Button(btn_frame, text="Novo", width=ui.button_width(12))
-        btn_save_map = tk.Button(btn_frame, text="Salvar", width=ui.button_width(12))
-        btn_delete_map = tk.Button(btn_frame, text="Excluir", width=ui.button_width(12))
+        btn_frame.grid(row=7, column=0, sticky="ew")
+
+        def mapping_button(label, *, accent=False, danger=False):
+            return tk.Button(
+                btn_frame,
+                text=label,
+                width=ui.button_width(12),
+                **ui.button_chrome(),
+                **ui.button_colors(accent=accent, danger=danger),
+            )
+
+        btn_new_map = mapping_button("Novo")
+        btn_save_map = mapping_button("Salvar", accent=True)
+        btn_delete_map = mapping_button("Excluir", danger=True)
         btn_new_map.pack(side=tk.LEFT, padx=(0, 6))
-        btn_save_map.pack(side=tk.LEFT, padx=6)
         btn_delete_map.pack(side=tk.LEFT, padx=(6, 0))
+        btn_save_map.pack(side=tk.RIGHT)
 
         def update_total_count():
             """Tab title counts every mapping item, across all types.
@@ -3596,11 +3961,14 @@ class Sniptype:
             mapping = self.snippets.get(current_type, {})
             if not isinstance(mapping, dict):
                 mapping = {}
+            has_rows = False
             for key in iter_filtered_mapping_items(mapping, query):
                 if not key:
                     continue  # a blank key cannot be a Treeview row iid
                 tree_map.insert("", tk.END, iid=key,
                                 values=snippet_row_values(key, mapping.get(key, "")))
+                has_rows = True
+            (tree_map if has_rows else empty_mapping_label).tkraise()
             update_total_count()
             update_example_label()
 
@@ -3656,7 +4024,14 @@ class Sniptype:
                 self.notify_status(f"Tipo '{type_name}' criado.", key=f"mapping-type-create:{type_name}")
                 dialog.destroy()
 
-            tk.Button(body, text="Criar Tipo", command=save_new_type, width=ui.button_width(15)).pack(anchor="e", pady=(14, 0))
+            tk.Button(
+                body,
+                text="Criar tipo",
+                command=save_new_type,
+                width=ui.button_width(15),
+                **ui.button_chrome(),
+                **ui.button_colors(accent=True),
+            ).pack(anchor="e", pady=(14, 0))
             center_dialog(dialog, root)
             entry_type_name.focus_set()
 
@@ -3692,8 +4067,20 @@ class Sniptype:
             refresh_mapping_list()
             self.notify_status(f"Tipo '{info.get('label', current_type)}' excluído.", key=f"mapping-type-delete:{current_type}")
 
-        tk.Button(btn_types_frame, text="Novo Tipo", command=add_new_type).pack(fill=tk.X)
-        tk.Button(btn_types_frame, text="Excluir Tipo", command=delete_current_type).pack(fill=tk.X, pady=(6, 0))
+        tk.Button(
+            btn_types_frame,
+            text="Novo tipo",
+            command=add_new_type,
+            **ui.button_chrome(compact=True),
+            **ui.button_colors(),
+        ).pack(fill=tk.X)
+        tk.Button(
+            btn_types_frame,
+            text="Excluir tipo",
+            command=delete_current_type,
+            **ui.button_chrome(compact=True),
+            **ui.button_colors(danger=True),
+        ).pack(fill=tk.X, pady=(6, 0))
 
         listbox_types.bind("<<ListboxSelect>>", on_type_select)
         self._bind_mousewheel(listbox_types, listbox_types)
@@ -3793,6 +4180,8 @@ class Sniptype:
         btn_save_map.configure(command=on_save_map)
         btn_delete_map.configure(command=on_delete_map)
         map_search_var.trace_add("write", lambda *_: refresh_mapping_list())
+        for widget in (entry_name, text_value, tree_map):
+            widget.bind("<Control-s>", lambda _event: (on_save_map(), "break")[1])
 
         def refresh_all_mappings():
             # A restore/import can drop the selected type entirely, so the type
@@ -3803,32 +4192,57 @@ class Sniptype:
         refresh_mapping_list()
         self._register_manager_refresher(refresh_all_mappings)
 
-    def _create_reference_tab(self, parent, root, section_title, subtitle, sections, footer_text):
+    def _create_reference_tab(
+        self, parent, root, section_title, subtitle, sections, footer_text
+    ):
         ui = ui_theme.theme()
-        main = tk.Frame(parent, bg=ui.surface, padx=14, pady=14)
+        main = tk.Frame(
+            parent, bg=ui.surface, padx=ui.space_lg, pady=ui.space_lg
+        )
         main.pack(fill=tk.BOTH, expand=True)
         main.grid_columnconfigure(0, weight=1)
-        main.grid_rowconfigure(1, weight=1)
+        main.grid_rowconfigure(2, weight=1)
 
-        header_card = tk.Frame(main, bg=ui.card, highlightbackground=ui.border, highlightthickness=1, padx=14, pady=12)
-        header_card.grid(row=0, column=0, sticky="ew", pady=(0, 12))
-        tk.Label(header_card, text=section_title, font=ui.font(11, "bold"), bg=ui.card, fg=ui.text).pack(anchor="w")
-        tk.Label(header_card, text=subtitle, font=ui.font(9), bg=ui.card, fg=ui.text_muted).pack(anchor="w", pady=(4, 0))
+        tk.Label(
+            main,
+            text=section_title,
+            font=ui.font(11, "bold"),
+            bg=ui.surface,
+            fg=ui.text,
+        ).grid(row=0, column=0, sticky="w")
+        tk.Label(
+            main,
+            text=subtitle,
+            font=ui.font(9),
+            bg=ui.surface,
+            fg=ui.text_muted,
+        ).grid(
+            row=1,
+            column=0,
+            sticky="w",
+            pady=(ui.space_xs, ui.space_md),
+        )
 
-        content = tk.Frame(main, bg=ui.card, highlightbackground=ui.border, highlightthickness=1)
-        content.grid(row=1, column=0, sticky="nsew")
+        content = tk.Frame(main, bg=ui.surface)
+        content.grid(row=2, column=0, sticky="nsew")
         content.grid_columnconfigure(0, weight=1)
         content.grid_rowconfigure(0, weight=1)
 
-        canvas = tk.Canvas(content, bg=ui.card, highlightthickness=0)
+        canvas = tk.Canvas(content, bg=ui.surface, highlightthickness=0)
         scrollbar = ttk.Scrollbar(content, orient=tk.VERTICAL, command=canvas.yview)
-        inner = tk.Frame(canvas, bg=ui.card, padx=12, pady=12)
-        inner.bind("<Configure>", lambda event: canvas.configure(scrollregion=canvas.bbox("all")))
+        inner = tk.Frame(canvas, bg=ui.surface)
+        inner.bind(
+            "<Configure>",
+            lambda event: canvas.configure(scrollregion=canvas.bbox("all")),
+        )
         canvas_window = canvas.create_window((0, 0), window=inner, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
         canvas.grid(row=0, column=0, sticky="nsew")
         scrollbar.grid(row=0, column=1, sticky="ns")
-        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(canvas_window, width=event.width))
+        canvas.bind(
+            "<Configure>",
+            lambda event: canvas.itemconfigure(canvas_window, width=event.width),
+        )
 
         def populate():
             for child in inner.winfo_children():
@@ -3836,11 +4250,25 @@ class Sniptype:
             grouped = reference_entries_by_category(self.dynamic_registry)
             for title, category_key in sections:
                 entries = grouped.get(category_key, [])
-                section = tk.LabelFrame(inner, text=title, font=ui.font(9, "bold"), bg=ui.card, fg=ui.text_native, padx=12, pady=12)
-                section.pack(fill=tk.X, expand=True, pady=(0, 12))
+                section = tk.Frame(
+                    inner,
+                    bg=ui.card,
+                    padx=ui.space_lg,
+                    pady=ui.space_md,
+                    highlightbackground=ui.border,
+                    highlightthickness=1,
+                )
+                section.pack(fill=tk.X, expand=True, pady=(0, ui.space_md))
+                tk.Label(
+                    section,
+                    text=title,
+                    font=ui.font(10, "bold"),
+                    bg=ui.card,
+                    fg=ui.text,
+                ).pack(anchor="w", pady=(0, ui.space_sm))
                 for key, trigger, desc, enabled in entries:
                     row = tk.Frame(section, bg=ui.card)
-                    row.pack(fill=tk.X, pady=2)
+                    row.pack(fill=tk.X, pady=ui.space_xs)
                     var = tk.BooleanVar(value=enabled)
                     # The checkbox writes by stable key, not by the (renameable) trigger.
                     tk.Checkbutton(
@@ -3849,26 +4277,53 @@ class Sniptype:
                         command=lambda k=key, v=var: self._on_registry_checkbox(k, v),
                         **ui.checkbutton_colors(ui.card),
                     ).pack(side=tk.LEFT)
-                    trigger_label = tk.Label(row, text=trigger, font=ui.mono_font(10, "bold"), fg=ui.link, bg=ui.card, width=12, anchor="w")
+                    trigger_label = tk.Label(
+                        row,
+                        text=trigger,
+                        font=ui.mono_font(10, "bold"),
+                        fg=ui.link,
+                        bg=ui.card,
+                        width=12,
+                        anchor="w",
+                    )
                     trigger_label.pack(side=tk.LEFT)
-                    rename = lambda event=None, k=key, t=trigger: self._rename_registry_entry_dialog(root, k, t, populate)
+                    rename = (
+                        lambda event=None, k=key, t=trigger:
+                        self._rename_registry_entry_dialog(root, k, t, populate)
+                    )
                     trigger_label.bind("<Double-Button-1>", rename)
                     tk.Button(
                         row,
-                        text="✎",
+                        text="Renomear",
                         font=ui.font(8),
-                        bd=0,
-                        relief=tk.FLAT,
-                        cursor="hand2",
                         command=rename,
-                        **ui.glyph_button_colors(ui.card),
-                    ).pack(side=tk.LEFT, padx=(0, 4))
-                    tk.Label(row, text=desc, font=ui.font(9), bg=ui.card, fg=ui.text_native, anchor="w").pack(side=tk.LEFT, padx=(10, 0), fill=tk.X, expand=True)
+                        **ui.button_chrome(compact=True),
+                        **ui.button_colors(),
+                    ).pack(side=tk.RIGHT)
+                    tk.Label(
+                        row,
+                        text=desc,
+                        font=ui.font(9),
+                        bg=ui.card,
+                        fg=ui.text_native,
+                        anchor="w",
+                    ).pack(
+                        side=tk.LEFT,
+                        padx=(ui.space_md, ui.space_sm),
+                        fill=tk.X,
+                        expand=True,
+                    )
             self._bind_mousewheel_descendants(inner, canvas)
 
         populate()
 
-        tk.Label(main, text=footer_text, font=ui.font(8), fg=ui.text_muted, bg=ui.surface).grid(row=2, column=0, sticky="w", pady=(10, 0))
+        tk.Label(
+            main,
+            text=footer_text,
+            font=ui.font(8),
+            fg=ui.text_muted,
+            bg=ui.surface,
+        ).grid(row=3, column=0, sticky="w", pady=(ui.space_md, 0))
 
         self._bind_mousewheel(canvas, canvas)
 
@@ -3976,7 +4431,7 @@ class Sniptype:
                 ("Ações (B3 e US)", "stock"),
                 ("WhatsApp", "whatsapp"),
             ],
-            "Use a caixa de seleção para ativar/desativar. Clique em ✎ (ou dê dois cliques no trigger) para renomear.",
+            "Use a caixa de seleção para ativar ou desativar. Dê dois cliques no trigger para renomear.",
         )
 
     def _rename_registry_entry_dialog(self, root, key, current_trigger, refresh):
