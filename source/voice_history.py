@@ -68,10 +68,12 @@ class VoiceRecording:
         with self._lock:
             if self._closed:
                 return self.record_id
-            if self._bytes_written == 0 and fallback_samples:
+            if fallback_samples is not None:
                 payload = _audio_bytes(fallback_samples)
-                self._handle.write(payload)
-                self._bytes_written += len(payload)
+                if len(payload) > self._bytes_written:
+                    remainder = payload[self._bytes_written :]
+                    self._handle.write(remainder)
+                    self._bytes_written += len(remainder)
             self._handle.flush()
             os.fsync(self._handle.fileno())
             self._handle.close()
@@ -82,7 +84,12 @@ class VoiceRecording:
             "audio_bytes": self._bytes_written,
         }
         if isinstance(capture_metadata, dict):
-            fields.update(capture_metadata)
+            reserved = {"id", "status", "captured_at", "audio_bytes"}
+            fields.update(
+                (key, value)
+                for key, value in capture_metadata.items()
+                if key not in reserved
+            )
         self.store.update(
             self.record_id,
             **fields,
