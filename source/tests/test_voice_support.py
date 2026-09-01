@@ -76,6 +76,14 @@ class _Queue:
         return self.items.pop(0)
 
 
+class _ChunkCapture:
+    def __init__(self, chunks):
+        self._chunks = _Queue(chunks)
+
+    def read_chunk(self, timeout=0):
+        return self._chunks.get(timeout=timeout)
+
+
 class ControllerTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
@@ -297,6 +305,14 @@ class ControllerTests(unittest.TestCase):
         self.controller.handle_hotkey_press(MODE_COMMAND)
         self.controller.handle_hotkey_release(MODE_COMMAND)
         self.assertEqual(self.expanded, ["xadds"])
+
+    def test_stream_tail_chunks_are_fed_before_finalize(self):
+        self.backend.start_stream()
+        capture = _ChunkCapture([[0.1, 0.2], [0.3]])
+
+        self.controller._drain_stream_chunks(capture)
+
+        self.assertEqual(self.backend._stream, [[0.1, 0.2], [0.3]])
 
     def test_dictation_applies_term_correction_and_keeps_raw_transcript(self):
         self._ready()
