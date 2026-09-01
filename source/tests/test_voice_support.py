@@ -7,7 +7,7 @@ from unittest import mock
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from trigger_index import compile_trigger_index
-from voice_audio import VoiceAudioError
+from voice_audio import CaptureIssue, CaptureResult, VoiceAudioError
 from voice_dispatch import (
     MODE_COMMAND,
     MODE_DICTATION,
@@ -41,6 +41,7 @@ class FakeCapture:
         self.error = error
         self.started = False
         self.stop_calls = 0
+        self.issue = None
         self._queue = _Queue(self.samples)
 
     def start(self):
@@ -51,7 +52,18 @@ class FakeCapture:
     def stop(self):
         self.stop_calls += 1
         self.started = False
-        return self.samples, self.overflow
+        issue = self.issue
+        if issue is None and self.overflow:
+            issue = CaptureIssue.DURATION_LIMIT
+        return CaptureResult(
+            self.samples,
+            issue=issue,
+            message=("capture failed" if issue is not None else None),
+            duration_seconds=len(self.samples) / 16000,
+        )
+
+    def read_chunk(self, timeout=0.1):
+        return self._queue.get(timeout=timeout)
 
 
 class _Queue:
@@ -145,16 +157,18 @@ class ControllerTests(unittest.TestCase):
         )
         recording.finish_capture([0.1, 0.2])
         self.controller._history.fail(recording.record_id, "offline")
-        self.backend.transcript = "texto recuperado"
+        self.controller.settings.voice_replacements = {"Queen": "Qwen"}
+        self.backend.transcript = "texto Queen recuperado"
 
         with mock.patch("voice_support.Clipboard.set_content", return_value=True) as copied:
             self.assertTrue(self.controller.retry_history(recording.record_id))
 
         self.assertEqual(self.inserted, [])
-        copied.assert_called_once_with("texto recuperado")
+        copied.assert_called_once_with("texto Qwen recuperado")
         entry = self.controller.history_entry(recording.record_id)
         self.assertEqual(entry["status"], "completed")
         self.assertEqual(entry["outcome"], "recovered")
+        self.assertEqual(entry["raw_transcript"], "texto Queen recuperado")
 
     def test_cancelled_history_retry_is_not_mislabeled_as_failed(self):
         self._ready()
@@ -278,10 +292,25 @@ class ControllerTests(unittest.TestCase):
 
     def test_voice_command_expands(self):
         self._ready()
+        self.controller.settings.voice_replacements = {"xadds": "wrong"}
         self.backend.transcript = "xadds"
         self.controller.handle_hotkey_press(MODE_COMMAND)
         self.controller.handle_hotkey_release(MODE_COMMAND)
         self.assertEqual(self.expanded, ["xadds"])
+
+    def test_dictation_applies_term_correction_and_keeps_raw_transcript(self):
+        self._ready()
+        self.controller.settings.voice_replacements = {"Queen": "Qwen"}
+        self.backend.transcript = "Testing Queen now"
+
+        self.controller.handle_hotkey_press(MODE_DICTATION)
+        self.controller.handle_hotkey_release(MODE_DICTATION)
+
+        self.assertEqual(self.inserted, ["Testing Qwen now"])
+        entry = self.controller.history_entries()[0]
+        self.assertEqual(entry["transcript"], "Testing Qwen now")
+        self.assertEqual(entry["raw_transcript"], "Testing Queen now")
+        self.assertIn("inference_duration_seconds", entry)
 
     def test_form_target_does_not_paste(self):
         self._ready()
@@ -304,6 +333,39 @@ class ControllerTests(unittest.TestCase):
         self.controller.handle_hotkey_press(MODE_DICTATION)
         self.controller.handle_hotkey_release(MODE_DICTATION)
         self.assertEqual(self.inserted, [])
+
+    def test_input_status_failure_is_not_reported_as_duration_limit(self):
+        self.capture.issue = CaptureIssue.INPUT_STATUS
+        self._ready()
+        with mock.patch.object(
+            self.backend, "transcribe", wraps=self.backend.transcribe
+        ) as transcribe:
+            self.controller.handle_hotkey_press(MODE_DICTATION)
+            self.controller.handle_hotkey_release(MODE_DICTATION)
+
+        transcribe.assert_not_called()
+        entry = self.controller.history_entries()[0]
+        self.assertEqual(entry["status"], "failed")
+        self.assertEqual(entry["capture_issue"], "input_status")
+        self.assertTrue(self.controller._history.is_retryable(entry["id"]))
+        self.notify.assert_called_with(
+            "O microfone relatou uma falha durante a gravação. "
+            "O áudio parcial foi salvo no histórico.",
+            key="voice-error",
+        )
+
+    def test_unexpected_stop_failure_closes_the_history_journal(self):
+        self._ready()
+        self.controller.handle_hotkey_press(MODE_DICTATION)
+        recording = self.controller._history_recording
+        self.capture.stop = mock.Mock(side_effect=OSError("device lost"))
+
+        self.controller.handle_hotkey_release(MODE_DICTATION)
+
+        self.assertTrue(recording._closed)
+        entry = self.controller.history_entry(recording.record_id)
+        self.assertEqual(entry["status"], "failed")
+        self.assertIn("device lost", entry["error"])
 
     def test_audio_error_stays_idle(self):
         self.capture.error = VoiceAudioError("recusado")

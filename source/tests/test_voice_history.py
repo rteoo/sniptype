@@ -43,6 +43,16 @@ class VoiceHistoryTests(unittest.TestCase):
             )
         )
 
+    def test_finish_capture_appends_only_missing_journal_tail(self):
+        recording = self._recording()
+        recording.write_chunk([0.25])
+        recording.finish_capture([0.25, -0.5, 0.75])
+
+        self.assertEqual(
+            self.store.load_samples(recording.record_id),
+            [0.25, -0.5, 0.75],
+        )
+
     def test_startup_recovers_an_interrupted_recording(self):
         recording = self._recording()
         recording.write_chunk([0.1])
