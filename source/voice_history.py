@@ -64,7 +64,7 @@ class VoiceRecording:
             os.fsync(self._handle.fileno())
             self._bytes_written += len(payload)
 
-    def finish_capture(self, fallback_samples=None):
+    def finish_capture(self, fallback_samples=None, capture_metadata=None):
         with self._lock:
             if self._closed:
                 return self.record_id
@@ -76,11 +76,16 @@ class VoiceRecording:
             os.fsync(self._handle.fileno())
             self._handle.close()
             self._closed = True
+        fields = {
+            "status": STATUS_PENDING,
+            "captured_at": _timestamp(),
+            "audio_bytes": self._bytes_written,
+        }
+        if isinstance(capture_metadata, dict):
+            fields.update(capture_metadata)
         self.store.update(
             self.record_id,
-            status=STATUS_PENDING,
-            captured_at=_timestamp(),
-            audio_bytes=self._bytes_written,
+            **fields,
         )
         return self.record_id
 
@@ -122,6 +127,8 @@ class VoiceHistoryStore:
             "language": language,
             "target_kind": target_kind,
             "sample_rate": 16000,
+            "sample_rate_hz": 16000,
+            "channels": 1,
             "sample_format": "float32-native-endian",
             "audio_bytes": 0,
             "transcript": "",
@@ -153,13 +160,16 @@ class VoiceHistoryStore:
             self._write_metadata(record_id, metadata)
         return True
 
-    def mark_transcribed(self, record_id, transcript):
-        return self.update(
-            record_id,
-            status=STATUS_TRANSCRIBED,
-            transcript=transcript or "",
-            error=None,
-        )
+    def mark_transcribed(self, record_id, transcript, raw_transcript=None, **metadata):
+        fields = {
+            "status": STATUS_TRANSCRIBED,
+            "transcript": transcript or "",
+            "error": None,
+        }
+        if raw_transcript is not None and raw_transcript != transcript:
+            fields["raw_transcript"] = raw_transcript
+        fields.update(metadata)
+        return self.update(record_id, **fields)
 
     def complete(self, record_id, transcript, outcome):
         return self.update(
@@ -178,7 +188,13 @@ class VoiceHistoryStore:
 
     def is_retryable(self, record_id):
         entry = self.get(record_id)
-        return bool(entry and entry.get("status") in RETRYABLE_STATUSES)
+        if not entry or entry.get("status") not in RETRYABLE_STATUSES:
+            return False
+        try:
+            size = os.path.getsize(self._audio_path(record_id))
+        except OSError:
+            return False
+        return size > 0 and size % array.array("f").itemsize == 0
 
     def get(self, record_id):
         if not self._valid_record_id(record_id):
@@ -213,9 +229,12 @@ class VoiceHistoryStore:
                 payload = handle.read()
         except OSError as exc:
             raise ValueError("O áudio salvo não está disponível.") from exc
-        usable = len(payload) - (len(payload) % array.array("f").itemsize)
+        if not payload:
+            raise ValueError("O áudio salvo está vazio.")
+        if len(payload) % array.array("f").itemsize:
+            raise ValueError("O áudio salvo está corrompido.")
         samples = array.array("f")
-        samples.frombytes(payload[:usable])
+        samples.frombytes(payload)
         return samples.tolist()
 
     def _item_dir(self, record_id):
