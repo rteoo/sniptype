@@ -619,6 +619,33 @@ class ManagerGuiSmokeTests(unittest.TestCase):
         voice.download_profile.assert_called_once_with("compact")
         voice.enable.assert_not_called()
 
+    def test_voice_replacements_editor_uses_shared_root_and_persists(self):
+        voice = _ensure_voice(self.app)
+        voice.settings.voice_replacements = {}
+
+        def open_and_save(shared_root):
+            with mock.patch.object(tx.tk, "Tk", wraps=tx.tk.Tk) as tk_constructor, \
+                    mock.patch.object(tx.simpledialog, "askstring", side_effect=["Quen", "Qwen"]):
+                dialog = self.app._show_voice_replacements(shared_root)
+                self.assertEqual(dialog.master, shared_root)
+                self.assertEqual(dialog.title(), "Correções da transcrição")
+                buttons = {
+                    str(widget.cget("text")): widget
+                    for widget in _descendants(dialog)
+                    if isinstance(widget, tk.Button)
+                }
+                buttons["Adicionar"].invoke()
+                buttons["Salvar"].invoke()
+                return tk_constructor.call_count
+
+        with mock.patch.object(
+            self.app, "_persist_voice_settings", return_value=True
+        ) as persist:
+            constructor_calls = self._on_gui(open_and_save)
+        persist.assert_called_once_with({"voice_replacements": {"Quen": "Qwen"}})
+        self.assertEqual(constructor_calls, 0)
+        self.assertEqual(voice.settings.voice_replacements, {"Quen": "Qwen"})
+
     def test_open_voice_settings_selects_the_manager_tab(self):
         _ensure_voice(self.app)
 
