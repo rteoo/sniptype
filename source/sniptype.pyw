@@ -1783,6 +1783,8 @@ class Sniptype:
         current.update(payload)
         if save_settings(self.settings_file, current):
             self.settings.update(payload)
+            return True
+        return False
 
     def _voice_menu_label(self, _text=None):
         if self.voice is None:
@@ -1962,6 +1964,158 @@ class Sniptype:
         ).grid(row=2, column=0, columnspan=2, sticky="e", pady=(12, 0))
 
         dialog.bind("<Escape>", lambda _event: dialog.destroy())
+        center_on_screen(dialog)
+        dialog.lift()
+        dialog.focus_force()
+        return dialog
+
+    def _show_voice_replacements(self, owner):
+        """Edit optional transcript corrections without creating another Tk root."""
+        from voice_text_support import validate_replacements
+
+        ui = ui_theme.theme()
+        dialog = tk.Toplevel(owner)
+        dialog.title("Correções da transcrição")
+        dialog.transient(owner)
+        dialog.resizable(True, True)
+        dialog.minsize(480, 300)
+        container = tk.Frame(dialog, bg=ui.surface, padx=16, pady=16)
+        container.pack(fill=tk.BOTH, expand=True)
+        tk.Label(
+            container,
+            text="Corrija termos recorrentes reconhecidos incorretamente.",
+            bg=ui.surface,
+            fg=ui.text,
+            font=ui.font(9),
+            wraplength=560,
+            justify="left",
+        ).pack(anchor="w", pady=(0, 10))
+        list_frame = tk.Frame(container, bg=ui.surface)
+        list_frame.pack(fill=tk.BOTH, expand=True)
+        listbox = tk.Listbox(
+            list_frame,
+            height=8,
+            font=ui.mono_font(9),
+            **ui.listbox_colors(),
+        )
+        scrollbar = tk.Scrollbar(list_frame, orient=tk.VERTICAL, command=listbox.yview)
+        listbox.configure(yscrollcommand=scrollbar.set)
+        listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        replacements = dict(
+            getattr(self.voice.settings, "voice_replacements", {}) or {}
+        )
+
+        def redraw():
+            listbox.delete(0, tk.END)
+            for source, replacement in replacements.items():
+                listbox.insert(tk.END, f"{source}  →  {replacement}")
+
+        def edit_selected():
+            selection = listbox.curselection()
+            if not selection:
+                return
+            source = list(replacements)[selection[0]]
+            replacement = replacements[source]
+            new_value = simpledialog.askstring(
+                "Substituição", f"Texto para substituir: {source}",
+                initialvalue=replacement, parent=dialog,
+            )
+            if new_value is None:
+                return
+            checked = dict(replacements)
+            checked[source] = new_value
+            if not validate_replacements(checked):
+                messagebox.showerror(
+                    "Correção inválida",
+                    "A substituição não pode ser vazia ou muito longa.",
+                    parent=dialog,
+                )
+                return
+            replacements[source] = new_value
+            redraw()
+
+        def add_entry():
+            source = simpledialog.askstring(
+                "Nova correção",
+                "Texto reconhecido incorretamente:",
+                parent=dialog,
+            )
+            if source is None:
+                return
+            replacement = simpledialog.askstring(
+                "Nova correção",
+                "Substituir por:",
+                parent=dialog,
+            )
+            if replacement is None:
+                return
+            checked = dict(replacements)
+            checked[source] = replacement
+            if not validate_replacements(checked):
+                messagebox.showerror(
+                    "Correção inválida",
+                    "O texto não pode ser vazio ou muito longo.",
+                    parent=dialog,
+                )
+                return
+            replacements.clear()
+            replacements.update(checked)
+            redraw()
+
+        def remove_entry():
+            selection = listbox.curselection()
+            if selection:
+                replacements.pop(list(replacements)[selection[0]], None)
+                redraw()
+
+        actions = tk.Frame(container, bg=ui.surface)
+        actions.pack(fill=tk.X, pady=(10, 0))
+        for label, command in (
+            ("Adicionar", add_entry),
+            ("Editar", edit_selected),
+            ("Remover", remove_entry),
+        ):
+            tk.Button(
+                actions,
+                text=label,
+                command=command,
+                **ui.button_colors(),
+            ).pack(side=tk.LEFT, padx=(0, 6))
+
+        def save_and_close():
+            checked = validate_replacements(replacements)
+            if checked != replacements:
+                messagebox.showerror(
+                    "Correções inválidas",
+                    "Revise os termos informados.",
+                    parent=dialog,
+                )
+                return
+            if not self._persist_voice_settings({"voice_replacements": checked}):
+                messagebox.showerror(
+                    "Falha ao salvar",
+                    "Não foi possível salvar as correções da transcrição.",
+                    parent=dialog,
+                )
+                return
+            self.voice.settings.voice_replacements = checked
+            dialog.destroy()
+
+        tk.Button(
+            actions,
+            text="Salvar",
+            command=save_and_close,
+            **ui.button_colors(accent=True),
+        ).pack(side=tk.RIGHT)
+        tk.Button(
+            actions,
+            text="Cancelar",
+            command=dialog.destroy,
+            **ui.button_colors(),
+        ).pack(side=tk.RIGHT, padx=(0, 6))
+        dialog.bind("<Escape>", lambda _event: dialog.destroy())
+        redraw()
         center_on_screen(dialog)
         dialog.lift()
         dialog.focus_force()
@@ -2276,6 +2430,12 @@ class Sniptype:
             buttons,
             text="Histórico de voz…",
             command=lambda: self._open_voice_history(owner),
+            **ui.button_colors(),
+        ).pack(side=tk.RIGHT, padx=(0, 8))
+        tk.Button(
+            buttons,
+            text="Correções…",
+            command=lambda: self._show_voice_replacements(owner),
             **ui.button_colors(),
         ).pack(side=tk.RIGHT, padx=(0, 8))
 

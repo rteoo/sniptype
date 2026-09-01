@@ -41,8 +41,11 @@ class PackagingExcludeTests(unittest.TestCase):
             mac_text = handle.read()
         for text in (win_text, mac_text):
             self.assertIn("VOICE_COLLECT_ARGS", text)
-            self.assertIn("import sounddevice, transcribe_cpp, transcribe_cpp_native", text)
+            self.assertIn("import sounddevice, soxr, transcribe_cpp, transcribe_cpp_native", text)
             self.assertIn("--collect-all sounddevice", text)
+            self.assertIn("--collect-all soxr", text)
+            self.assertIn("--copy-metadata soxr", text)
+            self.assertIn("THIRD_PARTY_NOTICES.md", text)
             self.assertIn("--collect-all transcribe_cpp", text)
             self.assertIn("--collect-all transcribe_cpp_native", text)
             self.assertIn("--voice-runtime-probe", text)
@@ -60,7 +63,7 @@ class PackagingExcludeTests(unittest.TestCase):
         path = os.path.join(ROOT, "source", "voice_runtime_probe.py")
         with open(path, encoding="utf-8") as handle:
             text = handle.read()
-        for package in ("tkinter", "sounddevice", "transcribe_cpp_native"):
+        for package in ("tkinter", "sounddevice", "soxr", "transcribe_cpp_native"):
             self.assertIn(f"import {package}", text)
 
     def test_entrypoint_runs_the_probe_before_desktop_imports(self):
@@ -82,6 +85,7 @@ class PackagingExcludeTests(unittest.TestCase):
             requirements,
             {
                 "sounddevice==0.5.5",
+                "soxr==1.1.0",
                 "transcribe-cpp==0.1.3",
                 "transcribe-cpp-native==0.1.3",
             },

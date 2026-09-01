@@ -10,7 +10,13 @@ import threading
 import time
 
 from clipboard_support import Clipboard
-from voice_audio import AudioCapture, VoiceAudioError, sounddevice_available
+from voice_audio import (
+    AudioCapture,
+    CaptureIssue,
+    CaptureResult,
+    VoiceAudioError,
+    sounddevice_available,
+)
 from voice_catalog import PROFILE_STREAMING, catalog_entry
 from voice_dispatch import (
     MODE_COMMAND,
@@ -41,6 +47,7 @@ from voice_models import (
 from voice_provider import create_provider
 from voice_runtime import VoiceRuntimeError
 from voice_settings import resolve_voice_settings, voice_settings_payload
+from voice_text_support import VoiceTextReplacements
 
 
 STATE_UNAVAILABLE = "unavailable"
@@ -51,6 +58,34 @@ STATE_TRANSCRIBING = "transcribing"
 STATE_ROUTING = "routing"
 
 _SHUTDOWN_JOIN_SECONDS = 2.0
+
+_CAPTURE_ISSUE_MESSAGES = {
+    CaptureIssue.DURATION_LIMIT: (
+        "A gravação de voz atingiu o limite e foi cancelada. "
+        "O áudio parcial foi salvo no histórico."
+    ),
+    CaptureIssue.INPUT_STATUS: (
+        "O microfone relatou uma falha durante a gravação. "
+        "O áudio parcial foi salvo no histórico."
+    ),
+    CaptureIssue.RAW_QUEUE: (
+        "A captura de áudio não acompanhou o microfone. "
+        "O áudio parcial foi salvo no histórico."
+    ),
+    CaptureIssue.NORMALIZED_QUEUE: (
+        "A transcrição em tempo real não acompanhou a gravação. "
+        "O áudio foi salvo no histórico."
+    ),
+    CaptureIssue.NORMALIZATION: (
+        "Não foi possível normalizar o áudio do microfone. "
+        "O áudio disponível foi salvo no histórico."
+    ),
+    CaptureIssue.JOURNAL: (
+        "Não foi possível salvar toda a gravação durante a captura."
+    ),
+    CaptureIssue.STOP: "O microfone falhou ao encerrar a gravação.",
+    CaptureIssue.CLOSE: "O microfone falhou ao liberar a gravação.",
+}
 
 _STATE_LABELS = {
     STATE_UNAVAILABLE: "Entrada por voz (indisponível)",
@@ -90,6 +125,10 @@ class VoiceController:
     ):
         warnings = []
         self.settings = resolve_voice_settings(settings, warnings)
+        self._replacement_config = tuple(self.settings.voice_replacements.items())
+        self._text_replacements = VoiceTextReplacements(
+            self.settings.voice_replacements
+        )
         self.task_runner = task_runner
         self._insert_text = insert_text
         self._expand_trigger = expand_trigger
@@ -137,6 +176,7 @@ class VoiceController:
         self._monitor = None
         self._load_error = None
         self._workers = []
+        self._stream_worker_events = {}
         self.last_outcome = None
         for warning in warnings:
             self._log(warning)
@@ -510,9 +550,18 @@ class VoiceController:
             self._partial = ""
             self._state = STATE_RECORDING
             generation = self._session_generation
+            stream_done = None
+            if self.settings.profile == PROFILE_STREAMING:
+                stream_done = threading.Event()
+                self._stream_worker_events[generation] = stream_done
         self._emit_status()
-        if self.settings.profile == PROFILE_STREAMING:
-            self._start_worker(self._stream_worker, generation, name="voice-stream")
+        if stream_done is not None:
+            self._start_worker(
+                self._stream_worker,
+                generation,
+                stream_done,
+                name="voice-stream",
+            )
         return True
 
     def handle_hotkey_release(self, mode):
@@ -549,6 +598,7 @@ class VoiceController:
         recording = None
         with self._lock:
             if self._state in (STATE_RECORDING, STATE_TRANSCRIBING, STATE_ROUTING):
+                generation = self._session_generation
                 capture = self._capture
                 self._capture = None
                 recording = self._history_recording
@@ -568,6 +618,7 @@ class VoiceController:
                     self._state = (
                         STATE_IDLE if self.settings.enabled else STATE_UNAVAILABLE
                     )
+                self._stream_worker_events.pop(generation, None)
         if capture is not None:
             try:
                 capture.stop()
@@ -707,27 +758,54 @@ class VoiceController:
     def _finish_worker(self, generation, capture, recording):
         if self._shutdown.is_set():
             return
-        pcm = []
-        overflow = False
+        capture_result = CaptureResult()
         if capture is not None:
             try:
-                pcm, overflow = capture.stop()
+                stopped = capture.stop()
+                if isinstance(stopped, CaptureResult):
+                    capture_result = stopped
+                else:
+                    pcm, failed = stopped
+                    capture_result = CaptureResult(
+                        pcm,
+                        issue=(CaptureIssue.DURATION_LIMIT if failed else None),
+                    )
             except Exception as exc:
                 self._recording_failed(recording, exc)
                 self._fail_to_idle(f"Falha ao encerrar a gravação: {exc}", generation)
                 return
+        pcm = capture_result.samples
+        capture_metadata = {
+            "audio_format": "f32le",
+            "sample_rate_hz": 16000,
+            "channels": 1,
+            "source_sample_rate_hz": capture_result.source_sample_rate,
+            "source_channels": capture_result.source_channels,
+            "capture_duration_seconds": capture_result.duration_seconds,
+        }
+        if capture_result.issue is not None:
+            capture_metadata["capture_issue"] = capture_result.issue.value
+            capture_metadata["capture_issue_message"] = capture_result.message
+            capture_metadata["capture_issues"] = [
+                {"issue": issue.value, "message": message}
+                for issue, message in capture_result.issues
+            ]
         try:
-            recording.finish_capture(pcm)
+            recording.finish_capture(pcm, capture_metadata)
         except Exception as exc:
             self._recording_failed(recording, exc)
             self._fail_to_idle(
                 f"Falha ao salvar a gravação recuperável: {exc}", generation
             )
             return
-        if overflow:
-            self._recording_failed(recording, "A captura de áudio excedeu o limite.")
+        if capture_result.issue is not None:
+            error = capture_result.message or capture_result.issue.value
+            self._recording_failed(recording, error)
             self._fail_to_idle(
-                "A gravação de voz estourou o limite e foi cancelada.",
+                _CAPTURE_ISSUE_MESSAGES.get(
+                    capture_result.issue,
+                    "A captura de áudio falhou. O áudio parcial foi salvo no histórico.",
+                ),
                 generation,
             )
             return
@@ -736,10 +814,34 @@ class VoiceController:
             self._complete_session(generation, OUTCOME_CANCELLED)
             return
         try:
-            if self.settings.profile == PROFILE_STREAMING and self._provider.supports_stream():
-                transcript = self._provider.finalize_stream()
+            inference_started = time.monotonic()
+            if (
+                self.settings.profile == PROFILE_STREAMING
+                and self._provider.supports_stream()
+            ):
+                if capture is not None:
+                    with self._lock:
+                        stream_done = self._stream_worker_events.get(generation)
+                    if stream_done is None or not stream_done.wait(0.25):
+                        raise VoiceRuntimeError(
+                            "A transcrição contínua não encerrou a tempo."
+                        )
+                    if not self._drain_stream_chunks(capture, generation):
+                        return
+                with self._lock:
+                    if (
+                        generation != self._session_generation
+                        or self._state != STATE_TRANSCRIBING
+                        or self._cancel.is_set()
+                        or self._shutdown.is_set()
+                    ):
+                        return
+                    raw_transcript = self._provider.finalize_stream()
             else:
-                transcript = self._provider.transcribe(pcm, cancel_event=self._cancel)
+                raw_transcript = self._provider.transcribe(
+                    pcm, cancel_event=self._cancel
+                )
+            inference_duration = max(0.0, time.monotonic() - inference_started)
         except VoiceRuntimeError as exc:
             self._recording_failed(recording, exc)
             self._fail_to_idle(str(exc), generation)
@@ -752,7 +854,6 @@ class VoiceController:
             self._history.cancel(recording.record_id)
             self._complete_session(generation, OUTCOME_CANCELLED)
             return
-        self._history.mark_transcribed(recording.record_id, transcript)
         with self._lock:
             if generation != self._session_generation:
                 return
@@ -762,6 +863,13 @@ class VoiceController:
             mode = self._active_mode or MODE_DICTATION
             target = self._active_target
             form_apply = self._session_form_apply
+        transcript = self._apply_text_replacements(raw_transcript, mode)
+        self._history.mark_transcribed(
+            recording.record_id,
+            transcript,
+            raw_transcript=raw_transcript,
+            inference_duration_seconds=inference_duration,
+        )
         self._emit_status()
         if self._shutdown.is_set():
             return
@@ -796,31 +904,75 @@ class VoiceController:
             return
         self._finish_outcome(outcome, generation, recording, transcript)
 
-    def _stream_worker(self, generation):
-        if not self._provider.supports_stream():
-            return
+    def _stream_worker(self, generation, done_event):
         try:
-            self._provider.start_stream()
-        except VoiceRuntimeError:
-            return
-        # Display-only partials. The release path finalizes.
-        while not self._shutdown.is_set() and not self._cancel.is_set():
+            if not self._provider.supports_stream():
+                return
             with self._lock:
-                if self._state != STATE_RECORDING or generation != self._session_generation:
+                if (
+                    self._state != STATE_RECORDING
+                    or generation != self._session_generation
+                    or self._cancel.is_set()
+                    or self._shutdown.is_set()
+                ):
                     return
-                capture = self._capture
-            if capture is None:
-                return
+                try:
+                    self._provider.start_stream()
+                except VoiceRuntimeError:
+                    return
+            # Display-only partials. The release path finalizes.
+            while not self._shutdown.is_set() and not self._cancel.is_set():
+                with self._lock:
+                    if (
+                        self._state != STATE_RECORDING
+                        or generation != self._session_generation
+                    ):
+                        return
+                    capture = self._capture
+                if capture is None:
+                    return
+                try:
+                    chunk = capture.read_chunk(timeout=0.1)
+                except Exception:
+                    continue
+                with self._lock:
+                    if (
+                        self._state != STATE_RECORDING
+                        or generation != self._session_generation
+                        or capture is not self._capture
+                        or self._cancel.is_set()
+                        or self._shutdown.is_set()
+                    ):
+                        return
+                    try:
+                        partial = self._provider.feed(_flatten(chunk))
+                    except Exception:
+                        return
+                    if self._cancel.is_set() or self._shutdown.is_set():
+                        return
+                    self._partial = partial or ""
+        finally:
+            done_event.set()
+
+    def _drain_stream_chunks(self, capture, generation=None):
+        """Feed normalized chunks emitted while capture was stopping."""
+        while True:
             try:
-                chunk = capture._queue.get(timeout=0.1)
+                chunk = capture.read_chunk(timeout=0)
             except Exception:
+                return True
+            if generation is None:
+                self._provider.feed(_flatten(chunk))
                 continue
-            try:
-                partial = self._provider.feed(_flatten(chunk))
-            except Exception:
-                return
             with self._lock:
-                self._partial = partial or ""
+                if (
+                    generation != self._session_generation
+                    or self._state != STATE_TRANSCRIBING
+                    or self._cancel.is_set()
+                    or self._shutdown.is_set()
+                ):
+                    return False
+                self._provider.feed(_flatten(chunk))
 
     def _snippets(self):
         getter = getattr(self, "get_snippets", None)
@@ -878,6 +1030,7 @@ class VoiceController:
             self._session_form_apply = None
             self._history_recording = None
             self._partial = ""
+            self._stream_worker_events.pop(generation, None)
             self._state = STATE_IDLE if self.settings.enabled else STATE_UNAVAILABLE
         self._emit_status()
         return True
@@ -933,12 +1086,31 @@ class VoiceController:
 
     def _recording_failed(self, recording, error):
         try:
-            self._history.fail(recording.record_id, error)
+            close_as = getattr(recording, "close_as", None)
+            if close_as is not None:
+                close_as(STATUS_FAILED, error)
+            else:
+                self._history.fail(recording.record_id, error)
         except Exception as exc:
             self._warn(f"Não foi possível atualizar o histórico de voz: {exc}")
 
+    def _apply_text_replacements(self, transcript, mode):
+        if mode == MODE_COMMAND:
+            return transcript
+        replacements = dict(self.settings.voice_replacements or {})
+        config = tuple(replacements.items())
+        if config != self._replacement_config:
+            self._replacement_config = config
+            self._text_replacements = VoiceTextReplacements(replacements)
+        try:
+            return self._text_replacements.apply(transcript)
+        except Exception as exc:
+            self._warn(f"Não foi possível aplicar as correções de voz: {exc}")
+            return transcript
+
     def _retry_history_worker(self, generation, record_id):
         try:
+            entry = self._history.get(record_id) or {}
             pcm = self._history.load_samples(record_id)
             if not pcm:
                 raise ValueError("A gravação salva está vazia.")
@@ -949,12 +1121,26 @@ class VoiceController:
                 retry_profile=self.settings.profile,
                 retry_language=self.settings.language,
             )
-            transcript = self._provider.transcribe(pcm, cancel_event=self._cancel)
-            if not str(transcript or "").strip():
+            inference_started = time.monotonic()
+            raw_transcript = self._provider.transcribe(
+                pcm, cancel_event=self._cancel
+            )
+            inference_duration = max(0.0, time.monotonic() - inference_started)
+            if not str(raw_transcript or "").strip():
                 raise ValueError("Nenhuma fala foi reconhecida na gravação.")
             if self._cancel.is_set() or self._shutdown.is_set():
                 self._history.cancel(record_id)
                 return
+            transcript = self._apply_text_replacements(
+                raw_transcript,
+                entry.get("mode", MODE_DICTATION),
+            )
+            self._history.mark_transcribed(
+                record_id,
+                transcript,
+                raw_transcript=raw_transcript,
+                inference_duration_seconds=inference_duration,
+            )
             self._history.complete(record_id, transcript, "recovered")
             copied = self._leave_on_clipboard(transcript)
             if copied:

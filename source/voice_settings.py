@@ -12,6 +12,7 @@ from voice_catalog import (
     is_selectable_profile,
 )
 from voice_hotkey import DEFAULT_COMMAND_HOTKEY, DEFAULT_DICTATION_HOTKEY, parse_chord
+from voice_text_support import validate_replacements
 
 
 class VoiceSettings:
@@ -24,15 +25,26 @@ class VoiceSettings:
         "hotkey",
         "command_hotkey",
         "cache_dir",
+        "voice_replacements",
     )
 
-    def __init__(self, enabled, profile, language, hotkey, command_hotkey, cache_dir):
+    def __init__(
+        self,
+        enabled,
+        profile,
+        language,
+        hotkey,
+        command_hotkey,
+        cache_dir,
+        voice_replacements=None,
+    ):
         self.enabled = enabled
         self.profile = profile
         self.language = language
         self.hotkey = hotkey
         self.command_hotkey = command_hotkey
         self.cache_dir = cache_dir
+        self.voice_replacements = voice_replacements or {}
 
 
 def _as_bool(value, default=False):
@@ -99,6 +111,15 @@ def resolve_voice_settings(settings, warnings=None):
                 command_hotkey = parse_chord(candidate).spec
                 break
 
+    raw_replacements = data.get("voice_replacements", {})
+    voice_replacements = validate_replacements(raw_replacements)
+    if (
+        "voice_replacements" in data
+        and raw_replacements != {}
+        and not voice_replacements
+    ):
+        notes.append("voice_replacements inválido; usando nenhuma correção.")
+
     return VoiceSettings(
         enabled=enabled,
         profile=profile,
@@ -106,6 +127,7 @@ def resolve_voice_settings(settings, warnings=None):
         hotkey=hotkey,
         command_hotkey=command_hotkey,
         cache_dir=_as_optional_dir(data.get("voice_cache_dir")),
+        voice_replacements=voice_replacements,
     )
 
 
@@ -117,4 +139,5 @@ def voice_settings_payload(voice_settings):
         "voice_language": voice_settings.language,
         "voice_hotkey": voice_settings.hotkey,
         "voice_command_hotkey": voice_settings.command_hotkey,
+        "voice_replacements": dict(voice_settings.voice_replacements),
     }
