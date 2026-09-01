@@ -1,6 +1,6 @@
 # Voice Input — Evaluation and Integration Plan
 
-## Implementation status (2026-08-21)
+## Implementation status (2026-09-01)
 
 The **opt-in module and stable-readiness hardening shipped** in the `3.4.0`
 stable release. Voice remains default-off. **Live dictation is not yet proven
@@ -21,6 +21,8 @@ product surface.
 | Manager **Entrada por voz** tab mirrors tray enable, live status, and settings | Physical manager/tray synchronization smoke on supported desktops |
 | Provider boundary owns runtime/model lifecycle; local transcribe.cpp behavior remains unchanged | Additional providers only after an explicit product decision |
 | Append-only audio journal, atomic history metadata, startup recovery, and safe manual retry | User-controlled retention and deletion policy |
+| Native device-rate capture normalized to mono 16 kHz float32 with stateful SoXR conversion and tail flush | Physical device-loss and final-word smoke tests on supported desktops |
+| Structured capture issues, canonical failed-audio history, inference timing, and opt-in deterministic term corrections | Broader cleanup only after corpus evidence; no filler removal or LLM post-processing |
 
 Enabling **Entrada por voz** without the optional native backend reports
 unavailable. That is expected. iOS is out of scope until this Windows-first
@@ -80,11 +82,17 @@ library first. Retain `sherpa-onnx` as the fallback for Parakeet and Nemotron if
 the unified runtime fails packaging or behavior gates; do not ship two inference
 stacks merely to expose an optional profile.
 
-The audio-capture candidate remains `sounddevice`. A SHA256-pinned
+Audio capture uses `sounddevice`. A SHA256-pinned
 `silero_vad.onnx` is optional because hotkey release already supplies an
 endpoint. When using sherpa, load it through sherpa's VAD API. Do **not** add
 the `silero-vad` Python package: its published package requires `torch` and
 `torchaudio`, recreating the bundle weight this plan aims to remove.
+The capture module normalizes the selected device stream to mono
+16 kHz float32 before inference. When the input device runs at another sample
+rate, it uses the pinned `soxr==1.1.0` streaming resampler and flushes its delay line
+on stop; a successful recording must not silently lose the final resampler
+tail. `soxr` bundles libsoxr under LGPLv2.1+ and PFFFT under its BSD-like
+license, so the packaged third-party notice must ship both attributions.
 
 Rationale in [Why not a fork](#why-not-a-fork) and
 [Proposed shape](#proposed-shape).
@@ -490,6 +498,7 @@ The application licenses do not cover the proposed runtime and model artifacts:
 | `transcribe.cpp` | MIT; ship the license and retain attribution for the exact bundled commit |
 | `sherpa-onnx` | Apache-2.0; ship the license and any applicable NOTICE material |
 | `sounddevice` / PortAudio | verify and ship their license notices for the exact approved versions |
+| `soxr` / libsoxr / PFFFT | Python-SoXR/libsoxr is LGPLv2.1+; PFFFT is BSD-like; ship the exact notice and attribution |
 | `silero_vad.onnx` | verify the model asset's MIT provenance and retain attribution |
 | Parakeet TDT 0.6B v3 | CC-BY-4.0; provide credit, license link, source, and modification/quantization disclosure |
 | Qwen3-ASR-0.6B and 1.7B | Apache-2.0; ship the license, source link, model identity, and Q8 conversion attribution |
