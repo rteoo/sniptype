@@ -92,6 +92,19 @@ class AudioCaptureTests(unittest.TestCase):
         stream.close.assert_called_once_with()
         self.assertTrue(result.ok)
 
+    def test_sounddevice_mono_matrix_is_flattened(self):
+        sounddevice, options, _stream = self._sounddevice(
+            {"default_samplerate": 16000, "max_input_channels": 1}
+        )
+        capture = AudioCapture()
+        with mock.patch.dict("sys.modules", {"sounddevice": sounddevice}):
+            capture.start()
+            options["callback"]([[0.25], [-0.5]], 2, None, None)
+            result = capture.stop()
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.samples, [0.25, -0.5])
+
     def test_native_rate_and_stereo_are_normalized(self):
         fake_soxr = types.SimpleNamespace(ResampleStream=_FakeResampleStream)
         sounddevice, options, _stream = self._sounddevice(

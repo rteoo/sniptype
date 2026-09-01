@@ -72,7 +72,7 @@ class CaptureResult:
         duration_seconds=0.0,
         issues=None,
     ):
-        self.samples = list(samples or [])
+        self.samples = list(samples) if samples is not None else []
         self.issue = issue
         self.issues = tuple(issues or (((issue, message),) if issue else ()))
         self.message = str(message) if message else None
@@ -487,9 +487,11 @@ def _to_mono(chunk, channels):
         return []
     if hasattr(chunk, "tolist"):
         chunk = chunk.tolist()
-    if channels <= 1:
-        return _as_floats(chunk)
     rows = list(chunk)
+    if channels <= 1:
+        if rows and isinstance(rows[0], (list, tuple)):
+            return [float(row[0]) for row in rows if row]
+        return _as_floats(rows)
     if not rows:
         return []
     if not isinstance(rows[0], (list, tuple)):

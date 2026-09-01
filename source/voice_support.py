@@ -176,6 +176,8 @@ class VoiceController:
         self._monitor = None
         self._load_error = None
         self._workers = []
+        self._stream_worker_done = threading.Event()
+        self._stream_worker_done.set()
         self.last_outcome = None
         for warning in warnings:
             self._log(warning)
@@ -551,6 +553,7 @@ class VoiceController:
             generation = self._session_generation
         self._emit_status()
         if self.settings.profile == PROFILE_STREAMING:
+            self._stream_worker_done.clear()
             self._start_worker(self._stream_worker, generation, name="voice-stream")
         return True
 
@@ -803,6 +806,12 @@ class VoiceController:
                 self.settings.profile == PROFILE_STREAMING
                 and self._provider.supports_stream()
             ):
+                if capture is not None:
+                    if not self._stream_worker_done.wait(0.25):
+                        raise VoiceRuntimeError(
+                            "A transcrição contínua não encerrou a tempo."
+                        )
+                    self._drain_stream_chunks(capture)
                 raw_transcript = self._provider.finalize_stream()
             else:
                 raw_transcript = self._provider.transcribe(
@@ -872,30 +881,45 @@ class VoiceController:
         self._finish_outcome(outcome, generation, recording, transcript)
 
     def _stream_worker(self, generation):
-        if not self._provider.supports_stream():
-            return
         try:
-            self._provider.start_stream()
-        except VoiceRuntimeError:
-            return
-        # Display-only partials. The release path finalizes.
-        while not self._shutdown.is_set() and not self._cancel.is_set():
-            with self._lock:
-                if self._state != STATE_RECORDING or generation != self._session_generation:
+            if not self._provider.supports_stream():
+                return
+            try:
+                self._provider.start_stream()
+            except VoiceRuntimeError:
+                return
+            # Display-only partials. The release path finalizes.
+            while not self._shutdown.is_set() and not self._cancel.is_set():
+                with self._lock:
+                    if (
+                        self._state != STATE_RECORDING
+                        or generation != self._session_generation
+                    ):
+                        return
+                    capture = self._capture
+                if capture is None:
                     return
-                capture = self._capture
-            if capture is None:
-                return
+                try:
+                    chunk = capture.read_chunk(timeout=0.1)
+                except Exception:
+                    continue
+                try:
+                    partial = self._provider.feed(_flatten(chunk))
+                except Exception:
+                    return
+                with self._lock:
+                    self._partial = partial or ""
+        finally:
+            self._stream_worker_done.set()
+
+    def _drain_stream_chunks(self, capture):
+        """Feed normalized chunks emitted while capture was stopping."""
+        while True:
             try:
-                chunk = capture.read_chunk(timeout=0.1)
-            except Exception:
-                continue
-            try:
-                partial = self._provider.feed(_flatten(chunk))
+                chunk = capture.read_chunk(timeout=0)
             except Exception:
                 return
-            with self._lock:
-                self._partial = partial or ""
+            self._provider.feed(_flatten(chunk))
 
     def _snippets(self):
         getter = getattr(self, "get_snippets", None)
