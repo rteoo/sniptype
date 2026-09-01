@@ -326,6 +326,99 @@ class ControllerTests(unittest.TestCase):
         self.assertTrue(old_done.is_set())
         self.assertFalse(new_done.is_set())
 
+    def test_cancelled_stream_cannot_feed_the_next_session(self):
+        import threading
+        import time
+
+        class ThreadRunner:
+            def __init__(self):
+                self.threads = []
+
+            def start(self, fn, *args, name=None):
+                thread = threading.Thread(target=fn, args=args, daemon=True, name=name)
+                self.threads.append(thread)
+                thread.start()
+                return thread
+
+        class BlockingCapture(FakeCapture):
+            def __init__(self, chunk):
+                super().__init__(samples=chunk)
+                self.chunk = chunk
+                self.read_entered = threading.Event()
+                self.release_read = threading.Event()
+                self.returned = False
+
+            def read_chunk(self, timeout=0.1):
+                del timeout
+                self.read_entered.set()
+                self.release_read.wait(1.0)
+                if self.returned:
+                    raise Exception("empty")
+                self.returned = True
+                return self.chunk
+
+        class TrackingBackend(FakeAsrBackend):
+            def __init__(self):
+                super().__init__()
+                self.stream_starts = 0
+                self.second_stream_started = threading.Event()
+
+            def start_stream(self):
+                super().start_stream()
+                self.stream_starts += 1
+                if self.stream_starts == 2:
+                    self.second_stream_started.set()
+
+        runner = ThreadRunner()
+        first_capture = BlockingCapture([0.1])
+        second_capture = BlockingCapture([0.2])
+        captures = iter((first_capture, second_capture))
+        backend = TrackingBackend()
+        controller = VoiceController(
+            {"voice_enabled": False},
+            task_runner=runner,
+            insert_text=lambda text: True,
+            expand_trigger=lambda trigger: True,
+            notify=self.notify,
+            logger=self.logger,
+            capture_target=lambda: VoiceTarget("window", handle=1),
+            restore_target=lambda target: True,
+            secure_input_blocks=lambda: False,
+            backend=backend,
+            capture_factory=lambda: next(captures),
+            cache_dir=self.tmp,
+            download=lambda entry, cache_dir, progress=None, cancel_event=None: os.path.join(
+                self.tmp, "model.gguf"
+            ),
+        )
+        with mock.patch("voice_support.model_is_installed", return_value=True), \
+                mock.patch("voice_support.installed_model_path", return_value="model.gguf"), \
+                mock.patch.object(controller, "_start_monitor"):
+            controller.enable()
+            deadline = time.time() + 1.0
+            while controller.state != STATE_IDLE and time.time() < deadline:
+                time.sleep(0.01)
+        controller.settings.profile = "streaming"
+
+        self.assertTrue(controller.handle_hotkey_press(MODE_DICTATION))
+        self.assertTrue(first_capture.read_entered.wait(1.0))
+        first_stream_worker = runner.threads[-1]
+        controller.cancel()
+        self.assertEqual(controller.state, STATE_IDLE)
+        self.assertTrue(controller.handle_hotkey_press(MODE_DICTATION))
+        self.assertTrue(backend.second_stream_started.wait(1.0))
+        self.assertTrue(second_capture.read_entered.wait(1.0))
+
+        first_capture.release_read.set()
+        first_stream_worker.join(1.0)
+
+        self.assertFalse(first_stream_worker.is_alive())
+        self.assertEqual(backend._stream, [])
+
+        controller.cancel()
+        second_capture.release_read.set()
+        controller.shutdown()
+
     def test_dictation_applies_term_correction_and_keeps_raw_transcript(self):
         self._ready()
         self.controller.settings.voice_replacements = {"Queen": "Qwen"}
