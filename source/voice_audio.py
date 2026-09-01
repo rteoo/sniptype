@@ -131,6 +131,7 @@ class AudioCapture:
         self._device = device
         self._resampler = None
         self._raw_sentinel = object()
+        self._expected_stop = None
 
     def set_journal(self, journal):
         """Attach an append-only recording journal before ``start()``."""
@@ -141,6 +142,12 @@ class AudioCapture:
     def start(self):
         if self._started:
             return
+        if self._worker is not None:
+            if self._worker.is_alive():
+                raise VoiceAudioError(
+                    "A gravação anterior ainda está encerrando. Tente novamente."
+                )
+            self._worker = None
         try:
             import sounddevice as sd
         except Exception as exc:
@@ -154,6 +161,12 @@ class AudioCapture:
                 sd, self._device
             )
             self._resampler = StreamingResampler(self._native_rate, SAMPLE_RATE)
+            source_blocks = math.ceil(
+                self.max_duration_seconds * self._native_rate / BLOCK_SIZE
+            )
+            self._raw_queue = queue.Queue(
+                maxsize=max(self._queue_max, source_blocks)
+            )
         except VoiceResamplerError as exc:
             self._record_issue(CaptureIssue.NORMALIZATION, str(exc))
             raise VoiceAudioError(str(exc)) from exc
@@ -172,6 +185,8 @@ class AudioCapture:
         samples = self._samples
         journal = self._journal
         session_issues = self._issues
+        expected_stop = threading.Event()
+        self._expected_stop = expected_stop
 
         def callback(indata, frames, time_info, status):
             del time_info
@@ -208,6 +223,14 @@ class AudioCapture:
                     "A fila de captura de áudio ficou cheia.",
                 )
 
+        def finished_callback():
+            if not expected_stop.is_set():
+                self._record_issue_to(
+                    session_issues,
+                    CaptureIssue.INPUT_STATUS,
+                    "O fluxo do microfone terminou inesperadamente.",
+                )
+
         try:
             kwargs = {
                 "samplerate": self._native_rate,
@@ -215,6 +238,7 @@ class AudioCapture:
                 "dtype": "float32",
                 "blocksize": BLOCK_SIZE,
                 "callback": callback,
+                "finished_callback": finished_callback,
             }
             if self._device is not None:
                 kwargs["device"] = self._device
@@ -238,6 +262,7 @@ class AudioCapture:
             self._stream.start()
         except Exception as exc:
             self._started = False
+            expected_stop.set()
             stream = self._stream
             self._stream = None
             if stream is not None:
@@ -263,6 +288,8 @@ class AudioCapture:
             return CaptureResult()
 
         if stream is not None:
+            if self._expected_stop is not None:
+                self._expected_stop.set()
             try:
                 stream.stop()
             except Exception as exc:
@@ -280,7 +307,8 @@ class AudioCapture:
                 CaptureIssue.NORMALIZATION,
                 "A normalização do áudio não terminou a tempo.",
             )
-        self._worker = None
+        else:
+            self._worker = None
 
         with self._issue_lock:
             issues = tuple(self._issues)
@@ -299,6 +327,7 @@ class AudioCapture:
         self._overflow = False
         self._samples = []
         self._resampler = None
+        self._expected_stop = None
         return result
 
     def _reset_session(self):

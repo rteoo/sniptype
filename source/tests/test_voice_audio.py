@@ -1,3 +1,4 @@
+import math
 import os
 import sys
 import time
@@ -133,6 +134,23 @@ class AudioCaptureTests(unittest.TestCase):
         self.assertAlmostEqual(result.samples[1], -0.2, places=6)
         self.assertAlmostEqual(result.samples[2], 0.75, places=6)
 
+    def test_raw_queue_covers_full_native_rate_capture_window(self):
+        fake_soxr = types.SimpleNamespace(ResampleStream=_FakeResampleStream)
+        sounddevice, _options, _stream = self._sounddevice(
+            {"default_samplerate": 48000, "max_input_channels": 1}
+        )
+        capture = AudioCapture(max_samples=16000 * 3)
+        with mock.patch.dict(
+            "sys.modules",
+            {"sounddevice": sounddevice, "soxr": fake_soxr, "numpy": _FakeNumpy},
+        ):
+            capture.start()
+            self.assertGreaterEqual(
+                capture._raw_queue.maxsize,
+                math.ceil(3 * 48000 / BLOCK_SIZE),
+            )
+            capture.stop()
+
     def test_read_chunk_exposes_normalized_public_stream(self):
         sounddevice, options, _stream = self._sounddevice()
         capture = AudioCapture()
@@ -161,6 +179,25 @@ class AudioCaptureTests(unittest.TestCase):
         self.assertEqual(result.issue, CaptureIssue.INPUT_STATUS)
         self.assertNotEqual(result.issue, CaptureIssue.DURATION_LIMIT)
         self.assertEqual(result.samples, [0.0] * BLOCK_SIZE)
+
+    def test_unexpected_stream_finish_is_a_capture_issue(self):
+        sounddevice, options, _stream = self._sounddevice()
+        capture = AudioCapture()
+        with mock.patch.dict("sys.modules", {"sounddevice": sounddevice}):
+            capture.start()
+            options["finished_callback"]()
+            result = capture.stop()
+        self.assertEqual(result.issue, CaptureIssue.INPUT_STATUS)
+        self.assertIn("inesperadamente", result.message)
+
+    def test_normal_stop_does_not_report_stream_finish(self):
+        sounddevice, options, stream = self._sounddevice()
+        stream.stop.side_effect = lambda: options["finished_callback"]()
+        capture = AudioCapture()
+        with mock.patch.dict("sys.modules", {"sounddevice": sounddevice}):
+            capture.start()
+            result = capture.stop()
+        self.assertTrue(result.ok)
 
     def test_duration_ceiling_preserves_partial_audio_and_issue(self):
         sounddevice, options, _stream = self._sounddevice()
@@ -216,8 +253,12 @@ class AudioCaptureTests(unittest.TestCase):
                 result = capture.stop()
             self.assertEqual(result.issue, CaptureIssue.NORMALIZATION)
             frozen = list(result.samples)
+            with self.assertRaisesRegex(VoiceAudioError, "ainda está encerrando"):
+                capture.start()
             _BlockingResampler.release.set()
-            time.sleep(0.05)
+            deadline = time.time() + 1
+            while capture._worker.is_alive() and time.time() < deadline:
+                time.sleep(0.01)
             self.assertEqual(result.samples, frozen)
 
             capture.start()
