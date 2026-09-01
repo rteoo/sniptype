@@ -132,6 +132,7 @@ class CatalogTests(unittest.TestCase):
         text = "\n".join(third_party_notices())
         self.assertIn("CC-BY-4.0", text)
         self.assertIn("Qwen3-ASR", text)
+        self.assertIn("soxr / libsoxr / PFFFT", text)
         self.assertNotIn("OpenMDW-1.1", text)
 
     def test_balanced_compact_and_accuracy_are_user_selectable(self):

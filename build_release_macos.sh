@@ -77,12 +77,12 @@ sips -s format icns "$REPO_DIR/source/sniptype.ico" --out "$ICNS" >/dev/null
 # --- Package --------------------------------------------------------------
 echo "Packaging $APP_NAME $APP_VERSION ($RELEASE_CHANNEL) ..."
 VOICE_COLLECT_ARGS=()
-if ! "$PYTHON" -c "import sounddevice, transcribe_cpp, transcribe_cpp_native" >/dev/null 2>&1; then
+if ! "$PYTHON" -c "import sounddevice, soxr, transcribe_cpp, transcribe_cpp_native" >/dev/null 2>&1; then
     echo "Voice release dependencies are missing." >&2
     echo "Install them with: $PYTHON -m pip install -r source/requirements-voice.txt" >&2
     exit 1
 fi
-VOICE_COLLECT_ARGS=(--collect-all sounddevice --collect-all transcribe_cpp --collect-all transcribe_cpp_native)
+VOICE_COLLECT_ARGS=(--collect-all sounddevice --collect-all soxr --copy-metadata soxr --collect-all transcribe_cpp --collect-all transcribe_cpp_native)
 "$PYTHON" -m PyInstaller --noconfirm --clean --windowed --onedir \
     --distpath "$STAGING_ROOT" \
     --workpath "$WORK_ROOT/build" \
@@ -93,6 +93,7 @@ VOICE_COLLECT_ARGS=(--collect-all sounddevice --collect-all transcribe_cpp --col
     --add-data "$REPO_DIR/source/snippets.json:." \
     --add-data "$REPO_DIR/source/dynamic_snippets.json:." \
     --add-data "$REPO_DIR/source/sniptype.ico:." \
+    --add-data "$REPO_DIR/THIRD_PARTY_NOTICES.md:." \
     --hidden-import pystray._darwin \
     "${VOICE_COLLECT_ARGS[@]}" \
     --exclude-module torch \
