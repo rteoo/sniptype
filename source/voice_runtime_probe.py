@@ -7,6 +7,7 @@ def probe_voice_runtime():
     """Prove the packaged desktop and native voice imports are loadable."""
     import tkinter  # noqa: F401 - catch a package built without Tcl/Tk
     import sounddevice  # noqa: F401 - import itself exercises PortAudio loading
+    import soxr  # noqa: F401 - import exercises the bundled libsoxr extension
     import transcribe_cpp_native  # noqa: F401 - exercise bundled native package
 
     backend = create_backend()
