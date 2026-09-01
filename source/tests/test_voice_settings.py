@@ -5,6 +5,7 @@ import unittest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from voice_settings import resolve_voice_settings, voice_settings_payload
+from voice_text_support import apply_voice_replacements, validate_replacements
 
 
 class VoiceSettingsTests(unittest.TestCase):
@@ -14,6 +15,7 @@ class VoiceSettingsTests(unittest.TestCase):
         self.assertEqual(settings.profile, "balanced")
         self.assertEqual(settings.hotkey, "ctrl+alt+space")
         self.assertEqual(settings.command_hotkey, "ctrl+alt+shift+space")
+        self.assertEqual(settings.voice_replacements, {})
 
     def test_warnings_for_bad_values(self):
         notes = []
@@ -43,10 +45,45 @@ class VoiceSettingsTests(unittest.TestCase):
                 "voice_language",
                 "voice_hotkey",
                 "voice_command_hotkey",
+                "voice_replacements",
             },
         )
         self.assertTrue(payload["voice_enabled"])
         self.assertEqual(payload["voice_profile"], "balanced")
+
+    def test_replacements_are_normalized_and_round_trip(self):
+        settings = resolve_voice_settings({"voice_replacements": {" Quen ": "Qwen"}})
+        self.assertEqual(settings.voice_replacements, {"Quen": "Qwen"})
+        self.assertEqual(
+            voice_settings_payload(settings)["voice_replacements"],
+            {"Quen": "Qwen"},
+        )
+
+    def test_malformed_replacements_are_disabled(self):
+        notes = []
+        settings = resolve_voice_settings({"voice_replacements": ["bad"]}, warnings=notes)
+        self.assertEqual(settings.voice_replacements, {})
+        self.assertTrue(any("voice_replacements" in note for note in notes))
+        self.assertEqual(resolve_voice_settings({}, warnings=[]).voice_replacements, {})
+
+    def test_replacements_are_unicode_case_insensitive_longest_first_and_non_cascading(self):
+        replacements = {"Quen": "Qwen", "Quen model": "Qwen model", "ação": "ACAO"}
+        self.assertEqual(
+            apply_voice_replacements("The QUEN MODEL and ação; Quen." , replacements),
+            "The Qwen model and ACAO; Qwen.",
+        )
+        self.assertEqual(
+            apply_voice_replacements("um comum", {"um": "one", "one": "two"}),
+            "one comum",
+        )
+        self.assertEqual(
+            apply_voice_replacements("um teste com Qwen", {"queen": "Qwen"}),
+            "um teste com Qwen",
+        )
+
+    def test_invalid_entries_reject_the_whole_mapping(self):
+        self.assertEqual(validate_replacements({"": "x"}), {})
+        self.assertEqual(validate_replacements({"x": 3}), {})
 
     def test_accuracy_profile_is_selectable_and_forces_auto_language(self):
         notes = []
