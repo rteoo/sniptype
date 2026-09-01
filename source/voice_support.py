@@ -826,8 +826,17 @@ class VoiceController:
                         raise VoiceRuntimeError(
                             "A transcrição contínua não encerrou a tempo."
                         )
-                    self._drain_stream_chunks(capture)
-                raw_transcript = self._provider.finalize_stream()
+                    if not self._drain_stream_chunks(capture, generation):
+                        return
+                with self._lock:
+                    if (
+                        generation != self._session_generation
+                        or self._state != STATE_TRANSCRIBING
+                        or self._cancel.is_set()
+                        or self._shutdown.is_set()
+                    ):
+                        return
+                    raw_transcript = self._provider.finalize_stream()
             else:
                 raw_transcript = self._provider.transcribe(
                     pcm, cancel_event=self._cancel
@@ -899,10 +908,18 @@ class VoiceController:
         try:
             if not self._provider.supports_stream():
                 return
-            try:
-                self._provider.start_stream()
-            except VoiceRuntimeError:
-                return
+            with self._lock:
+                if (
+                    self._state != STATE_RECORDING
+                    or generation != self._session_generation
+                    or self._cancel.is_set()
+                    or self._shutdown.is_set()
+                ):
+                    return
+                try:
+                    self._provider.start_stream()
+                except VoiceRuntimeError:
+                    return
             # Display-only partials. The release path finalizes.
             while not self._shutdown.is_set() and not self._cancel.is_set():
                 with self._lock:
@@ -918,23 +935,44 @@ class VoiceController:
                     chunk = capture.read_chunk(timeout=0.1)
                 except Exception:
                     continue
-                try:
-                    partial = self._provider.feed(_flatten(chunk))
-                except Exception:
-                    return
                 with self._lock:
+                    if (
+                        self._state != STATE_RECORDING
+                        or generation != self._session_generation
+                        or capture is not self._capture
+                        or self._cancel.is_set()
+                        or self._shutdown.is_set()
+                    ):
+                        return
+                    try:
+                        partial = self._provider.feed(_flatten(chunk))
+                    except Exception:
+                        return
+                    if self._cancel.is_set() or self._shutdown.is_set():
+                        return
                     self._partial = partial or ""
         finally:
             done_event.set()
 
-    def _drain_stream_chunks(self, capture):
+    def _drain_stream_chunks(self, capture, generation=None):
         """Feed normalized chunks emitted while capture was stopping."""
         while True:
             try:
                 chunk = capture.read_chunk(timeout=0)
             except Exception:
-                return
-            self._provider.feed(_flatten(chunk))
+                return True
+            if generation is None:
+                self._provider.feed(_flatten(chunk))
+                continue
+            with self._lock:
+                if (
+                    generation != self._session_generation
+                    or self._state != STATE_TRANSCRIBING
+                    or self._cancel.is_set()
+                    or self._shutdown.is_set()
+                ):
+                    return False
+                self._provider.feed(_flatten(chunk))
 
     def _snippets(self):
         getter = getattr(self, "get_snippets", None)
