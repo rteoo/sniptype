@@ -21,13 +21,31 @@ keyboard listener, and failed or empty captures do not paste.
 - An empty transcript does not insert.
 - A second press during a session is ignored.
 - Shutdown after press performs no insert.
+- Native 44.1/48 kHz mono or stereo input is converted to canonical mono
+  16 kHz float32 without resetting the resampler between callback chunks.
+- Releasing push-to-talk flushes the resampler tail before inference.
+- A capture status, device, queue, normalization, journal, stop, or close
+  failure stores the available audio as failed history and never transcribes
+  or pastes it as a completed utterance.
+- An empty or misaligned history recording is not retryable. A valid retry
+  copies its result to the clipboard and never pastes into a later target.
+- User term corrections apply once to dictation and form results. Spoken
+  commands continue matching the provider transcript unchanged.
 
 ## Anti-Cheat Probes
 - Change the fake transcript and confirm the inserted/expanded value changes with it.
 - A non-matching command prints `no_match` and expands nothing.
+- Split a 48 kHz test signal across irregular callback boundaries and compare
+  it with one-shot SoXR output; the flushed results must match.
+- Configure `Queen` → `Qwen`; confirm dictation changes, the raw transcript is
+  retained in history, and command matching is unchanged.
 
 ## Evidence Required
-- The probe stdout, one `CLAUSE ... PASS|FAIL` line per clause, ending with `RESULT pass` or `RESULT fail`.
+- The probe stdout, one `CLAUSE ... PASS|FAIL` line per clause, ending with
+  `RESULT pass` or `RESULT fail`.
+- The focused voice audio, resampler, controller, history, settings, GUI, and
+  packaging tests.
 
 ## Out Of Scope
-- Real microphone capture, real model download, packaged installer size, Handy composition, and live WER.
+- Physical microphone/device-loss behavior, real model download, packaged
+  installer size, Handy composition, and live WER.
