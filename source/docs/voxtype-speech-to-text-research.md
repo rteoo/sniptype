@@ -1,6 +1,6 @@
 # Voxtype speech-to-text review
 
-**Date:** 2026-08-31  
+**Date:** 2026-08-31
 **Scope:** inspect the upstream Voxtype repository and website for improvements to Sniptype's local voice input. This is a research note; no Voxtype code is copied and no Sniptype runtime behavior is changed here.
 **Upstream snapshot:** Voxtype `dev` commit `2772bbbaf27c4585ddb91661855fb7e2b8d93492`; latest release `v1.0.1` (published 2026-08-31).
 
