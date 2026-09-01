@@ -232,6 +232,7 @@ def third_party_notices():
     lines = [
         "transcribe.cpp — MIT",
         "sounddevice / PortAudio — MIT",
+        "soxr / libsoxr / PFFFT — LGPLv2.1+ (python-soxr) and BSD-like (PFFFT)",
     ]
     for entry in selectable_catalog():
         lines.append(
