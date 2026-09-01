@@ -3,6 +3,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -52,6 +53,45 @@ class VoiceHistoryTests(unittest.TestCase):
             self.store.load_samples(recording.record_id),
             [0.25, -0.5, 0.75],
         )
+
+    def test_short_writes_are_counted_exactly(self):
+        class ShortWriter:
+            def __init__(self):
+                self.payload = bytearray()
+
+            def write(self, payload):
+                written = min(3, len(payload))
+                self.payload.extend(payload[:written])
+                return written
+
+            def flush(self):
+                pass
+
+            def fileno(self):
+                return 1
+
+        recording = self._recording()
+        recording._handle.close()
+        writer = ShortWriter()
+        recording._handle = writer
+
+        with mock.patch("voice_history.os.fsync"):
+            recording.write_chunk([0.25, -0.5])
+
+        self.assertEqual(recording._bytes_written, 8)
+        self.assertEqual(len(writer.payload), 8)
+
+    def test_zero_length_write_fails_without_inventing_progress(self):
+        handle = mock.Mock()
+        handle.write.return_value = 0
+        recording = self._recording()
+        recording._handle.close()
+        recording._handle = handle
+
+        with self.assertRaisesRegex(OSError, "não avançou"):
+            recording.write_chunk([0.25])
+
+        self.assertEqual(recording._bytes_written, 0)
 
     def test_startup_recovers_an_interrupted_recording(self):
         recording = self._recording()

@@ -314,6 +314,18 @@ class ControllerTests(unittest.TestCase):
 
         self.assertEqual(self.backend._stream, [[0.1, 0.2], [0.3]])
 
+    def test_stream_completion_is_scoped_to_its_generation(self):
+        import threading
+
+        old_done = threading.Event()
+        new_done = threading.Event()
+        self.controller._stream_worker_events[2] = new_done
+
+        self.controller._stream_worker(1, old_done)
+
+        self.assertTrue(old_done.is_set())
+        self.assertFalse(new_done.is_set())
+
     def test_dictation_applies_term_correction_and_keeps_raw_transcript(self):
         self._ready()
         self.controller.settings.voice_replacements = {"Queen": "Qwen"}
@@ -363,6 +375,10 @@ class ControllerTests(unittest.TestCase):
         entry = self.controller.history_entries()[0]
         self.assertEqual(entry["status"], "failed")
         self.assertEqual(entry["capture_issue"], "input_status")
+        self.assertEqual(
+            entry["capture_issues"],
+            [{"issue": "input_status", "message": "capture failed"}],
+        )
         self.assertTrue(self.controller._history.is_retryable(entry["id"]))
         self.notify.assert_called_with(
             "O microfone relatou uma falha durante a gravação. "

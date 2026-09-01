@@ -176,8 +176,7 @@ class VoiceController:
         self._monitor = None
         self._load_error = None
         self._workers = []
-        self._stream_worker_done = threading.Event()
-        self._stream_worker_done.set()
+        self._stream_worker_events = {}
         self.last_outcome = None
         for warning in warnings:
             self._log(warning)
@@ -551,10 +550,18 @@ class VoiceController:
             self._partial = ""
             self._state = STATE_RECORDING
             generation = self._session_generation
+            stream_done = None
+            if self.settings.profile == PROFILE_STREAMING:
+                stream_done = threading.Event()
+                self._stream_worker_events[generation] = stream_done
         self._emit_status()
-        if self.settings.profile == PROFILE_STREAMING:
-            self._stream_worker_done.clear()
-            self._start_worker(self._stream_worker, generation, name="voice-stream")
+        if stream_done is not None:
+            self._start_worker(
+                self._stream_worker,
+                generation,
+                stream_done,
+                name="voice-stream",
+            )
         return True
 
     def handle_hotkey_release(self, mode):
@@ -591,6 +598,7 @@ class VoiceController:
         recording = None
         with self._lock:
             if self._state in (STATE_RECORDING, STATE_TRANSCRIBING, STATE_ROUTING):
+                generation = self._session_generation
                 capture = self._capture
                 self._capture = None
                 recording = self._history_recording
@@ -610,6 +618,7 @@ class VoiceController:
                     self._state = (
                         STATE_IDLE if self.settings.enabled else STATE_UNAVAILABLE
                     )
+                self._stream_worker_events.pop(generation, None)
         if capture is not None:
             try:
                 capture.stop()
@@ -777,6 +786,10 @@ class VoiceController:
         if capture_result.issue is not None:
             capture_metadata["capture_issue"] = capture_result.issue.value
             capture_metadata["capture_issue_message"] = capture_result.message
+            capture_metadata["capture_issues"] = [
+                {"issue": issue.value, "message": message}
+                for issue, message in capture_result.issues
+            ]
         try:
             recording.finish_capture(pcm, capture_metadata)
         except Exception as exc:
@@ -807,7 +820,9 @@ class VoiceController:
                 and self._provider.supports_stream()
             ):
                 if capture is not None:
-                    if not self._stream_worker_done.wait(0.25):
+                    with self._lock:
+                        stream_done = self._stream_worker_events.get(generation)
+                    if stream_done is None or not stream_done.wait(0.25):
                         raise VoiceRuntimeError(
                             "A transcrição contínua não encerrou a tempo."
                         )
@@ -880,7 +895,7 @@ class VoiceController:
             return
         self._finish_outcome(outcome, generation, recording, transcript)
 
-    def _stream_worker(self, generation):
+    def _stream_worker(self, generation, done_event):
         try:
             if not self._provider.supports_stream():
                 return
@@ -910,7 +925,7 @@ class VoiceController:
                 with self._lock:
                     self._partial = partial or ""
         finally:
-            self._stream_worker_done.set()
+            done_event.set()
 
     def _drain_stream_chunks(self, capture):
         """Feed normalized chunks emitted while capture was stopping."""
@@ -977,6 +992,7 @@ class VoiceController:
             self._session_form_apply = None
             self._history_recording = None
             self._partial = ""
+            self._stream_worker_events.pop(generation, None)
             self._state = STATE_IDLE if self.settings.enabled else STATE_UNAVAILABLE
         self._emit_status()
         return True
