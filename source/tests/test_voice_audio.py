@@ -255,6 +255,9 @@ class AudioCaptureTests(unittest.TestCase):
             frozen = list(result.samples)
             with self.assertRaisesRegex(VoiceAudioError, "ainda está encerrando"):
                 capture.start()
+            other_capture = AudioCapture()
+            with self.assertRaisesRegex(VoiceAudioError, "ainda está encerrando"):
+                other_capture.start()
             _BlockingResampler.release.set()
             deadline = time.time() + 1
             while capture._worker.is_alive() and time.time() < deadline:
@@ -264,8 +267,11 @@ class AudioCaptureTests(unittest.TestCase):
             capture.start()
             options["callback"]([0.25], 1, None, None)
             next_result = capture.stop()
+            other_capture.start()
+            other_result = other_capture.stop()
         self.assertEqual(next_result.samples, [0.25])
         self.assertTrue(next_result.ok)
+        self.assertTrue(other_result.ok)
 
 
 if __name__ == "__main__":
