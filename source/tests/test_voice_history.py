@@ -55,6 +55,24 @@ class VoiceHistoryTests(unittest.TestCase):
         self.assertEqual(entry["status"], STATUS_INTERRUPTED)
         self.assertTrue(recovered.is_retryable(recording.record_id))
 
+    def test_empty_failed_recording_is_not_retryable(self):
+        recording = self._recording()
+        recording.finish_capture()
+        self.store.fail(recording.record_id, "offline")
+
+        self.assertFalse(self.store.is_retryable(recording.record_id))
+
+    def test_misaligned_failed_recording_is_not_retryable(self):
+        recording = self._recording()
+        recording.finish_capture([0.1])
+        self.store.fail(recording.record_id, "offline")
+        with open(self.store._audio_path(recording.record_id), "ab") as handle:
+            handle.write(b"x")
+
+        self.assertFalse(self.store.is_retryable(recording.record_id))
+        with self.assertRaisesRegex(ValueError, "corrompido"):
+            self.store.load_samples(recording.record_id)
+
     def test_completed_transcript_remains_available(self):
         recording = self._recording()
         recording.finish_capture([0.1, 0.2])
@@ -64,6 +82,29 @@ class VoiceHistoryTests(unittest.TestCase):
         self.assertEqual(entry["status"], STATUS_COMPLETED)
         self.assertEqual(entry["transcript"], "texto")
         self.assertFalse(self.store.is_retryable(recording.record_id))
+
+    def test_capture_and_raw_transcript_metadata_are_additive(self):
+        recording = self._recording()
+        recording.finish_capture(
+            [0.1],
+            {
+                "source_sample_rate_hz": 48000,
+                "source_channels": 2,
+                "capture_duration_seconds": 0.25,
+            },
+        )
+        self.store.mark_transcribed(
+            recording.record_id,
+            "Qwen",
+            raw_transcript="Queen",
+            inference_duration_seconds=0.1,
+        )
+
+        entry = self.store.get(recording.record_id)
+        self.assertEqual(entry["source_sample_rate_hz"], 48000)
+        self.assertEqual(entry["source_channels"], 2)
+        self.assertEqual(entry["raw_transcript"], "Queen")
+        self.assertEqual(entry["transcript"], "Qwen")
 
     def test_corrupt_metadata_is_ignored_without_overwriting_it(self):
         item = os.path.join(self.root, "broken")
