@@ -105,6 +105,9 @@ def sounddevice_available():
 class AudioCapture:
     """Bounded native-format capture normalized to mono 16 kHz float32."""
 
+    _normalizer_slot_lock = threading.Lock()
+    _normalizer_slot_owner = None
+
     def __init__(self, max_samples=MAX_SAMPLES, queue_max=None, device=None):
         self.max_samples = max(1, int(max_samples))
         self.max_duration_seconds = self.max_samples / SAMPLE_RATE
@@ -155,6 +158,7 @@ class AudioCapture:
                 "A captura de áudio não está disponível neste aplicativo."
             ) from exc
 
+        self._claim_normalizer_slot()
         self._reset_session()
         try:
             self._native_rate, self._native_channels = _negotiate_input(
@@ -169,9 +173,11 @@ class AudioCapture:
             )
         except VoiceResamplerError as exc:
             self._record_issue(CaptureIssue.NORMALIZATION, str(exc))
+            self._release_normalizer_slot()
             raise VoiceAudioError(str(exc)) from exc
         except Exception as exc:
             self._record_issue(CaptureIssue.NORMALIZATION, str(exc))
+            self._release_normalizer_slot()
             raise VoiceAudioError(
                 f"Não foi possível preparar o áudio do microfone: {exc}"
             ) from exc
@@ -272,6 +278,7 @@ class AudioCapture:
                     pass
             self._signal_worker()
             self._join_worker()
+            self._release_normalizer_slot()
             raise VoiceAudioError(f"Não foi possível abrir o microfone: {exc}") from exc
 
     def read_chunk(self, timeout=0.1):
@@ -309,6 +316,7 @@ class AudioCapture:
             )
         else:
             self._worker = None
+        self._release_normalizer_slot()
 
         with self._issue_lock:
             issues = tuple(self._issues)
@@ -329,6 +337,26 @@ class AudioCapture:
         self._resampler = None
         self._expected_stop = None
         return result
+
+    def _claim_normalizer_slot(self):
+        with self.__class__._normalizer_slot_lock:
+            owner = self.__class__._normalizer_slot_owner
+            if owner is not None and owner is not self:
+                worker = owner._worker
+                if worker is None or worker.is_alive():
+                    raise VoiceAudioError(
+                        "Uma gravação anterior ainda está encerrando. "
+                        "Reinicie o aplicativo se o problema continuar."
+                    )
+            self.__class__._normalizer_slot_owner = self
+
+    def _release_normalizer_slot(self):
+        with self.__class__._normalizer_slot_lock:
+            if self.__class__._normalizer_slot_owner is not self:
+                return
+            if self._worker is not None and self._worker.is_alive():
+                return
+            self.__class__._normalizer_slot_owner = None
 
     def _reset_session(self):
         self._source_frame_count = [0]
