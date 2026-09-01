@@ -69,15 +69,15 @@ if errorlevel 1 (
     echo Repair or select a Python installation with working Tcl/Tk before packaging.
     goto cleanup_and_fail
 )
-python -c "import sounddevice, transcribe_cpp, transcribe_cpp_native" >nul 2>&1
+python -c "import sounddevice, soxr, transcribe_cpp, transcribe_cpp_native" >nul 2>&1
 if errorlevel 1 (
     echo Voice release dependencies are missing.
     echo Install them with: python -m pip install -r source\requirements-voice.txt
     goto cleanup_and_fail
 )
-set "VOICE_COLLECT_ARGS=--collect-all sounddevice --collect-all transcribe_cpp --collect-all transcribe_cpp_native"
+set "VOICE_COLLECT_ARGS=--collect-all sounddevice --collect-all soxr --copy-metadata soxr --collect-all transcribe_cpp --collect-all transcribe_cpp_native"
 
-python -m PyInstaller --noconfirm --clean --windowed --onedir --distpath "%STAGING_ROOT%" --workpath "%WORK_DIR%" --specpath "%REPO_DIR%" --name "Sniptype" --icon "%REPO_DIR%\source\sniptype.ico" --add-data "%REPO_DIR%\source\snippets.json;." --add-data "%REPO_DIR%\source\dynamic_snippets.json;." --add-data "%REPO_DIR%\source\sniptype.ico;." --hidden-import pystray._win32 %VOICE_COLLECT_ARGS% --exclude-module torch --exclude-module torchvision --exclude-module torchaudio --exclude-module cv2 --exclude-module transformers --exclude-module onnxruntime --exclude-module scipy "%REPO_DIR%\source\sniptype.pyw"
+python -m PyInstaller --noconfirm --clean --windowed --onedir --distpath "%STAGING_ROOT%" --workpath "%WORK_DIR%" --specpath "%REPO_DIR%" --name "Sniptype" --icon "%REPO_DIR%\source\sniptype.ico" --add-data "%REPO_DIR%\source\snippets.json;." --add-data "%REPO_DIR%\source\dynamic_snippets.json;." --add-data "%REPO_DIR%\source\sniptype.ico;." --add-data "%REPO_DIR%\THIRD_PARTY_NOTICES.md;." --hidden-import pystray._win32 %VOICE_COLLECT_ARGS% --exclude-module torch --exclude-module torchvision --exclude-module torchaudio --exclude-module cv2 --exclude-module transformers --exclude-module onnxruntime --exclude-module scipy "%REPO_DIR%\source\sniptype.pyw"
 if errorlevel 1 (
     echo.
     echo Packaging failed. The existing dist was left unchanged.
