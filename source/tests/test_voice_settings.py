@@ -80,6 +80,10 @@ class VoiceSettingsTests(unittest.TestCase):
             apply_voice_replacements("um teste com Qwen", {"queen": "Qwen"}),
             "um teste com Qwen",
         )
+        self.assertEqual(
+            apply_voice_replacements("STRASSE", {"straße": "road"}),
+            "road",
+        )
 
     def test_invalid_entries_reject_the_whole_mapping(self):
         self.assertEqual(validate_replacements({"": "x"}), {})
