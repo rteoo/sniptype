@@ -59,10 +59,18 @@ class VoiceRecording:
         with self._lock:
             if self._closed:
                 return
-            self._handle.write(payload)
+            self._write_all(payload)
             self._handle.flush()
             os.fsync(self._handle.fileno())
-            self._bytes_written += len(payload)
+
+    def _write_all(self, payload):
+        offset = 0
+        while offset < len(payload):
+            written = self._handle.write(payload[offset:])
+            if not isinstance(written, int) or written <= 0:
+                raise OSError("A gravação de áudio não avançou no disco.")
+            offset += written
+            self._bytes_written += written
 
     def finish_capture(self, fallback_samples=None, capture_metadata=None):
         with self._lock:
@@ -72,8 +80,7 @@ class VoiceRecording:
                 payload = _audio_bytes(fallback_samples)
                 if len(payload) > self._bytes_written:
                     remainder = payload[self._bytes_written :]
-                    self._handle.write(remainder)
-                    self._bytes_written += len(remainder)
+                    self._write_all(remainder)
             self._handle.flush()
             os.fsync(self._handle.fileno())
             self._handle.close()
