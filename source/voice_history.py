@@ -59,28 +59,47 @@ class VoiceRecording:
         with self._lock:
             if self._closed:
                 return
-            self._handle.write(payload)
+            self._write_all(payload)
             self._handle.flush()
             os.fsync(self._handle.fileno())
-            self._bytes_written += len(payload)
 
-    def finish_capture(self, fallback_samples=None):
+    def _write_all(self, payload):
+        offset = 0
+        while offset < len(payload):
+            written = self._handle.write(payload[offset:])
+            if not isinstance(written, int) or written <= 0:
+                raise OSError("A gravação de áudio não avançou no disco.")
+            offset += written
+            self._bytes_written += written
+
+    def finish_capture(self, fallback_samples=None, capture_metadata=None):
         with self._lock:
             if self._closed:
                 return self.record_id
-            if self._bytes_written == 0 and fallback_samples:
+            if fallback_samples is not None:
                 payload = _audio_bytes(fallback_samples)
-                self._handle.write(payload)
-                self._bytes_written += len(payload)
+                if len(payload) > self._bytes_written:
+                    remainder = payload[self._bytes_written :]
+                    self._write_all(remainder)
             self._handle.flush()
             os.fsync(self._handle.fileno())
             self._handle.close()
             self._closed = True
+        fields = {
+            "status": STATUS_PENDING,
+            "captured_at": _timestamp(),
+            "audio_bytes": self._bytes_written,
+        }
+        if isinstance(capture_metadata, dict):
+            reserved = {"id", "status", "captured_at", "audio_bytes"}
+            fields.update(
+                (key, value)
+                for key, value in capture_metadata.items()
+                if key not in reserved
+            )
         self.store.update(
             self.record_id,
-            status=STATUS_PENDING,
-            captured_at=_timestamp(),
-            audio_bytes=self._bytes_written,
+            **fields,
         )
         return self.record_id
 
@@ -122,6 +141,8 @@ class VoiceHistoryStore:
             "language": language,
             "target_kind": target_kind,
             "sample_rate": 16000,
+            "sample_rate_hz": 16000,
+            "channels": 1,
             "sample_format": "float32-native-endian",
             "audio_bytes": 0,
             "transcript": "",
@@ -153,13 +174,16 @@ class VoiceHistoryStore:
             self._write_metadata(record_id, metadata)
         return True
 
-    def mark_transcribed(self, record_id, transcript):
-        return self.update(
-            record_id,
-            status=STATUS_TRANSCRIBED,
-            transcript=transcript or "",
-            error=None,
-        )
+    def mark_transcribed(self, record_id, transcript, raw_transcript=None, **metadata):
+        fields = {
+            "status": STATUS_TRANSCRIBED,
+            "transcript": transcript or "",
+            "error": None,
+        }
+        if raw_transcript is not None and raw_transcript != transcript:
+            fields["raw_transcript"] = raw_transcript
+        fields.update(metadata)
+        return self.update(record_id, **fields)
 
     def complete(self, record_id, transcript, outcome):
         return self.update(
@@ -178,7 +202,13 @@ class VoiceHistoryStore:
 
     def is_retryable(self, record_id):
         entry = self.get(record_id)
-        return bool(entry and entry.get("status") in RETRYABLE_STATUSES)
+        if not entry or entry.get("status") not in RETRYABLE_STATUSES:
+            return False
+        try:
+            size = os.path.getsize(self._audio_path(record_id))
+        except OSError:
+            return False
+        return size > 0 and size % array.array("f").itemsize == 0
 
     def get(self, record_id):
         if not self._valid_record_id(record_id):
@@ -213,9 +243,12 @@ class VoiceHistoryStore:
                 payload = handle.read()
         except OSError as exc:
             raise ValueError("O áudio salvo não está disponível.") from exc
-        usable = len(payload) - (len(payload) % array.array("f").itemsize)
+        if not payload:
+            raise ValueError("O áudio salvo está vazio.")
+        if len(payload) % array.array("f").itemsize:
+            raise ValueError("O áudio salvo está corrompido.")
         samples = array.array("f")
-        samples.frombytes(payload[:usable])
+        samples.frombytes(payload)
         return samples.tolist()
 
     def _item_dir(self, record_id):

@@ -16,6 +16,7 @@ class VoiceRuntimeProbeTests(unittest.TestCase):
         modules = {
             "tkinter": types.ModuleType("tkinter"),
             "sounddevice": types.ModuleType("sounddevice"),
+            "soxr": types.ModuleType("soxr"),
             "transcribe_cpp_native": types.ModuleType("transcribe_cpp_native"),
         }
         with mock.patch.dict(sys.modules, modules), \
@@ -28,6 +29,7 @@ class VoiceRuntimeProbeTests(unittest.TestCase):
         modules = {
             "tkinter": types.ModuleType("tkinter"),
             "sounddevice": types.ModuleType("sounddevice"),
+            "soxr": types.ModuleType("soxr"),
             "transcribe_cpp_native": types.ModuleType("transcribe_cpp_native"),
         }
         with mock.patch.dict(sys.modules, modules), \
