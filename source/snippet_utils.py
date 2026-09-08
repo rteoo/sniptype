@@ -124,11 +124,6 @@ def check_dynamic_pattern(snippets, text, prefixes=None):
     return None, 0
 
 
-def calculate_max_trigger_length(snippets, fallback=20):
-    """Match the current load/reload behavior: only direct snippet keys count."""
-    return max((len(trigger) for trigger in snippets.keys()), default=fallback)
-
-
 def calculate_max_trigger_length_with_mappings(snippets, fallback=20):
     """Include dynamic mapping prefixes plus item names when recomputing from scratch."""
     all_triggers = list(snippets.keys())

@@ -53,7 +53,7 @@ Ordinary text expansion does not require the optional voice dependencies.
 
 The current stable source tag is
 [`v3.4.0`](https://github.com/rteoo/sniptype/tree/v3.4.0). The current preview is
-[`v3.5.0-beta.1`](https://github.com/rteoo/sniptype/releases/tag/v3.5.0-beta.1),
+[`v3.5.0-beta.2`](https://github.com/rteoo/sniptype/releases/tag/v3.5.0-beta.2),
 which adds recoverable voice history, the local-provider boundary, and the Qwen
 Compact profile. See the [development guide](source/docs/development.md) to build
 the Windows package and installer or the macOS app locally.
@@ -87,11 +87,11 @@ The manager is organized around the work being done:
 
 | Tab | Purpose |
 | --- | --- |
-| **Snippets Estáticos** | Create and edit plain or rich-text expansions |
-| **Mapeamentos Dinâmicos** | Maintain prefixed collections such as CPF/CNPJ mappings |
-| **Snippets Dinâmicos** | Enable, disable, rename, and inspect built-in actions |
+| **Snippets** | Create and edit plain or rich-text expansions |
+| **Mapeamentos** | Maintain prefixed collections such as CPF/CNPJ mappings |
+| **Dinâmicos** | Enable, disable, rename, and inspect built-in actions |
 | **Backups** | Restore, import, or export the snippet library |
-| **Entrada por voz** | Enable voice, choose a profile/language, and configure hotkeys |
+| **Voz** | Enable voice, choose a profile/language, and configure hotkeys |
 
 ## Variables
 
@@ -109,7 +109,7 @@ substitution.
 
 Optional settings live in `%USERPROFILE%\.sniptype\settings.json` by default,
 or under the directory selected by `SNIPTYPE_HOME`. Most voice settings are
-managed from **Gerenciar Snippets → Entrada por voz**.
+managed from **Gerenciar Snippets → Voz**.
 
 | Setting | Behavior |
 | --- | --- |
@@ -169,7 +169,7 @@ available. Missing voice dependencies leave ordinary snippet expansion
 unchanged.
 
 From the repository root, install the pinned optional runtime, restart Sniptype,
-then configure voice from **Gerenciar Snippets → Entrada por voz**:
+then configure voice from **Gerenciar Snippets → Voz**:
 
 ```powershell
 python -m pip install -r source\requirements-voice.txt
@@ -187,7 +187,7 @@ the selected profile; installed models are marked **Baixado**.
 
 Each enabled voice session writes crash-recoverable audio and atomic metadata
 under `~/.sniptype/voice-history/` (or `SNIPTYPE_HOME`). Interrupted and failed
-recordings appear in **Entrada por voz → Histórico de voz**, where retry runs
+recordings appear in **Voz → Histórico de voz**, where retry runs
 the selected local provider again and copies the recovered transcript without
 pasting into a stale application target. Successful recordings are retained as
 history too; Sniptype does not prune voice history automatically yet.
