@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from trigger_index import compile_trigger_index
 from voice_audio import AudioCapture, CaptureIssue, CaptureResult, VoiceAudioError
-from voice_catalog import LANGUAGE_AUTO
+from voice_catalog import LANGUAGE_AUTO, PROFILE_STREAMING
 from voice_dispatch import (
     MODE_COMMAND,
     MODE_DICTATION,
@@ -792,6 +792,104 @@ class ControllerTests(unittest.TestCase):
         controller.cancel()
         second_capture.release_read.set()
         controller.shutdown()
+
+    def test_cancelled_stream_closes_before_a_racing_next_start(self):
+        class NativeStream:
+            def __init__(self, name, start_in_progress):
+                self.name = name
+                self._start_in_progress = start_in_progress
+                self.closed = False
+                self.close_during_start = False
+
+            def close(self):
+                self.close_during_start = self._start_in_progress()
+                self.closed = True
+
+            def feed(self, chunk):
+                del chunk
+
+            def text(self):
+                return ""
+
+        stream_requested = threading.Event()
+        release_start = threading.Event()
+        start_in_progress = True
+        streams = []
+        stream_starts = []
+        cancel_lock_acquired = []
+        controller_ref = []
+
+        def close_during_start():
+            return start_in_progress
+
+        streams.extend(
+            (NativeStream("first", close_during_start),
+             NativeStream("second", close_during_start))
+        )
+
+        class NativeSession:
+            def stream(self):
+                stream = streams[len(stream_starts)]
+                stream_starts.append(stream)
+                if len(stream_starts) == 1:
+                    stream_requested.set()
+                    if not release_start.wait(1.0):
+                        raise AssertionError("start_stream release timed out")
+                    nonlocal start_in_progress
+                    start_in_progress = False
+                return stream
+
+            def cancel(self):
+                acquired = controller_ref[0]._lock.acquire(timeout=1.0)
+                cancel_lock_acquired.append(acquired)
+                if acquired:
+                    controller_ref[0]._lock.release()
+
+        from voice_runtime import TranscribeCppBackend
+
+        runner = ThreadRunner()
+        native = TranscribeCppBackend()
+        native._profile = PROFILE_STREAMING
+        native._session = NativeSession()
+        captures = iter((FakeCapture([0.1]), FakeCapture([0.2])))
+        controller = VoiceController(
+            {"voice_enabled": False},
+            task_runner=runner,
+            insert_text=lambda text: True,
+            expand_trigger=lambda trigger: True,
+            notify=self.notify,
+            logger=self.logger,
+            capture_target=lambda: VoiceTarget("window", handle=1),
+            restore_target=lambda target: True,
+            secure_input_blocks=lambda: False,
+            backend=native,
+            capture_factory=captures.__next__,
+            cache_dir=self.tmp,
+        )
+        controller_ref.append(controller)
+        controller.settings.enabled = True
+        controller.settings.profile = PROFILE_STREAMING
+        controller._state = STATE_IDLE
+
+        self.assertTrue(controller.handle_hotkey_press(MODE_DICTATION))
+        self.assertTrue(stream_requested.wait(1.0))
+        controller.cancel()
+        release_start.set()
+        runner.threads[-1].join(1.0)
+
+        self.assertEqual(cancel_lock_acquired, [True])
+        self.assertTrue(streams[0].closed)
+        self.assertFalse(streams[0].close_during_start)
+        self.assertIsNone(native._stream)
+
+        self.assertTrue(controller.handle_hotkey_press(MODE_DICTATION))
+        deadline = time.monotonic() + 1.0
+        while len(stream_starts) < 2 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertEqual(stream_starts, streams)
+        controller.cancel()
+        runner.threads[-1].join(1.0)
+        self.assertTrue(streams[1].closed)
 
     def test_dictation_applies_term_correction_and_keeps_raw_transcript(self):
         self._ready()
