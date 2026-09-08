@@ -1,5 +1,10 @@
 # September 2026 cleanup audit
 
+The initial audit below records the evidence for PR #44. The subsequent
+[remediation section](#remediation-for-the-windows-stable-release) records the
+fixes requested before the Windows stable release; initial limitations and
+follow-up descriptions are retained as historical evidence.
+
 Baseline: `853d558d4fa3f6b4ed931772037d9595329349be`, matching `origin/main`.
 The starting checkout was clean. All major directories were inspected, with
 independent source review, caller searches, focused checks, and a full Windows
@@ -101,3 +106,61 @@ These are implementation-level failures, not physical-device recordings.
 - Packaged builds, installation, physical cross-application paste/voice,
   macOS TCC/focus, and Wayland behavior were not exercised. This cleanup is not a
   release-promotion or desktop certification.
+
+## Remediation for the Windows stable release
+
+The follow-up review covers every issue requested for this release. Regression
+fixtures use synthetic libraries, capture devices, providers, targets, and
+temporary history. They do not record a microphone or inspect the live library.
+
+| Issue | Resolution and behavioral evidence |
+| --- | --- |
+| [#31](https://github.com/rteoo/sniptype/issues/31) | Add six native voice CI jobs across Windows, macOS and Linux with Python 3.12/3.14. Required imports and the runtime/resampler tests fail on any skip. The core-only matrix still verifies optional voice dependencies may be absent. |
+| [#32](https://github.com/rteoo/sniptype/issues/32) | Pin Ruff as a development-only tool, checking unused imports, duplicate definitions and undefined names in Python and `.pyw` sources. Remove six unused imports after checking callers; the deleted legacy harness accounts for its remaining unused imports. No runtime dependency changes or bulk formatting. |
+| [#33](https://github.com/rteoo/sniptype/issues/33) | Add the documentation index, distinguish implemented contracts from historical plans and unverified host research, and replace misleading issue-number references with current source links and descriptive history. Validate local document links and anchors. |
+| [#35](https://github.com/rteoo/sniptype/issues/35) | Refuse to overwrite a retained recovery package; check promotion and restore results, remove partial output before restoring, and keep recovery material on failure. Six Windows tests execute the production batch labels with injected copy failures, including first install, successful recovery, failed recovery and leftover-package refusal. |
+| [#36](https://github.com/rteoo/sniptype/issues/36) | Require JSON booleans for registry `enabled`; missing values retain the enabled default, while invalid values are disabled with an actionable warning. Runtime binding, manager rows and sync export share the predicate. A real manager toggle repairs invalid data without losing other fields. |
+| [#38](https://github.com/rteoo/sniptype/issues/38) | Reserve capture sessions before opening resources, reject concurrent starts, and release late-opened capture after cancellation. Gate worker admission before teardown and defer native unload until outstanding work exits. Event-gated regressions cover startup release/cancel, concurrent presses, shutdown and profile changes. |
+| [#39](https://github.com/rteoo/sniptype/issues/39) | Check cancellation after blocking target restoration and before output callbacks; queued form work checks validity when Tk executes it. Tests cancel during restoration and queued form delivery, preserving existing field content. Callbacks already committed may finish, as documented in the voice contract. |
+| [#40](https://github.com/rteoo/sniptype/issues/40) | Fence retry work and history/output commits by session generation. Late transcription cannot update cancelled history or copy text after a settings/session change. Native resource lifetime remains tied to tracked workers even when cancellation is ignored. |
+| [#41](https://github.com/rteoo/sniptype/issues/41) | Reject reserved mapping keys and duplicate prefixes before mutation, warn when a new static trigger shadows a composed mapping trigger, and restore the entire mapping on save failure. Real Tk action tests exercise refusal and rollback; imported precedence remains unchanged. |
+| [#42](https://github.com/rteoo/sniptype/issues/42) | Queue secure-input notices until the tray is visible, serialize queue/ready transitions, and preserve the cooldown and pre-erase check. Tests cover an absent icon and an allocated but not-yet-visible icon. Physical macOS timing remains unverified. |
+| [#43](https://github.com/rteoo/sniptype/issues/43) | Gate production voice readiness on capture availability before loading models or installing hotkeys. Keep injected capture independent of physical hardware. Repair the canonical offline probe and remove the unreferenced legacy harness after a tracked-caller search. |
+
+Packaging review also found that both build scripts copied third-party notices
+without the root license referenced by those notices. Both now bundle `LICENSE`,
+with packaging regression coverage. The `--show-manager` startup option opens
+the existing manager through its normal GUI queue for packaged desktop checks;
+ordinary tray startup and single-instance behavior are unchanged.
+
+The native lifecycle changes received a separate review of cancellation,
+deferred teardown, failed profile switches and queued GUI work. Physical speech
+recognition quality, live streaming adoption, macOS TCC/focus and Wayland behavior
+remain outside this Windows release verification. The existing macOS preview
+stays available without a replacement package.
+
+One additional improvement is tracked in
+[#45](https://github.com/rteoo/sniptype/issues/45): cancelling the experimental
+streaming profile must close its native stream before that profile is enabled
+for users. A synthetic lifecycle reproduction observed the unclosed stream.
+The catalog currently hides this profile and settings validation rejects it,
+including hand-edited settings; the stable selectable profiles do not use it.
+
+### Final source verification
+
+- Native Windows Python 3.14.6 with the existing isolated SoXR 1.1.0 runtime:
+  `python -m unittest discover -s tests -v -f` — **1,377 tests**, **4 platform-only
+  skips**, no failures, **29.948 seconds**. The skips require non-Windows symbols,
+  macOS Aqua Tk, Carbon, or `sips`; native DSP executed. No worker-thread exception
+  was reported in the log.
+- `python -m ruff check source` — all configured correctness checks passed.
+- AST parsing and `tabnanny` — **81 Python/`.pyw` files** passed. Local document
+  validation — **62 file links and 4 anchors** passed. `git diff --check` passed.
+- Focused package-promotion, packaging, registry and sync tests — **196 passed**,
+  including all six injected Windows promotion/rollback failure cases.
+- The final late-Escape regression failed against the old cancellation path and
+  passes with the teardown gate. The canonical offline voice probe passed all
+  nine clauses, and all four original lifecycle reproductions passed.
+
+These source checks precede the release build and desktop smoke test. They do not
+by themselves certify the installer or physical speech recognition.

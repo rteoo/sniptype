@@ -94,6 +94,7 @@ VOICE_COLLECT_ARGS=(--collect-all sounddevice --collect-all soxr --copy-metadata
     --add-data "$REPO_DIR/source/dynamic_snippets.json:." \
     --add-data "$REPO_DIR/source/sniptype.ico:." \
     --add-data "$REPO_DIR/THIRD_PARTY_NOTICES.md:." \
+    --add-data "$REPO_DIR/LICENSE:." \
     --hidden-import pystray._darwin \
     "${VOICE_COLLECT_ARGS[@]}" \
     --exclude-module torch \

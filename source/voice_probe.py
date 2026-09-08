@@ -10,7 +10,7 @@ import tempfile
 from trigger_index import compile_trigger_index
 from voice_dispatch import MODE_COMMAND, MODE_DICTATION, VoiceTarget
 from voice_runtime import FakeAsrBackend
-from voice_support import STATE_UNAVAILABLE, VoiceController
+from voice_support import STATE_IDLE, STATE_UNAVAILABLE, VoiceController
 
 
 class InlineRunner:
@@ -51,7 +51,9 @@ def _controller(transcript, tmp):
         backend=backend,
         capture_factory=lambda: FakeCapture(),
         cache_dir=tmp,
-        download=lambda entry, cache_dir, cancel_event=None: os.path.join(tmp, "m.gguf"),
+        download=lambda entry, cache_dir, progress=None, cancel_event=None: os.path.join(
+            tmp, "m.gguf"
+        ),
     )
     controller.bind_library(
         lambda: {"xadds": "hi"},
@@ -62,7 +64,9 @@ def _controller(transcript, tmp):
 
 def main():
     results = []
-    tmp = tempfile.mkdtemp()
+    tmp_parent = os.path.join(os.path.dirname(__file__), "tests", "tmp")
+    os.makedirs(tmp_parent, exist_ok=True)
+    tmp = tempfile.mkdtemp(prefix="voice-probe-", dir=tmp_parent)
 
     def clause(name, ok, detail=""):
         results.append(ok)
@@ -80,6 +84,8 @@ def main():
             mock.patch("voice_support.installed_model_path", return_value="m.gguf"), \
             mock.patch.object(controller, "_start_monitor"):
         controller.enable()
+
+    clause("enable_ready", controller.state == STATE_IDLE)
 
     backend.transcript = "xadds"
     controller.handle_hotkey_press(MODE_DICTATION)

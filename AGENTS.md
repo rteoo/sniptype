@@ -54,7 +54,7 @@ build_release.bat
 
 ```powershell
 build_release.bat      # produce dist\Sniptype first
-build_installer.bat    # compile installer\SniptypeSetup-<version>.exe
+build_installer.bat    # compile installer\Output\SniptypeSetup-<version>.exe
 ```
 
 `build_installer.bat` requires the Inno Setup 6 compiler (`ISCC.exe`) and compiles `installer\sniptype.iss`: a per-user install to `%LOCALAPPDATA%\Programs\Sniptype` (no admin), Start Menu/Desktop/Startup shortcuts, and a proper uninstaller that leaves `~/.sniptype` user data intact. Bump `MyAppVersion` and `MyAppChannel` in the `.iss` alongside the app release metadata.
@@ -103,7 +103,7 @@ Build details: the release is `--onedir` (not `--onefile`); the hidden import `p
 - `source\tests\` contains unit tests.
 - `source\docs\` contains planning notes for refactors and features, plus `audit-report.md` (full code audit) and `improvement-plan.md` (phased roadmap).
 - `source\run_sniptype.bat` is the source-side launcher. It checks/install dependencies and starts the app with `pythonw`.
-- `installer\sniptype.iss` is the Inno Setup script; `build_installer.bat` compiles the versioned installer directly into `installer\` (gitignored). The per-user install location is independent of where user data lives (`~/.sniptype`), which is what makes a Program-Files-style install safe.
+- `installer\sniptype.iss` is the Inno Setup script; `build_installer.bat` compiles the versioned installer into `installer\Output\` (gitignored). The per-user install location is independent of where user data lives (`~/.sniptype`), which is what makes a Program-Files-style install safe.
 - `build_release_macos.sh` is the macOS build script; it produces `dist/Sniptype.app` (menu-bar-only bundle).
 - `dist\Sniptype\` is the packaged application folder. Treat `build\`, `dist\`, and `dist_staging\` as generated output unless the task is explicitly about packaging.
 
@@ -191,7 +191,7 @@ Never probe Tk availability by building a throwaway `tk.Tk()` in the test proces
 
 Temporary test artifacts belong in `source\tests\tmp\`, which is gitignored.
 
-There is no repo-local `pyproject.toml`, `pytest`, `ruff`, `black`, `mypy`, or `tox` configuration at the time of writing.
+Focused Ruff correctness rules are configured in `ruff.toml`; install the pinned development tool from `source/requirements-dev.txt` and run `python -m ruff check source` from the repository root. The same command runs in CI. There is no configured formatter or type checker.
 
 ## Coding Guidance
 

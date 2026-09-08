@@ -209,6 +209,8 @@ def make_app():
     app.notify_error = mock.Mock()
     app.refresh_tray_menu = mock.Mock()
     app.open_macos_permission_window = mock.Mock()
+    app._notification_lock = threading.Lock()
+    app.pending_notifications = []
     app._macos_permission_status = {}
     app.macos_permission_window = None
     return app
@@ -309,6 +311,8 @@ class StartupWiringTests(unittest.TestCase):
         app = tx.Sniptype.__new__(tx.Sniptype)
         app.task_runner = mock.Mock()
         app.icon = None
+        app._notification_lock = threading.Lock()
+        app.pending_notifications = []
         icon = mock.Mock()
         app.on_tray_ready(icon)
         names = [call.kwargs.get("name") for call in app.task_runner.start.call_args_list]
@@ -413,11 +417,11 @@ class SecureInputExpansionGateTests(unittest.TestCase):
         self.assertEqual("", app.typed_text)
 
         # The expansion is not dispatched; the only background work scheduled is
-        # the notification, which is deferred off the listener thread (notify()
-        # writes to disk and calls the tray) rather than run inline.
+        # the notification, which is deferred off the listener thread (the
+        # deferred path writes to disk and calls the tray) rather than run inline.
         app.task_runner.start.assert_called_once()
         args, kwargs = app.task_runner.start.call_args
-        self.assertIs(args[0], app.notify)
+        self.assertEqual(args[0], app.notify_deferred_status)
         self.assertIsNot(args[0], app._run_expansion)
         self.assertEqual(kwargs.get("name"), "secure-input-notify")
         self.assertEqual(kwargs.get("key"), "secure-input")
@@ -468,15 +472,83 @@ class SecureInputNotifyDeferralTests(unittest.TestCase):
             blocked = app._secure_input_blocks_expansion()
 
         self.assertTrue(blocked)
-        # The JSON write never runs inline on the listener thread; notify() is
-        # handed to the task runner, which does the I/O on a worker.
+        # The JSON write never runs inline on the listener thread; the deferred
+        # status method is handed to the task runner, which does the I/O on a worker.
         save.assert_not_called()
         app.task_runner.start.assert_called_once()
         deferred = app.task_runner.start.call_args.args[0]
+        kwargs = app.task_runner.start.call_args.kwargs
         # A bound method is re-created on each attribute access, so compare by
         # value (same function, same instance) rather than identity.
-        self.assertEqual(deferred, app.notify)
-        self.assertEqual(deferred.__func__, tx.Sniptype.notify)
+        self.assertEqual(deferred, app.notify_deferred_status)
+        self.assertEqual(deferred.__func__, tx.Sniptype.notify_deferred_status)
+        self.assertEqual(kwargs.get("cooldown_seconds"), 60)
+
+    def test_early_notice_flushes_after_tray_ready_only_once(self):
+        app = tx.Sniptype.__new__(tx.Sniptype)
+        app.logger = mock.Mock()
+        app.task_runner = mock.Mock()
+        app.icon = None
+        app._notification_lock = threading.Lock()
+        app.pending_notifications = []
+        app.notification_timestamps = {}
+        app.notification_history = []
+        app.notification_history_file = "unused.json"
+        icon = mock.Mock()
+
+        with mock.patch.object(tx, "save_notification_history"), \
+                mock.patch.object(tx.time, "sleep"):
+            self.assertFalse(
+                app.notify_deferred_status(
+                    "secure input", key="secure-input", cooldown_seconds=60
+                )
+            )
+            app.on_tray_ready(icon)
+            app.notify_launch_ready()
+            # A repeated startup callback must not replay an already-drained queue
+            # (and the startup notice itself is behind its normal cooldown).
+            app.notify_launch_ready()
+
+        self.assertEqual([], app.pending_notifications)
+        self.assertEqual(
+            ["Sniptype iniciado com sucesso.", "secure input"],
+            [entry["message"] for entry in app.notification_history],
+        )
+        self.assertEqual(2, icon.notify.call_count)
+
+    def test_notice_waits_for_a_visible_tray_icon(self):
+        for initial_icon in (None, mock.Mock(visible=False)):
+            with self.subTest(initial_icon=initial_icon):
+                app = tx.Sniptype.__new__(tx.Sniptype)
+                app.logger = mock.Mock()
+                app.task_runner = mock.Mock()
+                app.icon = initial_icon
+                app._notification_lock = threading.Lock()
+                app.pending_notifications = []
+                app.notification_timestamps = {}
+                app.notification_history = []
+                app.notification_history_file = "unused.json"
+                icon = initial_icon or mock.Mock()
+
+                with mock.patch.object(tx, "save_notification_history"), \
+                        mock.patch.object(tx.time, "sleep"):
+                    self.assertFalse(
+                        app.notify_deferred_status(
+                            "secure input", key="secure-input", cooldown_seconds=60
+                        )
+                    )
+                    self.assertEqual(1, len(app.pending_notifications))
+                    app.on_tray_ready(icon)
+                    app.notify_launch_ready()
+                    app.notify_launch_ready()
+
+                self.assertTrue(icon.visible)
+                self.assertEqual([], app.pending_notifications)
+                self.assertEqual(
+                    ["Sniptype iniciado com sucesso.", "secure input"],
+                    [entry["message"] for entry in app.notification_history],
+                )
+                self.assertEqual(2, icon.notify.call_count)
 
 
 class NotifySerializationTests(unittest.TestCase):
