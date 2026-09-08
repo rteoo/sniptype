@@ -104,13 +104,24 @@ def dispatch_voice_result(
     secure_input_blocks,
     leave_on_clipboard,
     cancelled=False,
+    is_cancelled=None,
 ):
     """Apply one finished transcript. Never logs the text.
 
     ``insert_text`` / ``expand_trigger`` / ``apply_form`` are app callbacks.
     This function must not call ``_dispatch_expansion``.
     """
-    if cancelled:
+    def aborted():
+        if cancelled:
+            return True
+        if is_cancelled is None:
+            return False
+        try:
+            return bool(is_cancelled())
+        except Exception:
+            return True
+
+    if aborted():
         return VoiceDispatchResult(OUTCOME_CANCELLED)
     text = transcript if isinstance(transcript, str) else ""
     if not text.strip():
@@ -123,40 +134,87 @@ def dispatch_voice_result(
     if resolved_mode == MODE_FORM:
         if apply_form is None:
             return VoiceDispatchResult(OUTCOME_FAILED)
+        if aborted():
+            return VoiceDispatchResult(OUTCOME_CANCELLED)
         apply_form(text)
+        if aborted():
+            return VoiceDispatchResult(OUTCOME_CANCELLED)
         return VoiceDispatchResult(OUTCOME_FORM)
 
     if resolved_mode == MODE_COMMAND:
         trigger = match_voice_command(text, snippets, trigger_index)
         if trigger is None:
             return VoiceDispatchResult(OUTCOME_NO_MATCH)
+        if aborted():
+            return VoiceDispatchResult(OUTCOME_CANCELLED)
         if secure_input_blocks():
+            if aborted():
+                return VoiceDispatchResult(OUTCOME_CANCELLED)
+            saved = leave_on_clipboard(text)
+            if aborted():
+                return VoiceDispatchResult(OUTCOME_CANCELLED)
             return VoiceDispatchResult(
                 OUTCOME_SECURE_INPUT,
-                clipboard_saved=bool(leave_on_clipboard(text)),
+                clipboard_saved=bool(saved),
             )
+        if aborted():
+            return VoiceDispatchResult(OUTCOME_CANCELLED)
         if not restore_target(target):
+            if aborted():
+                return VoiceDispatchResult(OUTCOME_CANCELLED)
+            saved = leave_on_clipboard(text)
+            if aborted():
+                return VoiceDispatchResult(OUTCOME_CANCELLED)
             return VoiceDispatchResult(
                 OUTCOME_TARGET_LOST,
-                clipboard_saved=bool(leave_on_clipboard(text)),
+                clipboard_saved=bool(saved),
             )
-        if expand_trigger(trigger):
+        if aborted():
+            return VoiceDispatchResult(OUTCOME_CANCELLED)
+        expanded = expand_trigger(trigger)
+        if aborted():
+            return VoiceDispatchResult(OUTCOME_CANCELLED)
+        if expanded:
             return VoiceDispatchResult(OUTCOME_EXPANDED)
         return VoiceDispatchResult(OUTCOME_FAILED)
 
+    if aborted():
+        return VoiceDispatchResult(OUTCOME_CANCELLED)
     if secure_input_blocks():
+        if aborted():
+            return VoiceDispatchResult(OUTCOME_CANCELLED)
+        saved = leave_on_clipboard(text)
+        if aborted():
+            return VoiceDispatchResult(OUTCOME_CANCELLED)
         return VoiceDispatchResult(
             OUTCOME_SECURE_INPUT,
-            clipboard_saved=bool(leave_on_clipboard(text)),
+            clipboard_saved=bool(saved),
         )
+    if aborted():
+        return VoiceDispatchResult(OUTCOME_CANCELLED)
     if not restore_target(target):
+        if aborted():
+            return VoiceDispatchResult(OUTCOME_CANCELLED)
+        saved = leave_on_clipboard(text)
+        if aborted():
+            return VoiceDispatchResult(OUTCOME_CANCELLED)
         return VoiceDispatchResult(
             OUTCOME_TARGET_LOST,
-            clipboard_saved=bool(leave_on_clipboard(text)),
+            clipboard_saved=bool(saved),
         )
-    if insert_text(text):
+    if aborted():
+        return VoiceDispatchResult(OUTCOME_CANCELLED)
+    inserted = insert_text(text)
+    if aborted():
+        return VoiceDispatchResult(OUTCOME_CANCELLED)
+    if inserted:
         return VoiceDispatchResult(OUTCOME_INSERTED)
+    if aborted():
+        return VoiceDispatchResult(OUTCOME_CANCELLED)
+    saved = leave_on_clipboard(text)
+    if aborted():
+        return VoiceDispatchResult(OUTCOME_CANCELLED)
     return VoiceDispatchResult(
         OUTCOME_FAILED,
-        clipboard_saved=bool(leave_on_clipboard(text)),
+        clipboard_saved=bool(saved),
     )

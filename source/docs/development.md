@@ -53,6 +53,15 @@ User data is not stored in `dist`; it remains under `~/.sniptype`. The build
 keeps a one-time safety copy of any legacy packaged `snippets.json` but never
 restores it into the new package.
 
+If a failed promotion leaves `dist\Sniptype.previous`, the next build refuses
+to continue. Inspect the restored package and retain that recovery copy until
+recovery is confirmed; the build does not silently discard it on retry.
+
+For a packaged manager smoke test, stop the other Sniptype instance, set
+`SNIPTYPE_HOME` to a disposable directory containing synthetic data, and start
+`dist\Sniptype\Sniptype.exe --show-manager`. The flag opens the manager after
+the shared GUI root starts; ordinary startup remains tray-only.
+
 ## Windows installer
 
 Install Inno Setup 6, package the application, then compile the installer:
@@ -98,13 +107,36 @@ root, because `LSUIElement` alone does not keep an Aqua Tk app out of the Dock.
 
 `.github/workflows/ci.yml` runs the unittest suite on Windows, macOS, and Ubuntu
 with Python 3.12 and 3.14. Linux uses Xvfb because pynput and pystray bind to Xorg
-at import time. Each matrix job has a 10-minute timeout, and a newer commit
-cancels older validation for the same branch or pull request.
+at import time. A separate native voice matrix installs the pinned
+`requirements-voice.txt`, installs Ubuntu's `libportaudio2`, requires all four
+native imports, and runs the runtime/resampler tests without allowing skips; it
+does not access a microphone or download a model. The focused lint job installs
+the dev-only Ruff pin from `source/requirements-dev.txt` and applies the rules
+selected in `ruff.toml` (`F401`, `F811`, and `F821`) to source Python and `.pyw`
+files. Each matrix job has a bounded timeout, and a newer commit cancels older
+validation for the same branch or pull request.
 
-The workflow does not currently build PyInstaller artifacts, run a linter or
-type checker, audit transitive dependencies, or execute real desktop paste and
-tray smoke tests. Adding those checks requires an explicit dependency and
-support-matrix decision rather than an incidental workflow edit.
+Run the same focused lint command locally from the repository root:
+
+```powershell
+python -m pip install -r source/requirements-dev.txt
+python -m ruff check source
+```
+
+Ruff is a development-only dependency; its pin is separate from release runtime
+requirements. The initial rule set checks unused imports, duplicate definitions,
+and undefined names, without formatting churn. Generated output and temporary
+test fixtures are excluded.
+
+The native lane targets Python 3.12 and 3.14 on the hosted 64-bit runners. The
+pinned native distribution supplies Windows x64, Linux x64, and macOS x64/ARM64
+wheels; the CI runner tests its own architecture, not every wheel architecture.
+Other interpreter/architecture combinations and microphone permissions are not
+established by this lane. The core-only matrix keeps graceful optional-runtime
+skips and prints their reasons with verbose unittest output.
+
+The workflow does not build PyInstaller artifacts, run a type checker, audit
+transitive dependencies, or execute real desktop paste and tray smoke tests.
 
 ## Architecture references
 

@@ -1,4 +1,4 @@
-"""Tests for the desktop -> mobile sync bundle (docs/sync-design.md, issue #31)."""
+"""Tests for the desktop -> mobile sync bundle (docs/sync-design.md)."""
 
 import json
 import os
@@ -328,6 +328,15 @@ class PrecedenceTests(unittest.TestCase):
 
 
 class AcceptSetTests(unittest.TestCase):
+    def test_invalid_enabled_value_preserves_static_and_warns(self):
+        logger = RecordingLogger()
+        bundle = build({"xhj": "static survives"}, {
+            "xhj": {"provider": "datetime", "enabled": "false"},
+        }, logger=logger)
+        self.assertEqual(bundle["dynamic"], [])
+        self.assertEqual(entry_for(bundle, "xhj")["text"], "static survives")
+        self.assertTrue(any("enabled" in message for message in logger.warnings))
+
     def test_disabled_entries_excluded(self):
         registry = {
             "xhj": {"provider": "datetime", "format": "%d/%m/%Y"},

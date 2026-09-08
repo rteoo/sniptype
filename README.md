@@ -122,6 +122,14 @@ managed from **Gerenciar Snippets → Voz**.
 `sync_export_dir` must already exist; Sniptype deliberately does not create it.
 Both mirror and sync output contain plaintext user data.
 
+Dynamic trigger overrides live in `dynamic_snippets.json` in the same user-data
+directory. The optional `enabled` field accepts only JSON `true` or `false`
+(without quotes); omitting it enables the entry. Invalid values, including
+`"false"`, numbers, `null`, lists, and objects, disable that entry and log a
+warning. Other fields and neighboring entries are retained. To migrate an older
+hand-edited override, replace a previously truthy value with `true`, or use the
+dynamic tab's enable toggle to save a valid boolean.
+
 ## Data safety and privacy
 
 Sniptype stores its live library, settings, rotating backups, and logs under
@@ -205,7 +213,7 @@ test commands, Windows/macOS packaging, installer creation, release channels,
 and known verification limits.
 
 The deeper architecture and completed audit roadmap are documented in
-[`source/docs/`](source/docs). Release history lives only in
+[documentation index](source/docs/README.md). Release history lives only in
 [CHANGELOG.md](CHANGELOG.md).
 
 ## License

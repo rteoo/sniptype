@@ -248,6 +248,23 @@ class DynamicToggleCollisionTests(unittest.TestCase):
             self.assertTrue(self.app._toggle_registry_entry("xfree", False))
         ask.assert_not_called()
 
+    def test_toggle_repairs_invalid_enabled_value_without_losing_other_fields(self):
+        override = {
+            "xfree": {"enabled": "false", "format": "%d"},
+            "xhi": {"enabled": False},
+        }
+        with open(self.app.dynamic_registry_file, "w", encoding="utf-8") as handle:
+            json.dump(override, handle)
+        self.app = make_expander(self.tmp, resource_dir=self.app.resource_dir)
+        self.assertNotIn("xfree", self.app.snippets)
+
+        self.assertTrue(self.app._toggle_registry_entry("xfree", True))
+
+        self.assertIs(self._override()["xfree"]["enabled"], True)
+        self.assertEqual(self._override()["xfree"]["format"], "%d")
+        self.assertEqual(self._override()["xhi"], override["xhi"])
+        self.assertTrue(callable(self.app.snippets["xfree"]))
+
     def test_checkbox_snaps_back_when_the_toggle_is_refused(self):
         var = mock.Mock()
         var.get.return_value = True
