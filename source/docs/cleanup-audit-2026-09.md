@@ -139,18 +139,23 @@ recognition quality, live streaming adoption, macOS TCC/focus and Wayland behavi
 remain outside this Windows release verification. The existing macOS preview
 stays available without a replacement package.
 
-One additional improvement is tracked in
-[#45](https://github.com/rteoo/sniptype/issues/45): cancelling the experimental
-streaming profile must close its native stream before that profile is enabled
-for users. A synthetic lifecycle reproduction observed the unclosed stream.
-The catalog currently hides this profile and settings validation rejects it,
-including hand-edited settings; the stable selectable profiles do not use it.
+The additional cancellation defect in
+[#45](https://github.com/rteoo/sniptype/issues/45) is also fixed before release.
+Cancellation detaches the native stream and closes it after any in-flight
+start, feed or finalization returns. Startup reserves admission before entering
+native code; cancellation fences late-created streams, and teardown waits for
+actual stream closure before closing the session/model. No controller lock spans
+native calls. A controller regression reproduced the original leak, then passed
+with the fix; event-gated runtime regressions cover startup, feed, close and
+unload races. The catalog still hides streaming and settings validation rejects
+it, including hand-edited settings; this fix does not enable that profile.
 
 ### Final source verification
 
 - Native Windows Python 3.14.6 with the existing isolated SoXR 1.1.0 runtime:
-  `python -m unittest discover -s tests -v -f` — **1,377 tests**, **4 platform-only
-  skips**, no failures, **29.948 seconds**. The skips require non-Windows symbols,
+  `python -m unittest discover -s tests -v -f` — **1,384 tests**, **4 platform-only
+  skips**, no failures, **24.426 seconds**, including the #45 regressions.
+  The skips require non-Windows symbols,
   macOS Aqua Tk, Carbon, or `sips`; native DSP executed. No worker-thread exception
   was reported in the log.
 - `python -m ruff check source` — all configured correctness checks passed.
@@ -161,6 +166,12 @@ including hand-edited settings; the stable selectable profiles do not use it.
 - The final late-Escape regression failed against the old cancellation path and
   passes with the teardown gate. The canonical offline voice probe passed all
   nine clauses, and all four original lifecycle reproductions passed.
+- The #45 runtime/provider/controller modules passed **82 tests**. The controller
+  cancellation/start regression passed **30 consecutive runs**; the runtime
+  module passed **20 consecutive runs**. Independent lifetime checks confirmed
+  failed stream creation releases admission and unload waits for stream closure.
+  Review also reproduced a new start racing a blocked close; the corrected guard
+  refuses the second native factory until the previous close finishes.
 
 These source checks precede the release build and desktop smoke test. They do not
 by themselves certify the installer or physical speech recognition.
