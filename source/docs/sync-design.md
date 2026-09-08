@@ -1,7 +1,11 @@
 # Desktop → Mobile Sync: Interchange Format and Transport
 
 Date: 2026-07-21
-Status: decided (v1). Implemented by #31 (desktop export), consumed by #32/#34 (iOS).
+Status: v1 desktop contract, implemented in [sync_export.py](../sync_export.py)
+and covered by [test_sync_export.py](../tests/test_sync_export.py). iOS sections
+are historical consumer requirements, not proof of a shipped mobile app.
+Original work-item numbers have been replaced with descriptive references
+because they predate this repository's current issue sequence.
 
 ## Summary
 
@@ -40,12 +44,12 @@ The bundle carries the trigger **vocabulary** — every snippet the desktop can 
 
 Unreachable triggers still appear in the bundle.
 
-That is correct, because **the phone is a picker, not a matcher**: v1 is a snippet-picker keyboard (#32), the user taps a row, and no suffix matching happens. Shadowed triggers are a desktop discoverability problem worth its own issue; they are not a sync problem, and modelling them here would couple the export to keyboard internals for no benefit.
+That is correct, because **the phone is a picker, not a matcher**: v1 is a snippet-picker keyboard (the iOS keyboard plan), the user taps a row, and no suffix matching happens. Shadowed triggers are a desktop discoverability problem worth its own issue; they are not a sync problem, and modelling them here would couple the export to keyboard internals for no benefit.
 
 ### 1.3 File identity
 
 - **Name**: `sniptype_bundle.json`, fixed. The version lives *inside* the file, never in the filename — an iOS security-scoped bookmark points at a specific file, and renaming on a schema bump would silently break every phone that already picked the old name.
-- **Location**: `<sync_export_dir>/sniptype_bundle.json`, where `sync_export_dir` is the new optional `settings.json` key introduced by #31. Absent key = feature off.
+- **Location**: `<sync_export_dir>/sniptype_bundle.json`, where `sync_export_dir` is the optional `settings.json` key used by the desktop exporter. Absent key = feature off.
 - **Encoding**: written with `snippet_utils.write_json_atomic` — UTF-8, `ensure_ascii=False`, `indent=2`, same-directory temp + `os.replace`. The file is user-inspectable by design and its size doesn't justify minification. JSON line endings are platform-native (`write_json_atomic` opens in text mode); string contents are unaffected, since `json.dump` escapes embedded newlines.
 
 ### 1.4 Top-level shape
@@ -65,14 +69,14 @@ That is correct, because **the phone is a picker, not a matcher**: v1 is a snipp
 | `schema_version` | integer | yes | Starts at `1`. Bumped **only** for changes a v1 consumer cannot survive. |
 | `exported_at` | string | yes | UTC ISO-8601, `Z` suffix, second resolution. **Content-change time**, not write time — see §1.11's skip-if-unchanged rule. Display only; it is never a sync cursor (§3). |
 | `generator.name` | string | yes | Always `"sniptype"`. Lets a future importer distinguish sources. |
-| `generator.version` | string \| null | yes | Desktop app version, for support and bug reports. See §5.1 — no importable constant exists today, so `null` is legal and #31 is not blocked on introducing one. |
+| `generator.version` | string \| null | yes | Desktop app version, for support and bug reports. See §5.1; `null` is legal when the caller cannot supply an app version. |
 | `generator.platform` | string | yes | `sys.platform`. Diagnostics only. |
 | `entries` | array | yes | Insertable snippets. May be empty, never `null`. |
 | `dynamic` | array | yes | Registry metadata. May be empty, never `null`. |
 
 **`generator.version` is the only field in this schema that may be JSON `null`.** Every other field is either present with a non-null value or absent entirely. iOS models everything else as non-optional except the fields marked "Required: no".
 
-**Compatibility contract** — both sides honour it, and both #31 and #34 test it:
+**Compatibility contract** — the desktop tests cover it, and an iOS consumer must implement and test it:
 
 1. Consumers reject a bundle whose `schema_version` is **greater** than the version they know, with an actionable message, and keep their previous good copy.
 2. Consumers **ignore unknown fields**. Swift `Codable` does this by default; do not add strictness that breaks it.
@@ -160,7 +164,7 @@ The split matters: "update the iOS app" is only truthful for the forward-version
 - `resolve_inline` line 91 is `value = get_clipboard() or ""`. A clipboard getter returning `None` therefore **deletes** `%%clipboard-paste%%` instead of preserving it — producing an entry with a silent hole and no `input` block, which mobile would then treat as insertable. That is strictly worse than the failure §1.5 exists to prevent.
 - `classify_variable` decides `dynamic_ref` **solely** by `callable(snippets[name])` (`variable_support.py:45-51`). Passing a map with callables stripped reclassifies every dynamic reference as `form_field`, so `input.dynamic_refs` could never be populated at all.
 
-#31 implements a dedicated resolver in `sync_export.py` that:
+The desktop exporter implements a dedicated resolver in `sync_export.py` that:
 
 1. Builds a **classification map**: the static snippets, then — overwriting them, matching `merge_snippets`'s `{**static, **dynamic}` order — every registry entry in the **export accept set** (§1.8), keyed by effective trigger and mapped to a sentinel callable. Build it static-last and a name present in both reclassifies from `dynamic_ref` to `snippet_ref` and gets *baked*, silently breaking the rule above. `classify_variable` then returns the right kind for every name with no real callable in reach — so the export provably cannot invoke a provider, fetch from the network, or open a dialog.
 2. Walks `find_variable_names(raw_text)` once, substituting **only** `snippet_ref` and `mapping_ref` (via `extract_plain_text`), and collecting the other three kinds into the `input` lists.
@@ -202,15 +206,15 @@ The cost is one small read of a file the process just wrote (warm cache), and th
 **Expansion**, mirroring `get_dynamic_prefixes` / `check_dynamic_pattern`:
 
 - Skip every key starting with `_` as a direct trigger (matches `compile_trigger_index`). Note this is *not* the same as "every `_` key is a container": a key like `_notes` is neither a container nor a trigger — `get_dynamic_prefixes` ignores it and `compile_trigger_index` skips it. It is unreachable data and the bundle drops it silently.
-- **Iterate `get_dynamic_prefixes(static_snippets).items()`, not the snippet dict.** That map is keyed by *prefix*, so when two containers derive the same prefix the last one wins and the earlier container is genuinely unreachable at runtime — `check_dynamic_pattern` only ever consults this map. Iterating containers instead would emit triggers the desktop cannot fire, and could emit the same trigger twice. #31 reuses `get_dynamic_prefixes` rather than reimplementing the naming rules (`__prefix__`, else `key[1:]` with **every** occurrence of `_numbers`/`_codes` removed via `str.replace`; builtins `_cpf_numbers` → `cpf`, `_cnpj_numbers` → `cnpj`).
+- **Iterate `get_dynamic_prefixes(static_snippets).items()`, not the snippet dict.** That map is keyed by *prefix*, so when two containers derive the same prefix the last one wins and the earlier container is genuinely unreachable at runtime — `check_dynamic_pattern` only ever consults this map. Iterating containers instead would emit triggers the desktop cannot fire, and could emit the same trigger twice. The desktop exporter reuses `get_dynamic_prefixes` rather than reimplementing the naming rules (`__prefix__`, else `key[1:]` with **every** occurrence of `_numbers`/`_codes` removed via `str.replace`; builtins `_cpf_numbers` → `cpf`, `_cnpj_numbers` → `cnpj`).
 - For each resolved prefix, emit `prefix + item` for every item except `__prefix__`. An empty `__prefix__` is legal and yields the bare item name; the collision rule below handles the fallout.
 - Skip callables defensively (`build_saveable_snippets` semantics) — runtime dynamic snippets never become `entries`.
 
 **Precedence and collisions.** Precedence is evaluated over the **export accept set** — the registry entries `build_dynamic_snippets` would actually bind (§1.8), not merely the enabled ones. The reasoning generalises: an entry with `provider: "typo"` is enabled but binds no callable, so the desktop fires the static snippet of that name, and filtering on `enabled` alone would drop that static snippet from the bundle in favour of a trigger that does not exist. **One predicate, used in three places**: `dynamic[]`, this precedence contest, and §1.6's sentinel classification map. Order: accepted dynamic > static > mapping-composed. The bundle must never contain two entries with the same `trigger`; the loser is dropped with a logged warning.
 
-The static-vs-dynamic case used to be nearly unreachable, for a reason worth recording: `merge_snippets` is `{**static, **dynamic}`, so a static snippet sharing a name with a dynamic trigger was overwritten in memory, and the next `save_snippets` — which writes `build_saveable_snippets(self.snippets)` — **deleted it from `snippets.json`**. That data-loss bug was fixed in #43: `find_shadowed_statics` records the shadowed values at load and `build_saveable_snippets(snippets, preserved)` writes them back, so the colliding static now survives on disk indefinitely. The export's dedupe is therefore **not** defensive — it is the normal path whenever a user has such a collision, and #31 reads the static dict directly from the file where both keys now live.
+The static-vs-dynamic case used to be nearly unreachable, for a reason worth recording: `merge_snippets` is `{**static, **dynamic}`, so a static snippet sharing a name with a dynamic trigger was overwritten in memory, and the next `save_snippets` — which writes `build_saveable_snippets(self.snippets)` — **deleted it from `snippets.json`**. That data-loss bug is fixed by [snippet_utils.py](../snippet_utils.py): `find_shadowed_statics` records the shadowed values at load and `build_saveable_snippets(snippets, preserved)` writes them back, so the colliding static now survives on disk indefinitely. The export's dedupe is therefore **not** defensive — it is the normal path whenever a user has such a collision, and the desktop exporter reads the static dict directly from the file where both keys now live.
 
-**Consumer rule for a duplicate `trigger`** — the producer obligation above is not a guarantee the phone can rely on: **first occurrence wins, later duplicates are dropped, and the bundle is still accepted.** The idiomatic Swift lookup (`Dictionary(uniqueKeysWithValues:)`) calls `fatalError` on a duplicate key, and if that lookup lives in the shared model target from #32 it takes down the *keyboard extension*, not just the app. A malformed bundle must never crash the keyboard.
+**Consumer rule for a duplicate `trigger`** — the producer obligation above is not a guarantee the phone can rely on: **first occurrence wins, later duplicates are dropped, and the bundle is still accepted.** The idiomatic Swift lookup (`Dictionary(uniqueKeysWithValues:)`) calls `fatalError` on a duplicate key, and if that lookup lives in the shared model target from the iOS keyboard plan it takes down the *keyboard extension*, not just the app. A malformed bundle must never crash the keyboard.
 
 **Ordering** is fully determined, so that identical data always produces an identical file: `entries` are static snippets in `snippets.json` key order, then mapping entries grouped by container in `get_dynamic_prefixes` iteration order with items in container order; `dynamic` follows registry order. Undefined ordering would rewrite the whole file on every save and make every test sort defensively.
 
@@ -256,11 +260,11 @@ The static-vs-dynamic case used to be nearly unreachable, for a reason worth rec
 
 This set is computed **once per export** and is the single predicate behind three decisions: which rows appear in `dynamic[]`, which triggers win the precedence contest in §1.7, and which names get a sentinel callable in §1.6's classification map. Implement it as one function; three separate filters will drift.
 
-**Disabled entries are excluded, and `enabled` is still emitted.** #30 asks for the field; #31 excludes disabled entries. Both: the bundle carries only enabled entries — a disabled trigger does not exist as far as the phone is concerned — and the field is written explicitly so the file is self-describing and a v2 that ships disabled entries needs no schema bump. Consumers must read the field, not assume it. *Consequence for #34*: its task-4 requirement to "hide disabled dynamic entries" is a no-op under this design — there are none in the bundle to hide.
+**Disabled entries are excluded, and `enabled` is still emitted.** Only JSON booleans are valid explicit enabled values. Invalid types disable the entry with a warning; an absent field defaults to true, matching runtime binding and the manager. The bundle carries only enabled entries — a disabled trigger does not exist as far as the phone is concerned — and the field is written explicitly so the file is self-describing and a v2 that ships disabled entries needs no schema bump. Consumers must read the field, not assume it. *Consequence for the iOS import plan*: its task-4 requirement to "hide disabled dynamic entries" is a no-op under this design — there are none in the bundle to hide.
 
 **`local` and `render`.** Only `provider == "datetime"` is local in v1; `bcb`, `stock` and `whatsapp` need network, dialogs, a browser, or the desktop clipboard, none of which the extension has. Mobile lists non-local entries greyed with a "desktop only" hint — the issue's "knows what else exists".
 
-There is exactly **one** `render.kind`: `date_format`. An earlier draft had a second `long_date` kind for `method == "extenso"`, which was wrong — `data_extenso` (`sniptype.pyw:567-580`) is hand-rolled with hardcoded PT-BR arrays and a **zero-padded** day (`{dia:02d}` → `segunda-feira, 02 de março de 2026`), and no `DateFormatter` style reproduces that (`.full` gives `2 de março`, unpadded). A second render kind would have guaranteed a desktop/phone mismatch. Both datetime paths therefore compile to a TR35 pattern:
+There is exactly **one** `render.kind`: `date_format`. An earlier draft had a second `long_date` kind for `method == "extenso"`, which was wrong — `Sniptype.data_extenso` is hand-rolled with hardcoded PT-BR arrays and a **zero-padded** day (`{dia:02d}` → `segunda-feira, 02 de março de 2026`), and no `DateFormatter` style reproduces that (`.full` gives `2 de março`, unpadded). A second render kind would have guaranteed a desktop/phone mismatch. Both datetime paths therefore compile to a TR35 pattern:
 
 | Registry entry | `unicode_pattern` |
 | --- | --- |
@@ -269,7 +273,7 @@ There is exactly **one** `render.kind`: `date_format`. An earlier draft had a se
 
 `method == "extenso"` wins over any `format` key, matching `_datetime_provider`.
 
-That pattern reproduces `data_extenso` component by component — weekday, comma, zero-padded day, both `de` literals, lowercase month — **verified against CLDR pt-BR as shipped with iOS 18, 2026-07-21**. Date the claim, because the two sides age differently: the desktop's arrays are a frozen Python literal (`sniptype.pyw:569-572`) while the phone's month and weekday names come from a locale database Apple revises. §5.2's test asserts the *pattern string* and can never catch a rendering drift, so #34 carries a **snapshot test** rendering a fixed date and comparing it to the desktop's expected output. Without it, this equivalence is a claim no test in either repo covers.
+That pattern reproduces `data_extenso` component by component — weekday, comma, zero-padded day, both `de` literals, lowercase month — **verified against CLDR pt-BR as shipped with iOS 18, 2026-07-21**. Date the claim, because the two sides age differently: the desktop's arrays are Python literals in `Sniptype.data_extenso` while the phone's month and weekday names come from a locale database Apple revises. §5.2's test asserts the *pattern string* and can never catch a rendering drift, so the iOS import plan carries a **snapshot test** rendering a fixed date and comparing it to the desktop's expected output. Without it, this equivalence is a claim no test in either repo covers.
 
 **strftime → Unicode TR35 conversion is a desktop responsibility.** The registry stores C `strftime`; iOS `DateFormatter` speaks TR35. Converting on the phone would put a second parser in a second language.
 
@@ -347,7 +351,7 @@ and a registry containing only `xhj` (enabled) and `xdolar` (disabled by the use
 | `_toggle_registry_entry` (write at :2664, registry reloaded :2670-2674) | enable/disable a dynamic entry | no |
 | `_rename_registry_entry` (write at :2746, registry reloaded :2752-2756) | rename a dynamic trigger | no |
 
-The rule for #31 is therefore: **every call site of `mirror_snippets_file()`, plus both registry writers.** `restore_backup` and `import_library` write the file directly (`shutil.copyfile`, `write_json_atomic`) and never pass through `save_snippets`. Hooking `reload_snippets_from_disk()` would cover four of the five in one place, but it also fires at startup on every launch, so prefer explicit calls.
+The rule for the desktop exporter is therefore: **every call site of `mirror_snippets_file()`, plus both registry writers.** `restore_backup` and `import_library` write the file directly (`shutil.copyfile`, `write_json_atomic`) and never pass through `save_snippets`. Hooking `reload_snippets_from_disk()` would cover four of the five in one place, but it also fires at startup on every launch, so prefer explicit calls.
 
 Note that `save_snippets` can also fire at startup, from either of two mutually exclusive paths: `load_snippets` on first run (`:336`), or `recover_snippets_file` when the file is corrupt **and no valid backup exists** (`:386` — the recovery loop returns early on the first valid backup it finds). So the export can run before the user has touched anything. That is intended: with the feature on, the phone should receive a bundle without waiting for the first edit. It does mean a brand-new install publishes the seed library to the cloud folder; harmless, since the seed is anonymized, but worth knowing before it looks like a bug.
 
@@ -385,7 +389,7 @@ Also considered and not tabled: **SMB from the iOS Files app** (Windows shares n
 
 ### 2.2 Decision: (a), a user-owned cloud folder
 
-The desktop runs on **Windows**, and the sync is desktop→mobile, so the *writer* is the Windows app. That eliminates (b1): CloudKit gives Windows nothing, and the fallback web-services path requires the paid Developer Program while #32 explicitly scopes the project to "a free personal team is enough". (b2) is not a separate option at all — iCloud Drive for Windows is a synced folder, which is exactly what (a) supports, alongside Google Drive, Dropbox, OneDrive and Syncthing, with zero code difference.
+The desktop runs on **Windows**, and the sync is desktop→mobile, so the *writer* is the Windows app. That eliminates (b1): CloudKit gives Windows nothing, and the fallback web-services path requires the paid Developer Program while the iOS keyboard plan explicitly scopes the project to "a free personal team is enough". (b2) is not a separate option at all — iCloud Drive for Windows is a synced folder, which is exactly what (a) supports, alongside Google Drive, Dropbox, OneDrive and Syncthing, with zero code difference.
 
 (a) wins on the combination of *continuous* and *cheap*: `sync_export_dir` is a path, and the write is the atomic-replace discipline already in `snippet_utils.write_json_atomic`.
 
@@ -393,22 +397,22 @@ Honest accounting of what (a) costs, since §4 refuses to pretend otherwise: the
 
 **(a)'s advantage over (d) is smaller than "continuous vs manual" suggests, and the doc should not oversell it.** Two structural facts compress it. First, the keyboard only ever sees what the container app wrote, so a new desktop snippet reaches the keyboard when the container app runs and at no other time. Second, background refresh would not have closed that gap anyway: `BGAppRefreshTask` is scheduled from iOS usage heuristics, and this container app is opened *rarely* by design — the keyboard is the daily surface — so it might effectively never fire. §2.3 resolves this by dropping it outright, which means **no** iOS-reading option in this table has background refresh in v1. The real difference between (a) and (d) is therefore **"open the app" versus "open the app and tap import"**.
 
-(a) still wins v1 on being cheap and requiring no ritual. But **(d) is a first-class path in #34, not an afterthought** — the share-sheet / "Open in" import is the same import flow with a different source, it sidesteps the placeholder problem in §2.3, and it leaves no file-provider cache on the phone (§4.2). **LAN + QR handoff is the named v2 door** if the cloud-provider exposure turns out to matter more than continuity.
+(a) still wins v1 on being cheap and requiring no ritual. But **(d) is a first-class path in the iOS import plan, not an afterthought** — the share-sheet / "Open in" import is the same import flow with a different source, it sidesteps the placeholder problem in §2.3, and it leaves no file-provider cache on the phone (§4.2). **LAN + QR handoff is the named v2 door** if the cloud-provider exposure turns out to matter more than continuity.
 
 A user who wants end-to-end encryption today can point `sync_export_dir` at a **Syncthing** folder — but be precise about what that buys: "zero code change" is true of the **desktop** only. There is no official Syncthing client for iOS, so receiving the folder on the phone needs a third-party App Store app providing a File Provider extension (Möbius Sync being the usual one), which is paid, independently maintained, and itself handles the plaintext library. It is a real option and a genuine benefit of "it's just a path", but it is not free and it is not first-party.
 
 ### 2.3 Mechanics
 
-**Desktop side (#31)** — see §1.10 (call sites) and §1.11 (write discipline).
+**Desktop exporter** — see §1.10 (call sites) and §1.11 (write discipline).
 
-**iOS side (#34)**
+**iOS side (the iOS import plan)**
 
 - The user picks the bundle with `UIDocumentPickerViewController`; the app persists a **security-scoped bookmark** so later refreshes can reopen it without re-picking. The share-sheet / "Open in" path (option (d)) feeds the same import flow.
-- **Refresh = on app foreground + manual pull-to-refresh. No `BGAppRefreshTask`** — this supersedes #34's task 2. Two reasons, and they reinforce each other: the artifact is written with `.complete` file protection (below), and `BGAppRefreshTask` routinely fires while the device is *locked*, where the app can neither write the artifact nor read the previous copy — the failure would surface through §3.2's catch-all and be reported to the user as a **corrupt bundle**, intermittently, only when the phone happened to be locked. And per §2.2 the task may barely fire anyway for an app opened this rarely, while the keyboard only ever sees what the container app wrote. Dropping it removes a misdiagnosis class and simplifies #34 at almost no cost.
+- **Refresh = on app foreground + manual pull-to-refresh. No `BGAppRefreshTask`** — this supersedes the iOS import plan's task 2. Two reasons, and they reinforce each other: the artifact is written with `.complete` file protection (below), and `BGAppRefreshTask` routinely fires while the device is *locked*, where the app can neither write the artifact nor read the previous copy — the failure would surface through §3.2's catch-all and be reported to the user as a **corrupt bundle**, intermittently, only when the phone happened to be locked. And per §2.2 the task may barely fire anyway for an app opened this rarely, while the keyboard only ever sees what the container app wrote. Dropping it removes a misdiagnosis class and simplifies the iOS import plan at almost no cost.
 - There is no push; a cloud folder has no callback the app can rely on. `exported_at` is surfaced as "library last changed" so a stale file is visible rather than mysterious.
 - On refresh: validate `schema_version` (§1.4 table) → decode → write **atomically** into the App Group container. Reject-and-keep-previous on any failure (§3.2).
 
-**The App Group artifact**, named here so #32 and #34 don't each invent one:
+**The App Group artifact**, named here so the iOS keyboard plan and the iOS import plan don't each invent one:
 
 | Decision | Value |
 | --- | --- |
@@ -481,8 +485,8 @@ What it does **not** get: clipboard contents (never baked — §1.6), form-field
 1. **User-owned storage only.** No Sniptype server, no third-party service the user did not already choose, no telemetry, no phone-home. The bundle is written to a local path; whether that path is synced, and by whom, is the user's decision.
 2. **Be honest about the cloud provider.** iCloud, Google Drive and Dropbox encrypt in transit and at rest, but they hold the keys and can read the file. This is a real exposure, not a resolved one — §2.1 scores it as such, and two transports in §2.2 avoid it: **(c) in its LAN-only form** and **(d) delivered over USB**. Syncthing is discussed there too but is not a third candidate for this rule: on iOS it needs a paid, third-party File Provider app that handles the plaintext library itself.
 3. **The export dir is a deliberate act.** No default value, ever; absent key = no bundle is written; a missing directory is not created (§1.11). **Turning the feature off does not turn the exposure off**: clearing `sync_export_dir` leaves the last bundle — and the cloud provider's version history of it — in place. The settings UI must say so, and must give the steps **in order**: clear the key *first*, then delete the file. Delete first and the next save recreates it, guaranteed — skip-if-unchanged always treats a missing file as changed.
-4. **Warn on shared folders.** #31 should not attempt to *detect* sharing (unreliable across providers), but the settings UI and documentation must state that anyone with access to that folder gets the full library.
-5. **Do not mirror and export into the same directory.** `mirror_dir` writes raw `snippets.json`; `sync_export_dir` writes the compiled bundle. Pointing both at one cloud folder doubles the exposure for no benefit. Unlike rule 4 this *is* checkable, so #31 checks it rather than leaving it to documentation: when both keys are set, compare with `os.path.samefile` inside a `try/except OSError` (it raises when either path is missing, and §1.11 explicitly tolerates a missing export dir while `mirror_dir` is only created lazily on the first mirror) and log a warning. **Advisory only** — it never blocks the export. The user may have meant it; they just need to know what it costs. Note the check is deliberately narrow: it catches the identical directory, not two sibling folders under the same synced root, which expose to the same provider and compare unequal. Detecting *that* is the unreliable cross-provider problem rule 4 declines.
+4. **Warn on shared folders.** The desktop exporter should not attempt to *detect* sharing (unreliable across providers), but the settings UI and documentation must state that anyone with access to that folder gets the full library.
+5. **Do not mirror and export into the same directory.** `mirror_dir` writes raw `snippets.json`; `sync_export_dir` writes the compiled bundle. Pointing both at one cloud folder doubles the exposure for no benefit. Unlike rule 4 this *is* checkable, so the desktop exporter checks it rather than leaving it to documentation: when both keys are set, compare with `os.path.samefile` inside a `try/except OSError` (it raises when either path is missing, and §1.11 explicitly tolerates a missing export dir while `mirror_dir` is only created lazily on the first mirror) and log a warning. **Advisory only** — it never blocks the export. The user may have meant it; they just need to know what it costs. Note the check is deliberately narrow: it catches the identical directory, not two sibling folders under the same synced root, which expose to the same provider and compare unequal. Detecting *that* is the unreliable cross-provider problem rule 4 declines.
 6. **On the phone**: `.complete` file protection and `isExcludedFromBackup` on the App Group artifact (§2.3). Adopting a second device doubles the places this data can leak from, and neither of those is exotic.
 
 ### 4.4 Encryption: the named v2 door
@@ -491,15 +495,15 @@ Encrypting the bundle at rest (passphrase-derived key, symmetric, entered once p
 
 ---
 
-## 5. Notes the implementation issues inherit
+## 5. Implementation and consumer verification notes
 
-### 5.1 App version constant (#31)
+### 5.1 App version metadata
 
-`generator.version` needs the app version. It exists today in exactly two hand-maintained, non-importable places — the `sniptype.pyw` module docstring (`Version: 3.2.0`) and `installer/sniptype.iss` (`MyAppVersion`). `generator.version` is therefore nullable and #31 is not blocked. Introducing a single importable constant would make it a *third* place unless the docstring is derived from it; that is a scope call for #31, not a requirement of this design.
+`generator.version` is supplied by the desktop caller from the app release metadata; `build_bundle` accepts an injected version and permits `null`. The app docstring and installer definitions are the current release sources. This format does not require introducing another version constant.
 
-### 5.2 Test surface implied by this document (#31)
+### 5.2 Desktop test surface
 
-Beyond #31's own acceptance criteria:
+Beyond the desktop exporter's own acceptance criteria:
 
 - Mapping expansion iterates `get_dynamic_prefixes`, so two containers claiming the same prefix export only the winner; `__prefix__` never becomes a trigger; an empty `__prefix__` yields bare item names; `_notes`-style non-container `_` keys are dropped.
 - Collision precedence over the **export accept set** (not merely `enabled`): a registry entry with an unknown `provider` loses to the static snippet of the same name. Dynamic > static > mapping, loser dropped with a warning, no duplicate `trigger` in the bundle.
@@ -512,7 +516,7 @@ Beyond #31's own acceptance criteria:
 - All five call sites in §1.10 export, including the two registry writers and the two that bypass `save_snippets`. A toggle and a rename each reach the bundle — the regression test for the wrapper re-reading the registry file instead of `self.dynamic_registry`.
 - `generator.version`: the test asserts the **injected value round-trips**, not a literal — §5.1 leaves the constant itself undecided, and `null` is legal.
 
-### 5.3 Constraints for the iOS side (#32/#34)
+### 5.3 Constraints for an iOS consumer
 
 - Decode with `Codable`, **tolerating unknown fields and unknown enum values** (§1.4 rules 2–3) — a strict decoder turns an additive desktop change into a broken phone.
 - Implement the full `schema_version` table (§1.4), including the message split between "update the iOS app" and "invalid bundle".
@@ -521,6 +525,6 @@ Beyond #31's own acceptance criteria:
 - Entries with `input` are displayed and searchable but not insertable; tapping explains why, naming `fields`, `dynamic_refs` or `residual` (§1.5).
 - `dynamic` entries with `local: false` are displayed greyed as "desktop only"; `local: true` entries render locally from `render` (§1.8), honouring `render.locale` and the phone's timezone.
 - Apply `.complete` file protection and `isExcludedFromBackup` to the App Group artifact, to its write temp, and **re-apply both after every `replaceItemAt`** (§2.3, §4.3 rule 6).
-- **No `BGAppRefreshTask`** — refresh on foreground and pull-to-refresh only. This supersedes #34 task 2, and is what makes `.complete` safe (§2.3).
+- **No `BGAppRefreshTask`** — refresh on foreground and pull-to-refresh only. This supersedes the iOS import plan task 2, and is what makes `.complete` safe (§2.3).
 - Build the **share-sheet / "Open in" import as a first-class path**, not only the document picker (§2.2). It is the same import flow, and it is the only route that leaves no file-provider cache on the phone (§4.2).
 - Carry a **snapshot test** for `method: "extenso"`: render a fixed date through the exported pattern and compare against the desktop's expected string (§1.8). The desktop side can only test the pattern, not the rendering.

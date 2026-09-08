@@ -1,21 +1,24 @@
 # macOS insertion path: paste timings, erase, secure input
 
-Notes for [issue #27](https://github.com/rteoo/sniptype/issues/27): the
-expansion insertion path (`TextInserter._paste_value`,
-`Sniptype._erase_chars`) was tuned entirely against Windows timing. This
+Historical notes on [runtime insertion](../runtime_support.py) and
+[per-platform timings](../platform_support.py). The original work item predates
+this repository's current issue numbering. The expansion insertion path was
+initially tuned against Windows timing. This
 documents what the delays are for, which values macOS uses and why, and what a
 real-host pass still has to confirm by hand.
 
-> **STATUS: partially verified.** The pasteboard half was measured on this Mac
-> (macOS 15, Darwin 25.5.0, Python 3.14.6) and the constants follow from that
+> **STATUS: historical, partial host verification.** The pasteboard half was
+> measured on the original host (recorded as macOS 15 / Darwin 25.5.0, with
+> Python 3.14.6; OS labels not rechecked), and the constants follow from that
 > measurement. The **synthesized-keystroke half was not exercised**: it needs
 > Input Monitoring *and* Accessibility granted to the running process, which is
 > a TCC decision no script can make for itself. The manual matrix at the bottom
 > is the remaining work, and it needs a human at a granted Mac.
 >
-> Both grants have since been obtained on that host and the app's own probe
+> The original report later recorded both grants on that host; the app's probe
 > reports `Monitoramento de Entrada=granted, Acessibilidade=granted` — so the
-> setup is no longer the obstacle, only the typing. "Getting a Mac into a state
+> setup was no longer the obstacle at that time. Current grants and the new
+> package's paste behavior have not been reverified. "Getting a Mac into a state
 > where the matrix can run" below is what that took; it is the part worth not
 > rediscovering.
 
@@ -31,8 +34,9 @@ Typing a trigger produces, in order:
    before anything asks for it.
 5. **Paste** — press the paste shortcut: Cmd+V on macOS, Ctrl+V elsewhere
    (`platform_support.paste_modifier_is_cmd`).
-6. **Restore** — sleep `paste_restore_delay`, then put the snapshot back if the
-   clipboard still holds our payload.
+6. **Restore** — for eligible single-line pastes, sleep `paste_restore_delay`,
+   then restore the snapshot if the clipboard still holds the payload.
+   Multi-line pastes intentionally retain their payload on the clipboard.
 
 Steps 4 and 6 are the two guesses in the design. Step 4 guards against pasting
 before the clipboard is populated; step 6 against restoring before the target

@@ -45,7 +45,7 @@ platform_support.pin_tray_backend()
 from pynput import keyboard
 from pynput.keyboard import Controller, Key
 import pystray
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 
 from bcb_consultor import BCBConsultor
 from yf_stocks import B3FundamentosConsultor
@@ -54,7 +54,6 @@ from snippet_utils import (
     calculate_max_trigger_length_with_mappings,
     find_shadowed_statics,
     get_default_snippets as get_static_default_snippets,
-    get_dynamic_prefixes,
     load_json_file,
     merge_snippets,
     validate_static_snippets,
@@ -103,10 +102,8 @@ from platform_support import (
     IS_WINDOWS,
     acquire_lockfile,
     autostart_target_exists,
-    capture_text_target,
     classify_autostart,
     install_autostart,
-    restore_text_target,
     insertion_timings,
     invalid_timing_overrides,
     read_autostart_command,
@@ -207,6 +204,7 @@ LEGACY_APP_MUTEX_NAME = r"Local\TxtXpanderSingleton"
 APP_MUTEX_HANDLES = []
 ERROR_ALREADY_EXISTS = 183
 MB_ICONINFORMATION = 0x40
+_MISSING = object()
 
 # Extra headroom on the typed-text buffer beyond the longest known trigger, so a
 # newly added long mapping item is never truncated out before its index rebuild.
@@ -928,7 +926,15 @@ class Sniptype:
             entry = tk.Entry(container, font=ui.font(10), width=28, **ui.entry_colors())
             entry.pack(fill=tk.X, pady=(0, 12))
             self._register_voice_form_target(
-                lambda text, _entry=entry: self._apply_voice_form({"ticker": _entry}, text)
+                lambda text, _entry=entry: self._apply_voice_form(
+                    {"ticker": _entry}, text
+                ),
+                lambda text, token, _entry=entry: self._apply_voice_form(
+                    {"ticker": _entry},
+                    text,
+                    is_current=lambda: self.voice is not None
+                    and self.voice.form_guard_valid(token),
+                ),
             )
 
             buttons = tk.Frame(container, bg=ui.surface)
@@ -1315,7 +1321,13 @@ class Sniptype:
 
             first_entry = None
             self._register_voice_form_target(
-                lambda text, _entries=entries: self._apply_voice_form(_entries, text)
+                lambda text, _entries=entries: self._apply_voice_form(_entries, text),
+                lambda text, token, _entries=entries: self._apply_voice_form(
+                    _entries,
+                    text,
+                    is_current=lambda: self.voice is not None
+                    and self.voice.form_guard_valid(token),
+                ),
             )
             for i, name in enumerate(field_names):
                 label_text = name.replace("_", " ").title()
@@ -1412,16 +1424,21 @@ class Sniptype:
             key for key, value in self.snippets.items()
             if not key.startswith("_") and not callable(value)
         }
+        composed = composed_mapping_triggers(self.snippets)
+        # Mapping entries remain in the ordinary trigger set for prefix/suffix
+        # warnings. They are not runtime callables in ``self.snippets``: a
+        # direct static entry wins an exact collision, so the generic dynamic
+        # warning (which claims dynamic priority) would be false here.
         dynamic_names = {key for key, value in self.snippets.items() if callable(value)}
-        prefixes = get_dynamic_prefixes(self.snippets)
-        for prefix, mapping_key in prefixes.items():
-            mapping = self.snippets.get(mapping_key, {})
-            if isinstance(mapping, dict):
-                for name in mapping:
-                    if name != "__prefix__":
-                        static_triggers.add(prefix + name)
-        existing = static_triggers - {trigger}
-        return validate_trigger(trigger, existing, dynamic_names)
+        existing = (static_triggers - {trigger}) | composed
+        warnings = validate_trigger(trigger, existing, dynamic_names)
+        if trigger in composed:
+            warnings.insert(
+                0,
+                f"Já existe um mapeamento dinâmico com o trigger '{trigger}'; o snippet "
+                "estático tem prioridade e o item mapeado não será acionado.",
+            )
+        return warnings
 
     def refresh_runtime_indexes(self):
         """Refresh max trigger length and compiled trigger metadata.
@@ -1487,7 +1504,9 @@ class Sniptype:
         the tray call run outside the lock, against a snapshot taken inside it,
         so the lock is never held across I/O.
         """
-        if not self.icon:
+        with self._notification_lock:
+            icon = self.icon
+        if not icon:
             return False
 
         text = truncate_notification_text(message)
@@ -1513,7 +1532,7 @@ class Sniptype:
         save_notification_history(self.notification_history_file, history_snapshot)
 
         try:
-            self.icon.notify(text, title)
+            icon.notify(text, title)
             return True
         except Exception as e:
             self.logger.warning(f"Falha ao exibir notificação: {e}")
@@ -1524,9 +1543,14 @@ class Sniptype:
 
     def _notify_or_queue(self, message: str, key: str, kind: str, cooldown_seconds: float):
         """Notify now, or queue for tray startup when the icon is not up yet."""
-        if not self.icon:
-            self.pending_notifications.append((message, key, kind, cooldown_seconds))
-            return False
+        with self._notification_lock:
+            # pystray assigns the icon object before its backend has created the
+            # native tray item.  Queue until ``on_tray_ready`` marks it visible,
+            # otherwise an early secure-input notice can be lost or call into a
+            # half-initialized backend.
+            if not self.icon or not getattr(self.icon, "visible", False):
+                self.pending_notifications.append((message, key, kind, cooldown_seconds))
+                return False
         return self.notify(message, key=key, cooldown_seconds=cooldown_seconds, kind=kind)
 
     def notify_error(self, message: str, key: str = None, cooldown_seconds: float = 8):
@@ -1543,7 +1567,8 @@ class Sniptype:
         return message
 
     def on_tray_ready(self, icon):
-        self.icon = icon
+        with self._notification_lock:
+            self.icon = icon
         icon.visible = True
         self.task_runner.start(self.notify_launch_ready, name="startup-notify")
         self.task_runner.start(self.resolve_autostart_state, name="autostart-state")
@@ -1553,10 +1578,12 @@ class Sniptype:
 
     def notify_launch_ready(self, icon=None):
         if icon is not None:
-            self.icon = icon
+            with self._notification_lock:
+                self.icon = icon
         time.sleep(0.75)
         self.notify_status("Sniptype iniciado com sucesso.", key="startup")
-        pending, self.pending_notifications = self.pending_notifications, []
+        with self._notification_lock:
+            pending, self.pending_notifications = self.pending_notifications, []
         for message, key, kind, cooldown in pending:
             self.notify(message, key=key, cooldown_seconds=cooldown, kind=kind)
 
@@ -1644,13 +1671,14 @@ class Sniptype:
         if not IS_MAC or not macos_permissions.secure_input_enabled():
             return False
         self.logger.info(macos_permissions.SECURE_INPUT_MESSAGE)
-        # Notify off the listener thread: notify() writes the history JSON to
-        # disk and calls into the tray, neither of which may run on the keyboard
-        # listener (it must stay fast and unkillable). The 60s cooldown is
-        # enforced inside notify() under its lock, so racing triggers that each
-        # spawn a worker still produce exactly one notification.
+        # Notify off the listener thread: the deferred status path writes the
+        # history JSON and calls into the tray only after the icon exists. Neither
+        # operation may run on the keyboard listener (it must stay fast and
+        # unkillable). The 60s cooldown is enforced inside notify() under its
+        # lock, so racing triggers that each spawn a worker still produce exactly
+        # one notification.
         self.task_runner.start(
-            self.notify,
+            self.notify_deferred_status,
             macos_permissions.SECURE_INPUT_MESSAGE,
             key="secure-input",
             cooldown_seconds=60,
@@ -1733,18 +1761,24 @@ class Sniptype:
             )
             return False
 
-    def _register_voice_form_target(self, apply_fn):
+    def _register_voice_form_target(self, apply_fn, guarded_apply_fn=None):
         voice = self.voice
         if voice is not None:
-            voice.register_form_target(apply_fn)
+            voice.register_form_target(apply_fn, guarded_apply_fn)
 
     def _unregister_voice_form_target(self):
         voice = self.voice
         if voice is not None:
             voice.unregister_form_target()
 
-    def _apply_voice_form(self, entries, text):
+    def _apply_voice_form(self, entries, text, is_current=None):
         def apply(_root=None):
+            if is_current is not None:
+                try:
+                    if not is_current():
+                        return
+                except Exception:
+                    return
             if not entries:
                 return
             focused = None
@@ -3786,7 +3820,12 @@ class Sniptype:
 
             for key, value in self.snippets.items():
                 if key.startswith("_") and key.endswith(("_numbers", "_codes")) and isinstance(value, dict) and key not in base:
-                    prefix = value.get("__prefix__") or key[1:].replace("_numbers", "").replace("_codes", "")
+                    configured_prefix = value.get("__prefix__")
+                    prefix = (
+                        configured_prefix
+                        if isinstance(configured_prefix, str)
+                        else key[1:].replace("_numbers", "").replace("_codes", "")
+                    )
                     type_label = key[1:].replace("_numbers", "").replace("_codes", "").upper()
                     base[key] = {
                         "label": type_label,
@@ -4159,6 +4198,14 @@ class Sniptype:
                     messagebox.showwarning("Aviso", "Use apenas letras, números e underscores.", parent=dialog)
                     return
 
+                if any(info.get("prefix") == prefix for info in mappings_info.values()):
+                    messagebox.showwarning(
+                        "Aviso",
+                        f"O prefixo '{prefix}' já está em uso por outro tipo de mapeamento.",
+                        parent=dialog,
+                    )
+                    return
+
                 map_key = f"_{type_name}_codes"
                 if map_key in self.snippets:
                     messagebox.showwarning("Aviso", f"Tipo '{type_name}' já existe.", parent=dialog)
@@ -4277,23 +4324,30 @@ class Sniptype:
             if not name:
                 messagebox.showwarning("Aviso", "Informe um identificador.")
                 return
+            if name == "__prefix__":
+                messagebox.showwarning(
+                    "Aviso",
+                    "'__prefix__' é reservado para o prefixo do tipo de mapeamento.",
+                )
+                return
             if not extract_plain_text(value).strip():
                 messagebox.showwarning("Aviso", "Informe um valor.")
                 return
 
+            previous_mapping = self.snippets.get(current_type, _MISSING)
+            previous_mapping_snapshot = (
+                dict(previous_mapping)
+                if isinstance(previous_mapping, dict)
+                else previous_mapping
+            )
             mapping = ensure_mapping_dict(current_type)
-            prefix_key = mapping.get("__prefix__")
-            existed = name in mapping
-            previous_value = mapping.get(name)
             mapping[name] = value
-            if prefix_key:
-                mapping["__prefix__"] = prefix_key
 
             if not self.save_snippets(self.snippets):
-                if existed:
-                    mapping[name] = previous_value
+                if previous_mapping is _MISSING:
+                    self.snippets.pop(current_type, None)
                 else:
-                    mapping.pop(name, None)
+                    self.snippets[current_type] = previous_mapping_snapshot
                 messagebox.showerror(
                     "Erro ao salvar",
                     "Não foi possível gravar snippets.json. Verifique os logs; o item não foi salvo.",
@@ -5094,7 +5148,7 @@ class Sniptype:
         self.listener.start()
         self.listener.join()
     
-    def run(self):
+    def run(self, *, show_manager=False):
         """Start the program with the system tray."""
         print("=" * 60)
         print("               SNIPTYPE - EXPANSOR DE SNIPPETS")
@@ -5145,6 +5199,12 @@ class Sniptype:
             # Cosmetic only: the tray still works, the app just also sits in the
             # Dock. Logged rather than raised for exactly that reason.
             self.logger.warning("Não foi possível ocultar o ícone do Dock.")
+
+        if show_manager:
+            # Reuse the tray action so the manager is always marshaled through
+            # GuiThread.submit. In main-thread mode this queues work for the
+            # Tk pump and never calls Tcl from the Cocoa startup frame.
+            self.manage_snippets_gui(None, None)
 
         self.task_runner.start(self.run_keyboard_listener, name="keyboard-listener")
 
@@ -5245,7 +5305,7 @@ def main():
     set_dpi_awareness()
     try:
         expander = Sniptype()
-        expander.run()
+        expander.run(show_manager="--show-manager" in sys.argv[1:])
     finally:
         if lock_path is not None:
             release_lockfile(lock_path)

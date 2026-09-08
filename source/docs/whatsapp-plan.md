@@ -2,6 +2,11 @@
 
 Date: 2026-03-07
 
+> Implemented design record. Current actions live in
+> [whatsapp_runtime_support.py](../whatsapp_runtime_support.py), with
+> [behavioral tests](../tests/test_whatsapp_runtime_support.py). The steps below
+> record the original implementation plan, not a new rollout checklist.
+
 ## Summary
 - Add a built-in dynamic snippet `xwapp` that removes the typed trigger, reads a phone number from the clipboard, generates a valid `wa.me` link, copies that link to the clipboard, and opens it in the default browser.
 - If the clipboard does not contain a usable number, open a small modal popup to collect the phone and an optional message, then generate/open the link from that input.

@@ -163,8 +163,23 @@ PROVIDERS = {
 }
 
 
-def is_enabled(entry):
-    return bool(entry.get("enabled", True))
+def is_enabled(entry, *, logger=None, key=None):
+    """Missing means enabled; only JSON booleans are valid explicit values.
+
+    Invalid values disable the entry without discarding its fields, so the
+    manager can repair it by saving a boolean through its enable toggle.
+    """
+    if not isinstance(entry, dict):
+        return False
+    enabled = entry.get("enabled", True)
+    if not isinstance(enabled, bool):
+        if logger:
+            logger.warning(
+                f"Valor inválido de 'enabled' na entrada '{key}'; desativada. "
+                "Use true ou false (booleanos JSON sem aspas), ou altere a opção no gerenciador."
+            )
+        return False
+    return enabled
 
 
 def effective_trigger(key, entry):
@@ -192,7 +207,7 @@ def build_dynamic_snippets(registry, context, logger=None):
     slow_triggers = set()
 
     for key, entry in registry.items():
-        if not isinstance(entry, dict) or not is_enabled(entry):
+        if not is_enabled(entry, logger=logger, key=key):
             continue
         trigger = effective_trigger(key, entry)
         if trigger in snippets:
