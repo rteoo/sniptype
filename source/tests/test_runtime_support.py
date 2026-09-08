@@ -1,3 +1,4 @@
+import io
 import json
 import logging
 import os
@@ -325,6 +326,57 @@ class ConfigureLoggingTests(unittest.TestCase):
 
         self.assertEqual([], self._file_handlers())
         self.assertTrue(any("log" in line.lower() for line in logs.output))
+
+    def test_console_uses_safe_stderr_and_file_keeps_original_unicode(self):
+        stdout = io.TextIOWrapper(
+            io.BytesIO(), encoding="cp1252", errors="strict"
+        )
+        stderr = io.TextIOWrapper(
+            io.BytesIO(), encoding="cp1252", errors="backslashreplace"
+        )
+        self.addCleanup(stdout.close)
+        self.addCleanup(stderr.close)
+        message = "✓ Unicode diagnostic"
+
+        with mock.patch.object(runtime_support.sys, "stdout", stdout), \
+                mock.patch.object(runtime_support.sys, "stderr", stderr):
+            configure_logging(self.tmp)
+            AppLogger().info(message)
+            for handler in self.logger.handlers:
+                handler.flush()
+
+        console = stderr.buffer.getvalue().decode("cp1252")
+        self.assertEqual(b"", stdout.buffer.getvalue())
+        self.assertNotIn("--- Logging error ---", console)
+        log_path = os.path.join(self.tmp, runtime_support.LOG_FILE_NAME)
+        with open(log_path, encoding="utf-8") as handle:
+            file_text = handle.read()
+
+        self.assertIn(r"\u2713 Unicode diagnostic", console)
+        self.assertIn(message, file_text)
+        stream_handlers = [
+            handler
+            for handler in self.logger.handlers
+            if isinstance(handler, logging.StreamHandler)
+            and not isinstance(handler, RotatingFileHandler)
+        ]
+        self.assertEqual([stderr], [handler.stream for handler in stream_handlers])
+
+    def test_missing_stderr_does_not_fallback_to_strict_stdout(self):
+        stdout = io.TextIOWrapper(
+            io.BytesIO(), encoding="cp1252", errors="strict"
+        )
+        self.addCleanup(stdout.close)
+        with mock.patch.object(runtime_support.sys, "stdout", stdout), \
+                mock.patch.object(runtime_support.sys, "stderr", None):
+            configure_logging(self.tmp)
+
+        self.assertEqual([], [
+            handler
+            for handler in self.logger.handlers
+            if isinstance(handler, logging.StreamHandler)
+            and not isinstance(handler, RotatingFileHandler)
+        ])
 
 
 class AppLoggerTests(unittest.TestCase):
