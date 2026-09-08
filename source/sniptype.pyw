@@ -828,6 +828,15 @@ class Sniptype:
             restore_state = {}
 
             def build_and_restore_focus(root):
+                if platform_support.IS_WINDOWS:
+                    target = platform_support.capture_text_target()
+                    if target is None:
+                        raise RuntimeError(
+                            "Could not capture the foreground text target"
+                        )
+                    restore_state["target"] = target
+                    return build(root)
+
                 target_app = platform_support.capture_frontmost_application()
                 try:
                     return build(root)
@@ -851,6 +860,16 @@ class Sniptype:
                     )
 
             def wait_for_focus_restore():
+                if platform_support.IS_WINDOWS:
+                    target = restore_state.get("target")
+                    if target is None:
+                        return
+                    if not platform_support.restore_text_target(target):
+                        raise RuntimeError(
+                            "Could not restore focus to the foreground text target"
+                        )
+                    return
+
                 event = restore_state.get("event")
                 if event is None:
                     return
