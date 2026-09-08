@@ -196,3 +196,17 @@ modal suite passes all eight tests, and the focused hotpath/platform suites pass
 159 tests. The existing real-Tk serialization tests now mock the external target
 boundary so they cannot depend on or activate the runner's desktop windows.
 The final packaged form retest remains required before stable publication.
+
+### Windows console diagnostics follow-up
+
+Inspection of the successful Windows CI run exposed
+[#51](https://github.com/rteoo/sniptype/issues/51): 942 console records failed with
+`UnicodeEncodeError` because the handler wrote to strict cp1252 stdout. A local
+stream reproduction retained an ASCII message but lost a Unicode message. The
+UTF-8 rotating file retained both; application behavior and the windowed package
+were unaffected.
+
+Console diagnostics now use standard stderr, whose default error handling
+escapes characters the console encoding cannot represent. This preserves the
+diagnostic without reconfiguring the process streams or changing file log text.
+Regression coverage checks a cp1252 console and the original UTF-8 file record.
