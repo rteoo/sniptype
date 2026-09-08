@@ -4,7 +4,6 @@ Sniptype - Brazilian Central Bank API lookup module
 
 import json
 from urllib.request import urlopen
-from urllib.error import URLError
 from datetime import datetime, timedelta
 
 class BCBConsultor:

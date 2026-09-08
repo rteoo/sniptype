@@ -26,7 +26,7 @@ affecting ordinary expansion.
 ## Release channels
 
 The current stable source tag is `v3.4.0`; the current preview release is
-`v3.5.0-beta.1`. Stable tags use
+`v3.5.0-beta.2`. Stable tags use
 `vMAJOR.MINOR.PATCH`; beta tags use `vMAJOR.MINOR.PATCH-beta.N` and their GitHub
 Releases are prereleases. Both channels share the same user-data directory and
 installer identity, so they must not run simultaneously.
@@ -63,7 +63,7 @@ build_installer.bat
 ```
 
 `build_installer.bat` compiles `installer/sniptype.iss` and writes the versioned
-installer under `installer/`. The installer is per-user, does not require
+installer under `installer/Output/`. The installer is per-user, does not require
 administrator rights, and leaves `~/.sniptype` intact when uninstalling.
 
 The installer is unsigned. Windows SmartScreen therefore warns on first use.
@@ -80,7 +80,8 @@ python3 -m pip install -r source/requirements.txt -r source/requirements-voice.t
 
 Set `PYTHON=/path/to/python` to select an interpreter and
 `CODESIGN_IDENTITY="Developer ID Application: ..."` to use a real signing
-identity. Without one, the script uses ad-hoc signing.
+identity. Otherwise the script tries the local `Sniptype Dev` identity and
+falls back to ad-hoc signing when that identity is unavailable or signing fails.
 
 The script builds `dist/Sniptype.app`, asserts that the generated icon is both
 present and referenced, adds the `LSUIElement` and microphone metadata, re-signs
