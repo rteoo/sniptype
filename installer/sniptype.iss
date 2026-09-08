@@ -9,7 +9,7 @@
 
 #define MyAppName "Sniptype"
 #define MyAppVersion "3.5.0"
-#define MyAppChannel "beta"
+#define MyAppChannel "stable"
 #if MyAppChannel == "beta"
   #define MyAppDisplayVersion MyAppVersion + " beta"
   #define MyInstallerVersion MyAppVersion + "-beta"
