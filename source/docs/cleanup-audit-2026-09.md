@@ -175,3 +175,24 @@ it, including hand-edited settings; this fix does not enable that profile.
 
 These source checks precede the release build and desktop smoke test. They do not
 by themselves certify the installer or physical speech recognition.
+
+### Windows dialog focus follow-up
+
+The installed-package Notepad smoke test passed plain text, multiline Portuguese
+accents and mapping expansion, then exposed
+[#49](https://github.com/rteoo/sniptype/issues/49): form submission erased the
+trigger but did not return the completed text to Notepad. This reproduced with
+the manager open and closed. The shared modal wrapper restored the editor only
+on macOS; its Windows restoration was a no-op.
+
+The Windows path now captures the exact external HWND before constructing the
+dialog and restores it before returning the result to the expansion worker.
+Missing targets or failed restoration abort insertion. Cancellation and dialog
+exceptions also restore the target and release the dialog lock. The existing
+macOS activation barriers and Linux behavior remain unchanged.
+
+Five new regressions failed against the previous implementation. The corrected
+modal suite passes all eight tests, and the focused hotpath/platform suites pass
+159 tests. The existing real-Tk serialization tests now mock the external target
+boundary so they cannot depend on or activate the runner's desktop windows.
+The final packaged form retest remains required before stable publication.
