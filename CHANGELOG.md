@@ -404,6 +404,6 @@ behavioral change and warrants a major version bump.
 ## Versioning Strategy
 
 - **Stable channel**: the latest `vMAJOR.MINOR.PATCH` tag and non-prerelease artifact; currently `v3.4.0`.
-- **Beta channel**: the next product version with an explicit `beta` channel label; none open after `3.4.0`.
+- **Beta channel**: the next product version with an explicit `beta` channel label; current source targets `3.5.0 beta`.
 - **Beta tags**: use `vMAJOR.MINOR.PATCH-beta.N` and mark the corresponding GitHub Release as a prerelease.
 - **Promotion**: beta becomes stable only after the full supported-OS test matrix and packaged desktop smoke tests pass. Promotion removes the channel suffix without changing the tested product version.

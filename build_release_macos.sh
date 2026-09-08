@@ -13,7 +13,7 @@
 #   CODESIGN_IDENTITY="Developer ID Application: ..." ./build_release_macos.sh
 #
 # Ad-hoc rebuilds and signing-identity changes invalidate the bundle's TCC
-# grants (Input Monitoring / Accessibility) — see README, "Build on macOS".
+# grants (Input Monitoring / Accessibility) — see source/docs/development.md.
 
 set -euo pipefail
 
@@ -23,8 +23,8 @@ BUNDLE_ID="com.sniptype"
 # A stable signing identity is what lets the bundle keep its TCC grants across
 # rebuilds: ad-hoc signing has no identity, so macOS pins Input Monitoring and
 # Accessibility to the binary's cdhash and every build silently revokes them.
-# Any code-signing identity works; this is the name the README's self-signed
-# certificate uses. Ad-hoc stays the fallback so a fresh checkout still builds.
+# Try the local development identity before falling back to ad-hoc signing so
+# a fresh checkout still builds without a certificate.
 DEFAULT_SIGN_IDENTITY="Sniptype Dev"
 DIST_ROOT="$REPO_DIR/dist"
 TARGET_APP="$DIST_ROOT/$APP_NAME.app"

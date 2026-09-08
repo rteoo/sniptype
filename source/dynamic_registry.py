@@ -262,6 +262,10 @@ def validate_rename(registry, key, new_trigger, snippets=None):
     candidate = new_trigger.strip() if isinstance(new_trigger, str) else ""
     if not candidate:
         return (["O trigger não pode ficar vazio."], [])
+    if candidate.startswith("_"):
+        errors.append(
+            "O trigger não pode começar com '_', pois esse prefixo é reservado para mapeamentos."
+        )
     if any(ch.isspace() for ch in candidate):
         errors.append("O trigger não pode conter espaços em branco.")
 
