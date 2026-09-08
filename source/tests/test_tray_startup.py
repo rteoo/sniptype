@@ -15,6 +15,8 @@ import tempfile
 import threading
 import types
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 from unittest import mock
 
@@ -54,8 +56,11 @@ class RunStartupTests(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def _run(self, main_thread, options=None):
+    @staticmethod
+    def _run(main_thread, options=None, snippets=None):
         app = make_startup_app()
+        if snippets is not None:
+            app.snippets = snippets
         icon = mock.Mock()
         with mock.patch.object(tx.pystray, "Icon", return_value=icon) as icon_cls, \
                 mock.patch.object(
@@ -93,6 +98,25 @@ class RunStartupTests(unittest.TestCase):
         acquire.assert_not_called()
 
 
+class RunStartupOutputTests(unittest.TestCase):
+    def test_startup_output_does_not_include_trigger_or_payload_values(self):
+        snippets = {
+            "MARKER_TRIGGER_ALPHA": "MARKER_PAYLOAD_ALPHA",
+            "MARKER_TRIGGER_BETA": {"__kind__": "rich_text", "text": "MARKER_PAYLOAD_BETA"},
+            "_marker_mapping": {"marker": "MARKER_MAPPING_VALUE"},
+            "MARKER_DYNAMIC": lambda: "MARKER_DYNAMIC_VALUE",
+        }
+        output = StringIO()
+        with redirect_stdout(output):
+            RunStartupTests._run(main_thread=False, snippets=snippets)
+
+        rendered = output.getvalue()
+        self.assertNotIn("MARKER_", rendered)
+        self.assertNotIn("_marker_mapping", rendered)
+        self.assertIn("Snippets carregados (estáticos, não-callable): 2", rendered)
+        self.assertIn("Snippets dinâmicos: 1", rendered)
+
+
 class StartupAndSingleInstanceCompatibilityTests(unittest.TestCase):
     class Kernel32:
         def __init__(self, errors):
@@ -123,7 +147,7 @@ class StartupAndSingleInstanceCompatibilityTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def _run(self, main_thread, options=None):
-        return RunStartupTests._run(self, main_thread, options)
+        return RunStartupTests._run(main_thread, options)
 
     def _acquire(self, errors):
         kernel32 = self.Kernel32(errors)

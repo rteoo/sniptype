@@ -1,7 +1,7 @@
 ; Inno Setup script for Sniptype — per-user install, no admin required.
 ;
 ; Build: run build_release.bat first (produces dist\Sniptype), then
-; build_installer.bat (compiles this script into installer\).
+; build_installer.bat (compiles this script into installer\Output\).
 ;
 ; User data lives in %USERPROFILE%\.sniptype and is intentionally NOT removed
 ; on uninstall — the installer only manages the program files under {app}.

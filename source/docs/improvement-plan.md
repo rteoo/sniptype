@@ -1,5 +1,9 @@
 # Sniptype — Improvement Plan
 
+> Historical implementation roadmap. Status and verification counts below are
+> dated snapshots. Current workflows are in [development.md](development.md);
+> the [September cleanup audit](cleanup-audit-2026-09.md) tracks current follow-ups.
+
 > **Status (2026-07-20):** Phases 0–4 fully implemented; Phases 5–6 implemented except two items that need a running app / non-Windows host to verify. Full unittest suite green (261 tests). Phase 5.1 (single Tk root, audit 3.3) and Phase 6 clipboard backend split (`clipboard_support.py`, last hard Win32 coupling) both landed 2026-07-20 — the POSIX backend is plain-text only and unverified on a real macOS/Linux host. Phase 5 Treeview list/preview (4.2) landed 2026-07-20; the autostart adapter is wired to a tray toggle and the ticker dialog moved to Tk with Phase 5.1, closing the adapter follow-ups. Remaining, tracked follow-up: Phase 6 rich-text paste off Windows.
 
 Companion to [audit-report.md](audit-report.md). Seven phases (0–6), ordered so that guideline compliance and data safety land before anything else and each phase ships independently. Constraint honored throughout: **JSON files only — no database.**
@@ -132,4 +136,6 @@ Effort: large, but Phases 2 and 5 will have already removed most couplings. Ship
 
 Each phase = one branch, one PR, tests included (`python -m unittest discover -s tests -v` green). Phases 1+2 can be combined into a single release since both are prerequisites for trusting the data layer; everything after that is incremental.
 
-Immediate manual step (before any code lands): copy `dist/Sniptype/snippets.json` somewhere safe today — it is currently the only copy of the live library.
+The original instruction to back up `dist/Sniptype/snippets.json` applied to
+the pre-migration layout. The live library now lives in `~/.sniptype` (or
+`SNIPTYPE_HOME`), with rotating backups; `dist` is generated application output.

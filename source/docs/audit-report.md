@@ -1,5 +1,11 @@
 # Sniptype — Audit Report
 
+> Historical findings from July 2026, retained for context. Many findings below
+> were resolved by the [remediation plan](improvement-plan.md); they do not
+> describe the current runtime or data locations. See [development.md](development.md)
+> for current workflows and [cleanup-audit-2026-09.md](cleanup-audit-2026-09.md)
+> for the latest cleanup audit and tracked follow-ups.
+
 Date: 2026-07-16
 Scope: full source review (`source/*.py`, `sniptype.pyw`, `build_release.bat`, `Sniptype.spec`, `snippets.json` in source and dist), focused on data safety, performance, UI, and cross-platform portability.
 

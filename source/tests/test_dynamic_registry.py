@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import dynamic_registry as dr
+from trigger_index import compile_trigger_index, find_direct_trigger
 
 
 class FakeBCB:
@@ -549,6 +550,21 @@ class ValidateRenameAdversarialTests(unittest.TestCase):
         # A rich-text dict snippet still counts as a static trigger name.
         errors = self._errors("relatorio")
         self.assertTrue(any("est" in e.lower() for e in errors))
+
+    def test_leading_underscore_trigger_is_rejected_after_stripping(self):
+        errors = self._errors(" _broken ")
+        self.assertTrue(any("começar" in error.lower() for error in errors))
+
+    def test_internal_underscore_trigger_is_accepted_and_indexed(self):
+        errors, _ = dr.validate_rename(self.registry, "xhj", "x_data", self.snippets)
+        self.assertEqual([], errors)
+
+        snippets, _ = dr.build_dynamic_snippets(
+            {"xhj": {**self.registry["xhj"], "trigger": "x_data"}}, FakeContext()
+        )
+        index = compile_trigger_index(snippets, set())
+        self.assertIn("x_data", index["direct_triggers"])
+        self.assertEqual("x_data", find_direct_trigger("prefixx_data", index))
 
 
 # --------------------------------------------------------------------------- #

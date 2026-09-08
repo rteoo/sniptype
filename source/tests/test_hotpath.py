@@ -407,20 +407,11 @@ class OnPressSpecialKeyTests(unittest.TestCase):
         self.assertEqual("ab", self.app.typed_text)
 
     def test_enter_resets_the_buffer(self):
-        # KNOWN DEFECT — kept as a failing regression marker (no source fix).
-        # on_press (sniptype.pyw:1304) guards with ``hasattr(key, 'char')``,
-        # which is False for Key.enter, so the try body short-circuits WITHOUT
-        # touching key.char, no AttributeError is raised, and the
-        # ``except AttributeError`` block that clears the buffer is dead code.
-        # The code's own comment says "Enter always just resets the buffer".
         self._press("ab")
         self.app.on_press(Key.enter)
         self.assertEqual("", self.app.typed_text)
 
     def test_backspace_pops_the_last_buffered_char(self):
-        # KNOWN DEFECT — same root cause as Enter. Backspace never pops the
-        # buffer, so detection diverges from the on-screen text after a typo
-        # correction (stale chars accumulate → missed or phantom matches).
         self._press("abx")
         self.app.on_press(Key.backspace)
         self.assertEqual("ab", self.app.typed_text)
