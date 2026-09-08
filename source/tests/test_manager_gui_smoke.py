@@ -902,6 +902,13 @@ class ModalDialogSerializationTests(unittest.TestCase):
 
     def setUp(self):
         self.app = _make_app(tempfile.mkdtemp())
+        for name, result in (
+            ("capture_text_target", ("hwnd", 42)),
+            ("restore_text_target", True),
+        ):
+            patcher = mock.patch.object(tx.platform_support, name, return_value=result)
+            patcher.start()
+            self.addCleanup(patcher.stop)
         self.app.gui.ensure_started()
         self.results = {}
 

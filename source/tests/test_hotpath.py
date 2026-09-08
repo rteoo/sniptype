@@ -155,6 +155,9 @@ class ModalDialogFocusTests(unittest.TestCase):
         self.tmp = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.tmp, True)
         self.app = make_app(self.tmp, {"xhi": "hello"})
+        self._non_windows = mock.patch.object(tx.platform_support, "IS_WINDOWS", False)
+        self._non_windows.start()
+        self.addCleanup(self._non_windows.stop)
         root = object()
         self.app.gui = mock.Mock()
         self.app.gui.call.side_effect = lambda callback: callback(root)
@@ -229,6 +232,98 @@ class ModalDialogFocusTests(unittest.TestCase):
                     None,
                     "ticker",
                 )
+
+    def test_windows_focus_is_restored_to_the_exact_target(self):
+        events = []
+        target = ("hwnd", 42)
+
+        def build(root):
+            events.append(("build", root))
+            return "Ada"
+
+        with mock.patch.object(tx.platform_support, "IS_WINDOWS", True), \
+                mock.patch.object(
+                    tx.platform_support,
+                    "capture_text_target",
+                    side_effect=lambda: events.append(("capture", None)) or target,
+                ), mock.patch.object(
+                    tx.platform_support,
+                    "restore_text_target",
+                    side_effect=lambda value: events.append(("restore", value)) or True,
+                ):
+            result = self.app._run_modal_dialog(build, None, "campos")
+
+        self.assertEqual("Ada", result)
+        self.assertEqual(
+            [("capture", None), ("build", mock.ANY), ("restore", target)],
+            events,
+        )
+
+    def test_windows_missing_target_fails_closed_before_showing_dialog(self):
+        build = mock.Mock(return_value="Ada")
+        with mock.patch.object(tx.platform_support, "IS_WINDOWS", True), \
+                mock.patch.object(
+                    tx.platform_support, "capture_text_target", return_value=None
+                ), mock.patch.object(
+                    tx.platform_support, "restore_text_target"
+                ) as restore:
+            with self.assertRaisesRegex(RuntimeError, "capture"):
+                self.app._run_modal_dialog(build, None, "campos")
+
+        build.assert_not_called()
+        restore.assert_not_called()
+
+    def test_windows_restore_failure_discards_dialog_result(self):
+        target = ("hwnd", 42)
+        with mock.patch.object(tx.platform_support, "IS_WINDOWS", True), \
+                mock.patch.object(
+                    tx.platform_support, "capture_text_target", return_value=target
+                ), mock.patch.object(
+                    tx.platform_support, "restore_text_target", return_value=False
+                ) as restore:
+            with self.assertRaisesRegex(RuntimeError, "restore"):
+                self.app._run_modal_dialog(lambda _root: "Ada", None, "campos")
+
+        restore.assert_called_once_with(target)
+
+    def test_windows_cancelled_dialog_restores_target_and_releases_lock(self):
+        target = ("hwnd", 42)
+        with mock.patch.object(tx.platform_support, "IS_WINDOWS", True), \
+                mock.patch.object(
+                    tx.platform_support, "capture_text_target", return_value=target
+                ), mock.patch.object(
+                    tx.platform_support, "restore_text_target", return_value=True
+                ) as restore:
+            self.assertIsNone(
+                self.app._run_modal_dialog(lambda _root: None, None, "campos")
+            )
+            self.assertEqual(
+                "again",
+                self.app._run_modal_dialog(lambda _root: "again", None, "campos"),
+            )
+
+        self.assertEqual(2, restore.call_count)
+
+    def test_windows_dialog_exception_restores_target_and_releases_lock(self):
+        target = ("hwnd", 42)
+        with mock.patch.object(tx.platform_support, "IS_WINDOWS", True), \
+                mock.patch.object(
+                    tx.platform_support, "capture_text_target", return_value=target
+                ), mock.patch.object(
+                    tx.platform_support, "restore_text_target", return_value=True
+                ) as restore:
+            with self.assertRaisesRegex(ValueError, "dialog failed"):
+                self.app._run_modal_dialog(
+                    lambda _root: (_ for _ in ()).throw(ValueError("dialog failed")),
+                    None,
+                    "campos",
+                )
+            self.assertEqual(
+                "again",
+                self.app._run_modal_dialog(lambda _root: "again", None, "campos"),
+            )
+
+        self.assertEqual(2, restore.call_count)
 
 
 class ClipboardSerializationTests(unittest.TestCase):
