@@ -1142,10 +1142,6 @@ class Sniptype:
     # SPECIAL PATTERNS (cnpj/cpf/cge)
     # =====================================================================
 
-    def get_all_dynamic_prefixes(self):
-        """Return all dynamic mapping prefixes (built-in + custom)."""
-        return get_dynamic_prefixes(self.snippets)
-
     def check_dynamic_pattern(self, text: str):
         """Check whether the text matches a dynamic pattern (cnpj/cpf/cge/custom)."""
         return resolve_dynamic_pattern(self.snippets, text)
@@ -5110,18 +5106,12 @@ class Sniptype:
             print("\n⚠ Executando SEM privilégios de administrador")
             print("  Funcionará na maioria dos aplicativos comuns")
         
-        print("\n📝 Snippets carregados (estáticos, não-callable):")
-        static_count = 0
-        for trigger, value in self.snippets.items():
-            if trigger.startswith("_") or callable(value):
-                continue
-            static_count += 1
-            if static_count <= 5:
-                preview = extract_plain_text(value).replace("\n", " ")[:40]
-                print(f"  • {trigger:15s} → {preview}")
-        
-        if static_count > 5:
-            print(f"  ... e mais {static_count - 5} snippets estáticos")
+        static_count = sum(
+            1
+            for trigger, value in self.snippets.items()
+            if not trigger.startswith("_") and not callable(value)
+        )
+        print(f"\n📝 Snippets carregados (estáticos, não-callable): {static_count}")
         
         dynamic_count = sum(1 for v in self.snippets.values() if callable(v))
         print(f"\n📊 Snippets dinâmicos: {dynamic_count}")

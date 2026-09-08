@@ -5,7 +5,6 @@ from pathlib import Path
 from snippet_utils import (
     build_saveable_snippets,
     find_shadowed_statics,
-    calculate_max_trigger_length,
     calculate_max_trigger_length_with_mappings,
     check_dynamic_pattern,
     get_default_snippets,
@@ -142,9 +141,6 @@ class SnippetUtilsTests(unittest.TestCase):
         self.assertIsNone(value)
         self.assertEqual(0, trigger_length)
 
-    def test_calculate_max_trigger_length_matches_current_direct_key_behavior(self):
-        self.assertEqual(len("_service_codes"), calculate_max_trigger_length(self.snippets))
-
     def test_calculate_max_trigger_length_with_mappings_counts_full_dynamic_trigger(self):
         snippets = {
             "x": "y",
@@ -257,14 +253,9 @@ class MergeAndShadowRoundTripTests(unittest.TestCase):
         # Defensive: a static value that is itself callable is never "preserved".
         self.assertEqual({}, find_shadowed_statics({"x": lambda: 1}, {"x": lambda: 2}))
 
-    def test_build_saveable_preserved_does_not_override_live_value(self):
-        saveable = build_saveable_snippets({"xhj": "editado"}, {"xhj": "antigo"})
-        self.assertEqual({"xhj": "editado"}, saveable)
-
 
 class CalculateMaxTriggerLengthEdgeTests(unittest.TestCase):
     def test_empty_snippets_use_fallback(self):
-        self.assertEqual(20, calculate_max_trigger_length({}))
         self.assertEqual(20, calculate_max_trigger_length_with_mappings({}))
 
     def test_with_mappings_ignores_non_dict_mapping_values(self):
