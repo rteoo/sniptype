@@ -132,6 +132,15 @@ class TranscribeCppBackend(AsrBackend):
         self._module = None
         self._profile = None
         self._language = None
+        self._state = threading.Condition(threading.Lock())
+        self._active_operations = 0
+        self._stream_operations = []
+        self._stream_starting = False
+        self._starting_streams = []
+        self._pending_stream_closes = []
+        self._stream_epoch = 0
+        self._cancel_in_progress = 0
+        self._unloading = False
 
     def available(self):
         return self._import() is not None
@@ -153,76 +162,108 @@ class TranscribeCppBackend(AsrBackend):
                 "O runtime transcribe.cpp não está instalado neste aplicativo."
             )
         self.unload()
+        with self._state:
+            while self._unloading or self._cancel_in_progress:
+                self._state.wait()
+            self._begin_operation_locked()
+        model = None
+        session = None
         try:
-            self._model = module.Model(model_path)
-            self._session = self._model.session()
+            model = module.Model(model_path)
+            session = model.session()
         except Exception as exc:
-            self.unload()
+            self._close_resource(session)
+            self._close_resource(model)
             raise VoiceRuntimeError(f"Falha ao carregar o modelo de voz: {exc}") from exc
-        self._profile = profile
-        entry = catalog_entry(profile)
-        if entry and entry.get("language_hint") == "unsupported":
-            self._language = LANGUAGE_AUTO
         else:
-            self._language = language
+            entry = catalog_entry(profile)
+            model_language = (
+                LANGUAGE_AUTO
+                if entry and entry.get("language_hint") == "unsupported"
+                else language
+            )
+            with self._state:
+                self._model = model
+                self._session = session
+                self._profile = profile
+                self._language = model_language
+        finally:
+            self._end_operation()
 
     def unload(self):
-        stream = self._stream
-        self._stream = None
-        if stream is not None:
-            try:
-                close = getattr(stream, "close", None)
-                if close is not None:
-                    close()
-            except Exception:
-                pass
-        session = self._session
-        self._session = None
-        if session is not None:
-            try:
-                close = getattr(session, "close", None)
-                if close is not None:
-                    close()
-            except Exception:
-                pass
-        model = self._model
-        self._model = None
-        if model is not None:
-            try:
-                close = getattr(model, "close", None)
-                if close is not None:
-                    close()
-            except Exception:
-                pass
-        self._profile = None
-        self._language = None
+        with self._state:
+            while self._unloading or self._active_operations or self._cancel_in_progress:
+                self._state.wait()
+            self._unloading = True
+            self._stream_epoch += 1
+            if self._stream is not None:
+                self._append_pending_stream_locked(self._stream)
+                self._stream = None
+            streams = self._take_ready_streams_locked()
+            session = self._session
+            self._session = None
+            model = self._model
+            self._model = None
+            self._profile = None
+            self._language = None
+        try:
+            self._close_streams(streams)
+            if session is not None:
+                self._close_resource(session)
+            if model is not None:
+                self._close_resource(model)
+        finally:
+            with self._state:
+                self._unloading = False
+                self._state.notify_all()
 
     def is_loaded(self):
-        return self._session is not None
+        with self._state:
+            return self._session is not None
 
     def _language_kw(self):
-        if self._language in (None, LANGUAGE_AUTO):
+        with self._state:
+            language = self._language
+        if language in (None, LANGUAGE_AUTO):
             return {}
-        return {"language": _MODEL_LANGUAGE_CODES.get(self._language, self._language)}
+        return {"language": _MODEL_LANGUAGE_CODES.get(language, language)}
 
     def cancel(self):
-        session = self._session
-        if session is None:
-            return
-        cancel = getattr(session, "cancel", None)
-        if cancel is None:
-            return
+        with self._state:
+            self._cancel_in_progress += 1
+            self._stream_epoch += 1
+            session = self._session
+            self._append_pending_stream_locked(self._stream)
+            self._stream = None
+            for stream in self._starting_streams:
+                self._append_pending_stream_locked(stream)
+            streams = self._take_ready_streams_locked()
+        self._close_streams(streams)
         try:
-            cancel()
+            cancel = getattr(session, "cancel", None) if session is not None else None
+            if cancel is not None:
+                cancel()
         except Exception:
             pass
+        finally:
+            with self._state:
+                self._cancel_in_progress -= 1
+                self._state.notify_all()
+                streams = self._take_ready_streams_locked()
+            self._close_streams(streams)
 
     def transcribe(self, pcm, cancel_event=None):
-        if self._session is None:
-            raise VoiceRuntimeError("Nenhum modelo de voz está carregado.")
+        with self._state:
+            session = self._session
+            if session is None or self._unloading:
+                raise VoiceRuntimeError("Nenhum modelo de voz está carregado.")
+            self._begin_operation_locked()
         if cancel_event is not None and cancel_event.is_set():
-            self.cancel()
-            raise VoiceRuntimeError("Transcrição cancelada.")
+            try:
+                self.cancel()
+                raise VoiceRuntimeError("Transcrição cancelada.")
+            finally:
+                self._end_operation()
         done = threading.Event()
 
         def watch():
@@ -239,37 +280,205 @@ class TranscribeCppBackend(AsrBackend):
             watcher.start()
         try:
             try:
-                result = self._session.run(pcm, **self._language_kw())
+                result = session.run(pcm, **self._language_kw())
             except TypeError:
-                result = self._session.run(pcm)
+                result = session.run(pcm)
         except Exception as exc:
             raise VoiceRuntimeError(f"Falha na transcrição: {exc}") from exc
         finally:
             done.set()
             if watcher is not None:
                 watcher.join(0.2)
+            streams = self._end_operation()
+            self._close_streams(streams)
         if cancel_event is not None and cancel_event.is_set():
             raise VoiceRuntimeError("Transcrição cancelada.")
         return _result_text(result)
 
+    @staticmethod
+    def _close_resource(resource):
+        close = getattr(resource, "close", None)
+        if close is None:
+            return
+        try:
+            close()
+        except Exception:
+            pass
+
+    @classmethod
+    def _close_stream(cls, stream):
+        close = getattr(stream, "close", None) or getattr(stream, "__exit__", None)
+        if close is None:
+            return
+        try:
+            if close == getattr(stream, "__exit__", None):
+                close(None, None, None)
+            else:
+                close()
+        except Exception:
+            pass
+
+    def _close_streams(self, streams):
+        if not streams:
+            return
+        try:
+            for stream in streams:
+                self._close_stream(stream)
+        finally:
+            with self._state:
+                self._active_operations -= len(streams)
+                self._state.notify_all()
+
+    def _append_pending_stream_locked(self, stream):
+        if stream is not None and not any(
+            pending is stream for pending in self._pending_stream_closes
+        ):
+            self._pending_stream_closes.append(stream)
+
+    def _replace_stream_identity_locked(self, previous, current):
+        if previous is None or previous is current:
+            return
+        self._starting_streams = [
+            current if stream is previous else stream for stream in self._starting_streams
+        ]
+        self._pending_stream_closes = [
+            current if stream is previous else stream
+            for stream in self._pending_stream_closes
+        ]
+        self._stream_operations = [
+            (current if stream is previous else stream, count)
+            for stream, count in self._stream_operations
+        ]
+
+    def _take_ready_streams_locked(self):
+        active = [stream for stream, count in self._stream_operations if count]
+        ready = [
+            stream
+            for stream in self._pending_stream_closes
+            if not any(active_stream is stream for active_stream in active)
+        ]
+        self._pending_stream_closes = [
+            stream
+            for stream in self._pending_stream_closes
+            if any(active_stream is stream for active_stream in active)
+        ]
+        self._active_operations += len(ready)
+        return ready
+
+    def _begin_operation_locked(self, stream=None):
+        self._active_operations += 1
+        if stream is not None:
+            for index, (active_stream, count) in enumerate(self._stream_operations):
+                if active_stream is stream:
+                    self._stream_operations[index] = (stream, count + 1)
+                    break
+            else:
+                self._stream_operations.append((stream, 1))
+
+    def _end_operation(self, stream=None):
+        with self._state:
+            self._active_operations -= 1
+            if stream is not None:
+                for index, (active_stream, count) in enumerate(self._stream_operations):
+                    if active_stream is stream:
+                        if count > 1:
+                            self._stream_operations[index] = (stream, count - 1)
+                        else:
+                            self._stream_operations.pop(index)
+                        break
+            streams = self._take_ready_streams_locked()
+            self._state.notify_all()
+            return streams
+
     def supports_stream(self):
-        return self._profile == PROFILE_STREAMING and self._session is not None and hasattr(
-            self._session, "stream"
+        with self._state:
+            session = self._session
+            profile = self._profile
+        return profile == PROFILE_STREAMING and session is not None and hasattr(
+            session, "stream"
         )
 
     def start_stream(self):
-        if not self.supports_stream():
-            raise VoiceRuntimeError("Este perfil não faz transcrição contínua.")
-        self._stream = self._session.stream()
-        enter = getattr(self._stream, "__enter__", None)
-        if enter is not None:
-            self._stream = enter()
+        with self._state:
+            while self._cancel_in_progress:
+                self._state.wait()
+            session = self._session
+            if (
+                self._unloading
+                or self._profile != PROFILE_STREAMING
+                or session is None
+                or not hasattr(session, "stream")
+            ):
+                raise VoiceRuntimeError("Este perfil não faz transcrição contínua.")
+            if (
+                self._active_operations
+                or self._stream is not None
+                or self._stream_starting
+                or self._starting_streams
+            ):
+                raise VoiceRuntimeError("A transcrição contínua já está ativa.")
+            self._stream_starting = True
+            epoch = self._stream_epoch
+            self._begin_operation_locked()
+        stream = None
+        entered_stream = None
+        try:
+            stream = session.stream()
+            with self._state:
+                if stream is not None:
+                    self._starting_streams.append(stream)
+                    self._begin_operation_locked(stream)
+            enter = getattr(stream, "__enter__", None)
+            entered_stream = enter() if enter is not None else stream
+            if entered_stream is None:
+                entered_stream = stream
+            if entered_stream is not stream:
+                with self._state:
+                    self._replace_stream_identity_locked(stream, entered_stream)
+            with self._state:
+                stale = (
+                    epoch != self._stream_epoch
+                    or self._cancel_in_progress
+                    or self._unloading
+                    or session is not self._session
+                )
+                if stale:
+                    self._append_pending_stream_locked(entered_stream)
+                else:
+                    self._stream = entered_stream
+        except Exception:
+            with self._state:
+                self._append_pending_stream_locked(entered_stream or stream)
+            raise
+        finally:
+            with self._state:
+                self._stream_starting = False
+                if stream is not None:
+                    self._starting_streams = [
+                        current
+                        for current in self._starting_streams
+                        if current is not stream and current is not entered_stream
+                    ]
+            operation_stream = entered_stream if entered_stream is not None else stream
+            if operation_stream is not None:
+                streams = self._end_operation(operation_stream)
+                self._close_streams(streams)
+            streams = self._end_operation()
+            self._close_streams(streams)
 
     def feed(self, pcm_chunk):
-        if self._stream is None:
-            return ""
-        self._stream.feed(pcm_chunk)
-        text = self._stream.text()
+        with self._state:
+            stream = self._stream
+            if stream is None or self._unloading:
+                return ""
+            self._begin_operation_locked(stream)
+        text = ""
+        try:
+            stream.feed(pcm_chunk)
+            text = stream.text()
+        finally:
+            streams = self._end_operation(stream)
+            self._close_streams(streams)
         committed = getattr(text, "committed", None)
         tentative = getattr(text, "tentative", None)
         if committed is None and tentative is None:
@@ -277,10 +486,13 @@ class TranscribeCppBackend(AsrBackend):
         return f"{committed or ''}{tentative or ''}"
 
     def finalize_stream(self):
-        stream = self._stream
-        self._stream = None
-        if stream is None:
-            return ""
+        with self._state:
+            stream = self._stream
+            self._stream = None
+            if stream is None:
+                return ""
+            self._append_pending_stream_locked(stream)
+            self._begin_operation_locked(stream)
         try:
             finalize = getattr(stream, "finalize", None)
             if finalize is not None:
@@ -288,15 +500,8 @@ class TranscribeCppBackend(AsrBackend):
             text = stream.text()
             return _result_text(text)
         finally:
-            close = getattr(stream, "close", None) or getattr(stream, "__exit__", None)
-            if close is not None:
-                try:
-                    if close == getattr(stream, "__exit__", None):
-                        close(None, None, None)
-                    else:
-                        close()
-                except Exception:
-                    pass
+            streams = self._end_operation(stream)
+            self._close_streams(streams)
 
 
 def _result_text(result):
