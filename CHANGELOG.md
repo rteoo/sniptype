@@ -2,6 +2,60 @@
 
 All notable changes to Sniptype are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [3.5.0] — 2026-09-08
+
+Stable Windows release following the `3.5.0-beta.2` preview. Voice remains
+optional and disabled by default. The macOS ARM64 package remains available
+as `v3.5.0-beta.2`; this release publishes a Windows installer.
+
+### Added
+
+- Recoverable local voice history with append-only audio journals and explicit
+  transcription retry to history/clipboard.
+- Qwen Compact profile and deterministic user-configured dictation corrections,
+  with raw transcripts retained and spoken commands kept exact.
+- `--show-manager` opens the manager after desktop startup, supporting direct
+  access and packaged desktop validation with a separate `SNIPTYPE_HOME`.
+- Focused development lint and a separate native voice CI matrix that fails
+  when a required runtime or DSP test skips.
+
+### Changed
+
+- Refreshed the manager layout and voice controls, retaining the shared GUI
+  thread and native platform appearance.
+- Isolated native transcription behind a local provider and packaged the
+  pinned streaming SoXR runtime with its required notices.
+- Removed unused helpers, duplicate test coverage and stale comments; routine
+  startup output reports library counts without snippet contents.
+- Dynamic registry `enabled` values now require JSON booleans. Invalid types
+  disable only that entry with an actionable warning; the manager toggle repairs
+  older hand-edited values without dropping neighboring overrides.
+
+### Fixed
+
+- Voice startup now reserves one session and honors release/cancellation while
+  capture starts. Dispatch rechecks cancellation after target restoration and
+  before committing app callbacks; stale history retries cannot commit results
+  or copy text into a newer session.
+- Missing capture runtime keeps optional voice unavailable. The offline behavior
+  probe replaces the stale standalone harness.
+- Cancelling an experimental native stream closes it after pending native work
+  finishes, fences late startup results, and prevents overlapping starts from
+  overwriting resources. Streaming remains unavailable in user settings.
+- Mapping saves reject reserved metadata names and duplicate prefixes, warn
+  before static snippets hide mappings, and restore prior state on failed saves.
+- Secure Keyboard Entry notices queue during tray startup and retain their
+  existing cooldown.
+- Failed Windows package promotion preserves a recoverable previous build and
+  verifies rollback instead of silently discarding recovery files.
+- Both package builders include the application's MIT license alongside the
+  third-party notices.
+- Dynamic names beginning with the reserved `_` prefix are rejected before
+  persistence instead of becoming unreachable triggers.
+- Included earlier beta fixes for model integrity, hotkeys, clipboard variables,
+  rich-text spans, required backups, WhatsApp validation, POSIX locking and
+  settings normalization.
+
 ## [3.4.0] — 2026-08-24
 
 Promotes `3.4.0` from beta to the stable channel. Optional voice input ships
@@ -403,7 +457,7 @@ behavioral change and warrants a major version bump.
 
 ## Versioning Strategy
 
-- **Stable channel**: the latest `vMAJOR.MINOR.PATCH` tag and non-prerelease artifact; currently `v3.4.0`.
-- **Beta channel**: the next product version with an explicit `beta` channel label; current source targets `3.5.0 beta`.
+- **Stable channel**: the latest `vMAJOR.MINOR.PATCH` tag and non-prerelease artifact; currently `v3.5.0` for Windows.
+- **Beta channel**: a preview with an explicit `beta` channel label; the macOS package remains `v3.5.0-beta.2` pending its packaged desktop validation.
 - **Beta tags**: use `vMAJOR.MINOR.PATCH-beta.N` and mark the corresponding GitHub Release as a prerelease.
 - **Promotion**: beta becomes stable only after the full supported-OS test matrix and packaged desktop smoke tests pass. Promotion removes the channel suffix without changing the tested product version.
