@@ -36,8 +36,8 @@ An optional terminator mode waits for a following space or punctuation mark.
 
 ## Quick start
 
-Sniptype currently runs from source or from a locally built package. On Windows
-with Python installed:
+Download the Windows installer from the [stable release](https://github.com/rteoo/sniptype/releases/tag/v3.5.0).
+To run from source with Python installed:
 
 ```powershell
 git clone https://github.com/rteoo/sniptype.git
@@ -51,11 +51,12 @@ Ordinary text expansion does not require the optional voice dependencies.
 
 ### Releases and installer
 
-The current stable source tag is
-[`v3.4.0`](https://github.com/rteoo/sniptype/tree/v3.4.0). The current preview is
-[`v3.5.0-beta.2`](https://github.com/rteoo/sniptype/releases/tag/v3.5.0-beta.2),
-which adds recoverable voice history, the local-provider boundary, and the Qwen
-Compact profile. See the [development guide](source/docs/development.md) to build
+The current stable release is
+[`v3.5.0`](https://github.com/rteoo/sniptype/releases/tag/v3.5.0) for Windows, with
+recoverable voice history, the local-provider boundary, and the Qwen Compact
+profile. The macOS ARM64 package remains the
+[`v3.5.0-beta.2` preview](https://github.com/rteoo/sniptype/releases/tag/v3.5.0-beta.2).
+See the [development guide](source/docs/development.md) to build
 the Windows package and installer or the macOS app locally.
 
 The installer is currently unsigned, so Windows SmartScreen may show
