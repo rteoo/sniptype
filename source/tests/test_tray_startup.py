@@ -57,7 +57,7 @@ class RunStartupTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     @staticmethod
-    def _run(main_thread, options=None, snippets=None):
+    def _run(main_thread, options=None, snippets=None, show_manager=False):
         app = make_startup_app()
         if snippets is not None:
             app.snippets = snippets
@@ -72,7 +72,7 @@ class RunStartupTests(unittest.TestCase):
                 mock.patch.object(
                     tx.platform_support, "tray_icon_options", return_value=dict(options or {})
                 ):
-            app.run()
+            app.run(show_manager=show_manager)
         return app, icon, icon_cls
 
     def test_windows_keeps_the_tray_on_the_main_thread(self):
@@ -96,6 +96,59 @@ class RunStartupTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, 0)
         probe.assert_called_once_with()
         acquire.assert_not_called()
+
+    def test_main_passes_show_manager_flag_into_startup(self):
+        for arguments, requested in (([], False), (["--show-manager"], True)):
+            with self.subTest(arguments=arguments):
+                expander = mock.Mock()
+                with mock.patch.object(tx, "IS_WINDOWS", True), \
+                        mock.patch.object(tx, "acquire_single_instance_mutex", return_value=True), \
+                        mock.patch.object(tx, "set_dpi_awareness"), \
+                        mock.patch.object(tx, "Sniptype", return_value=expander), \
+                        mock.patch.object(tx.sys, "argv", ["sniptype.pyw", *arguments]):
+                    tx.main()
+
+                expander.run.assert_called_once_with(show_manager=requested)
+
+    def test_show_manager_flag_opens_manager_through_existing_tray_action(self):
+        app = make_startup_app()
+        app.manage_snippets_gui = mock.Mock()
+        icon = mock.Mock()
+        with mock.patch.object(tx.pystray, "Icon", return_value=icon), \
+                mock.patch.object(
+                    tx.platform_support, "tk_runs_on_main_thread", return_value=False
+                ), \
+                mock.patch.object(
+                    tx.platform_support, "hide_dock_icon", return_value=True
+                ), \
+                mock.patch.object(tx.platform_support, "tray_icon_options", return_value={}):
+            app.run(show_manager=True)
+
+        app.manage_snippets_gui.assert_called_once_with(None, None)
+
+    def test_default_startup_does_not_open_manager(self):
+        app = make_startup_app()
+        app.manage_snippets_gui = mock.Mock()
+        icon = mock.Mock()
+        with mock.patch.object(tx.pystray, "Icon", return_value=icon), \
+                mock.patch.object(
+                    tx.platform_support, "tk_runs_on_main_thread", return_value=True
+                ), \
+                mock.patch.object(
+                    tx.platform_support, "hide_dock_icon", return_value=True
+                ), \
+                mock.patch.object(tx.platform_support, "tray_icon_options", return_value={}):
+            app.run()
+
+        app.manage_snippets_gui.assert_not_called()
+
+    def test_macos_show_manager_uses_gui_submission_boundary(self):
+        app, _icon, _icon_cls = self._run(main_thread=True, show_manager=True)
+
+        app.gui.submit.assert_called_once()
+        callback = app.gui.submit.call_args.args[0]
+        self.assertIs(callback.__self__, app)
+        self.assertEqual(callback.__name__, "_show_manager_window")
 
 
 class RunStartupOutputTests(unittest.TestCase):

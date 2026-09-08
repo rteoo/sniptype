@@ -15,6 +15,19 @@ keyboard listener, and failed or empty captures do not paste.
 
 ## Expected Observable Behavior
 - Voice defaults to disabled / unavailable.
+- Enabling voice keeps it unavailable when the configured capture runtime is
+  missing; the model is not loaded until capture is ready.
+- Cancellation is checked again after blocking target readiness and immediately
+  before each application callback commits a side effect. A callback that has
+  already committed may finish and cannot be interrupted or undone. Queued Tk
+  form writes recheck their session token when they execute.
+- Capture, ASR, target restoration, and application callbacks run without the
+  controller state lock. Internal history metadata writes serialize with the
+  state transition; slow local disk I/O can therefore delay cancellation and
+  status updates during that commit.
+- If shutdown reaches its bounded wait while native inference is still running,
+  runtime unload is deferred until the worker exits; voice remains unavailable
+  during that cleanup.
 - A dictation result is inserted as literal text, even if it looks like a trigger.
 - A voice-command result expands only an exact trigger and does not insert the spoken word.
 - A form-field result updates the form callback and does not insert globally.

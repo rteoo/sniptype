@@ -1,19 +1,18 @@
 # Voice Input — Evaluation and Integration Plan
 
-## Implementation status (2026-09-01)
+## Implementation status (2026-09-08)
 
-The **opt-in module and stable-readiness hardening shipped** in the `3.4.0`
-stable release. Voice remains default-off. **Live dictation is not yet proven
-on target hardware**; the remaining physical-desktop and supported-OS items
-below are follow-up measurement and packaged-runtime validation, not more
-product surface.
+The opt-in module is implemented and remains default-off. The current Windows
+release target is 3.5.0; the macOS ARM64 artifact remains the 3.5.0 beta 2 preview.
+**Live microphone-to-paste ASR is not certified by the offline tests.** The
+remaining physical-desktop items below need separate target-machine evidence.
 
-| Implemented and covered | Follow-up after 3.4.0 |
+| Implemented and covered | Remaining physical evidence or product decision |
 |---|---|
 | Default-off push-to-talk with dedicated observer and exact end-of-hold semantics | Live microphone-to-paste ASR on Windows x64 and macOS ARM64 |
 | Dictation, spoken-trigger, and form-field dispatch without `_dispatch_expansion` | Parakeet and Qwen latency/accuracy adoption-gate measurements on target hardware |
 | User-selectable Balanced/Parakeet, Compact/Qwen 0.6B, and Accuracy/Qwen 1.7B profiles; Qwen forces automatic language detection | Handy-alongside shortcut and focus composition test |
-| SHA256 catalog and range-validated resumable model downloads | Hosted Windows/macOS/Linux matrix after Actions billing is restored |
+| SHA256 catalog and range-validated resumable model downloads | Real model-download interruption and recovery smoke on target machines |
 | Exact pinned release dependencies plus packaged native-runtime probe and Windows package smoke | Windows installer install/upgrade/uninstall smoke test |
 | ARM64 macOS package probe and physical focus check for the non-activating recording panel | Signed macOS build from an interactive keychain session and granted-TCC paste smoke |
 | Failed backend import, controller construction, or profile swap leaves normal expansion available | Nemotron live streaming and its OpenMDW-1.1 review |
@@ -579,7 +578,7 @@ and startup before accepting the size reduction.
 
 ## Next steps
 
-See [Implementation status](#implementation-status-2026-08-14). In order:
+See [Implementation status](#implementation-status-2026-09-08). In order:
 
 1. Run the Handy composition test on Windows and macOS.
 2. Rebuild from an isolated environment and confirm the PyInstaller excludes

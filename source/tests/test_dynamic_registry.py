@@ -480,13 +480,17 @@ class BuildDynamicAdversarialTests(unittest.TestCase):
         self.assertEqual(snippets["xcot"](), "cotacao-PETR4")
         self.assertEqual(called, ["Cotação"])
 
-    def test_string_enabled_false_still_binds(self):
-        # Footgun characterization: is_enabled uses bool(), so the JSON string
-        # "false" is truthy and does NOT disable the entry. Only a real boolean
-        # false (or 0/empty) disables it.
+    def test_string_enabled_false_is_disabled_with_actionable_warning(self):
         registry = {"x": {"provider": "datetime", "format": "%Y", "enabled": "false"}}
-        snippets, _ = dr.build_dynamic_snippets(registry, self.ctx)
-        self.assertIn("x", snippets)
+        logger = MagicMock()
+        snippets, _ = dr.build_dynamic_snippets(registry, self.ctx, logger=logger)
+        self.assertNotIn("x", snippets)
+        logger.warning.assert_called_once()
+        message = logger.warning.call_args.args[0]
+        self.assertIn("enabled", message)
+        self.assertIn("true", message)
+        self.assertIn("false", message)
+        self.assertIn("'x'", message)
 
 
 # --------------------------------------------------------------------------- #
@@ -594,15 +598,44 @@ class IsEnabledTests(unittest.TestCase):
     def test_explicit_false(self):
         self.assertFalse(dr.is_enabled({"enabled": False}))
 
-    def test_zero_is_false(self):
-        self.assertFalse(dr.is_enabled({"enabled": 0}))
+    def test_invalid_values_disable_only_the_affected_override_everywhere(self):
+        import sync_export
 
-    def test_empty_string_is_false(self):
-        self.assertFalse(dr.is_enabled({"enabled": ""}))
+        temp_root = os.path.join(os.path.dirname(__file__), "tmp")
+        os.makedirs(temp_root, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=temp_root) as folder:
+            bundled = os.path.join(folder, "bundled.json")
+            user = os.path.join(folder, "user.json")
+            with open(bundled, "w", encoding="utf-8") as handle:
+                json.dump({"x": {"provider": "datetime", "format": "%Y"}}, handle)
+            for value in (True, False, "false", "true", "", 0, 1, -1, 1.5, None, [], [1], {}):
+                with self.subTest(value=value):
+                    with open(user, "w", encoding="utf-8") as handle:
+                        json.dump({
+                            "x": {"enabled": value},
+                            "neighbor": {"provider": "datetime", "format": "%Y"},
+                            "broken": "malformed entry",
+                        }, handle)
+                    registry = dr.load_registry(bundled, user)
+                    self.assertEqual(registry["x"]["format"], "%Y")
+                    expected = value is True
+                    self.assertEqual(dr.is_enabled(registry["x"]), expected)
+                    runtime, _ = dr.build_dynamic_snippets(registry, FakeContext())
+                    displayed = {row[0]: row[3] for row in dr.reference_entries_by_category(registry)["datetime"]}
+                    bundle = sync_export.build_bundle({}, registry)
+                    exported = {row["id"] for row in bundle["dynamic"]}
+                    self.assertEqual("x" in runtime, expected)
+                    self.assertEqual(displayed["x"], expected)
+                    self.assertEqual("x" in exported, expected)
+                    self.assertIn("neighbor", runtime)
+                    self.assertTrue(displayed["neighbor"])
+                    self.assertIn("neighbor", exported)
+                    self.assertNotIn("broken", runtime)
 
-    def test_nonempty_string_false_is_truthy(self):
-        # Footgun: the string "false" is truthy under bool().
-        self.assertTrue(dr.is_enabled({"enabled": "false"}))
+    def test_malformed_entries_are_disabled(self):
+        for entry in (None, False, 1, "bad", [], [1]):
+            with self.subTest(entry=entry):
+                self.assertFalse(dr.is_enabled(entry))
 
 
 if __name__ == "__main__":

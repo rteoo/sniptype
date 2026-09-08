@@ -1,15 +1,18 @@
 # macOS tray + Tk threading model
 
-Investigation spike for [issue #24](https://github.com/rteoo/sniptype/issues/24):
-resolve how the pystray tray loop and the Tcl/Tk root coexist on macOS, where
-both frameworks demand the main thread.
+Historical investigation of pystray and Tcl/Tk main-thread ownership on macOS.
+The implemented contract is in [GuiThread](../gui_thread.py) and
+[platform support](../platform_support.py); the original work item predates
+this repository's current issue numbering.
 
-> **STATUS: resolved and verified on macOS.** Option 1 was prototyped and then
+> **STATUS: implemented; historical host evidence.** Option 1 was prototyped and then
 > implemented: the main thread runs Tk's `mainloop()` and the tray runs
-> detached on the `NSApplication` Tk created. Verified on macOS 15 (Darwin
-> 25.5.0), Python 3.14.6, Tk 9.0.3, pystray 0.19.5, pyobjc-Cocoa 12.2.1 — see
+> detached on the `NSApplication` Tk created. The original record lists macOS 15
+> and Darwin 25.5.0 (OS labels not rechecked), Python 3.14.6, Tk 9.0.3,
+> pystray 0.19.5, and pyobjc-Cocoa 12.2.1 — see
 > "What was measured" below. The Windows path is unchanged: it takes the same
-> branch it always did.
+> branch it always did. These measurements do not certify the current package;
+> a fresh macOS desktop smoke pass remains necessary.
 
 ## The collision
 

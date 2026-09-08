@@ -130,7 +130,7 @@ def build_accept_set(registry, logger=None):
     seen = set()
 
     for key, entry in registry.items():
-        if not isinstance(entry, dict) or not is_enabled(entry):
+        if not is_enabled(entry, logger=logger, key=key):
             continue
         trigger = effective_trigger(key, entry)
         if trigger in seen:
