@@ -59,6 +59,16 @@ STATE_ROUTING = "routing"
 
 _SHUTDOWN_JOIN_SECONDS = 2.0
 
+
+class _TrackedWorker:
+    """Track a task before its runner can execute it."""
+
+    __slots__ = ("done", "thread")
+
+    def __init__(self):
+        self.done = threading.Event()
+        self.thread = None
+
 _CAPTURE_ISSUE_MESSAGES = {
     CaptureIssue.DURATION_LIMIT: (
         "A gravação de voz atingiu o limite e foi cancelada. "
@@ -122,6 +132,7 @@ class VoiceController:
         download=None,
         history_store=None,
         history_dir=None,
+        capture_available=None,
     ):
         warnings = []
         self.settings = resolve_voice_settings(settings, warnings)
@@ -140,6 +151,7 @@ class VoiceController:
         self._restore_target = restore_target or (lambda target: True)
         self._secure_input_blocks = secure_input_blocks or (lambda: False)
         self._microphone_status = microphone_status
+        self._capture_available = capture_available
         self._on_status_change = on_status_change
         self._download_done = 0
         self._download_total = 0
@@ -169,13 +181,28 @@ class VoiceController:
         self._active_mode = None
         self._active_target = None
         self._session_form_apply = None
+        self._session_form_apply_guarded = None
         self._capture = None
+        self._capture_starting = False
+        self._startup_generation = None
+        self._starting_capture = None
+        self._starting_recording = None
         self._history_recording = None
+        self._retry_record_id = None
+        self._retry_generation = None
         self._form_apply = None
+        self._form_apply_guarded = None
+        self._form_guard_token = None
         self._partial = ""
         self._monitor = None
         self._load_error = None
         self._workers = []
+        self._workers_lock = threading.Lock()
+        self._unload_lock = threading.Lock()
+        self._unload_pending = False
+        self._unload_in_progress = False
+        self._clear_disable_after_unload = False
+        self._disable_requested = False
         self._stream_worker_events = {}
         self.last_outcome = None
         for warning in warnings:
@@ -196,6 +223,156 @@ class VoiceController:
         warning = getattr(logger, "warning", None) or getattr(logger, "info", None)
         if warning is not None:
             warning(message)
+
+    def _session_valid_locked(self, generation, state):
+        return (
+            generation == self._session_generation
+            and self._state == state
+            and not self._cancel.is_set()
+            and not self._shutdown.is_set()
+        )
+
+    def _session_invalid(self, generation, state):
+        with self._lock:
+            return not self._session_valid_locked(generation, state)
+
+    def _switch_valid_locked(self, generation):
+        return (
+            (generation is None or generation == self._session_generation)
+            and self.settings.enabled
+            and not self._shutdown.is_set()
+        )
+
+    def _run_session_side_effect(self, generation, callback, *args, **kwargs):
+        """Run one irreversible session callback while its generation owns state."""
+        with self._lock:
+            if not self._session_valid_locked(generation, STATE_ROUTING):
+                return False, None
+        return True, callback(*args, **kwargs)
+
+    def _guarded_session_callback(self, generation, callback, *args, **kwargs):
+        allowed, result = self._run_session_side_effect(
+            generation, callback, *args, **kwargs
+        )
+        return result if allowed else False
+
+    def _run_history_side_effect(self, generation, callback, *args, **kwargs):
+        """Serialize a history write with the generation transition."""
+        with self._lock:
+            if not self._session_valid_locked(generation, STATE_ROUTING):
+                return False, None
+            return True, callback(*args, **kwargs)
+
+    def _apply_form_if_current(self, generation, text):
+        with self._lock:
+            if not self._session_valid_locked(generation, STATE_ROUTING):
+                return False
+            apply_fn = self._session_form_apply
+            if apply_fn is None:
+                return False
+            guarded_apply_fn = self._session_form_apply_guarded
+            token = object() if guarded_apply_fn is not None else None
+            if token is not None:
+                self._form_guard_token = token
+        if guarded_apply_fn is not None:
+            guarded_apply_fn(text, token)
+            return True
+        apply_fn(text)
+        return True
+
+    def _retry_history_valid_locked(self, generation, record_id=None):
+        return (
+            self._session_valid_locked(generation, STATE_TRANSCRIBING)
+            and self._retry_generation == generation
+            and (record_id is None or self._retry_record_id == record_id)
+        )
+
+    def _retry_callback_valid_locked(self, generation):
+        return (
+            generation == self._retry_generation
+            and generation == self._session_generation
+            and not self._cancel.is_set()
+            and not self._shutdown.is_set()
+        )
+
+    def _run_retry_side_effect(self, generation, callback, *args, **kwargs):
+        """Run retry metadata/clipboard work only while the retry owns state."""
+        with self._lock:
+            if not self._retry_callback_valid_locked(generation):
+                return False, None
+        return True, callback(*args, **kwargs)
+
+    def _run_retry_history_side_effect(self, generation, callback, *args, **kwargs):
+        """Serialize retry history writes with cancellation and replacement."""
+        with self._lock:
+            if not self._retry_history_valid_locked(generation):
+                return False, None
+            return True, callback(*args, **kwargs)
+
+    def _retry_aborted(self, generation):
+        with self._lock:
+            return not self._retry_history_valid_locked(generation)
+
+    def _startup_valid_locked(self, generation):
+        return (
+            self._capture_starting
+            and generation == self._session_generation
+            and generation == self._startup_generation
+            and self._state == STATE_IDLE
+            and self.settings.enabled
+            and not self._cancel.is_set()
+            and not self._shutdown.is_set()
+        )
+
+    def _abandon_startup_locked(self, generation):
+        if (
+            not self._capture_starting
+            or generation != self._session_generation
+            or generation != self._startup_generation
+        ):
+            return False
+        self._capture_starting = False
+        self._startup_generation = None
+        self._session_generation += 1
+        self._active_mode = None
+        self._active_target = None
+        self._session_form_apply = None
+        self._session_form_apply_guarded = None
+        return True
+
+    def _finish_startup_locked(self, generation):
+        """Release the startup reservation after its worker has cleaned up."""
+        if generation != self._startup_generation:
+            return False
+        self._capture_starting = False
+        self._startup_generation = None
+        return True
+
+    def _abort_capture_start(self, generation, capture, recording, error):
+        with self._lock:
+            current = self._capture_starting and generation == self._session_generation
+            if self._starting_capture is capture:
+                self._starting_capture = None
+            if self._starting_recording is recording:
+                self._starting_recording = None
+            if current:
+                self._abandon_startup_locked(generation)
+            else:
+                self._finish_startup_locked(generation)
+        if capture is not None:
+            try:
+                capture.stop()
+            except Exception:
+                pass
+        if recording is not None:
+            try:
+                recording.close_as(
+                    STATUS_FAILED if current else STATUS_CANCELLED,
+                    error if current else None,
+                )
+            except Exception as close_exc:
+                self._warn(f"Não foi possível encerrar o histórico de voz: {close_exc}")
+        return current
 
     @property
     def state(self):
@@ -278,6 +455,21 @@ class VoiceController:
     def provider_available(self):
         return self._provider.available()
 
+    def capture_available(self):
+        """Return whether the configured capture runtime can be imported."""
+        checker = self._capture_available
+        if checker is None:
+            # Tests and embedders may provide a fake factory without installing
+            # the optional sounddevice wheel. The production AudioCapture path
+            # is the one that needs the runtime gate.
+            checker = sounddevice_available if self._capture_factory is AudioCapture else None
+        if checker is None:
+            return True
+        try:
+            return bool(checker())
+        except Exception:
+            return False
+
     def history_entries(self):
         return self._history.list_entries()
 
@@ -286,18 +478,25 @@ class VoiceController:
 
     def retry_history(self, record_id):
         """Retry saved audio without pasting into a potentially stale target."""
-        if not self._history.is_retryable(record_id):
-            return False
         with self._lock:
-            if self._state != STATE_IDLE or not self.settings.enabled:
+            if (
+                self._state != STATE_IDLE
+                or self._capture_starting
+                or not self.settings.enabled
+            ):
                 self._notify(
                     "Ative a entrada por voz e aguarde ela ficar pronta para tentar novamente.",
                     key="voice-history",
                 )
                 return False
+            if not self._history.is_retryable(record_id):
+                return False
             self._session_generation += 1
             generation = self._session_generation
             self._cancel.clear()
+            self._retry_record_id = record_id
+            self._retry_generation = generation
+            self._form_guard_token = None
             self._state = STATE_TRANSCRIBING
         self._emit_status()
         self._start_worker(
@@ -339,16 +538,19 @@ class VoiceController:
         candidate = resolve_voice_settings(payload, warnings)
         for warning in warnings:
             self._log(warning)
-        previous = self.settings
-        runtime_same = (
-            candidate.profile == previous.profile
-            and candidate.language == previous.language
-        )
-        hotkeys_same = (
-            candidate.hotkey == previous.hotkey
-            and candidate.command_hotkey == previous.command_hotkey
-        )
-        self.settings = candidate
+        with self._lock:
+            if self._disable_requested:
+                return
+            previous = self.settings
+            runtime_same = (
+                candidate.profile == previous.profile
+                and candidate.language == previous.language
+            )
+            hotkeys_same = (
+                candidate.hotkey == previous.hotkey
+                and candidate.command_hotkey == previous.command_hotkey
+            )
+            self.settings = candidate
         self._persist()
         if runtime_same and hotkeys_same:
             if candidate.enabled and self.state == STATE_UNAVAILABLE:
@@ -361,6 +563,15 @@ class VoiceController:
                 STATE_RECORDING,
                 STATE_TRANSCRIBING,
                 STATE_ROUTING,
+            ) or self._capture_starting or any(
+                value is not None
+                for value in (
+                    self._capture,
+                    self._starting_capture,
+                    self._starting_recording,
+                    self._history_recording,
+                    self._retry_record_id,
+                )
             )
         if runtime_same:
             if active:
@@ -384,11 +595,18 @@ class VoiceController:
                 if not candidate.enabled:
                     return
                 self._session_generation += 1
+                self._form_guard_token = None
                 self._state = STATE_LOADING
             self._emit_status()
+        with self._lock:
+            switch_generation = self._session_generation
+        with self._workers_lock:
+            antecedent_workers = tuple(self._workers)
         self._start_worker(
             self._switch_profile_worker,
             previous,
+            antecedent_workers,
+            switch_generation,
             name="voice-switch",
         )
 
@@ -405,21 +623,40 @@ class VoiceController:
                 "partial": self._partial,
             }
 
-    def register_form_target(self, apply_fn):
+    def register_form_target(self, apply_fn, guarded_apply_fn=None):
         with self._lock:
             self._form_apply = apply_fn
+            self._form_apply_guarded = guarded_apply_fn
+
+    def form_guard_valid(self, token):
+        """Return whether a queued form update still belongs to its session."""
+        with self._lock:
+            return token is self._form_guard_token and not self._shutdown.is_set()
 
     def unregister_form_target(self):
         with self._lock:
             closed = self._form_apply
             self._form_apply = None
+            self._form_apply_guarded = None
+            self._form_guard_token = None
             if self._session_form_apply is closed:
                 self._session_form_apply = None
+                self._session_form_apply_guarded = None
 
     def enable(self):
         if self._shutdown.is_set():
             return
+        with self._unload_lock:
+            unload_busy = self._unload_pending or self._unload_in_progress
+        if unload_busy:
+            self._notify(
+                "A entrada por voz ainda está encerrando; tente ativá-la novamente em instantes.",
+                key="voice-load",
+            )
+            return
         with self._lock:
+            if self._disable_requested:
+                return
             if self._model_download_active:
                 blocked_by_download = True
             else:
@@ -446,16 +683,28 @@ class VoiceController:
         self._start_worker(self._load_worker, name="voice-load")
 
     def disable(self):
+        # Close new-session admission before cancellation can wait on a worker.
+        # Keep active pointers intact until _cancel_session_locked captures and
+        # cleans them.
+        with self._lock:
+            self._disable_requested = True
+            self.settings.enabled = False
+            self._state = STATE_UNAVAILABLE
         self._cancel_session_locked(reason="disable")
-        self._join_workers(_SHUTDOWN_JOIN_SECONDS)
+        joined = self._join_workers(_SHUTDOWN_JOIN_SECONDS)
         with self._lock:
             self.settings.enabled = False
             self._state = STATE_UNAVAILABLE
         self._stop_monitor()
-        try:
-            self._provider.unload()
-        except Exception:
-            pass
+        if joined:
+            unloaded = self._unload_provider()
+            if unloaded:
+                with self._lock:
+                    self._disable_requested = False
+            else:
+                self._schedule_unload_after_workers(clear_disable=True)
+        else:
+            self._schedule_unload_after_workers(clear_disable=True)
         self._persist()
         self._emit_status()
 
@@ -468,15 +717,17 @@ class VoiceController:
             self._state = STATE_UNAVAILABLE
             self.settings.enabled = False
         self._emit_status()
-        # ceiling: 2 s. A stuck native run is abandoned after this and then
-        # unloaded; raise if a real backend needs a longer bounded wait.
+        # ceiling: 2 s before detaching a stuck native run; runtime unload is
+        # deferred until that worker exits so native resources stay valid.
         joined = self._join_workers(timeout)
         if not joined:
-            self._warn("Encerramento da voz atingiu o tempo limite; descarregando mesmo assim.")
-        try:
-            self._provider.unload()
-        except Exception:
-            pass
+            self._warn(
+                "Encerramento da voz atingiu o tempo limite; o runtime será "
+                "descarregado quando os workers terminarem."
+            )
+            self._schedule_unload_after_workers()
+            return
+        self._unload_provider()
 
     def set_profile(self, profile):
         self.apply_options(profile=profile)
@@ -485,24 +736,70 @@ class VoiceController:
         if self._shutdown.is_set():
             return False
         with self._lock:
-            if self._state != STATE_IDLE:
+            if (
+                self._disable_requested
+                or not self.settings.enabled
+                or self._state != STATE_IDLE
+                or self._capture_starting
+            ):
                 return False
             if mode not in (MODE_DICTATION, MODE_COMMAND):
                 mode = MODE_DICTATION
             form_apply = self._form_apply
+            form_apply_guarded = self._form_apply_guarded
+            self._form_guard_token = None
+            self._session_generation += 1
+            generation = self._session_generation
+            self._cancel.clear()
+            self._capture_starting = True
+            self._startup_generation = generation
         if self._microphone_status is not None:
-            status = self._microphone_status()
-            if status == "denied":
-                self._notify(
-                    "O macOS bloqueou o microfone. Conceda a permissão e reinicie o app.",
-                    key="voice-mic",
-                )
+            try:
+                status = self._microphone_status()
+            except Exception as exc:
+                with self._lock:
+                    current = self._capture_starting and generation == self._session_generation
+                    if current:
+                        self._abandon_startup_locked(generation)
+                    else:
+                        self._finish_startup_locked(generation)
+                if current:
+                    self._warn(f"Não foi possível verificar o microfone: {exc}")
                 return False
-        target = self._capture_target()
+            if status == "denied":
+                with self._lock:
+                    current = self._capture_starting and generation == self._session_generation
+                    if current:
+                        self._abandon_startup_locked(generation)
+                    else:
+                        self._finish_startup_locked(generation)
+                if current:
+                    self._notify(
+                        "O macOS bloqueou o microfone. Conceda a permissão e reinicie o app.",
+                        key="voice-mic",
+                    )
+                return False
+        try:
+            target = self._capture_target()
+        except Exception as exc:
+            with self._lock:
+                current = self._capture_starting and generation == self._session_generation
+                if current:
+                    self._abandon_startup_locked(generation)
+                else:
+                    self._finish_startup_locked(generation)
+            if current:
+                self._warn(f"Não foi possível capturar o destino da voz: {exc}")
+                self._notify("Não foi possível preparar o destino da voz.", key="voice-target")
+            return False
         session_form = None
         if form_apply is not None and mode != MODE_COMMAND:
             target = VoiceTarget("form", handle=form_apply)
             session_form = form_apply
+        with self._lock:
+            if not self._startup_valid_locked(generation):
+                self._finish_startup_locked(generation)
+                return False
         try:
             recording = self._history.begin(
                 mode=mode,
@@ -512,48 +809,94 @@ class VoiceController:
                 target_kind=getattr(target, "kind", "unknown"),
             )
         except Exception as exc:
-            self._warn(f"Não foi possível preparar o histórico de voz: {exc}")
-            self._notify(
-                "Não foi possível iniciar uma gravação recuperável.",
-                key="voice-history",
-            )
+            with self._lock:
+                current = self._capture_starting and generation == self._session_generation
+                if current:
+                    self._abandon_startup_locked(generation)
+                else:
+                    self._finish_startup_locked(generation)
+            if current:
+                self._warn(f"Não foi possível preparar o histórico de voz: {exc}")
+                self._notify(
+                    "Não foi possível iniciar uma gravação recuperável.",
+                    key="voice-history",
+                )
             return False
+        with self._lock:
+            current = self._startup_valid_locked(generation)
+            if current:
+                self._starting_recording = recording
+        if not current:
+            recording.close_as(STATUS_CANCELLED)
+            with self._lock:
+                self._finish_startup_locked(generation)
+            return False
+        capture = None
         try:
             capture = self._capture_factory()
+            with self._lock:
+                current = self._startup_valid_locked(generation)
+                if current:
+                    self._starting_capture = capture
+            if not current:
+                capture.stop()
+                recording.close_as(STATUS_CANCELLED)
+                with self._lock:
+                    self._finish_startup_locked(generation)
+                return False
             set_journal = getattr(capture, "set_journal", None)
             if set_journal is not None:
                 set_journal(recording)
             capture.start()
         except VoiceAudioError as exc:
-            recording.close_as(STATUS_FAILED, exc)
-            self._notify(str(exc), key="voice-audio")
+            current = self._abort_capture_start(generation, capture, recording, exc)
+            if current:
+                self._notify(str(exc), key="voice-audio")
             return False
         except Exception as exc:
-            recording.close_as(STATUS_FAILED, exc)
-            self._notify(f"Não foi possível gravar: {exc}", key="voice-audio")
+            current = self._abort_capture_start(generation, capture, recording, exc)
+            if current:
+                self._notify(f"Não foi possível gravar: {exc}", key="voice-audio")
             return False
         with self._lock:
-            if self._state != STATE_IDLE or self._shutdown.is_set():
+            startup_aborted = not self._startup_valid_locked(generation)
+            if startup_aborted:
+                self._finish_startup_locked(generation)
+                if self._starting_capture is capture:
+                    self._starting_capture = None
+                if self._starting_recording is recording:
+                    self._starting_recording = None
+            else:
+                self._capture_starting = False
+                self._startup_generation = None
+                self._starting_capture = None
+                self._starting_recording = None
+                self._active_mode = mode
+                self._active_target = target
+                self._session_form_apply = session_form
+                self._session_form_apply_guarded = form_apply_guarded
+                self._capture = capture
+                self._history_recording = recording
+                self._partial = ""
+                self._state = STATE_RECORDING
+            stream_done = None
+            if self._state == STATE_RECORDING and self.settings.profile == PROFILE_STREAMING:
+                stream_done = threading.Event()
+                self._stream_worker_events[generation] = stream_done
+        if startup_aborted:
+            if capture is not None:
                 try:
                     capture.stop()
                 except Exception:
                     pass
-                recording.close_as(STATUS_CANCELLED)
-                return False
-            self._session_generation += 1
-            self._cancel.clear()
-            self._active_mode = mode
-            self._active_target = target
-            self._session_form_apply = session_form
-            self._capture = capture
-            self._history_recording = recording
-            self._partial = ""
-            self._state = STATE_RECORDING
-            generation = self._session_generation
-            stream_done = None
-            if self.settings.profile == PROFILE_STREAMING:
-                stream_done = threading.Event()
-                self._stream_worker_events[generation] = stream_done
+            if recording is not None:
+                try:
+                    recording.close_as(STATUS_CANCELLED)
+                except Exception as exc:
+                    self._warn(
+                        f"Não foi possível encerrar o histórico de voz: {exc}"
+                    )
+            return False
         self._emit_status()
         if stream_done is not None:
             self._start_worker(
@@ -568,13 +911,22 @@ class VoiceController:
         if self._shutdown.is_set():
             return False
         with self._lock:
-            if self._state != STATE_RECORDING:
+            if self._disable_requested or not self.settings.enabled:
                 return False
-            generation = self._session_generation
-            capture = self._capture
-            self._capture = None
-            recording = self._history_recording
-            self._state = STATE_TRANSCRIBING
+            starting = self._capture_starting
+            if not starting and self._state != STATE_RECORDING:
+                return False
+            if starting:
+                generation = None
+            else:
+                generation = self._session_generation
+                capture = self._capture
+                self._capture = None
+                recording = self._history_recording
+                self._state = STATE_TRANSCRIBING
+        if starting:
+            self._cancel_session_locked(reason="cancel")
+            return True
         self._emit_status()
         self._start_worker(
             self._finish_worker,
@@ -586,6 +938,9 @@ class VoiceController:
         return True
 
     def cancel(self):
+        with self._lock:
+            if self._disable_requested or self._shutdown.is_set():
+                return
         self._cancel_session_locked(reason="cancel")
 
     def _cancel_session_locked(self, reason):
@@ -596,29 +951,66 @@ class VoiceController:
             pass
         capture = None
         recording = None
+        starting_recording = None
+        retry_record_id = None
         with self._lock:
-            if self._state in (STATE_RECORDING, STATE_TRANSCRIBING, STATE_ROUTING):
+            self._form_guard_token = None
+            active = self._state in (
+                STATE_RECORDING,
+                STATE_TRANSCRIBING,
+                STATE_ROUTING,
+            ) or self._capture_starting or any(
+                value is not None
+                for value in (
+                    self._capture,
+                    self._starting_capture,
+                    self._starting_recording,
+                    self._history_recording,
+                    self._retry_record_id,
+                )
+            )
+            if active:
                 generation = self._session_generation
                 capture = self._capture
                 self._capture = None
+                if not self._capture_starting:
+                    self._starting_capture = None
                 recording = self._history_recording
                 self._history_recording = None
+                if self._capture_starting:
+                    starting_recording = self._starting_recording
+                else:
+                    self._starting_recording = None
+                retry_record_id = self._retry_record_id
+                self._retry_record_id = None
+                self._retry_generation = None
                 self._active_mode = None
                 self._active_target = None
                 self._session_form_apply = None
+                self._session_form_apply_guarded = None
                 self._partial = ""
                 self.last_outcome = OUTCOME_CANCELLED
-                if reason == "switch":
-                    self._session_generation += 1
+                self._session_generation += 1
+                if (
+                    reason == "switch"
+                    and self.settings.enabled
+                    and not self._disable_requested
+                ):
                     self._state = STATE_LOADING
-                elif reason == "shutdown":
-                    self._session_generation += 1
+                elif (
+                    reason == "shutdown"
+                    or self._disable_requested
+                    or not self.settings.enabled
+                ):
                     self._state = STATE_UNAVAILABLE
                 else:
-                    self._state = (
-                        STATE_IDLE if self.settings.enabled else STATE_UNAVAILABLE
-                    )
+                    self._state = STATE_IDLE
                 self._stream_worker_events.pop(generation, None)
+                if retry_record_id is not None:
+                    try:
+                        self._history.cancel(retry_record_id)
+                    except Exception as exc:
+                        self._warn(f"Não foi possível encerrar o retry de voz: {exc}")
         if capture is not None:
             try:
                 capture.stop()
@@ -629,12 +1021,21 @@ class VoiceController:
                 recording.close_as(STATUS_CANCELLED)
             except Exception as exc:
                 self._warn(f"Não foi possível encerrar o histórico de voz: {exc}")
+        if starting_recording is not None and starting_recording is not recording:
+            try:
+                starting_recording.close_as(STATUS_CANCELLED)
+            except Exception as exc:
+                self._warn(f"Não foi possível encerrar o histórico de voz: {exc}")
         self._emit_status()
 
     def _load_worker(self):
         if self._shutdown.is_set():
             return
         try:
+            if not self.capture_available():
+                raise VoiceRuntimeError(
+                    "A captura de áudio não está disponível neste aplicativo."
+                )
             self._prepare_provider()
             if self._cancel.is_set() or self._shutdown.is_set():
                 return
@@ -667,40 +1068,110 @@ class VoiceController:
             self._start_monitor()
         self._emit_status()
 
-    def _switch_profile_worker(self, previous):
+    def _switch_profile_worker(
+        self,
+        previous,
+        antecedent_workers=(),
+        generation=None,
+    ):
+        with self._lock:
+            if not self._switch_valid_locked(generation):
+                return
         if self._shutdown.is_set():
             return
         # A cancelled finish/stream worker may still be inside native inference.
-        self._join_workers(_SHUTDOWN_JOIN_SECONDS)
-        if self._shutdown.is_set():
+        if not self._join_workers(
+            _SHUTDOWN_JOIN_SECONDS,
+            workers=antecedent_workers,
+        ):
+            self._wait_for_workers(antecedent_workers)
+        with self._lock:
+            switch_valid = self._switch_valid_locked(generation)
+        if not switch_valid:
+            return
+        with self._unload_lock:
+            unload_busy = self._unload_pending or self._unload_in_progress
+        if unload_busy:
+            with self._lock:
+                if self._switch_valid_locked(generation):
+                    self._state = STATE_UNAVAILABLE
+            self._emit_status()
             return
         # The aborted session set this; a new download/load must not inherit it.
         self._cancel.clear()
         try:
-            self._provider.unload()
+            if not self._unload_provider():
+                with self._lock:
+                    if self._switch_valid_locked(generation):
+                        self._state = STATE_UNAVAILABLE
+                self._emit_status()
+                return
+            with self._lock:
+                switch_valid = self._switch_valid_locked(generation)
+            if not switch_valid:
+                return
             self._prepare_provider()
-            if self._cancel.is_set() or self._shutdown.is_set():
+            with self._lock:
+                switch_valid = self._switch_valid_locked(generation)
+            if not switch_valid or self._cancel.is_set():
                 return
         except Exception as exc:
             self._warn(f"Falha ao trocar o perfil de voz; mantendo o anterior: {exc}")
-            self.settings = previous
-            self._persist()
+            rollback_payload = None
+            with self._lock:
+                switch_valid = self._switch_valid_locked(generation)
+                if switch_valid:
+                    self.settings = previous
+                    rollback_payload = voice_settings_payload(self.settings)
+                    unavailable = False
+                else:
+                    unavailable = not self.settings.enabled or self._shutdown.is_set()
+                    if unavailable:
+                        self._state = STATE_UNAVAILABLE
+            if not switch_valid:
+                if unavailable:
+                    self._emit_status()
+                return
+            self._persist_payload(rollback_payload)
             try:
                 if not self._provider.profile_installed(previous.profile):
                     raise VoiceRuntimeError("O modelo anterior não está mais instalado.")
                 self._provider.prepare(previous.profile, previous.language)
                 with self._lock:
-                    self._state = STATE_IDLE
+                    if not self._switch_valid_locked(generation):
+                        if not self.settings.enabled or self._shutdown.is_set():
+                            self._state = STATE_UNAVAILABLE
+                            emit_status = True
+                        else:
+                            emit_status = False
+                    else:
+                        emit_status = False
+                        self._state = STATE_IDLE
+                if emit_status:
+                    self._emit_status()
+                    return
                 self._emit_status()
                 return
             except Exception:
                 pass
             with self._lock:
-                self._state = STATE_UNAVAILABLE
+                if not self._switch_valid_locked(generation):
+                    if not self.settings.enabled or self._shutdown.is_set():
+                        self._state = STATE_UNAVAILABLE
+                        emit_status = True
+                    else:
+                        emit_status = False
+                else:
+                    self._state = STATE_UNAVAILABLE
+                    emit_status = True
+            if not emit_status:
+                return
             self._emit_status()
             self._notify(str(exc), key="voice-switch")
             return
         with self._lock:
+            if not self._switch_valid_locked(generation):
+                return
             self._state = STATE_IDLE
         self._start_monitor()
         self._emit_status()
@@ -756,8 +1227,6 @@ class VoiceController:
             self._emit_status()
 
     def _finish_worker(self, generation, capture, recording):
-        if self._shutdown.is_set():
-            return
         capture_result = CaptureResult()
         if capture is not None:
             try:
@@ -771,9 +1240,13 @@ class VoiceController:
                         issue=(CaptureIssue.DURATION_LIMIT if failed else None),
                     )
             except Exception as exc:
-                self._recording_failed(recording, exc)
+                if self._shutdown.is_set():
+                    return
+                self._recording_failed_if_current(generation, recording, exc)
                 self._fail_to_idle(f"Falha ao encerrar a gravação: {exc}", generation)
                 return
+        if self._shutdown.is_set():
+            return
         pcm = capture_result.samples
         capture_metadata = {
             "audio_format": "f32le",
@@ -793,14 +1266,14 @@ class VoiceController:
         try:
             recording.finish_capture(pcm, capture_metadata)
         except Exception as exc:
-            self._recording_failed(recording, exc)
+            self._recording_failed_if_current(generation, recording, exc)
             self._fail_to_idle(
                 f"Falha ao salvar a gravação recuperável: {exc}", generation
             )
             return
         if capture_result.issue is not None:
             error = capture_result.message or capture_result.issue.value
-            self._recording_failed(recording, error)
+            self._recording_failed_if_current(generation, recording, error)
             self._fail_to_idle(
                 _CAPTURE_ISSUE_MESSAGES.get(
                     capture_result.issue,
@@ -810,8 +1283,7 @@ class VoiceController:
             )
             return
         if self._cancel.is_set() or self._shutdown.is_set():
-            self._history.cancel(recording.record_id)
-            self._complete_session(generation, OUTCOME_CANCELLED)
+            self._cancel_recording_if_current(generation, recording)
             return
         try:
             inference_started = time.monotonic()
@@ -836,23 +1308,22 @@ class VoiceController:
                         or self._shutdown.is_set()
                     ):
                         return
-                    raw_transcript = self._provider.finalize_stream()
+                raw_transcript = self._provider.finalize_stream()
             else:
                 raw_transcript = self._provider.transcribe(
                     pcm, cancel_event=self._cancel
                 )
             inference_duration = max(0.0, time.monotonic() - inference_started)
         except VoiceRuntimeError as exc:
-            self._recording_failed(recording, exc)
+            self._recording_failed_if_current(generation, recording, exc)
             self._fail_to_idle(str(exc), generation)
             return
         except Exception as exc:
-            self._recording_failed(recording, exc)
+            self._recording_failed_if_current(generation, recording, exc)
             self._fail_to_idle(f"Falha na transcrição: {exc}", generation)
             return
         if self._cancel.is_set() or self._shutdown.is_set():
-            self._history.cancel(recording.record_id)
-            self._complete_session(generation, OUTCOME_CANCELLED)
+            self._cancel_recording_if_current(generation, recording)
             return
         with self._lock:
             if generation != self._session_generation:
@@ -864,19 +1335,27 @@ class VoiceController:
             target = self._active_target
             form_apply = self._session_form_apply
         transcript = self._apply_text_replacements(raw_transcript, mode)
-        self._history.mark_transcribed(
+        marked, _ = self._run_history_side_effect(
+            generation,
+            self._history.mark_transcribed,
             recording.record_id,
             transcript,
             raw_transcript=raw_transcript,
             inference_duration_seconds=inference_duration,
         )
+        if not marked:
+            return
         self._emit_status()
         if self._shutdown.is_set():
             return
         if getattr(target, "kind", None) == "form" and form_apply is None:
-            self._history.cancel(recording.record_id)
-            self._complete_session(generation, OUTCOME_CANCELLED)
+            self._cancel_recording_if_current(generation, recording)
             return
+        apply_form = (
+            (lambda text: self._apply_form_if_current(generation, text))
+            if form_apply is not None and mode != MODE_COMMAND
+            else None
+        )
         try:
             outcome = dispatch_voice_result(
                 transcript,
@@ -884,20 +1363,25 @@ class VoiceController:
                 target,
                 snippets=self._snippets(),
                 trigger_index=self._trigger_index(),
-                insert_text=self._insert_text,
-                expand_trigger=self._expand_trigger,
-                apply_form=(
-                    self._invoke_session_form
-                    if form_apply is not None and mode != MODE_COMMAND
-                    else None
+                insert_text=lambda text: self._guarded_session_callback(
+                    generation, self._insert_text, text
                 ),
+                expand_trigger=lambda trigger: self._guarded_session_callback(
+                    generation, self._expand_trigger, trigger
+                ),
+                apply_form=apply_form,
                 restore_target=self._restore_target,
                 secure_input_blocks=self._secure_input_blocks,
-                leave_on_clipboard=self._leave_on_clipboard,
+                leave_on_clipboard=lambda text: self._guarded_session_callback(
+                    generation, self._leave_on_clipboard, text
+                ),
                 cancelled=self._cancel.is_set(),
+                is_cancelled=lambda: self._session_invalid(
+                    generation, STATE_ROUTING
+                ),
             )
         except Exception as exc:
-            self._recording_failed(recording, exc)
+            self._recording_failed_if_current(generation, recording, exc)
             self._fail_to_idle(
                 f"Falha ao processar o texto de voz: {exc}", generation
             )
@@ -916,10 +1400,12 @@ class VoiceController:
                     or self._shutdown.is_set()
                 ):
                     return
-                try:
-                    self._provider.start_stream()
-                except VoiceRuntimeError:
-                    return
+            try:
+                self._provider.start_stream()
+            except VoiceRuntimeError:
+                return
+            if self._session_invalid(generation, STATE_RECORDING):
+                return
             # Display-only partials. The release path finalizes.
             while not self._shutdown.is_set() and not self._cancel.is_set():
                 with self._lock:
@@ -944,11 +1430,18 @@ class VoiceController:
                         or self._shutdown.is_set()
                     ):
                         return
-                    try:
-                        partial = self._provider.feed(_flatten(chunk))
-                    except Exception:
-                        return
+                try:
+                    partial = self._provider.feed(_flatten(chunk))
+                except Exception:
+                    return
+                with self._lock:
                     if self._cancel.is_set() or self._shutdown.is_set():
+                        return
+                    if (
+                        self._state != STATE_RECORDING
+                        or generation != self._session_generation
+                        or capture is not self._capture
+                    ):
                         return
                     self._partial = partial or ""
         finally:
@@ -972,7 +1465,7 @@ class VoiceController:
                     or self._shutdown.is_set()
                 ):
                     return False
-                self._provider.feed(_flatten(chunk))
+            self._provider.feed(_flatten(chunk))
 
     def _snippets(self):
         getter = getattr(self, "get_snippets", None)
@@ -1013,34 +1506,65 @@ class VoiceController:
             )
         return saved
 
+    def _complete_session_locked(self, generation, outcome):
+        if generation != self._session_generation:
+            return False
+        if self._state not in (
+            STATE_RECORDING,
+            STATE_TRANSCRIBING,
+            STATE_ROUTING,
+        ):
+            return False
+        self.last_outcome = outcome
+        self._active_mode = None
+        self._active_target = None
+        self._session_form_apply = None
+        self._session_form_apply_guarded = None
+        self._history_recording = None
+        self._partial = ""
+        self._stream_worker_events.pop(generation, None)
+        self._state = STATE_IDLE if self.settings.enabled else STATE_UNAVAILABLE
+        return True
+
     def _complete_session(self, generation, outcome):
         """Return True when this session still owns the controller state."""
         with self._lock:
-            if generation != self._session_generation:
+            completed = self._complete_session_locked(generation, outcome)
+        if completed:
+            self._emit_status()
+        return completed
+
+    def _cancel_recording_if_current(self, generation, recording):
+        """Commit cancellation and its journal write as one state transition."""
+        with self._lock:
+            if not self._complete_session_locked(generation, OUTCOME_CANCELLED):
                 return False
-            if self._state not in (
-                STATE_RECORDING,
-                STATE_TRANSCRIBING,
-                STATE_ROUTING,
-            ):
-                return False
-            self.last_outcome = outcome
-            self._active_mode = None
-            self._active_target = None
-            self._session_form_apply = None
-            self._history_recording = None
-            self._partial = ""
-            self._stream_worker_events.pop(generation, None)
-            self._state = STATE_IDLE if self.settings.enabled else STATE_UNAVAILABLE
+            try:
+                self._history.cancel(recording.record_id)
+            except Exception as exc:
+                self._warn(f"Não foi possível encerrar o histórico de voz: {exc}")
         self._emit_status()
         return True
 
     def _finish_outcome(self, result, generation, recording, transcript):
         outcome = result.outcome
-        if not self._complete_session(generation, outcome):
-            self._history.cancel(recording.record_id)
+        # State completion and its journal write share the controller lock. The
+        # state transition is still performed first: a crash before the journal
+        # write leaves an already-transcribed record retryable, while a later
+        # cancel cannot claim a session that has finished routing.
+        with self._lock:
+            if not self._complete_session_locked(generation, outcome):
+                return
+            try:
+                if outcome == OUTCOME_CANCELLED:
+                    self._history.cancel(recording.record_id)
+                else:
+                    self._history.complete(recording.record_id, transcript, outcome)
+            except Exception as exc:
+                self._warn(f"Não foi possível atualizar o histórico de voz: {exc}")
+        self._emit_status()
+        if outcome == OUTCOME_CANCELLED:
             return
-        self._history.complete(recording.record_id, transcript, outcome)
         if outcome == OUTCOME_NO_MATCH:
             self._notify("Nenhum atalho corresponde ao que foi falado.", key="voice-nomatch")
         elif outcome == OUTCOME_SECURE_INPUT:
@@ -1084,6 +1608,19 @@ class VoiceController:
                 message = "Não foi possível inserir o texto de voz."
             self._notify(message, key="voice-insert")
 
+    def _recording_failed_if_current(self, generation, recording, error):
+        """Record a failure only while its session still owns the journal."""
+        with self._lock:
+            if (
+                generation != self._session_generation
+                or self._state not in (STATE_TRANSCRIBING, STATE_ROUTING)
+                or self._cancel.is_set()
+                or self._shutdown.is_set()
+            ):
+                return False
+            self._recording_failed(recording, error)
+            return True
+
     def _recording_failed(self, recording, error):
         try:
             close_as = getattr(recording, "close_as", None)
@@ -1108,19 +1645,42 @@ class VoiceController:
             self._warn(f"Não foi possível aplicar as correções de voz: {exc}")
             return transcript
 
+    def _commit_retry_history(self, generation, record_id, transcript):
+        """Durably finish a retry before any clipboard or notification callback."""
+        with self._lock:
+            if not self._retry_history_valid_locked(generation, record_id):
+                return False
+            try:
+                completed = self._history.complete(record_id, transcript, "recovered")
+            except Exception as exc:
+                self._warn(f"Não foi possível atualizar o histórico de voz: {exc}")
+                return False
+            if not completed:
+                return False
+            self._retry_record_id = None
+            self._state = STATE_IDLE if self.settings.enabled else STATE_UNAVAILABLE
+        self._emit_status()
+        return True
+
     def _retry_history_worker(self, generation, record_id):
         try:
+            if self._retry_aborted(generation):
+                return
             entry = self._history.get(record_id) or {}
             pcm = self._history.load_samples(record_id)
             if not pcm:
                 raise ValueError("A gravação salva está vazia.")
-            self._history.update(
+            updated, _ = self._run_retry_history_side_effect(
+                generation,
+                self._history.update,
                 record_id,
                 status="pending",
                 retry_provider=self._provider.provider_id,
                 retry_profile=self.settings.profile,
                 retry_language=self.settings.language,
             )
+            if not updated:
+                return
             inference_started = time.monotonic()
             raw_transcript = self._provider.transcribe(
                 pcm, cancel_event=self._cancel
@@ -1128,21 +1688,31 @@ class VoiceController:
             inference_duration = max(0.0, time.monotonic() - inference_started)
             if not str(raw_transcript or "").strip():
                 raise ValueError("Nenhuma fala foi reconhecida na gravação.")
-            if self._cancel.is_set() or self._shutdown.is_set():
-                self._history.cancel(record_id)
+            if self._retry_aborted(generation):
                 return
             transcript = self._apply_text_replacements(
                 raw_transcript,
                 entry.get("mode", MODE_DICTATION),
             )
-            self._history.mark_transcribed(
+            marked, _ = self._run_retry_history_side_effect(
+                generation,
+                self._history.mark_transcribed,
                 record_id,
                 transcript,
                 raw_transcript=raw_transcript,
                 inference_duration_seconds=inference_duration,
             )
-            self._history.complete(record_id, transcript, "recovered")
-            copied = self._leave_on_clipboard(transcript)
+            if not marked:
+                return
+            if not self._commit_retry_history(generation, record_id, transcript):
+                return
+            copied_allowed, copied = self._run_retry_side_effect(
+                generation,
+                self._leave_on_clipboard,
+                transcript,
+            )
+            if not copied_allowed:
+                return
             if copied:
                 message = (
                     "A gravação foi recuperada. O texto está na área de transferência."
@@ -1152,19 +1722,37 @@ class VoiceController:
                     "A gravação foi recuperada no histórico, mas não foi possível "
                     "copiar o texto."
                 )
-            self._notify(message, key="voice-history")
+            self._run_retry_side_effect(
+                generation,
+                self._notify,
+                message,
+                key="voice-history",
+            )
         except Exception as exc:
-            if self._cancel.is_set() or self._shutdown.is_set():
-                self._history.cancel(record_id)
+            if self._retry_aborted(generation):
                 return
-            self._history.fail(record_id, exc)
-            self._notify(f"Não foi possível recuperar a gravação: {exc}", key="voice-history")
+            failed, _ = self._run_retry_history_side_effect(
+                generation,
+                self._history.fail,
+                record_id,
+                exc,
+            )
+            if failed:
+                self._run_retry_side_effect(
+                    generation,
+                    self._notify,
+                    f"Não foi possível recuperar a gravação: {exc}",
+                    key="voice-history",
+                )
         finally:
             with self._lock:
                 if generation == self._session_generation:
-                    self._state = (
-                        STATE_IDLE if self.settings.enabled else STATE_UNAVAILABLE
-                    )
+                    self._retry_record_id = None
+                    self._retry_generation = None
+                    if self._state == STATE_TRANSCRIBING:
+                        self._state = (
+                            STATE_IDLE if self.settings.enabled else STATE_UNAVAILABLE
+                        )
             self._emit_status()
 
     def _fail_to_idle(self, message, generation=None):
@@ -1175,10 +1763,13 @@ class VoiceController:
             self._notify(message, key="voice-error")
 
     def _persist(self):
+        self._persist_payload(voice_settings_payload(self.settings))
+
+    def _persist_payload(self, payload):
         if self._persist_settings is None:
             return
         try:
-            self._persist_settings(voice_settings_payload(self.settings))
+            self._persist_settings(payload)
         except Exception as exc:
             self._warn(f"Não foi possível gravar as configurações de voz: {exc}")
 
@@ -1211,37 +1802,127 @@ class VoiceController:
             monitor.stop()
 
     def _start_worker(self, fn, *args, name=None):
-        thread = self.task_runner.start(fn, *args, name=name)
-        if thread is None or not hasattr(thread, "join"):
-            return thread
-        with self._lock:
-            self._workers.append(thread)
+        tracked = _TrackedWorker()
+        with self._workers_lock:
+            self._workers.append(tracked)
+
+        def run():
+            tracked.thread = threading.current_thread()
+            try:
+                fn(*args)
+            finally:
+                tracked.done.set()
+
+        try:
+            thread = self.task_runner.start(run, name=name)
+        except Exception:
+            tracked.done.set()
+            with self._workers_lock:
+                if tracked in self._workers:
+                    self._workers.remove(tracked)
+            raise
+        if tracked.thread is None and thread is not None:
+            tracked.thread = thread
         return thread
 
-    def _join_workers(self, timeout):
+    def _join_workers(self, timeout, workers=None):
         """Join tracked voice workers except the caller. True if all finished."""
         deadline = time.monotonic() + max(0.0, float(timeout))
         current = threading.current_thread()
-        with self._lock:
-            workers = list(self._workers)
+        with self._workers_lock:
+            workers = list(self._workers if workers is None else workers)
         pending = []
-        for thread in workers:
-            if thread is current:
-                pending.append(thread)
+        for tracked in workers:
+            if tracked.thread is current:
+                pending.append(tracked)
                 continue
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                pending.append(thread)
+                pending.append(tracked)
                 continue
+            tracked.done.wait(remaining)
+            if not tracked.done.is_set():
+                pending.append(tracked)
+        with self._workers_lock:
+            self._workers = [
+                tracked
+                for tracked in self._workers
+                if tracked in pending or not tracked.done.is_set()
+            ]
+            remaining = list(self._workers)
+        return not any(tracked.thread is not current for tracked in remaining)
+
+    def _wait_for_workers(self, workers=None):
+        """Wait without holding controller state while native work unwinds."""
+        current = threading.current_thread()
+        if workers is not None:
+            for tracked in workers:
+                if tracked.thread is current:
+                    continue
+                tracked.done.wait()
+            return
+        while True:
+            with self._workers_lock:
+                pending = [
+                    tracked
+                    for tracked in self._workers
+                    if tracked.thread is not current and not tracked.done.is_set()
+                ]
+            if not pending:
+                return
+            for tracked in pending:
+                tracked.done.wait()
+
+    def _unload_provider(self, deferred=False):
+        with self._unload_lock:
+            if self._unload_in_progress:
+                return False
+            if self._unload_pending and not deferred:
+                return False
+            self._unload_in_progress = True
+        try:
+            self._provider.unload()
+        except Exception:
+            pass
+        finally:
+            with self._unload_lock:
+                self._unload_in_progress = False
+                clear_disable = (
+                    self._clear_disable_after_unload and not self._unload_pending
+                )
+                if clear_disable:
+                    self._clear_disable_after_unload = False
+            if clear_disable:
+                with self._lock:
+                    self._disable_requested = False
+        return True
+
+    def _schedule_unload_after_workers(self, clear_disable=False):
+        with self._unload_lock:
+            if self._unload_pending or self._unload_in_progress:
+                self._clear_disable_after_unload |= clear_disable
+                return
+            self._unload_pending = True
+            self._clear_disable_after_unload = clear_disable
+
+        def unload_when_done():
             try:
-                thread.join(remaining)
-            except Exception:
-                pass
-            if thread.is_alive():
-                pending.append(thread)
-        with self._lock:
-            self._workers = pending
-        return not pending
+                self._wait_for_workers()
+                self._unload_provider(deferred=True)
+            finally:
+                with self._unload_lock:
+                    clear_disable = self._clear_disable_after_unload
+                    self._unload_pending = False
+                    self._clear_disable_after_unload = False
+                if clear_disable:
+                    with self._lock:
+                        self._disable_requested = False
+
+        threading.Thread(
+            target=unload_when_done,
+            name="voice-deferred-unload",
+            daemon=True,
+        ).start()
 
     def _hotkey_press_from_os(self, mode):
         # OS callback: enqueue only.
@@ -1263,7 +1944,17 @@ class VoiceController:
         """Disable voice, then remove only the catalog directory of the profile."""
         profile = self.settings.profile
         self.disable()
+        with self._unload_lock:
+            unload_busy = self._unload_pending or self._unload_in_progress
+        if unload_busy:
+            self._notify(
+                "A entrada por voz ainda está encerrando; tente remover o modelo "
+                "novamente em instantes.",
+                key="voice-model",
+            )
+            return False
         self._provider.delete_profile(profile)
+        return True
 
 
 def _flatten(chunk):

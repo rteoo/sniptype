@@ -50,6 +50,16 @@ class PackagingExcludeTests(unittest.TestCase):
             self.assertIn("--collect-all transcribe_cpp_native", text)
             self.assertIn("--voice-runtime-probe", text)
 
+    def test_release_bundles_the_application_license(self):
+        windows = os.path.join(ROOT, "build_release.bat")
+        macos = os.path.join(ROOT, "build_release_macos.sh")
+        with open(windows, encoding="utf-8") as handle:
+            win_text = handle.read()
+        with open(macos, encoding="utf-8") as handle:
+            mac_text = handle.read()
+        self.assertIn('--add-data "%REPO_DIR%\\LICENSE;."', win_text)
+        self.assertIn('--add-data "$REPO_DIR/LICENSE:."', mac_text)
+
     def test_windows_build_fails_early_when_tcl_tk_cannot_initialize(self):
         path = os.path.join(ROOT, "build_release.bat")
         with open(path, encoding="utf-8") as handle:

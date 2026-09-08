@@ -1,13 +1,16 @@
 import os
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from unittest import mock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from trigger_index import compile_trigger_index
-from voice_audio import CaptureIssue, CaptureResult, VoiceAudioError
+from voice_audio import AudioCapture, CaptureIssue, CaptureResult, VoiceAudioError
+from voice_catalog import LANGUAGE_AUTO
 from voice_dispatch import (
     MODE_COMMAND,
     MODE_DICTATION,
@@ -32,6 +35,17 @@ from voice_support import (
 class InlineRunner:
     def start(self, fn, *args, name=None):
         fn(*args)
+
+
+class ThreadRunner:
+    def __init__(self):
+        self.threads = []
+
+    def start(self, fn, *args, name=None):
+        thread = threading.Thread(target=fn, args=args, daemon=True, name=name)
+        self.threads.append(thread)
+        thread.start()
+        return thread
 
 
 class FakeCapture:
@@ -126,6 +140,19 @@ class ControllerTests(unittest.TestCase):
         self.assertFalse(self.controller.enabled)
         self.assertEqual(self.controller.state, STATE_UNAVAILABLE)
 
+    def test_capture_runtime_unavailable_never_enters_ready(self):
+        self.controller._capture_available = lambda: False
+        self.controller._capture_factory = AudioCapture
+
+        self.controller.enable()
+
+        self.assertEqual(self.controller.state, STATE_UNAVAILABLE)
+        self.assertFalse(self.controller._provider.is_ready())
+        self.notify.assert_called_with(
+            "A captura de áudio não está disponível neste aplicativo.",
+            key="voice-load",
+        )
+
     def test_hotkey_while_loading_is_ignored(self):
         self.controller._state = "loading"
         self.assertFalse(self.controller.handle_hotkey_press(MODE_DICTATION))
@@ -189,15 +216,362 @@ class ControllerTests(unittest.TestCase):
         )
         recording.finish_capture([0.1])
         self.controller._history.fail(recording.record_id, "offline")
-        self.controller._cancel.set()
+        with self.controller._lock:
+            self.controller._state = STATE_TRANSCRIBING
+            self.controller._retry_record_id = recording.record_id
+            generation = self.controller._session_generation
+        self.controller.cancel()
 
         self.controller._retry_history_worker(
-            self.controller._session_generation,
+            generation,
             recording.record_id,
         )
 
         entry = self.controller.history_entry(recording.record_id)
         self.assertEqual(entry["status"], "cancelled")
+
+    def test_release_during_capture_start_cancels_startup(self):
+        self._ready()
+        entered = threading.Event()
+        release = threading.Event()
+        test_case = self
+
+        class BlockingCapture(FakeCapture):
+            def start(self):
+                entered.set()
+                test_case.assertTrue(release.wait(1.0))
+                super().start()
+
+        capture = BlockingCapture()
+        self.controller._capture_factory = lambda: capture
+        result = []
+        press = threading.Thread(
+            target=lambda: result.append(
+                self.controller.handle_hotkey_press(MODE_DICTATION)
+            ),
+            daemon=True,
+        )
+        press.start()
+        self.assertTrue(entered.wait(1.0))
+        self.assertTrue(self.controller.handle_hotkey_release(MODE_DICTATION))
+        self.assertEqual(self.controller.state, STATE_IDLE)
+        self.assertFalse(self.controller.handle_hotkey_press(MODE_DICTATION))
+        release.set()
+        press.join(1.0)
+
+        self.assertFalse(press.is_alive())
+        self.assertEqual(result, [False])
+        self.assertEqual(self.controller.state, STATE_IDLE)
+        self.assertGreaterEqual(capture.stop_calls, 1)
+        self.assertEqual(self.controller.history_entries()[0]["status"], "cancelled")
+
+    def test_concurrent_presses_create_only_one_capture(self):
+        self._ready()
+        entered = threading.Event()
+        release = threading.Event()
+        captures = []
+        test_case = self
+
+        class BlockingCapture(FakeCapture):
+            def start(self):
+                if not entered.is_set():
+                    entered.set()
+                    test_case.assertTrue(release.wait(1.0))
+                super().start()
+
+        def factory():
+            capture = BlockingCapture()
+            captures.append(capture)
+            return capture
+
+        self.controller._capture_factory = factory
+        results = []
+        first = threading.Thread(
+            target=lambda: results.append(
+                self.controller.handle_hotkey_press(MODE_DICTATION)
+            ),
+            daemon=True,
+        )
+        second = threading.Thread(
+            target=lambda: results.append(
+                self.controller.handle_hotkey_press(MODE_DICTATION)
+            ),
+            daemon=True,
+        )
+        first.start()
+        self.assertTrue(entered.wait(1.0))
+        second.start()
+        second.join(1.0)
+        self.assertFalse(second.is_alive())
+        release.set()
+        first.join(1.0)
+
+        self.assertFalse(first.is_alive())
+        self.assertEqual(sorted(results), [False, True])
+        self.assertEqual(len(captures), 1)
+        self.assertEqual(self.controller.state, STATE_RECORDING)
+        self.controller.cancel()
+
+    def test_cancel_during_target_restore_blocks_late_insert(self):
+        self._ready()
+        runner = ThreadRunner()
+        entered = threading.Event()
+        release = threading.Event()
+
+        def restore_target(target):
+            del target
+            entered.set()
+            self.assertTrue(release.wait(1.0))
+            return True
+
+        self.controller.task_runner = runner
+        self.controller._restore_target = restore_target
+        self.assertTrue(self.controller.handle_hotkey_press(MODE_DICTATION))
+        self.assertTrue(self.controller.handle_hotkey_release(MODE_DICTATION))
+        self.assertTrue(entered.wait(1.0))
+        self.controller.cancel()
+        self.assertEqual(self.controller.state, STATE_IDLE)
+        self.assertEqual(self.inserted, [])
+        release.set()
+        for thread in runner.threads:
+            thread.join(1.0)
+
+        self.assertEqual(self.inserted, [])
+        self.assertFalse(any(thread.is_alive() for thread in runner.threads))
+        self.assertEqual(self.controller.last_outcome, "cancelled")
+        self.assertEqual(self.controller.history_entries()[0]["status"], "cancelled")
+
+    def test_language_switch_fences_stale_history_retry(self):
+        self._ready()
+        recording = self.controller._history.begin(
+            mode=MODE_DICTATION,
+            provider="local",
+            profile="balanced",
+            language="pt-BR",
+            target_kind="window",
+        )
+        recording.finish_capture([0.1, 0.2])
+        self.controller._history.fail(recording.record_id, "offline")
+        entered = threading.Event()
+        release = threading.Event()
+        copied = []
+
+        def slow_transcribe(pcm, cancel_event=None):
+            del pcm, cancel_event
+            entered.set()
+            self.assertTrue(release.wait(1.0))
+            return "stale retry"
+
+        self.backend.transcribe = slow_transcribe
+        self.controller._leave_on_clipboard = lambda text: copied.append(text) or True
+        runner = ThreadRunner()
+        self.controller.task_runner = runner
+        self.assertTrue(self.controller.retry_history(recording.record_id))
+        self.assertTrue(entered.wait(1.0))
+
+        with mock.patch("voice_support._SHUTDOWN_JOIN_SECONDS", 0.05), \
+                mock.patch("voice_support.model_is_installed", return_value=True), \
+                mock.patch("voice_support.installed_model_path", return_value="model.gguf"), \
+                mock.patch.object(self.controller, "_start_monitor"):
+            self.controller.set_language("en-US")
+            deadline = time.monotonic() + 1.0
+            while self.controller.state != STATE_IDLE and time.monotonic() < deadline:
+                time.sleep(0.01)
+
+        self.assertEqual(self.controller.history_entry(recording.record_id)["status"], "cancelled")
+        release.set()
+        for thread in runner.threads:
+            thread.join(1.0)
+
+        self.assertFalse(any(thread.is_alive() for thread in runner.threads))
+        self.assertEqual(copied, [])
+        self.assertEqual(
+            self.controller.history_entry(recording.record_id)["status"],
+            "cancelled",
+        )
+
+    def test_old_retry_cannot_cancel_a_new_retry_or_later_session(self):
+        self._ready()
+        recording = self.controller._history.begin(
+            mode=MODE_DICTATION,
+            provider="local",
+            profile="balanced",
+            language="pt-BR",
+            target_kind="window",
+        )
+        recording.finish_capture([0.1, 0.2])
+        self.controller._history.fail(recording.record_id, "offline")
+        entered = threading.Event()
+        release = threading.Event()
+        copied = []
+        calls = []
+
+        def transcribe(pcm, cancel_event=None):
+            del pcm, cancel_event
+            calls.append(len(calls) + 1)
+            if len(calls) == 1:
+                entered.set()
+                self.assertTrue(release.wait(1.0))
+                return "stale retry"
+            return "fresh retry"
+
+        self.backend.transcribe = transcribe
+        self.controller._leave_on_clipboard = lambda text: copied.append(text) or True
+        runner = ThreadRunner()
+        self.controller.task_runner = runner
+        self.assertTrue(self.controller.retry_history(recording.record_id))
+        self.assertTrue(entered.wait(1.0))
+        self.controller.cancel()
+        self.controller._history.fail(recording.record_id, "retry again")
+
+        self.assertTrue(self.controller.retry_history(recording.record_id))
+        second_retry = runner.threads[-1]
+        second_retry.join(1.0)
+        self.assertFalse(second_retry.is_alive())
+        self.assertEqual(copied, ["fresh retry"])
+        self.assertEqual(
+            self.controller.history_entry(recording.record_id)["status"],
+            "completed",
+        )
+
+        self.assertTrue(self.controller.handle_hotkey_press(MODE_DICTATION))
+        self.controller.cancel()
+        release.set()
+        for thread in runner.threads:
+            thread.join(1.0)
+
+        self.assertFalse(any(thread.is_alive() for thread in runner.threads))
+        self.assertEqual(copied, ["fresh retry"])
+        self.assertEqual(
+            self.controller.history_entry(recording.record_id)["status"],
+            "completed",
+        )
+
+    def test_retry_commit_survives_cancel_during_clipboard_copy(self):
+        self._ready()
+        recording = self.controller._history.begin(
+            mode=MODE_DICTATION,
+            provider="local",
+            profile="balanced",
+            language="pt-BR",
+            target_kind="window",
+        )
+        recording.finish_capture([0.1, 0.2])
+        self.controller._history.fail(recording.record_id, "offline")
+        entered = threading.Event()
+        release = threading.Event()
+
+        def blocked_copy(text):
+            del text
+            entered.set()
+            self.assertTrue(release.wait(1.0))
+            return True
+
+        self.backend.transcript = "recovered"
+        self.controller._leave_on_clipboard = blocked_copy
+        runner = ThreadRunner()
+        self.controller.task_runner = runner
+        self.assertTrue(self.controller.retry_history(recording.record_id))
+        self.assertTrue(entered.wait(1.0))
+
+        self.controller.cancel()
+        self.assertEqual(self.controller.state, STATE_IDLE)
+        self.assertEqual(
+            self.controller.history_entry(recording.record_id)["status"],
+            "completed",
+        )
+        release.set()
+        for thread in runner.threads:
+            thread.join(1.0)
+        self.assertFalse(any(thread.is_alive() for thread in runner.threads))
+        self.assertEqual(
+            self.controller.history_entry(recording.record_id)["status"],
+            "completed",
+        )
+
+    def test_cancel_serializes_before_a_new_retry_of_the_same_record(self):
+        self._ready()
+        recording = self.controller._history.begin(
+            mode=MODE_DICTATION,
+            provider="local",
+            profile="balanced",
+            language="pt-BR",
+            target_kind="window",
+        )
+        recording.finish_capture([0.1, 0.2])
+        self.controller._history.fail(recording.record_id, "offline")
+        with self.controller._lock:
+            self.controller._state = STATE_TRANSCRIBING
+            self.controller._retry_record_id = recording.record_id
+            self.controller._retry_generation = self.controller._session_generation
+
+        entered = threading.Event()
+        release = threading.Event()
+        original_cancel = self.controller._history.cancel
+
+        def blocked_cancel(record_id):
+            entered.set()
+            self.assertTrue(release.wait(1.0))
+            return original_cancel(record_id)
+
+        self.controller._history.cancel = blocked_cancel
+        cancelling = threading.Thread(target=self.controller.cancel, daemon=True)
+        cancelling.start()
+        self.assertTrue(entered.wait(1.0))
+
+        retry_result = []
+        retrying = threading.Thread(
+            target=lambda: retry_result.append(
+                self.controller.retry_history(recording.record_id)
+            ),
+            daemon=True,
+        )
+        retrying.start()
+        retrying.join(0.05)
+        self.assertTrue(retrying.is_alive())
+        release.set()
+        cancelling.join(1.0)
+        retrying.join(1.0)
+
+        self.assertFalse(cancelling.is_alive())
+        self.assertFalse(retrying.is_alive())
+        self.assertEqual(retry_result, [False])
+        self.assertEqual(
+            self.controller.history_entry(recording.record_id)["status"],
+            "cancelled",
+        )
+
+    def test_completion_history_write_serializes_cancel(self):
+        self._ready()
+        entered = threading.Event()
+        release = threading.Event()
+        original_complete = self.controller._history.complete
+
+        def blocked_complete(*args):
+            entered.set()
+            self.assertTrue(release.wait(1.0))
+            return original_complete(*args)
+
+        self.controller._history.complete = blocked_complete
+        runner = ThreadRunner()
+        self.controller.task_runner = runner
+        self.assertTrue(self.controller.handle_hotkey_press(MODE_DICTATION))
+        self.assertTrue(self.controller.handle_hotkey_release(MODE_DICTATION))
+        self.assertTrue(entered.wait(1.0))
+
+        cancel_thread = threading.Thread(target=self.controller.cancel, daemon=True)
+        cancel_thread.start()
+        cancel_thread.join(0.05)
+        self.assertTrue(cancel_thread.is_alive())
+        release.set()
+        cancel_thread.join(1.0)
+        for thread in runner.threads:
+            thread.join(1.0)
+
+        self.assertFalse(cancel_thread.is_alive())
+        self.assertFalse(any(thread.is_alive() for thread in runner.threads))
+        self.assertEqual(self.controller.state, STATE_IDLE)
+        self.assertEqual(self.controller.history_entries()[0]["status"], "completed")
 
     def test_clipboard_exception_reports_that_dictation_was_not_recovered(self):
         self._ready()
@@ -443,6 +817,24 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(seen, ["João"])
         self.assertEqual(self.inserted, [])
 
+    def test_queued_form_guard_expires_after_cancel(self):
+        self._ready()
+        queued = []
+        self.controller.register_form_target(
+            lambda text: None,
+            lambda text, token: queued.append((text, token)),
+        )
+        self.backend.transcript = "João"
+
+        self.controller.handle_hotkey_press(MODE_DICTATION)
+        self.controller.handle_hotkey_release(MODE_DICTATION)
+
+        self.assertEqual([text for text, _token in queued], ["João"])
+        token = queued[0][1]
+        self.assertTrue(self.controller.form_guard_valid(token))
+        self.controller.cancel()
+        self.assertFalse(self.controller.form_guard_valid(token))
+
     def test_second_press_ignored(self):
         self._ready()
         self.assertTrue(self.controller.handle_hotkey_press(MODE_DICTATION))
@@ -503,6 +895,60 @@ class ControllerTests(unittest.TestCase):
         self.controller.shutdown()
         self.assertFalse(self.controller.handle_hotkey_press(MODE_DICTATION))
 
+    def test_shutdown_stops_a_queued_finish_capture(self):
+        finish_gate = threading.Event()
+
+        class GatedRunner:
+            def __init__(self):
+                self.threads = []
+
+            def start(self, fn, *args, name=None):
+                def run():
+                    if name == "voice-finish":
+                        finish_gate.wait(1.0)
+                    fn(*args)
+
+                thread = threading.Thread(target=run, daemon=True, name=name)
+                self.threads.append(thread)
+                thread.start()
+                return thread
+
+        runner = GatedRunner()
+        controller = VoiceController(
+            {"voice_enabled": False},
+            task_runner=runner,
+            insert_text=lambda text: self.inserted.append(text) or True,
+            expand_trigger=lambda trigger: True,
+            notify=self.notify,
+            logger=self.logger,
+            capture_target=lambda: VoiceTarget("window", handle=1),
+            restore_target=lambda target: True,
+            secure_input_blocks=lambda: False,
+            backend=self.backend,
+            capture_factory=lambda: self.capture,
+            cache_dir=self.tmp,
+            download=lambda entry, cache_dir, progress=None, cancel_event=None: os.path.join(
+                self.tmp, "model.gguf"
+            ),
+        )
+        with mock.patch("voice_support.model_is_installed", return_value=True), \
+                mock.patch("voice_support.installed_model_path", return_value="model.gguf"), \
+                mock.patch.object(controller, "_start_monitor"):
+            controller.enable()
+            self.assertEqual(controller.state, STATE_IDLE)
+            self.assertTrue(controller.handle_hotkey_press(MODE_DICTATION))
+            self.assertTrue(self.capture.started)
+            self.assertTrue(controller.handle_hotkey_release(MODE_DICTATION))
+            controller.shutdown(timeout=0.05)
+            self.assertEqual(self.capture.stop_calls, 0)
+
+            finish_gate.set()
+            runner.threads[-1].join(1.0)
+
+        self.assertFalse(runner.threads[-1].is_alive())
+        self.assertGreaterEqual(self.capture.stop_calls, 1)
+        self.assertEqual(self.inserted, [])
+
     def test_failed_switch_restores_previous_when_possible(self):
         self._ready()
         self.backend.load = mock.Mock(side_effect=Exception("boom"))
@@ -551,7 +997,7 @@ class ControllerTests(unittest.TestCase):
     def test_delete_disables(self):
         self._ready()
         with mock.patch("voice_support.delete_model"):
-            self.controller.delete_active_model()
+            self.assertTrue(self.controller.delete_active_model())
         self.assertFalse(self.controller.enabled)
 
     def test_reapplying_same_options_retries_an_unavailable_backend(self):
@@ -658,6 +1104,101 @@ class ControllerTests(unittest.TestCase):
         self.assertTrue(self.controller.handle_hotkey_press(MODE_DICTATION))
         self.assertEqual(self.controller.state, STATE_RECORDING)
 
+    def test_disable_closes_admission_before_waiting_for_workers(self):
+        entered = threading.Event()
+        release = threading.Event()
+
+        class BlockingBackend(FakeAsrBackend):
+            def transcribe(self, pcm, cancel_event=None):
+                entered.set()
+                release.wait(2.0)
+                return super().transcribe(pcm, cancel_event=cancel_event)
+
+        self._ready()
+        self.controller._provider.backend = BlockingBackend(transcript="late")
+        self.controller.task_runner = ThreadRunner()
+        with mock.patch.object(self.controller, "_start_monitor"):
+            self.assertTrue(self.controller.handle_hotkey_press(MODE_DICTATION))
+            self.controller.handle_hotkey_release(MODE_DICTATION)
+        self.assertTrue(entered.wait(1.0))
+
+        join_entered = threading.Event()
+        allow_join = threading.Event()
+        original_join = self.controller._join_workers
+
+        def gated_join(timeout, workers=None):
+            join_entered.set()
+            self.assertTrue(allow_join.wait(1.0))
+            return original_join(timeout, workers=workers)
+
+        self.controller._join_workers = gated_join
+        disable_thread = threading.Thread(target=self.controller.disable, daemon=True)
+        disable_thread.start()
+        self.assertTrue(join_entered.wait(1.0))
+        self.assertFalse(self.controller.settings.enabled)
+        self.assertEqual(self.controller.state, STATE_UNAVAILABLE)
+        self.assertGreaterEqual(self.capture.stop_calls, 1)
+        self.assertEqual(self.controller.history_entries()[0]["status"], "cancelled")
+        self.assertFalse(self.controller.handle_hotkey_press(MODE_DICTATION))
+        self.controller.apply_options(profile="accuracy")
+        self.assertEqual(self.controller.settings.profile, "balanced")
+        self.controller.enable()
+        self.assertEqual(self.controller.state, STATE_UNAVAILABLE)
+        self.assertFalse(self.controller.settings.enabled)
+
+        release.set()
+        allow_join.set()
+        disable_thread.join(1.0)
+        self.assertFalse(disable_thread.is_alive())
+
+    def test_late_escape_does_not_cancel_during_disable(self):
+        self._ready()
+        self.controller.task_runner = ThreadRunner()
+        join_entered = threading.Event()
+        allow_join = threading.Event()
+        original_join = self.controller._join_workers
+
+        def gated_join(timeout, workers=None):
+            join_entered.set()
+            self.assertTrue(allow_join.wait(1.0))
+            return original_join(timeout, workers=workers)
+
+        self.controller._join_workers = gated_join
+        disable_thread = threading.Thread(target=self.controller.disable, daemon=True)
+        disable_thread.start()
+        self.assertTrue(join_entered.wait(1.0))
+        cancel_calls_before_escape = self.backend.cancel_calls
+
+        self.controller._hotkey_escape_from_os()
+        self.controller._wait_for_workers()
+        self.assertEqual(self.backend.cancel_calls, cancel_calls_before_escape)
+
+        allow_join.set()
+        disable_thread.join(1.0)
+        self.assertFalse(disable_thread.is_alive())
+
+    def test_switch_rollback_persists_without_holding_controller_lock(self):
+        self._ready()
+        payloads = []
+        lock_observed = []
+
+        def persist(payload):
+            payloads.append(payload)
+            acquired = self.controller._lock.acquire(timeout=1.0)
+            lock_observed.append(acquired)
+            if acquired:
+                self.controller._lock.release()
+
+        self.controller._persist_settings = persist
+        self.backend.load = mock.Mock(side_effect=[Exception("boom"), None])
+        with mock.patch("voice_support.installed_model_path", return_value="old.gguf"):
+            self.controller.set_profile("accuracy")
+
+        self.assertEqual(self.controller.settings.profile, "balanced")
+        self.assertEqual(payloads[-1]["voice_profile"], "balanced")
+        self.assertTrue(lock_observed)
+        self.assertTrue(all(lock_observed))
+
     def test_switch_during_recording_stops_capture(self):
         self._ready()
         self.assertTrue(self.controller.handle_hotkey_press(MODE_DICTATION))
@@ -749,6 +1290,399 @@ class ControllerTests(unittest.TestCase):
         self.assertGreaterEqual(backend.cancel_calls, 1)
         self.assertEqual(unloaded_before_exit, [False])
         self.assertEqual(self.inserted, [])
+
+    def test_shutdown_defers_unload_when_backend_ignores_cancel(self):
+        entered = threading.Event()
+        release = threading.Event()
+        left = threading.Event()
+        unloaded = threading.Event()
+        unloaded_before_exit = []
+
+        class IgnoringCancelBackend(FakeAsrBackend):
+            def transcribe(self, pcm, cancel_event=None):
+                del pcm, cancel_event
+                entered.set()
+                try:
+                    release.wait(2.0)
+                    return self.transcript
+                finally:
+                    left.set()
+
+            def cancel(self):
+                self.cancel_calls += 1
+
+            def unload(self):
+                unloaded_before_exit.append(not left.is_set())
+                unloaded.set()
+                super().unload()
+
+        backend = IgnoringCancelBackend(transcript="late")
+        controller = VoiceController(
+            {"voice_enabled": False},
+            task_runner=ThreadRunner(),
+            insert_text=lambda text: self.inserted.append(text) or True,
+            expand_trigger=lambda trigger: True,
+            notify=self.notify,
+            logger=self.logger,
+            capture_target=lambda: VoiceTarget("window", handle=1),
+            restore_target=lambda target: True,
+            secure_input_blocks=lambda: False,
+            backend=backend,
+            capture_factory=lambda: FakeCapture(),
+            cache_dir=self.tmp,
+            download=lambda entry, cache_dir, progress=None, cancel_event=None: os.path.join(
+                self.tmp, "model.gguf"
+            ),
+        )
+        with mock.patch("voice_support.model_is_installed", return_value=True), \
+                mock.patch("voice_support.installed_model_path", return_value="model.gguf"), \
+                mock.patch.object(controller, "_start_monitor"):
+            controller.enable()
+            deadline = time.monotonic() + 1.0
+            while controller.state != STATE_IDLE and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertEqual(controller.state, STATE_IDLE)
+            self.assertTrue(controller.handle_hotkey_press(MODE_DICTATION))
+            self.assertTrue(controller.handle_hotkey_release(MODE_DICTATION))
+            self.assertTrue(entered.wait(1.0))
+
+            started = time.monotonic()
+            controller.shutdown(timeout=0.05)
+            elapsed = time.monotonic() - started
+            self.assertLess(elapsed, 0.5)
+            self.assertGreaterEqual(backend.cancel_calls, 1)
+            self.assertFalse(unloaded.is_set())
+
+            release.set()
+            self.assertTrue(left.wait(1.0))
+            self.assertTrue(unloaded.wait(1.0))
+
+        self.assertEqual(unloaded_before_exit, [False])
+        self.assertEqual(self.inserted, [])
+
+    def test_concurrent_profile_switches_do_not_wait_on_each_other(self):
+        entered = threading.Event()
+        release = threading.Event()
+
+        class IgnoringCancelBackend(FakeAsrBackend):
+            def transcribe(self, pcm, cancel_event=None):
+                del pcm, cancel_event
+                entered.set()
+                release.wait(2.0)
+                return self.transcript
+
+            def cancel(self):
+                self.cancel_calls += 1
+
+        backend = IgnoringCancelBackend(transcript="late")
+        controller = VoiceController(
+            {"voice_enabled": False},
+            task_runner=ThreadRunner(),
+            insert_text=lambda text: self.inserted.append(text) or True,
+            expand_trigger=lambda trigger: True,
+            notify=self.notify,
+            logger=self.logger,
+            capture_target=lambda: VoiceTarget("window", handle=1),
+            restore_target=lambda target: True,
+            secure_input_blocks=lambda: False,
+            backend=backend,
+            capture_factory=lambda: FakeCapture(),
+            cache_dir=self.tmp,
+            download=lambda entry, cache_dir, progress=None, cancel_event=None: os.path.join(
+                self.tmp, "model.gguf"
+            ),
+        )
+        with mock.patch("voice_support.model_is_installed", return_value=True), \
+                mock.patch("voice_support.installed_model_path", return_value="model.gguf"), \
+                mock.patch.object(controller, "_start_monitor"):
+            controller.enable()
+            deadline = time.monotonic() + 1.0
+            while controller.state != STATE_IDLE and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertEqual(controller.state, STATE_IDLE)
+            self.assertTrue(controller.handle_hotkey_press(MODE_DICTATION))
+            self.assertTrue(controller.handle_hotkey_release(MODE_DICTATION))
+            self.assertTrue(entered.wait(1.0))
+
+            controller.set_language("en-US")
+            controller.set_profile("accuracy")
+            release.set()
+
+            deadline = time.monotonic() + 2.0
+            while controller.state != STATE_IDLE and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertEqual(controller.state, STATE_IDLE)
+            self.assertFalse(any(thread.is_alive() for thread in controller.task_runner.threads))
+            self.assertEqual(self.inserted, [])
+
+    def test_repeated_shutdown_does_not_overlap_deferred_unload(self):
+        entered = threading.Event()
+        release = threading.Event()
+        finished = threading.Event()
+        active = 0
+        calls = []
+        overlap = []
+        active_lock = threading.Lock()
+
+        class BlockingUnloadBackend(FakeAsrBackend):
+            def unload(self):
+                nonlocal active
+                with active_lock:
+                    active += 1
+                    calls.append(active)
+                    if active > 1:
+                        overlap.append(True)
+                entered.set()
+                try:
+                    if len(calls) == 1:
+                        release.wait(1.0)
+                    super().unload()
+                finally:
+                    with active_lock:
+                        active -= 1
+                    finished.set()
+
+        backend = BlockingUnloadBackend()
+        controller = VoiceController(
+            {"voice_enabled": False},
+            task_runner=InlineRunner(),
+            insert_text=lambda text: self.inserted.append(text) or True,
+            expand_trigger=lambda trigger: True,
+            notify=self.notify,
+            logger=self.logger,
+            capture_target=lambda: VoiceTarget("window", handle=1),
+            restore_target=lambda target: True,
+            secure_input_blocks=lambda: False,
+            backend=backend,
+            capture_factory=lambda: FakeCapture(),
+            cache_dir=self.tmp,
+            download=lambda entry, cache_dir, progress=None, cancel_event=None: os.path.join(
+                self.tmp, "model.gguf"
+            ),
+        )
+        with mock.patch("voice_support.model_is_installed", return_value=True), \
+                mock.patch("voice_support.installed_model_path", return_value="model.gguf"), \
+                mock.patch.object(controller, "_start_monitor"):
+            controller.enable()
+            controller._schedule_unload_after_workers()
+            self.assertTrue(entered.wait(1.0))
+
+            started = time.monotonic()
+            controller.shutdown(timeout=0.0)
+            self.assertLess(time.monotonic() - started, 0.5)
+            self.assertEqual(calls, [1])
+            self.assertEqual(overlap, [])
+
+            release.set()
+            self.assertTrue(finished.wait(1.0))
+
+        self.assertEqual(calls, [1])
+        self.assertEqual(overlap, [])
+
+    def test_delete_model_waits_for_deferred_unload(self):
+        entered = threading.Event()
+        release = threading.Event()
+        first_unload = True
+
+        class BlockingUnloadBackend(FakeAsrBackend):
+            def unload(self):
+                nonlocal first_unload
+                if first_unload:
+                    first_unload = False
+                    entered.set()
+                    release.wait(1.0)
+                super().unload()
+
+        backend = BlockingUnloadBackend()
+        controller = VoiceController(
+            {"voice_enabled": False},
+            task_runner=InlineRunner(),
+            insert_text=lambda text: self.inserted.append(text) or True,
+            expand_trigger=lambda trigger: True,
+            notify=self.notify,
+            logger=self.logger,
+            capture_target=lambda: VoiceTarget("window", handle=1),
+            restore_target=lambda target: True,
+            secure_input_blocks=lambda: False,
+            backend=backend,
+            capture_factory=lambda: FakeCapture(),
+            cache_dir=self.tmp,
+            download=lambda entry, cache_dir, progress=None, cancel_event=None: os.path.join(
+                self.tmp, "model.gguf"
+            ),
+        )
+        with mock.patch("voice_support.model_is_installed", return_value=True), \
+                mock.patch("voice_support.installed_model_path", return_value="model.gguf"), \
+                mock.patch.object(controller, "_start_monitor"):
+            controller.enable()
+            controller._schedule_unload_after_workers()
+            self.assertTrue(entered.wait(1.0))
+            with mock.patch.object(controller._provider, "delete_profile") as delete:
+                self.assertFalse(controller.delete_active_model())
+                delete.assert_not_called()
+
+            release.set()
+            deadline = time.monotonic() + 1.0
+            while controller._unload_pending and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertFalse(controller._unload_pending)
+            with mock.patch.object(controller._provider, "delete_profile") as delete:
+                self.assertTrue(controller.delete_active_model())
+                delete.assert_called_once_with("balanced")
+
+    def test_stale_switch_failure_cannot_restore_after_disable(self):
+        entered = threading.Event()
+        release = threading.Event()
+
+        class FailingSwitchBackend(FakeAsrBackend):
+            def load(self, model_path, profile, language):
+                if profile == "accuracy":
+                    entered.set()
+                    release.wait(2.0)
+                    raise RuntimeError("new model failed")
+                super().load(model_path, profile, language)
+
+        backend = FailingSwitchBackend()
+        controller = VoiceController(
+            {"voice_enabled": False},
+            task_runner=ThreadRunner(),
+            insert_text=lambda text: self.inserted.append(text) or True,
+            expand_trigger=lambda trigger: True,
+            notify=self.notify,
+            logger=self.logger,
+            capture_target=lambda: VoiceTarget("window", handle=1),
+            restore_target=lambda target: True,
+            secure_input_blocks=lambda: False,
+            backend=backend,
+            capture_factory=lambda: FakeCapture(),
+            cache_dir=self.tmp,
+            download=lambda entry, cache_dir, progress=None, cancel_event=None: os.path.join(
+                self.tmp, "model.gguf"
+            ),
+        )
+        with mock.patch("voice_support.model_is_installed", return_value=True), \
+                mock.patch("voice_support.installed_model_path", return_value="model.gguf"), \
+                mock.patch("voice_support._SHUTDOWN_JOIN_SECONDS", 0.05), \
+                mock.patch.object(controller, "_start_monitor"):
+            controller.enable()
+            deadline = time.monotonic() + 1.0
+            while controller.state != STATE_IDLE and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertEqual(controller.state, STATE_IDLE)
+
+            controller.set_profile("accuracy")
+            self.assertTrue(entered.wait(1.0))
+            controller.disable()
+            self.assertEqual(controller.state, STATE_UNAVAILABLE)
+            self.assertFalse(controller.settings.enabled)
+
+            release.set()
+            for thread in controller.task_runner.threads:
+                thread.join(1.0)
+
+        self.assertFalse(any(thread.is_alive() for thread in controller.task_runner.threads))
+        self.assertEqual(controller.state, STATE_UNAVAILABLE)
+        self.assertFalse(controller.settings.enabled)
+        self.assertEqual(controller.settings.profile, "accuracy")
+
+    def test_superseded_switch_failure_cannot_restore_an_older_profile(self):
+        entered = threading.Event()
+        release = threading.Event()
+
+        class FailingSwitchBackend(FakeAsrBackend):
+            def load(self, model_path, profile, language):
+                if (
+                    profile == "balanced"
+                    and language == "en-US"
+                    and not entered.is_set()
+                ):
+                    entered.set()
+                    release.wait(2.0)
+                    raise RuntimeError("new model failed")
+                super().load(model_path, profile, language)
+
+        backend = FailingSwitchBackend()
+        controller = VoiceController(
+            {"voice_enabled": False},
+            task_runner=ThreadRunner(),
+            insert_text=lambda text: self.inserted.append(text) or True,
+            expand_trigger=lambda trigger: True,
+            notify=self.notify,
+            logger=self.logger,
+            capture_target=lambda: VoiceTarget("window", handle=1),
+            restore_target=lambda target: True,
+            secure_input_blocks=lambda: False,
+            backend=backend,
+            capture_factory=lambda: FakeCapture(),
+            cache_dir=self.tmp,
+            download=lambda entry, cache_dir, progress=None, cancel_event=None: os.path.join(
+                self.tmp, "model.gguf"
+            ),
+        )
+        with mock.patch("voice_support.model_is_installed", return_value=True), \
+                mock.patch("voice_support.installed_model_path", return_value="model.gguf"), \
+                mock.patch.object(controller, "_start_monitor"):
+            controller.enable()
+            deadline = time.monotonic() + 1.0
+            while controller.state != STATE_IDLE and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertEqual(controller.state, STATE_IDLE)
+
+            controller.set_language("en-US")
+            self.assertTrue(entered.wait(1.0))
+            controller.set_profile("accuracy")
+            release.set()
+            deadline = time.monotonic() + 2.0
+            while controller.state != STATE_IDLE and time.monotonic() < deadline:
+                time.sleep(0.01)
+
+        self.assertEqual(controller.state, STATE_IDLE)
+        self.assertTrue(controller.settings.enabled)
+        self.assertEqual(controller.settings.profile, "accuracy")
+        self.assertEqual(controller.settings.language, LANGUAGE_AUTO)
+
+    def test_worker_is_tracked_before_runner_returns(self):
+        started = threading.Event()
+        allow_runner_return = threading.Event()
+        entered = threading.Event()
+        release = threading.Event()
+
+        class DelayedRunner:
+            def start(self, fn, *args, name=None):
+                thread = threading.Thread(target=fn, args=args, daemon=True, name=name)
+                thread.start()
+                started.set()
+                self.assertTrue(allow_runner_return.wait(1.0))
+                return thread
+
+            @staticmethod
+            def assertTrue(value):
+                if not value:
+                    raise AssertionError("runner return gate timed out")
+
+        self.controller.task_runner = DelayedRunner()
+
+        def slow_worker():
+            entered.set()
+            self.assertTrue(release.wait(1.0))
+
+        starter = threading.Thread(
+            target=lambda: self.controller._start_worker(slow_worker, name="slow-test"),
+            daemon=True,
+        )
+        starter.start()
+        self.assertTrue(started.wait(1.0))
+        self.assertTrue(entered.wait(1.0))
+
+        joined = self.controller._join_workers(0.05)
+        self.assertFalse(joined)
+        self.assertEqual(len(self.controller._workers), 1)
+
+        release.set()
+        allow_runner_return.set()
+        starter.join(1.0)
+        self.assertFalse(starter.is_alive())
+        self.assertTrue(self.controller._join_workers(1.0))
 
     def test_switch_during_transcription_keeps_loading_and_rejects_press(self):
         import threading

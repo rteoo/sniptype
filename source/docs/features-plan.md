@@ -2,6 +2,10 @@
 
 Date: 2026-03-30
 
+> Implemented design record. See [variable support](../variable_support.py),
+> its [tests](../tests/test_variable_support.py), and the current
+> [development guide](development.md). Implementation steps below are historical.
+
 ## Overview
 
 Four additions to the existing architecture:

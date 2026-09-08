@@ -32,7 +32,7 @@ if IS_MAC:
     # the process ("NSWindow should only be instantiated on the main thread!")
     # instead of raising, so this has to be decided *before* the probe below:
     # the probe would take the whole suite down with it rather than fail over.
-    # Issue #24 resolved this for the app by moving the root to the main thread
+    # The app resolves this by moving the root to the main thread
     # there (``GuiThread`` main-thread mode); these smoke tests still drive the
     # worker-thread mode, which macOS does not permit, so they stay skipped.
     TK_SKIP_REASON = "macOS requires AppKit on the main thread; these tests drive the worker-thread root"
@@ -360,6 +360,155 @@ class ManagerGuiSmokeTests(unittest.TestCase):
         self.assertNotIn("", rows)
         self.assertEqual(["alice"], list(rows))
         self.assertEqual(1, counts[-1], "a blank key is not an item")
+
+    def test_mapping_save_rejects_reserved_prefix_metadata(self):
+        self.app.snippets["_cpf_numbers"] = {
+            "__prefix__": "cpf",
+            "alice": "123",
+        }
+
+        def build(shared_root):
+            frame = self._build_mappings_tab(shared_root)
+            entries = [w for w in _descendants(frame) if isinstance(w, tk.Entry)]
+            text = [w for w in _descendants(frame) if isinstance(w, tk.Text)][0]
+            entries[1].insert(0, "__prefix__")
+            text.insert("1.0", "must not replace metadata")
+            button = next(
+                widget for widget in _descendants(frame)
+                if isinstance(widget, tk.Button) and str(widget.cget("text")) == "Salvar"
+            )
+            button.invoke()
+
+        with mock.patch.object(tx.messagebox, "showwarning") as warning, \
+                mock.patch.object(self.app, "save_snippets", return_value=True) as save:
+            self._on_gui(build)
+
+        warning.assert_called_once()
+        self.assertIn("__prefix__", warning.call_args.args[1])
+        save.assert_not_called()
+        self.assertEqual(
+            {"__prefix__": "cpf", "alice": "123"},
+            self.app.snippets["_cpf_numbers"],
+        )
+
+    def test_new_mapping_type_rejects_duplicate_effective_prefix_and_preserves_imported_type(self):
+        imported = {"__prefix__": "mail", "team": "team@example.test"}
+        self.app.snippets["_imported_codes"] = imported
+
+        def build(shared_root):
+            frame = self._build_mappings_tab(shared_root)
+            new_button = next(
+                widget for widget in _descendants(frame)
+                if isinstance(widget, tk.Button) and str(widget.cget("text")) == "Novo tipo"
+            )
+            new_button.invoke()
+            dialog = next(
+                child for child in _descendants(shared_root)
+                if isinstance(child, tk.Toplevel) and child.title() == "Novo Tipo de Mapeamento"
+            )
+            entries = [w for w in _descendants(dialog) if isinstance(w, tk.Entry)]
+            entries[0].insert(0, "outro")
+            entries[1].insert(0, "mail")
+            create = next(
+                widget for widget in _descendants(dialog)
+                if isinstance(widget, tk.Button) and str(widget.cget("text")) == "Criar tipo"
+            )
+            create.invoke()
+            dialog.destroy()
+
+        with mock.patch.object(tx.messagebox, "showwarning") as warning, \
+                mock.patch.object(self.app, "save_snippets", return_value=True) as save:
+            self._on_gui(build)
+
+        warning.assert_called_once()
+        self.assertIn("mail", warning.call_args.args[1])
+        save.assert_not_called()
+        self.assertEqual(imported, self.app.snippets["_imported_codes"])
+        self.assertNotIn("_outro_codes", self.app.snippets)
+
+    def test_mapping_save_rolls_back_the_entire_mapping_on_persistence_failure(self):
+        original = {"__prefix__": "cpf", "alice": "old"}
+        self.app.snippets["_cpf_numbers"] = dict(original)
+
+        def build(shared_root):
+            frame = self._build_mappings_tab(shared_root)
+            entries = [w for w in _descendants(frame) if isinstance(w, tk.Entry)]
+            text = [w for w in _descendants(frame) if isinstance(w, tk.Text)][0]
+            entries[1].insert(0, "alice")
+            text.insert("1.0", "new")
+            button = next(
+                widget for widget in _descendants(frame)
+                if isinstance(widget, tk.Button) and str(widget.cget("text")) == "Salvar"
+            )
+            button.invoke()
+
+        with mock.patch.object(self.app, "save_snippets", return_value=False) as save, \
+                mock.patch.object(tx.messagebox, "showerror") as error:
+            self._on_gui(build)
+
+        save.assert_called_once()
+        error.assert_called_once()
+        self.assertEqual(original, self.app.snippets["_cpf_numbers"])
+
+    def test_new_mapping_type_rolls_back_on_persistence_failure(self):
+        def build(shared_root):
+            frame = self._build_mappings_tab(shared_root)
+            new_button = next(
+                widget for widget in _descendants(frame)
+                if isinstance(widget, tk.Button) and str(widget.cget("text")) == "Novo tipo"
+            )
+            new_button.invoke()
+            dialog = next(
+                child for child in _descendants(shared_root)
+                if isinstance(child, tk.Toplevel) and child.title() == "Novo Tipo de Mapeamento"
+            )
+            entries = [w for w in _descendants(dialog) if isinstance(w, tk.Entry)]
+            entries[0].insert(0, "outro")
+            entries[1].insert(0, "mail")
+            create = next(
+                widget for widget in _descendants(dialog)
+                if isinstance(widget, tk.Button) and str(widget.cget("text")) == "Criar tipo"
+            )
+            create.invoke()
+            dialog.destroy()
+
+        with mock.patch.object(self.app, "save_snippets", return_value=False) as save, \
+                mock.patch.object(tx.messagebox, "showerror") as error:
+            self._on_gui(build)
+
+        save.assert_called_once()
+        error.assert_called_once()
+        self.assertNotIn("_outro_codes", self.app.snippets)
+
+    def test_new_static_warns_when_composed_mapping_trigger_collides(self):
+        self.app.snippets["_cpf_numbers"] = {
+            "__prefix__": "cpf",
+            "alice": "mapped",
+        }
+        self.app.refresh_runtime_indexes()
+
+        with mock.patch.object(tx.messagebox, "askyesno", return_value=False) as ask:
+            self._save_static_from_editor("cpfalice", "static")
+
+        ask.assert_called_once()
+        self.assertIn("cpfalice", ask.call_args.args[1])
+        self.assertIn("mapeamento dinâmico", ask.call_args.args[1])
+        self.assertIn("estático tem prioridade", ask.call_args.args[1])
+        self.assertNotIn("cpfalice", self.app.snippets)
+
+    def test_editing_existing_static_composed_collision_does_not_warn_about_itself(self):
+        self.app.snippets["_cpf_numbers"] = {
+            "__prefix__": "cpf",
+            "alice": "mapped",
+        }
+        self.app.snippets["cpfalice"] = "old static"
+        self.app.refresh_runtime_indexes()
+
+        with mock.patch.object(tx.messagebox, "askyesno", return_value=True) as ask:
+            self._save_static_from_editor("cpfalice", "updated static")
+
+        ask.assert_not_called()
+        self.assertEqual("updated static", self.app.snippets["cpfalice"])
 
     def test_notification_history_window_builds(self):
         def build(shared_root):
