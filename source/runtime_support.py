@@ -56,8 +56,9 @@ def configure_logging(log_dir=None, level=logging.INFO):
 
     Idempotent: repeated calls do not duplicate handlers. A rotating file
     handler (1 MB x 3) is added when ``log_dir`` is given, so errors survive in
-    the windowed/packaged build where stdout is discarded. A console handler is
-    added only when a real stdout exists (running from a terminal in dev).
+    the windowed/packaged build where console streams are absent. A console
+    handler targets ``stderr`` when available; standard Windows stderr uses
+    backslash replacement for characters unavailable in legacy code pages.
     """
     logger = logging.getLogger(LOGGER_NAME)
     logger.setLevel(level)
@@ -87,7 +88,7 @@ def configure_logging(log_dir=None, level=logging.INFO):
             except OSError as error:
                 logger.warning(f"Não foi possível criar o log em {log_dir}: {error}")
 
-    stream = getattr(sys, "stdout", None)
+    stream = getattr(sys, "stderr", None)
     if stream is not None:
         has_stream_handler = any(
             isinstance(handler, logging.StreamHandler)

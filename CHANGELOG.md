@@ -33,6 +33,10 @@ as `v3.5.0-beta.2`; this release publishes a Windows installer.
 
 ### Fixed
 
+- Windows forms restore the original editor before inserting completed text;
+  missing targets or failed focus restoration abort insertion.
+- Console diagnostics use stderr so Windows encodings can escape unsupported
+  characters instead of losing log records. File logs retain UTF-8 text.
 - Voice startup now reserves one session and honors release/cancellation while
   capture starts. Dispatch rechecks cancellation after target restoration and
   before committing app callbacks; stale history retries cannot commit results
