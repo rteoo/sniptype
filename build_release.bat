@@ -20,6 +20,13 @@ set "HAS_SNIPPETS_BACKUP=0"
 set "STARTUP_DIR=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
 set "SHORTCUT_PATH=%STARTUP_DIR%\Sniptype.lnk"
 
+if exist "%PREVIOUS_DIR%" (
+    echo A previous rollback copy exists: "%PREVIOUS_DIR%"
+    echo Resolve this recovery copy before rebuilding. No files were deleted.
+    pause
+    exit /b 1
+)
+
 tasklist /FI "IMAGENAME eq Sniptype.exe" 2>nul | find /I "Sniptype.exe" >nul
 if not errorlevel 1 (
     echo "Sniptype.exe" is currently running.
@@ -57,11 +64,6 @@ if exist "%STAGING_ROOT%" (
     rmdir /s /q "%STAGING_ROOT%" >nul 2>&1
 )
 
-if exist "%PREVIOUS_DIR%" (
-    attrib -r "%PREVIOUS_DIR%\*.*" /s /d >nul 2>&1
-    rmdir /s /q "%PREVIOUS_DIR%" >nul 2>&1
-)
-
 set "VOICE_COLLECT_ARGS="
 python -c "import tkinter; tkinter.Tcl()" >nul 2>&1
 if errorlevel 1 (
@@ -77,7 +79,7 @@ if errorlevel 1 (
 )
 set "VOICE_COLLECT_ARGS=--collect-all sounddevice --collect-all soxr --copy-metadata soxr --collect-all transcribe_cpp --collect-all transcribe_cpp_native"
 
-python -m PyInstaller --noconfirm --clean --windowed --onedir --distpath "%STAGING_ROOT%" --workpath "%WORK_DIR%" --specpath "%REPO_DIR%" --name "Sniptype" --icon "%REPO_DIR%\source\sniptype.ico" --add-data "%REPO_DIR%\source\snippets.json;." --add-data "%REPO_DIR%\source\dynamic_snippets.json;." --add-data "%REPO_DIR%\source\sniptype.ico;." --add-data "%REPO_DIR%\THIRD_PARTY_NOTICES.md;." --hidden-import pystray._win32 %VOICE_COLLECT_ARGS% --exclude-module torch --exclude-module torchvision --exclude-module torchaudio --exclude-module cv2 --exclude-module transformers --exclude-module onnxruntime --exclude-module scipy "%REPO_DIR%\source\sniptype.pyw"
+python -m PyInstaller --noconfirm --clean --windowed --onedir --distpath "%STAGING_ROOT%" --workpath "%WORK_DIR%" --specpath "%REPO_DIR%" --name "Sniptype" --icon "%REPO_DIR%\source\sniptype.ico" --add-data "%REPO_DIR%\source\snippets.json;." --add-data "%REPO_DIR%\source\dynamic_snippets.json;." --add-data "%REPO_DIR%\source\sniptype.ico;." --add-data "%REPO_DIR%\THIRD_PARTY_NOTICES.md;." --add-data "%REPO_DIR%\LICENSE;." --hidden-import pystray._win32 %VOICE_COLLECT_ARGS% --exclude-module torch --exclude-module torchvision --exclude-module torchaudio --exclude-module cv2 --exclude-module transformers --exclude-module onnxruntime --exclude-module scipy "%REPO_DIR%\source\sniptype.pyw"
 if errorlevel 1 (
     echo.
     echo Packaging failed. The existing dist was left unchanged.
@@ -98,31 +100,9 @@ if errorlevel 1 (
 REM No snippets are restored into the new dist: the app reads and writes user data
 REM in %USERPROFILE%\.sniptype, and the bundled seed stays as-is.
 
-if exist "%TARGET_DIR%" (
-    echo Replacing the previous dist with the new packaged release...
-    move "%TARGET_DIR%" "%PREVIOUS_DIR%" >nul
-    if errorlevel 1 (
-        echo Failed to move the existing dist out of the way.
-        echo Close any running "Sniptype.exe" instance and try again.
-        goto cleanup_and_fail
-    )
-)
-
-if not exist "%DIST_ROOT%" mkdir "%DIST_ROOT%"
-robocopy "%STAGING_DIR%" "%TARGET_DIR%" /e /j /nfl /ndl /njh /njs /r:0 /w:0 >nul
-if errorlevel 8 (
-    echo Failed to promote the new staged dist into place.
-    if exist "%PREVIOUS_DIR%" (
-        echo Attempting to restore previous dist...
-        robocopy "%PREVIOUS_DIR%" "%TARGET_DIR%" /e /j /nfl /ndl /njh /njs /r:0 /w:0 >nul
-        rmdir /s /q "%PREVIOUS_DIR%" >nul 2>&1
-    )
+call :promote_staged_release
+if errorlevel 1 (
     goto cleanup_and_fail
-)
-
-if exist "%PREVIOUS_DIR%" (
-    attrib -r "%PREVIOUS_DIR%\*.*" /s /d >nul 2>&1
-    rmdir /s /q "%PREVIOUS_DIR%" >nul 2>&1
 )
 
 if exist "%SHORTCUT_PATH%" (
@@ -154,6 +134,71 @@ echo Packaging complete. The release folder is in dist\"Sniptype"\
 echo User data lives in "%USERPROFILE%\.sniptype" and is migrated on first launch.
 if "%HAS_SNIPPETS_BACKUP%"=="1" echo Safety copy of the old dist snippets: "%SNIPPETS_BACKUP%"
 goto cleanup_and_exit
+
+:promote_staged_release
+if exist "%TARGET_DIR%" (
+    echo Replacing the previous dist with the new packaged release...
+    move "%TARGET_DIR%" "%PREVIOUS_DIR%" >nul
+    if errorlevel 1 (
+        echo Failed to move the existing dist out of the way.
+        echo Close any running "Sniptype.exe" instance and try again.
+        exit /b 1
+    )
+)
+
+if not exist "%DIST_ROOT%" mkdir "%DIST_ROOT%"
+call robocopy "%STAGING_DIR%" "%TARGET_DIR%" /e /j /nfl /ndl /njh /njs /r:0 /w:0 >nul
+if errorlevel 8 goto promote_rollback
+if not exist "%TARGET_EXE%" goto promote_rollback
+
+if exist "%PREVIOUS_DIR%" (
+    attrib -r "%PREVIOUS_DIR%\*.*" /s /d >nul 2>&1
+    rmdir /s /q "%PREVIOUS_DIR%" >nul 2>&1
+    if exist "%PREVIOUS_DIR%" (
+        echo Failed to discard the temporary rollback copy.
+        echo The new dist is present, but the previous package was retained for recovery.
+        exit /b 1
+    )
+)
+exit /b 0
+
+:promote_rollback
+echo Failed to promote the new staged dist into place.
+if exist "%PREVIOUS_DIR%" (
+    echo Attempting to restore previous dist...
+    if exist "%TARGET_DIR%" (
+        attrib -r "%TARGET_DIR%\*.*" /s /d >nul 2>&1
+        rmdir /s /q "%TARGET_DIR%" >nul 2>&1
+        if exist "%TARGET_DIR%" (
+            echo Failed to clear the partial new dist before restoring.
+            echo Previous package retained at "%PREVIOUS_DIR%".
+            exit /b 1
+        )
+    )
+    call robocopy "%PREVIOUS_DIR%" "%TARGET_DIR%" /e /j /nfl /ndl /njh /njs /r:0 /w:0 >nul
+    if errorlevel 8 (
+        echo Failed to restore the previous dist.
+        echo Previous package retained at "%PREVIOUS_DIR%".
+        exit /b 1
+    )
+    if not exist "%TARGET_EXE%" (
+        echo Restored dist is missing Sniptype.exe.
+        echo Previous package retained at "%PREVIOUS_DIR%".
+        exit /b 1
+    )
+    echo Previous dist restored; rollback copy retained at "%PREVIOUS_DIR%".
+) else (
+    if exist "%TARGET_DIR%" (
+        attrib -r "%TARGET_DIR%\*.*" /s /d >nul 2>&1
+        rmdir /s /q "%TARGET_DIR%" >nul 2>&1
+        if exist "%TARGET_DIR%" (
+            echo Failed to clear the incomplete dist.
+            exit /b 1
+        )
+    )
+    echo No previous dist was available to restore.
+)
+exit /b 1
 
 :cleanup_and_fail
 if exist "%STAGING_ROOT%" (
