@@ -39,12 +39,6 @@ def make_startup_app():
     app._autostart_state = tx.AUTOSTART_ABSENT
     app.is_admin = mock.Mock(return_value=False)
     app.load_tray_icon = mock.Mock(return_value="icon-image")
-    app.voice = None
-    app._voice_menu_label = lambda text=None: "Entrada por voz"
-    app._voice_menu_checked = lambda item=None: False
-    app._voice_menu_visible = lambda item=None: False
-    app.toggle_voice = mock.Mock()
-    app.open_voice_settings = mock.Mock()
     return app
 
 
@@ -85,17 +79,6 @@ class RunStartupTests(unittest.TestCase):
         icon.run_detached.assert_not_called()
         self.assertEqual(icon_cls.call_args.kwargs, {})
 
-    def test_runtime_probe_flag_exits_before_single_instance_startup(self):
-        probe = mock.Mock(return_value=0)
-        module = types.SimpleNamespace(main=probe)
-        with mock.patch.dict(sys.modules, {"voice_runtime_probe": module}), \
-                mock.patch.object(tx, "acquire_single_instance_mutex") as acquire, \
-                self.assertRaises(SystemExit) as raised:
-            tx.run_voice_runtime_probe_if_requested(["--voice-runtime-probe"])
-
-        self.assertEqual(raised.exception.code, 0)
-        probe.assert_called_once_with()
-        acquire.assert_not_called()
 
     def test_main_passes_show_manager_flag_into_startup(self):
         for arguments, requested in (([], False), (["--show-manager"], True)):

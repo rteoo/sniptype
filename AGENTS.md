@@ -6,6 +6,8 @@ This file is the canonical agent contract for this repository — it guides Clau
 
 Sniptype is a Windows system tray text expander. Typing a trigger word replaces the typed text with an expanded value, usually by placing the payload on the clipboard and sending Ctrl+V. By default expansion fires immediately on the last character of a matching trigger. An opt-in terminator mode (`settings.json` key `terminator_mode: true`, default off) instead expands only after a word-ending character (space/punctuation) and re-emits that character; Enter is not a terminator.
 
+Sniptype accepts text/keyboard input only. Voice capture, transcription, model management, recording history, and voice controls belong to the independent Snipvoice project at `../snipvoice`. Do not add voice listeners, microphone permissions, or transcription dependencies back to Sniptype. Previously published binaries retain their historical behavior until rebuilt and released.
+
 The app includes:
 
 - A Tkinter snippet manager GUI.
@@ -94,8 +96,6 @@ Build details: the release is `--onedir` (not `--onefile`); the hidden import `p
 - `source\macos_permissions.py` probes the two macOS TCC grants the app depends on (Input Monitoring for the listener, Accessibility for the synthesized paste) and owns the PT-BR onboarding copy, the System Settings deep-links and the re-check decision. Inert off macOS: every check answers `unknown` and the decision layer then asks for nothing.
 - `source\whatsapp_support.py` normalizes phone numbers and builds WhatsApp URLs.
 - `source\whatsapp_runtime_support.py` runs the `xwapp`, `xlwapp`, and `xpwapp` action flows.
-- `source\voice_support.py` owns the optional push-to-talk session and dispatch state machine. `voice_provider.py` owns provider readiness, model/runtime lifecycle, transcription, streaming, and cancellation; only `LocalVoiceProvider` exists, backed by transcribe.cpp. `voice_history.py` stores append-only float32 recordings plus atomic metadata under `~/.sniptype\voice-history`, recovers interrupted sessions, and permits explicit retry to History/clipboard only — never delayed blind paste. `voice_catalog.py` is the SHA256-pinned model list; `voice_models.py` downloads into a non-roaming cache (never `~/.sniptype`) and resumes only verified byte ranges; `voice_dispatch.py` routes dictation, spoken triggers, and form fields without calling `_dispatch_expansion`; `voice_hotkey.py` is a dedicated observer, not the expansion listener. Voice is default-off. Balanced and Accuracy are user-selectable; Accuracy forces automatic language detection. Live ASR is not proven. A missing provider/backend or failed `VoiceController` must leave expansion unchanged. Status: `source/docs/voice-input-plan.md`.
-- `source\macos_voice_overlay.py` owns the native click-through recording panel on macOS. It must remain non-activating and must not steal focus from the app receiving dictation.
 - `source\bcb_consultor.py` fetches Brazilian Central Bank API values with caching.
 - `source\yf_stocks.py` wraps yfinance stock/fundamentals lookups. The ticker prompt itself is a Tk dialog in `sniptype.pyw` (`ask_ticker_input`), not in this module.
 - `source\gui_thread.py` owns the process's only `tk.Tk()` root. Worker threads never touch Tk: they pass a callable to `GuiThread.call` (blocks, returns the result, re-raises errors) or `GuiThread.submit` (fire-and-forget), and a `root.after` pump runs it on the GUI thread. The keyboard listener must never call into it. *Which* thread that is depends on the OS: a dedicated worker thread on Windows (`ensure_started`), the main thread on macOS (`adopt_main_thread` + `run_mainloop`, selected by `platform_support.tk_runs_on_main_thread`). The marshaling contract is identical in both modes — only the thread the pump ticks on changes.
@@ -161,7 +161,7 @@ Runtime dependencies are listed in `source\requirements.txt`:
 - `Pillow`
 - `yfinance`
 
-`source\requirements.txt` holds exactly these four core runtime dependencies. Voice capture and native transcription are pinned separately in `source\requirements-voice.txt`; missing them in a source checkout leaves expansion unchanged and voice unavailable. Official release builds require both requirements files and run the packaged `--voice-runtime-probe` before promoting the staged artifact. PyInstaller is installed separately and is not in either requirements file.
+`source\requirements.txt` holds exactly these four core runtime dependencies. Sniptype release builds do not collect or probe voice runtimes and do not request microphone access. The transcription requirements and packaged voice-runtime probe live in Snipvoice. PyInstaller is installed separately and is not in the runtime requirements file.
 
 ## Agent Workflow
 

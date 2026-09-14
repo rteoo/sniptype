@@ -8,12 +8,10 @@ not certification of the current release.
 
 | Category | Documents and scope |
 | --- | --- |
-| Active contracts | [Sync format](sync-design.md): implemented desktop export and historical mobile consumer requirements. [Voice behavior](voice-behavior-contract.md): offline probe and failure boundaries. |
-| Implemented design records | [Manager voice controls](manager-voice-controls-plan.md), [variables and tray](features-plan.md), [WhatsApp actions](whatsapp-plan.md), and [WhatsApp v2](whatsapp_v2-plan.md). Current behavior is in the linked source/tests, not old rollout commands. |
+| Active contracts | [Sync format](sync-design.md): implemented desktop export and historical mobile consumer requirements. |
+| Implemented design records | [Variables and tray](features-plan.md), [WhatsApp actions](whatsapp-plan.md), and [WhatsApp v2](whatsapp_v2-plan.md). Current behavior is in the linked source/tests, not old rollout commands. |
 | Platform design and historical host evidence | [Tk/AppKit threading](macos-threading.md) and [macOS insertion](macos-insertion.md). A new Mac package still needs physical focus, TCC, paste, and startup checks. |
-| Mixed implementation status and remaining measurements | [Voice input plan](voice-input-plan.md). Physical microphone-to-paste, device loss, target-machine latency/accuracy, and Mac package validation remain distinct from offline tests. |
 | Historical audits and plans | [July audit](audit-report.md), [phased remediation](improvement-plan.md), [original refactor proposal](refactor-plan.md), and [September cleanup audit](cleanup-audit-2026-09.md). Dates, counts, and unresolved-at-audit labels are snapshots. |
-| Research snapshots | [Model value comparison](voice-model-value-research.md), [ASR candidate triage](asr-trending-candidate-triage.md), [Gemma evaluation](gemma-4-asr-evaluation.md), and [Voxtype review](voxtype-speech-to-text-research.md). These do not change the shipped model catalog or prove live ASR quality. |
 
 ## Historical reference audit
 
@@ -32,3 +30,8 @@ names. No private repository links are needed to preserve the design evidence.
 The sync producer is [sync_export.py](../sync_export.py), with
 [behavioral tests](../tests/test_sync_export.py). The iOS sections describe an
 external consumer contract; this repository does not verify an iOS application.
+
+Voice-specific contracts, plans, and research now belong to the independent
+Snipvoice project in the sibling `../snipvoice` directory. Its extraction record
+is `source/docs/extraction.md`. Sniptype handles text/keyboard input only.
+Historical Sniptype audits and changelogs remain here.

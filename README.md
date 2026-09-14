@@ -6,7 +6,7 @@
 
 <p align="center">
   A local-first text expander for Windows, with a tray app, visual snippet manager,
-  dynamic data, rich text, forms, and optional offline voice input.
+  dynamic data, rich text, and forms.
 </p>
 
 <p align="center">
@@ -24,14 +24,12 @@ An optional terminator mode waits for a following space or punctuation mark.
 - Static plain-text and rich-text snippets.
 - Variables for snippet references, clipboard content, and fill-in forms.
 - Built-in date/time, Brazilian Central Bank, market-data, and WhatsApp actions.
-- One manager for static snippets, dynamic mappings, built-in actions, backups,
-  and optional voice controls.
+- One manager for static snippets, dynamic mappings, built-in actions, and backups.
 - Dynamic actions can be enabled, disabled, and renamed without editing the
   bundled registry.
 - Automatic rotating backups, corrupt-file quarantine, library import/export,
   and an optional deterministic mobile sync bundle.
 - Per-user installation with no administrator rights required.
-- Optional local voice dictation and spoken-trigger mode, disabled by default.
 - No telemetry or keystroke logging.
 
 ## Quick start
@@ -47,7 +45,7 @@ python sniptype.pyw
 ```
 
 Use `pythonw sniptype.pyw` after setup when you do not need console output.
-Ordinary text expansion does not require the optional voice dependencies.
+Voice transcription now lives in the separate Snipvoice project (`../snipvoice`).
 
 ### Releases and installer
 
@@ -81,7 +79,7 @@ The bundled sample library includes examples such as:
 | `xselic` | Current Selic target |
 | `xwapp` | A WhatsApp link generated from a phone number |
 
-The tray menu also exposes reload, autostart, enable/disable, voice, backup, and
+The tray menu also exposes reload, autostart, enable/disable, backup, and
 data-folder actions when those features are available.
 
 The manager is organized around the work being done:
@@ -92,7 +90,6 @@ The manager is organized around the work being done:
 | **Mapeamentos** | Maintain prefixed collections such as CPF/CNPJ mappings |
 | **Dinâmicos** | Enable, disable, rename, and inspect built-in actions |
 | **Backups** | Restore, import, or export the snippet library |
-| **Voz** | Enable voice, choose a profile/language, and configure hotkeys |
 
 ## Variables
 
@@ -109,8 +106,8 @@ substitution.
 ## Configuration
 
 Optional settings live in `%USERPROFILE%\.sniptype\settings.json` by default,
-or under the directory selected by `SNIPTYPE_HOME`. Most voice settings are
-managed from **Gerenciar Snippets → Voz**.
+or under the directory selected by `SNIPTYPE_HOME`. Edit this optional file
+to configure the runtime settings below.
 
 | Setting | Behavior |
 | --- | --- |
@@ -143,7 +140,6 @@ Network access happens only for features that need it:
 
 - Central Bank and stock snippets fetch current values.
 - WhatsApp actions open a `wa.me` URL containing user-supplied data.
-- Optional voice models download from their catalogued, SHA256-pinned URLs.
 
 The optional `mirror_dir` and `sync_export_dir` settings copy plaintext snippet
 data to a directory selected by the user. A cloud-synchronized destination can
@@ -169,42 +165,14 @@ on Windows.
   macOS permission flows still require physical-host verification before a beta
   is promoted to stable.
 
-## Optional voice input
+## Voice transcription
 
-Voice input is disabled by default and isolated from normal expansion. Balanced
-uses Parakeet; Compact uses Qwen3-ASR 0.6B; Accuracy uses Qwen3-ASR 1.7B. Both
-Qwen profiles use automatic language detection. Live streaming is not
-available. Missing voice dependencies leave ordinary snippet expansion
-unchanged.
-
-From the repository root, install the pinned optional runtime, restart Sniptype,
-then configure voice from **Gerenciar Snippets → Voz**:
-
-```powershell
-python -m pip install -r source\requirements-voice.txt
-```
-
-The manager and tray stay synchronized for enable/disable state, model status,
-profile, language, and dictation/command hotkeys. Dictation is literal; the
-separate voice-command hotkey expands only an exact spoken trigger. Failed
-insertion reports whether the transcript was actually preserved on the
-clipboard instead of claiming recovery unconditionally.
-
-Every missing model has a **Baixar** button in the voice settings. It downloads
-and verifies that model in the background without enabling voice or changing
-the selected profile; installed models are marked **Baixado**.
-
-Each enabled voice session writes crash-recoverable audio and atomic metadata
-under `~/.sniptype/voice-history/` (or `SNIPTYPE_HOME`). Interrupted and failed
-recordings appear in **Voz → Histórico de voz**, where retry runs
-the selected local provider again and copies the recovered transcript without
-pasting into a stale application target. Successful recordings are retained as
-history too; Sniptype does not prune voice history automatically yet.
-
-Model downloads require HTTPS, follow only verified redirects, validate SHA256,
-and resume only when the server confirms the requested byte range. See the
-[voice input plan](source/docs/voice-input-plan.md) for the current verification
-status and remaining adoption gates.
+Voice capture, transcription, model management, corrections, and recording
+history have moved to the separate Snipvoice project (`../snipvoice`).
+Current Sniptype source handles text expansion only. Previously published
+Sniptype releases retain their original voice behavior.
+Existing `~/.sniptype/voice-history` and voice settings/models are preserved;
+Snipvoice uses separate data and cache folders without automatic migration.
 
 ## Develop and build
 
