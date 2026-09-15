@@ -34,7 +34,7 @@ An optional terminator mode waits for a following space or punctuation mark.
 
 ## Quick start
 
-Download the Windows installer from the [stable release](https://github.com/rteoo/sniptype/releases/tag/v3.5.0).
+Download the Windows installer from the [stable release](https://github.com/rteoo/sniptype/releases/tag/v4.0.0).
 To run from source with Python installed:
 
 ```powershell
@@ -50,9 +50,9 @@ Voice transcription now lives in the separate Snipvoice project (`../snipvoice`)
 ### Releases and installer
 
 The current stable release is
-[`v3.5.0`](https://github.com/rteoo/sniptype/releases/tag/v3.5.0) for Windows, with
-recoverable voice history, the local-provider boundary, and the Qwen Compact
-profile. The macOS ARM64 package remains the
+[`v4.0.0`](https://github.com/rteoo/sniptype/releases/tag/v4.0.0) for Windows.
+This major release restores Sniptype's focused text/keyboard expansion scope;
+voice transcription now lives in the independent Snipvoice project. The macOS ARM64 package remains the
 [`v3.5.0-beta.2` preview](https://github.com/rteoo/sniptype/releases/tag/v3.5.0-beta.2).
 See the [development guide](source/docs/development.md) to build
 the Windows package and installer or the macOS app locally.
