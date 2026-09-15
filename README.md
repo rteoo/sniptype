@@ -165,14 +165,17 @@ on Windows.
   macOS permission flows still require physical-host verification before a beta
   is promoted to stable.
 
-## Voice transcription
+## Looking for voice transcription?
 
-Voice capture, transcription, model management, corrections, and recording
-history have moved to the independent Snipvoice project. Current Sniptype
-source and releases from v4.0.0 onward handle text expansion only. Sniptype
-releases before v4.0.0 retain their original voice behavior.
-Existing `~/.sniptype/voice-history` and voice settings/models are preserved;
-Snipvoice uses separate data and cache folders without automatic migration.
+Voice input now lives in [Snipvoice](https://github.com/rteoo/snipvoice), an
+independent app for local voice capture and transcription. Snipvoice owns its
+model management, corrections, and recording history, while Sniptype v4.0.0
+and later remain focused on text and keyboard expansion.
+
+Sniptype releases before v4.0.0 retain their original voice behavior. Existing
+`~/.sniptype/voice-history` data, voice settings, and cached models are left
+untouched; Snipvoice uses separate data and cache folders without automatic
+migration.
 
 ## Develop and build
 
