@@ -34,7 +34,7 @@ An optional terminator mode waits for a following space or punctuation mark.
 
 ## Quick start
 
-Download the Windows installer from the [stable release](https://github.com/rteoo/sniptype/releases/tag/v4.0.0).
+Download the Windows installer from the [latest stable release](https://github.com/rteoo/sniptype/releases/latest).
 To run from source with Python installed:
 
 ```powershell
@@ -45,14 +45,14 @@ python sniptype.pyw
 ```
 
 Use `pythonw sniptype.pyw` after setup when you do not need console output.
-Voice transcription now lives in the separate Snipvoice project (`../snipvoice`).
 
 ### Releases and installer
 
 The current stable release is
 [`v4.0.0`](https://github.com/rteoo/sniptype/releases/tag/v4.0.0) for Windows.
 This major release restores Sniptype's focused text/keyboard expansion scope;
-voice transcription now lives in the independent Snipvoice project. The macOS ARM64 package remains the
+voice transcription now lives in the independent Snipvoice project. v4.0.0 has
+no macOS package; the older macOS ARM64 package remains available as the
 [`v3.5.0-beta.2` preview](https://github.com/rteoo/sniptype/releases/tag/v3.5.0-beta.2).
 See the [development guide](source/docs/development.md) to build
 the Windows package and installer or the macOS app locally.
@@ -156,8 +156,8 @@ on Windows.
   password or other sensitive value. Native and browser password controls do
   not expose one dependable, non-blocking detection path to the keyboard hook.
 - **macOS:** Input Monitoring and Accessibility permissions are required.
-  Secure Keyboard Entry is detected before a trigger is erased. The current
-  Apple Silicon build is ARM64-only.
+  Secure Keyboard Entry is detected before a trigger is erased. The available
+  `v3.5.0-beta.2` preview is ARM64-only and predates the v4 scope split.
 - **Linux:** plain-text clipboard insertion is supported through Wayland/X11
   clipboard tools; rich text is downgraded to plain text. Wayland may restrict
   global keyboard hooks.
@@ -168,9 +168,9 @@ on Windows.
 ## Voice transcription
 
 Voice capture, transcription, model management, corrections, and recording
-history have moved to the separate Snipvoice project (`../snipvoice`).
-Current Sniptype source handles text expansion only. Previously published
-Sniptype releases retain their original voice behavior.
+history have moved to the independent Snipvoice project. Current Sniptype
+source and releases from v4.0.0 onward handle text expansion only. Sniptype
+releases before v4.0.0 retain their original voice behavior.
 Existing `~/.sniptype/voice-history` and voice settings/models are preserved;
 Snipvoice uses separate data and cache folders without automatic migration.
 
