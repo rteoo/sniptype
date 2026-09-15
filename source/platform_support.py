@@ -254,11 +254,11 @@ def _win32_user32():
 
 
 def capture_text_target():
-    """Foreground app/window that should receive a voice insertion.
+    """Foreground app/window that should receive text after a modal dialog.
 
     macOS reuses the AppKit application handle already used by expansion
     dialogs. Windows stores the foreground HWND. The caller must invoke this
-    on hotkey press, before any Sniptype UI can take focus. Returns None
+    before any Sniptype UI can take focus. Returns None
     when the foreground owner is this process or cannot be read.
     """
     if IS_MAC:
