@@ -18,14 +18,13 @@ Use `python sniptype.pyw` when console output is useful. The source-side
 `source\run_sniptype.bat` launcher checks the core dependencies and starts the
 app with `pythonw`.
 
-Core runtime requirements are in `source/requirements.txt`. Optional voice
-capture and native transcription requirements are pinned separately in
-`source/requirements-voice.txt`; missing them keeps voice unavailable without
-affecting ordinary expansion.
+Core runtime requirements are in `source/requirements.txt`. Voice transcription
+now belongs to the separate Snipvoice project; its dependencies are not required
+by current Sniptype source or release builds.
 
 ## Release channels
 
-The current Windows stable release is `v3.5.0`; the macOS ARM64 package remains
+The current Windows stable release is `v4.0.0`; the macOS ARM64 package remains
 the `v3.5.0-beta.2` preview pending its packaged desktop validation. Stable tags use
 `vMAJOR.MINOR.PATCH`; beta tags use `vMAJOR.MINOR.PATCH-beta.N` and their GitHub
 Releases are prereleases. Both channels share the same user-data directory and
@@ -40,14 +39,14 @@ desktop smoke tests pass. The app docstring owns `Version:` and `Channel:`;
 Install the existing build requirements, then use the staging script:
 
 ```powershell
-python -m pip install -r source\requirements.txt -r source\requirements-voice.txt pyinstaller
+python -m pip install -r source\requirements.txt pyinstaller
 build_release.bat
 ```
 
-The script builds an onedir release in a temporary directory, runs the packaged
-`--voice-runtime-probe`, and replaces `dist\Sniptype` only after success. The
-hidden import `pystray._win32` and the voice package collection arguments are
-required. Generated `build`, `dist`, and spec output must not be edited by hand.
+The script builds an onedir release in a temporary directory and replaces
+`dist\Sniptype` only after success. The hidden import `pystray._win32` is
+required. Voice runtime collection and its packaged probe now belong to Snipvoice.
+Generated `build`, `dist`, and spec output must not be edited by hand.
 
 User data is not stored in `dist`; it remains under `~/.sniptype`. The build
 keeps a one-time safety copy of any legacy packaged `snippets.json` but never
@@ -83,7 +82,7 @@ Code signing is a separate release decision.
 Use a native Python toolchain for the target architecture:
 
 ```bash
-python3 -m pip install -r source/requirements.txt -r source/requirements-voice.txt pyinstaller
+python3 -m pip install -r source/requirements.txt pyinstaller
 ./build_release_macos.sh
 ```
 
@@ -93,8 +92,8 @@ identity. Otherwise the script tries the local `Sniptype Dev` identity and
 falls back to ad-hoc signing when that identity is unavailable or signing fails.
 
 The script builds `dist/Sniptype.app`, asserts that the generated icon is both
-present and referenced, adds the `LSUIElement` and microphone metadata, re-signs
-after the plist change, and runs the packaged voice probe before promotion. The
+present and referenced, adds `LSUIElement`, and re-signs after the plist change
+before promotion. The
 selected Python interpreter determines the bundle architecture; the current
 Apple Silicon release is ARM64-only.
 
@@ -107,10 +106,7 @@ root, because `LSUIElement` alone does not keep an Aqua Tk app out of the Dock.
 
 `.github/workflows/ci.yml` runs the unittest suite on Windows, macOS, and Ubuntu
 with Python 3.12 and 3.14. Linux uses Xvfb because pynput and pystray bind to Xorg
-at import time. A separate native voice matrix installs the pinned
-`requirements-voice.txt`, installs Ubuntu's `libportaudio2`, requires all four
-native imports, and runs the runtime/resampler tests without allowing skips; it
-does not access a microphone or download a model. The focused lint job installs
+at import time. The focused lint job installs
 the dev-only Ruff pin from `source/requirements-dev.txt` and applies the rules
 selected in `ruff.toml` (`F401`, `F811`, and `F821`) to source Python and `.pyw`
 files. Each matrix job has a bounded timeout, and a newer commit cancels older
@@ -128,13 +124,6 @@ requirements. The initial rule set checks unused imports, duplicate definitions,
 and undefined names, without formatting churn. Generated output and temporary
 test fixtures are excluded.
 
-The native lane targets Python 3.12 and 3.14 on the hosted 64-bit runners. The
-pinned native distribution supplies Windows x64, Linux x64, and macOS x64/ARM64
-wheels; the CI runner tests its own architecture, not every wheel architecture.
-Other interpreter/architecture combinations and microphone permissions are not
-established by this lane. The core-only matrix keeps graceful optional-runtime
-skips and prints their reasons with verbose unittest output.
-
 The workflow does not build PyInstaller artifacts, run a type checker, audit
 transitive dependencies, or execute real desktop paste and tray smoke tests.
 
@@ -145,4 +134,4 @@ transitive dependencies, or execute real desktop paste and tray smoke tests.
 - `source/docs/improvement-plan.md`: completed phased remediation roadmap.
 - `source/docs/macos-threading.md`: Tk/AppKit main-thread ownership.
 - `source/docs/macos-insertion.md`: paste timings, focus handoff, and secure input.
-- `source/docs/voice-input-plan.md`: voice architecture and verification status.
+- Sibling Snipvoice project (`../snipvoice`): extracted voice architecture and verification status.

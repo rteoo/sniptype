@@ -39,12 +39,6 @@ def make_startup_app():
     app._autostart_state = tx.AUTOSTART_ABSENT
     app.is_admin = mock.Mock(return_value=False)
     app.load_tray_icon = mock.Mock(return_value="icon-image")
-    app.voice = None
-    app._voice_menu_label = lambda text=None: "Entrada por voz"
-    app._voice_menu_checked = lambda item=None: False
-    app._voice_menu_visible = lambda item=None: False
-    app.toggle_voice = mock.Mock()
-    app.open_voice_settings = mock.Mock()
     return app
 
 
@@ -85,17 +79,6 @@ class RunStartupTests(unittest.TestCase):
         icon.run_detached.assert_not_called()
         self.assertEqual(icon_cls.call_args.kwargs, {})
 
-    def test_runtime_probe_flag_exits_before_single_instance_startup(self):
-        probe = mock.Mock(return_value=0)
-        module = types.SimpleNamespace(main=probe)
-        with mock.patch.dict(sys.modules, {"voice_runtime_probe": module}), \
-                mock.patch.object(tx, "acquire_single_instance_mutex") as acquire, \
-                self.assertRaises(SystemExit) as raised:
-            tx.run_voice_runtime_probe_if_requested(["--voice-runtime-probe"])
-
-        self.assertEqual(raised.exception.code, 0)
-        probe.assert_called_once_with()
-        acquire.assert_not_called()
 
     def test_main_passes_show_manager_flag_into_startup(self):
         for arguments, requested in (([], False), (["--show-manager"], True)):
@@ -393,10 +376,10 @@ class AppVersionFormattingTests(unittest.TestCase):
             "Sniptype v3.3.0 beta",
         )
 
-    def test_running_build_is_the_3_5_0_stable_release(self):
-        self.assertEqual(tx.APP_VERSION, "3.5.0")
+    def test_running_build_is_the_4_0_0_stable_release(self):
+        self.assertEqual(tx.APP_VERSION, "4.0.0")
         self.assertEqual(tx.RELEASE_CHANNEL, "stable")
-        self.assertEqual(tx.APP_DISPLAY_NAME, "Sniptype v3.5.0")
+        self.assertEqual(tx.APP_DISPLAY_NAME, "Sniptype v4.0.0")
 
     def test_older_source_without_a_channel_is_treated_as_stable(self):
         with mock.patch.object(tx, "__doc__", "Version: 9.8.7"):
@@ -418,7 +401,7 @@ class AppVersionFormattingTests(unittest.TestCase):
         installer = (repo_root / "installer" / "sniptype.iss").read_text(
             encoding="utf-8-sig"
         )
-        self.assertIn('#define MyAppVersion "3.5.0"', installer)
+        self.assertIn('#define MyAppVersion "4.0.0"', installer)
         self.assertIn('#define MyAppChannel "stable"', installer)
         self.assertIn(
             "OutputBaseFilename=SniptypeSetup-{#MyInstallerVersion}",

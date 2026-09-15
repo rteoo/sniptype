@@ -2,6 +2,28 @@
 
 All notable changes to Sniptype are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [4.0.0] — 2026-09-14
+
+Sniptype returns to its original text and keyboard input scope. Voice capture,
+transcription, model management, corrections, and recording history now live in
+the independent Snipvoice project.
+
+### Changed
+
+- Removed voice controls and runtime initialization from the tray app and
+  snippet manager while preserving keyboard expansion, variables, forms,
+  rich text, dynamic actions, backups, and sync export.
+- Removed microphone permission handling and native transcription dependencies
+  from Sniptype source and release builds.
+- Moved voice implementation, tests, plans, and model research into Snipvoice,
+  which uses its own application identity, data directory, and model cache.
+
+### Compatibility
+
+- Existing Sniptype snippet libraries and settings remain in `~/.sniptype`.
+- Existing voice history and cached models are left untouched; Snipvoice does
+  not migrate them automatically.
+
 ## [3.5.0] — 2026-09-08
 
 Stable Windows release following the `3.5.0-beta.2` preview. Voice remains
