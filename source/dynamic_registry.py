@@ -136,7 +136,7 @@ def _stock_provider(trigger, entry, context):
     def run_stock():
         ticker = context.ask_ticker_input(label)
         if not ticker:
-            return "[Cancelado]"
+            return None
         return getattr(context.b3_consultor, attr)(ticker)
 
     return run_stock
