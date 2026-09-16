@@ -162,9 +162,11 @@ from manager_view_support import (
     FILTER_ALL,
     FILTER_FAVORITES,
     FILTER_RECENT,
+    UNGROUPED_FILTER,
     build_manager_rows,
     filter_manager_rows,
     find_manager_target,
+    format_trigger_pair,
 )
 from gui_support import (
     center_dialog,
@@ -1184,10 +1186,14 @@ class Sniptype:
         The set of slow triggers is derived from the registry (never hardcoded),
         so adding or disabling a trigger is a data change, not a code change.
         """
-        snippets, slow_triggers = build_dynamic_snippets(
-            self.dynamic_registry, self, logger=self.logger
+        snippets, slow_triggers, identities = build_dynamic_snippets(
+            self.dynamic_registry,
+            self,
+            logger=self.logger,
+            include_identities=True,
         )
         self.slow_snippets = slow_triggers
+        self.dynamic_identities = identities
         return snippets
 
     # =====================================================================
@@ -1519,11 +1525,16 @@ class Sniptype:
 
     def rebuild_trigger_index(self):
         """Rebuild compiled trigger metadata after snippet changes."""
-        dynamic_identities = {
-            effective_trigger(stable_key, entry): stable_key
-            for stable_key, entry in self.dynamic_registry.items()
-            if isinstance(stable_key, str) and isinstance(entry, dict)
-        }
+        dynamic_identities = dict(getattr(self, "dynamic_identities", {}))
+        # Compatibility for tests/custom embedders that replace the registry
+        # directly instead of going through ``load_snippets``. Supported reload
+        # paths already carry the exact binder winner in ``dynamic_identities``.
+        for stable_key, entry in self.dynamic_registry.items():
+            if not isinstance(stable_key, str) or not isinstance(entry, dict):
+                continue
+            trigger = effective_trigger(stable_key, entry)
+            if trigger not in dynamic_identities and callable(self.snippets.get(trigger)):
+                dynamic_identities[trigger] = stable_key
         self.trigger_index = compile_trigger_index(
             self.snippets,
             self.slow_snippets,
@@ -1750,15 +1761,18 @@ class Sniptype:
 
         if not isinstance(trigger, str) or not trigger:
             return None
+        # A raw string can still name a direct target in compatibility calls.
+        # Prefer the compiled route because a stored key may be disabled or may
+        # have a group prefix while the same typed text belongs to a mapping.
+        for target in getattr(self, "trigger_index", {}).get("direct_targets", ()):
+            if target.effective_trigger == trigger:
+                return self._workflow_ref(target)
         value = self.snippets.get(trigger)
         if callable(value):
             for stable_key, entry in self.dynamic_registry.items():
                 if effective_trigger(stable_key, entry) == trigger:
                     return SnippetRef("dynamic", stable_key)
             return SnippetRef("dynamic", trigger)
-        if trigger in self.snippets and not trigger.startswith("_"):
-            return SnippetRef("static", trigger)
-
         for prefix, container in get_dynamic_prefixes(self.snippets).items():
             if not trigger.startswith(prefix) or len(trigger) <= len(prefix):
                 continue
@@ -1766,6 +1780,8 @@ class Sniptype:
             mapping = self.snippets.get(container)
             if isinstance(mapping, dict) and item in mapping and item != "__prefix__":
                 return SnippetRef("mapping", item, container)
+        if trigger in self.snippets and not trigger.startswith("_"):
+            return SnippetRef("static", trigger)
         return None
 
     def on_press(self, key):
@@ -3181,7 +3197,7 @@ class Sniptype:
 
         tk.Label(
             frame_right,
-            text="Trigger",
+            text="Trigger armazenado",
             font=ui.font(9, "bold"),
             bg=ui.card,
             fg=ui.text_strong,
@@ -3202,6 +3218,15 @@ class Sniptype:
             pady=(ui.space_xs, ui.space_md),
             ipady=5,
         )
+        effective_trigger_var = tk.StringVar(value="Efetivo: —")
+        tk.Label(
+            frame_right,
+            textvariable=effective_trigger_var,
+            font=ui.font(8),
+            bg=ui.card,
+            fg=ui.text_muted,
+            anchor="e",
+        ).grid(row=2, column=0, sticky="e")
 
         tk.Label(
             frame_right,
@@ -3309,6 +3334,10 @@ class Sniptype:
             menu = group_menu["menu"]
             menu.delete(0, tk.END)
             menu.add_command(label="Grupo", command=lambda: (group_var.set(""), filter_var.set(FILTER_ALL)))
+            menu.add_command(
+                label="Sem grupo",
+                command=lambda: (group_var.set(""), filter_var.set(UNGROUPED_FILTER)),
+            )
             groups = self.library_metadata.get("groups", {}) if isinstance(self.library_metadata, dict) else {}
             for group_id, definition in groups.items():
                 label = definition.get("label", group_id) if isinstance(definition, dict) else group_id
@@ -3354,12 +3383,18 @@ class Sniptype:
             static_snips.update(get_static_visible_snippets())
             for key in sorted(static_snips.keys()):
                 row = visible_rows.get(key)
-                display_trigger = row.effective_trigger if row else key
+                display_trigger = format_trigger_pair(row) if row else key
                 tree.insert("", tk.END, iid=key,
                             values=(display_trigger,) + snippet_row_values(key, static_snips[key])[1:])
             (tree if static_snips else empty_label).tkraise()
             if set_count is not None:
                 set_count(len(static_snips))
+            edited_key = entry_trigger.get().strip()
+            edited_row = visible_rows.get(edited_key)
+            effective_trigger_var.set(
+                f"Efetivo: {edited_row.effective_trigger}"
+                if edited_row else "Efetivo: —"
+            )
 
         def load_selected(event=None):
             selection = tree.selection()
@@ -3373,10 +3408,19 @@ class Sniptype:
                         if candidate.kind == "static" and candidate.stored_trigger == key), None)
             item_group_var.set(row.group_id if row and row.group_id else "")
             item_favorite_var.set(bool(row and row.favorite))
+            effective_trigger_var.set(
+                f"Efetivo: {row.effective_trigger}" if row else "Efetivo: —"
+            )
             update_format_status()
 
         def select_static_target(descriptor):
-            if descriptor.kind != "static" or not tree.exists(descriptor.row_id):
+            if descriptor.kind != "static":
+                return False
+            group_var.set("")
+            filter_var.set(FILTER_ALL)
+            search_var.set("")
+            refresh_listbox()
+            if not tree.exists(descriptor.row_id):
                 return False
             try:
                 if self._manager_notebook is not None:
@@ -3549,6 +3593,7 @@ class Sniptype:
         def on_new():
             entry_trigger.delete(0, tk.END)
             load_value_into_text_widget(text_value, "")
+            effective_trigger_var.set("Efetivo: —")
             update_format_status()
             entry_trigger.focus_set()
 
@@ -4693,8 +4738,23 @@ class Sniptype:
         if trigger.startswith("_"):
             return True
 
-        value = self.snippets.get(trigger)
-        if value is not None and not callable(value):
+        static_snippets = build_saveable_snippets(
+            self.snippets,
+            self.shadowed_static_snippets,
+        )
+        static_row = next(
+            (
+                row
+                for row in build_manager_rows(
+                    static_snippets,
+                    self.library_metadata,
+                    self.dynamic_registry,
+                )
+                if row.kind == "static" and row.effective_trigger == trigger
+            ),
+            None,
+        )
+        if static_row is not None:
             self.logger.warning(
                 f"Ativar o snippet dinâmico '{trigger}' sobrepõe o snippet estático de mesmo nome."
             )
@@ -4710,7 +4770,7 @@ class Sniptype:
         # ``check_dynamic_pattern`` against the ``_``-prefixed container — so the
         # direct lookup above misses it. Enabling the dynamic entry still changes
         # what the user's typing expands to, so it needs the same confirmation.
-        if value is None and trigger in composed_mapping_triggers(self.snippets):
+        if trigger in composed_mapping_triggers(self.snippets):
             self.logger.warning(
                 f"Ativar o snippet dinâmico '{trigger}' sobrepõe um mapeamento dinâmico de mesmo nome."
             )
@@ -4754,7 +4814,17 @@ class Sniptype:
         if not new_trigger or new_trigger == current_trigger:
             return
 
-        errors, warnings = validate_rename(self.dynamic_registry, key, new_trigger, self.snippets)
+        static_snippets = build_saveable_snippets(
+            self.snippets,
+            self.shadowed_static_snippets,
+        )
+        errors, warnings = validate_rename(
+            self.dynamic_registry,
+            key,
+            new_trigger,
+            static_snippets,
+            self.library_metadata,
+        )
         if errors:
             messagebox.showerror("Trigger inválido", "\n".join(errors), parent=root)
             return

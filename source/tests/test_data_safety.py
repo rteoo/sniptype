@@ -333,6 +333,23 @@ class DynamicToggleCollisionTests(unittest.TestCase):
             self.assertTrue(self.app._toggle_registry_entry("xfree", True))
         ask.assert_not_called()
 
+    def test_group_prefix_controls_whether_static_trigger_collides(self):
+        self.app.library_metadata = {
+            "groups": {"work": {"prefix": "w", "enabled": True}},
+            "items": {
+                "static": {"xhi": {"group_id": "work"}},
+                "mappings": {},
+            },
+        }
+        with mock.patch.object(tx.messagebox, "askyesno") as ask:
+            self.assertTrue(self.app._confirm_dynamic_shadows_static("xhi"))
+        ask.assert_not_called()
+
+        self.app.dynamic_registry["xhi"]["trigger"] = "wxhi"
+        with mock.patch.object(tx.messagebox, "askyesno", return_value=False) as ask:
+            self.assertFalse(self.app._confirm_dynamic_shadows_static("xhi"))
+        ask.assert_called_once()
+
     def test_disabling_never_prompts(self):
         with mock.patch.object(tx.messagebox, "askyesno") as ask:
             self.assertTrue(self.app._toggle_registry_entry("xfree", False))

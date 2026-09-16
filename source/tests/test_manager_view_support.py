@@ -3,9 +3,11 @@ import unittest
 from manager_view_support import (
     FILTER_FAVORITES,
     FILTER_RECENT,
+    UNGROUPED_FILTER,
     build_manager_rows,
     filter_manager_rows,
     find_manager_target,
+    format_trigger_pair,
 )
 from workflow_support import SnippetRef, WorkflowState
 
@@ -41,6 +43,8 @@ class ManagerRowBuildTests(unittest.TestCase):
         self.assertTrue(rows[1].favorite)
         self.assertEqual("xnow", rows[2].effective_trigger)
         self.assertFalse(rows[2].favorite)
+        self.assertEqual("xhello → wxhello", format_trigger_pair(rows[0]))
+        self.assertEqual("xdate → xnow", format_trigger_pair(rows[2]))
         with self.assertRaises(AttributeError):
             rows[0].favorite = False
 
@@ -108,6 +112,14 @@ class ManagerFilterTests(unittest.TestCase):
 
         self.assertEqual((SnippetRef("static", "one"),), tuple(row.ref for row in work_rows))
         self.assertEqual(tuple(work_rows), tuple(work_rows_by_id))
+
+    def test_ungrouped_filter_is_explicit_and_excludes_mapping_rows(self):
+        rows = filter_manager_rows(self.rows, UNGROUPED_FILTER)
+
+        self.assertEqual(
+            (SnippetRef("static", "two"),),
+            tuple(row.ref for row in rows),
+        )
 
 
 class ManagerNavigationTests(unittest.TestCase):

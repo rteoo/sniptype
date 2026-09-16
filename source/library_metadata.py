@@ -10,10 +10,15 @@ from collections.abc import Mapping
 import copy
 import uuid
 
+from form_support import FormValidationError, validate_form_fields
+from group_policy import normalize_executable_name
+
 
 METADATA_KEY = "__sniptype__"
 METADATA_KIND = "sniptype_metadata"
 SCHEMA_VERSION = 1
+_TERMINATOR_POLICIES = frozenset({"inherit", "immediate", "terminator"})
+_APPLICATION_MODES = frozenset({"all", "allow", "deny"})
 
 
 class MetadataReadOnlyError(ValueError):
@@ -76,7 +81,12 @@ def _state(value, *, present=False):
 
 
 def _valid_schema_one(block):
-    """Check the structural contract while allowing additive unknown fields."""
+    """Check the schema-v1 contract while allowing additive unknown fields.
+
+    Known fields are validated here rather than being silently repaired by the
+    runtime policy helpers.  That keeps an unsupported or malformed metadata
+    block intact and read-only while the snippet content remains usable.
+    """
     if not isinstance(block, Mapping):
         return False
     if block.get("kind") != METADATA_KIND:
@@ -90,10 +100,14 @@ def _valid_schema_one(block):
         return False
     if any(not isinstance(group, Mapping) for group in groups.values()):
         return False
+    if any(not _valid_group_definition(group) for group in groups.values()):
+        return False
     static_entries = items.get("static", {})
     if not isinstance(static_entries, Mapping):
         return False
     if any(not isinstance(item, Mapping) for item in static_entries.values()):
+        return False
+    if any(not _valid_item_metadata(item) for item in static_entries.values()):
         return False
     mapping_entries = items.get("mappings", {})
     if not isinstance(mapping_entries, Mapping):
@@ -103,7 +117,95 @@ def _valid_schema_one(block):
             return False
         if any(not isinstance(item, Mapping) for item in container.values()):
             return False
+        if any(not _valid_item_metadata(item) for item in container.values()):
+            return False
     return True
+
+
+def _valid_group_definition(group):
+    """Validate known group fields without rejecting additive extensions."""
+    for key in ("label", "notes", "prefix"):
+        if key in group and not isinstance(group[key], str):
+            return False
+    if "enabled" in group and not isinstance(group["enabled"], bool):
+        return False
+    if "terminator" in group and group["terminator"] not in _TERMINATOR_POLICIES:
+        return False
+    if "applications" not in group:
+        return True
+    applications = group["applications"]
+    if not isinstance(applications, Mapping):
+        return False
+    if applications.get("mode", "all") not in _APPLICATION_MODES:
+        return False
+    if "executables" not in applications:
+        return True
+    executables = applications["executables"]
+    return (
+        isinstance(executables, (list, tuple))
+        and not isinstance(executables, str)
+        and all(
+            isinstance(executable, str)
+            and normalize_executable_name(executable) is not None
+            for executable in executables
+        )
+    )
+
+
+def _valid_item_metadata(item):
+    """Validate known item fields, including the structured form boundary."""
+    if "group_id" in item and (
+        not isinstance(item["group_id"], str) or not item["group_id"]
+    ):
+        return False
+    if "favorite" in item and not isinstance(item["favorite"], bool):
+        return False
+    if "form" in item and not _valid_form_definition(item["form"]):
+        return False
+    return True
+
+
+def _valid_form_definition(form):
+    """Reuse the form domain's schema validation without template references."""
+    if not isinstance(form, Mapping):
+        return False
+    try:
+        validate_form_fields(form.get("fields"))
+    except FormValidationError:
+        return False
+    return True
+
+
+def _normalize_group_for_storage(group):
+    """Copy a group and canonicalize executable policy entries for JSON."""
+    result = copy.deepcopy(dict(group))
+    applications = result.get("applications")
+    if not isinstance(applications, Mapping) or "executables" not in applications:
+        return result
+    normalized_applications = copy.deepcopy(dict(applications))
+    normalized = []
+    for executable in normalized_applications["executables"]:
+        basename = normalize_executable_name(executable)
+        if basename is not None and basename not in normalized:
+            normalized.append(basename)
+    normalized_applications["executables"] = normalized
+    result["applications"] = normalized_applications
+    return result
+
+
+def _canonicalize_metadata_groups(metadata):
+    """Copy metadata while canonicalizing executable policy entries only."""
+    state = _state(metadata)
+    if state.read_only or not state:
+        return state
+    value = copy.deepcopy(dict(state))
+    groups = value.get("groups")
+    if isinstance(groups, Mapping):
+        value["groups"] = {
+            str(group_id): _normalize_group_for_storage(group)
+            for group_id, group in groups.items()
+        }
+    return LibraryMetadata(value, present=state.present)
 
 
 def split_library_document(document):
@@ -158,7 +260,10 @@ def normalize_metadata(metadata, available_items):
     normalized.setdefault("schema_version", SCHEMA_VERSION)
     groups = normalized.setdefault("groups", {})
     items = normalized.setdefault("items", {})
-    normalized["groups"] = {str(group_id): copy.deepcopy(group) for group_id, group in groups.items()}
+    normalized["groups"] = {
+        str(group_id): _normalize_group_for_storage(group)
+        for group_id, group in groups.items()
+    }
     available = _available_sets(available_items)
 
     static_source = items.get("static", {})
@@ -213,7 +318,7 @@ def build_library_document(snippets, metadata):
         for key, value in snippets.items()
         if key != METADATA_KEY
     }
-    state = _state(metadata)
+    state = _canonicalize_metadata_groups(metadata)
     if state.read_only:
         document[METADATA_KEY] = copy.deepcopy(state.raw_block)
     elif state or state.present:
@@ -269,18 +374,18 @@ def merge_metadata(existing, imported, import_result):
     mode = _import_mode(import_result)
     if mode not in ("replace", "merge"):
         raise ValueError("import mode must be 'replace' or 'merge'")
-    incoming = _state(imported)
+    incoming = _canonicalize_metadata_groups(_state(imported))
     if mode == "replace":
-        return incoming
+        return _canonicalize_metadata_groups(incoming)
     if incoming.read_only:
         raise ValueError("cannot merge read-only or future-schema imported metadata")
-    current = _state(existing)
+    current = _canonicalize_metadata_groups(_state(existing))
     if current.read_only:
         return current
     if not incoming:
-        return current
+        return _canonicalize_metadata_groups(current)
     if not current:
-        return incoming
+        return _canonicalize_metadata_groups(incoming)
 
     merged = copy.deepcopy(dict(current))
     merged.update({key: copy.deepcopy(value) for key, value in incoming.items() if key not in ("groups", "items")})
@@ -330,7 +435,7 @@ def merge_metadata(existing, imported, import_result):
         if category not in ("static", "mappings"):
             existing_items[category] = copy.deepcopy(values)
     merged["items"] = existing_items
-    return LibraryMetadata(merged, present=True)
+    return _canonicalize_metadata_groups(LibraryMetadata(merged, present=True))
 
 
 def _mutable_metadata(metadata):

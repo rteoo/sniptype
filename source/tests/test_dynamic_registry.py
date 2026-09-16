@@ -153,6 +153,22 @@ class BuildDynamicSnippetsTests(unittest.TestCase):
         self.assertEqual(len(snippets), 1)
         self.assertNotEqual(snippets["xhj"](), "segunda-feira")  # first entry won
 
+    def test_identity_map_keeps_the_same_duplicate_winner_as_the_callable(self):
+        registry = {
+            "first": {"provider": "datetime", "format": "%Y", "trigger": "xnow"},
+            "second": {"provider": "datetime", "method": "extenso", "trigger": "xnow"},
+        }
+
+        snippets, slow, identities = dr.build_dynamic_snippets(
+            registry,
+            self.ctx,
+            include_identities=True,
+        )
+
+        self.assertEqual(set(snippets), {"xnow"})
+        self.assertEqual(set(), slow)
+        self.assertEqual({"xnow": "first"}, identities)
+
     def test_stock_cancel_returns_marker(self):
         self.ctx._ticker = None
         registry = {"xcot": {"provider": "stock", "method": "cotacao", "dialog": "Cotação"}}
@@ -251,6 +267,20 @@ class ValidateRenameTests(unittest.TestCase):
 
     def test_collision_with_static_snippet_is_rejected(self):
         self.assertTrue(self._errors("email"))
+
+    def test_collision_with_prefixed_static_snippet_is_rejected(self):
+        metadata = {
+            "groups": {"work": {"prefix": "w", "enabled": True}},
+            "items": {"static": {"email": {"group_id": "work"}}, "mappings": {}},
+        }
+        errors, _ = dr.validate_rename(
+            self.registry,
+            "xhj",
+            "wemail",
+            self.snippets,
+            metadata,
+        )
+        self.assertTrue(errors)
 
     def test_collision_with_mapping_prefix_is_rejected(self):
         self.assertTrue(self._errors("cpf"))
