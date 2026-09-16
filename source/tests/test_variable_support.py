@@ -13,6 +13,7 @@ from variable_support import (
     resolve_form_variables,
     resolve_inline,
 )
+from whatsapp_runtime_support import ACTION_COMPLETED
 
 
 def _resolve_in_thread(*args, timeout=2.0, **kwargs):
@@ -161,6 +162,11 @@ class TestResolveInline(unittest.TestCase):
     def test_callable_returning_none_becomes_empty(self):
         # Action-only flows (xwapp opens the browser) substitute nothing.
         snippets = {"xwapp": lambda: None}
+        result = resolve_inline("link: %%xwapp%%", snippets, lambda: None)
+        self.assertEqual(result, "link: ")
+
+    def test_action_completion_marker_becomes_empty(self):
+        snippets = {"xwapp": lambda: ACTION_COMPLETED}
         result = resolve_inline("link: %%xwapp%%", snippets, lambda: None)
         self.assertEqual(result, "link: ")
 
