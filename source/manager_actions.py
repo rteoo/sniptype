@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 from dynamic_registry import composed_mapping_triggers
 from group_policy import effective_trigger, static_item_enabled
+from rich_text_support import extract_plain_text
 from library_metadata import (
     LibraryMetadata,
     MetadataReadOnlyError,
@@ -261,9 +262,9 @@ def set_form(snippets, metadata, item_key, form, *, dynamic_triggers=()):
         raise KeyError(f"unknown static item: {item_key}")
     # Keep the persisted JSON shape while reusing the pure field validator.
     # Passing content also rejects names that would lose to runtime variables.
-    from form_support import validate_form_fields
+    from form_support import compile_form
 
-    validate_form_fields(form, content)
+    compile_form(extract_plain_text(content[item_key]), form, content)
     state = metadata_set_form_metadata(state, item_key, form)
     return _finish(content, state, dynamic_triggers)
 

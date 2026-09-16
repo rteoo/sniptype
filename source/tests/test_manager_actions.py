@@ -61,14 +61,20 @@ class ManagerActionTests(unittest.TestCase):
         self.assertEqual({"favorite": False}, result.metadata["items"]["static"]["copy"])
 
     def test_set_form_rejects_invalid_field_definition_without_mutating_inputs(self):
-        snippets = {"x": "value"}
+        snippets = {"x": "%%field%%"}
         metadata = {}
 
         with self.assertRaises(ValueError):
             set_form(snippets, metadata, "x", {"fields": [{"name": "bad", "type": "unknown"}]})
 
-        self.assertEqual({"x": "value"}, snippets)
+        self.assertEqual({"x": "%%field%%"}, snippets)
         self.assertEqual({}, metadata)
+
+    def test_set_form_definition_must_match_template_fields(self):
+        snippets = {"x": "Hello %%name%%"}
+
+        with self.assertRaises(ValueError):
+            set_form(snippets, {}, "x", {"fields": [{"name": "unused"}]})
 
     def test_create_group_is_copy_on_write_and_accepts_injected_id(self):
         snippets = {"x": "value"}
@@ -120,7 +126,7 @@ class ManagerActionTests(unittest.TestCase):
         self.assertEqual({"favorite": True}, deleted.metadata["items"]["mappings"]["_codes"]["item"])
 
     def test_form_and_favorite_actions_return_content_unchanged(self):
-        snippets = {"x": "value"}
+        snippets = {"x": "%%n%%"}
         metadata = {"groups": {}, "items": {"static": {}, "mappings": {}}}
 
         with_form = set_form(snippets, metadata, "x", {"fields": [{"name": "n", "type": "text"}]})
