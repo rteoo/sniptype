@@ -484,6 +484,18 @@ def toggle_favorite(metadata, item_key, favorite=None):
     return state
 
 
+def toggle_mapping_favorite(metadata, container_key, item_key, favorite=None):
+    """Toggle or explicitly set a mapping item's nested favorite flag."""
+    if favorite is not None and not isinstance(favorite, bool):
+        raise TypeError("favorite must be a boolean")
+    state = _mutable_metadata(metadata)
+    mappings = _item_container(state, "mappings")
+    container = mappings.setdefault(container_key, {})
+    item = container.setdefault(item_key, {})
+    item["favorite"] = (not item.get("favorite", False)) if favorite is None else favorite
+    return state
+
+
 def duplicate_static_item_metadata(metadata, source_key, destination_key):
     """Copy static item metadata under a new key as a non-favorite item."""
     state = _mutable_metadata(metadata)
@@ -515,6 +527,7 @@ __all__ = [
     "set_form_metadata",
     "split_library_document",
     "toggle_favorite",
+    "toggle_mapping_favorite",
     "unassign_static_item",
     "update_group",
 ]
