@@ -16,6 +16,10 @@ METADATA_KIND = "sniptype_metadata"
 SCHEMA_VERSION = 1
 
 
+class MetadataReadOnlyError(ValueError):
+    """Raised when a metadata mutation would rewrite an unsupported block."""
+
+
 class LibraryMetadata(dict):
     """A dict-compatible metadata value with compatibility-state annotations.
 
@@ -329,13 +333,188 @@ def merge_metadata(existing, imported, import_result):
     return LibraryMetadata(merged, present=True)
 
 
+def _mutable_metadata(metadata):
+    state = _state(metadata)
+    if state.read_only:
+        raise MetadataReadOnlyError("library metadata is read-only for compatibility")
+    if not state:
+        return LibraryMetadata(
+            {
+                "kind": METADATA_KIND,
+                "schema_version": SCHEMA_VERSION,
+                "groups": {},
+                "items": {"static": {}, "mappings": {}},
+            },
+            present=True,
+        )
+    value = copy.deepcopy(dict(state))
+    value.setdefault("kind", METADATA_KIND)
+    value.setdefault("schema_version", SCHEMA_VERSION)
+    value.setdefault("groups", {})
+    value.setdefault("items", {})
+    value["items"].setdefault("static", {})
+    value["items"].setdefault("mappings", {})
+    return LibraryMetadata(value, present=True)
+
+
+def _item_container(state, category="static"):
+    return state["items"].setdefault(category, {})
+
+
+def _prune_item(container, item_key):
+    if not container.get(item_key):
+        container.pop(item_key, None)
+
+
+def create_group(metadata, group_id=None, definition=None, **fields):
+    """Create a group and return a new metadata value.
+
+    ``group_id`` is injectable for deterministic callers; otherwise a UUID4 is
+    generated.  Definition fields, including unknown extensions, are retained.
+    """
+    state = _mutable_metadata(metadata)
+    if definition is None:
+        definition = {}
+    if not isinstance(definition, Mapping):
+        raise TypeError("group definition must be a mapping")
+    group_id = str(uuid.uuid4()) if group_id is None else str(group_id)
+    if not group_id:
+        raise ValueError("group_id must not be empty")
+    if group_id in state["groups"]:
+        raise ValueError(f"group already exists: {group_id}")
+    group = {
+        "label": "",
+        "notes": "",
+        "prefix": "",
+        "enabled": True,
+        "terminator": "inherit",
+        "applications": {"mode": "all", "executables": []},
+    }
+    group.update(copy.deepcopy(dict(definition)))
+    group.update(copy.deepcopy(fields))
+    state["groups"][group_id] = group
+    return state
+
+
+def update_group(metadata, group_id, updates=None, **changes):
+    """Update one group while retaining its unknown fields."""
+    state = _mutable_metadata(metadata)
+    group_id = str(group_id)
+    if group_id not in state["groups"]:
+        raise KeyError(f"unknown group: {group_id}")
+    if updates is None:
+        updates = {}
+    if not isinstance(updates, Mapping):
+        raise TypeError("group updates must be a mapping")
+    state["groups"][group_id].update(copy.deepcopy(dict(updates)))
+    state["groups"][group_id].update(copy.deepcopy(changes))
+    return state
+
+
+def delete_group(metadata, group_id):
+    """Delete a group and move all of its assignments to implicit Ungrouped."""
+    state = _mutable_metadata(metadata)
+    group_id = str(group_id)
+    if group_id not in state["groups"]:
+        raise KeyError(f"unknown group: {group_id}")
+    del state["groups"][group_id]
+    for item in _item_container(state, "static").values():
+        if item.get("group_id") == group_id:
+            item.pop("group_id", None)
+    for container in _item_container(state, "mappings").values():
+        for item in container.values():
+            if item.get("group_id") == group_id:
+                item.pop("group_id", None)
+    for item_key in list(_item_container(state, "static")):
+        _prune_item(_item_container(state, "static"), item_key)
+    for container in _item_container(state, "mappings").values():
+        for item_key in list(container):
+            _prune_item(container, item_key)
+    return state
+
+
+def assign_static_item(metadata, item_key, group_id):
+    """Assign a static item to an existing group."""
+    state = _mutable_metadata(metadata)
+    group_id = str(group_id)
+    if group_id not in state["groups"]:
+        raise KeyError(f"unknown group: {group_id}")
+    items = _item_container(state)
+    item = items.setdefault(item_key, {})
+    item["group_id"] = group_id
+    return state
+
+
+def unassign_static_item(metadata, item_key):
+    """Move a static item to implicit Ungrouped."""
+    state = _mutable_metadata(metadata)
+    items = _item_container(state)
+    if item_key in items:
+        items[item_key].pop("group_id", None)
+        _prune_item(items, item_key)
+    return state
+
+
+def set_form_metadata(metadata, item_key, form):
+    """Set structured form metadata for a static item."""
+    if not isinstance(form, Mapping):
+        raise TypeError("form metadata must be a mapping")
+    state = _mutable_metadata(metadata)
+    _item_container(state).setdefault(item_key, {})["form"] = copy.deepcopy(dict(form))
+    return state
+
+
+def remove_form_metadata(metadata, item_key):
+    """Remove structured form metadata from a static item."""
+    state = _mutable_metadata(metadata)
+    items = _item_container(state)
+    if item_key in items:
+        items[item_key].pop("form", None)
+        _prune_item(items, item_key)
+    return state
+
+
+def toggle_favorite(metadata, item_key, favorite=None):
+    """Toggle or explicitly set a static item's favorite flag."""
+    if favorite is not None and not isinstance(favorite, bool):
+        raise TypeError("favorite must be a boolean")
+    state = _mutable_metadata(metadata)
+    item = _item_container(state).setdefault(item_key, {})
+    item["favorite"] = (not item.get("favorite", False)) if favorite is None else favorite
+    return state
+
+
+def duplicate_static_item_metadata(metadata, source_key, destination_key):
+    """Copy static item metadata under a new key as a non-favorite item."""
+    state = _mutable_metadata(metadata)
+    items = _item_container(state)
+    if destination_key in items:
+        raise ValueError(f"static item already exists: {destination_key}")
+    if source_key not in items:
+        return state
+    duplicated = copy.deepcopy(items[source_key])
+    duplicated["favorite"] = False
+    items[destination_key] = duplicated
+    return state
+
+
 __all__ = [
     "LibraryMetadata",
+    "MetadataReadOnlyError",
     "METADATA_KEY",
     "METADATA_KIND",
     "SCHEMA_VERSION",
     "build_library_document",
+    "assign_static_item",
+    "create_group",
+    "delete_group",
+    "duplicate_static_item_metadata",
     "merge_metadata",
     "normalize_metadata",
+    "remove_form_metadata",
+    "set_form_metadata",
     "split_library_document",
+    "toggle_favorite",
+    "unassign_static_item",
+    "update_group",
 ]
