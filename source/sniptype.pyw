@@ -43,6 +43,7 @@ from snippet_utils import (
     build_saveable_snippets,
     calculate_max_trigger_length_with_mappings,
     find_shadowed_statics,
+    get_dynamic_prefixes,
     get_default_snippets as get_static_default_snippets,
     load_json_file,
     merge_snippets,
@@ -90,7 +91,9 @@ from app_paths import (
     migrate_snippets,
     needs_migration,
 )
-from settings_support import load_settings, normalize_runtime_settings
+from settings_support import load_settings, normalize_runtime_settings, save_settings
+from hotkey_support import HotkeyRouter, normalize_hotkeys
+from workflow_support import SnippetRef, WorkflowState
 from validation_support import validate_trigger
 import macos_permissions
 import ui_theme
@@ -264,6 +267,7 @@ class Sniptype:
         # of it, marshaled onto its thread. Started in run().
         self.gui = GuiThread(logger=self.logger)
         self.manager_window = None
+        self._pending_manager_target = None
         self.macos_permission_window = None
         self._manager_notebook = None
         # Cached macOS TCC probe. Like the autostart cache, the tray menu only
@@ -304,6 +308,11 @@ class Sniptype:
         self.notification_history = load_notification_history(self.notification_history_file)
         self.settings, invalid_runtime_settings = normalize_runtime_settings(
             load_settings(self.settings_file)
+        )
+        self.workflow_state = WorkflowState()
+        self.hotkey_router = HotkeyRouter(
+            self.settings.get("hotkeys", {}),
+            self._dispatch_hotkey_action,
         )
         # Opt-in: expand only after a terminator (space/punctuation). Default off
         # to preserve the existing expand-on-last-character muscle memory.
@@ -1485,11 +1494,17 @@ class Sniptype:
 
     def rebuild_trigger_index(self):
         """Rebuild compiled trigger metadata after snippet changes."""
+        dynamic_identities = {
+            effective_trigger(stable_key, entry): stable_key
+            for stable_key, entry in self.dynamic_registry.items()
+            if isinstance(stable_key, str) and isinstance(entry, dict)
+        }
         self.trigger_index = compile_trigger_index(
             self.snippets,
             self.slow_snippets,
             metadata=self.library_metadata,
             terminator_mode=self.terminator_mode,
+            dynamic_identities=dynamic_identities,
         )
 
     def _validate_trigger_warnings(self, trigger):
@@ -1671,6 +1686,63 @@ class Sniptype:
     # =====================================================================
     # KEYBOARD LISTENER
     # =====================================================================
+    def _dispatch_hotkey_action(self, action):
+        """Queue a workflow action away from the keyboard listener callback."""
+        self.task_runner.start(
+            self._run_hotkey_action,
+            action,
+            name=f"hotkey-{action}",
+        )
+
+    def _run_hotkey_action(self, action):
+        """Perform one configured workflow action through its safe seam."""
+        try:
+            if action == "edit_last":
+                self._pending_manager_target = self.workflow_state.last_successful_item
+            if action in ("open_manager", "edit_last"):
+                self.gui.submit(self._show_manager_window)
+            elif action == "toggle_enabled":
+                self.gui.submit(self._toggle_enabled_from_hotkey)
+        except Exception as e:
+            self.logger.error(f"Falha no atalho de fluxo '{action}': {e}")
+
+    def _toggle_enabled_from_hotkey(self, _root=None):
+        """Apply the enabled toggle on the GUI thread, where tray state is safe."""
+        self.toggle_enabled(self.icon, None)
+
+    def _workflow_ref(self, trigger):
+        """Resolve a completed expansion to its stable workflow reference."""
+        if isinstance(trigger, ExpansionTarget):
+            if trigger.source_kind == "static":
+                return SnippetRef("static", trigger.stable_identity)
+            if trigger.source_kind == "mapping":
+                # Current compiled direct targets are static-only; mappings
+                # resolve through the legacy string path below. Keep a future
+                # mapping target from raising because its container is not
+                # carried by ExpansionTarget.
+                return None
+            return SnippetRef("dynamic", trigger.stable_identity)
+
+        if not isinstance(trigger, str) or not trigger:
+            return None
+        value = self.snippets.get(trigger)
+        if callable(value):
+            for stable_key, entry in self.dynamic_registry.items():
+                if effective_trigger(stable_key, entry) == trigger:
+                    return SnippetRef("dynamic", stable_key)
+            return SnippetRef("dynamic", trigger)
+        if trigger in self.snippets and not trigger.startswith("_"):
+            return SnippetRef("static", trigger)
+
+        for prefix, container in get_dynamic_prefixes(self.snippets).items():
+            if not trigger.startswith(prefix) or len(trigger) <= len(prefix):
+                continue
+            item = trigger[len(prefix):]
+            mapping = self.snippets.get(container)
+            if isinstance(mapping, dict) and item in mapping and item != "__prefix__":
+                return SnippetRef("mapping", item, container)
+        return None
+
     def on_press(self, key):
         """Detect a trigger on the listener thread; expand on a worker thread.
 
@@ -1679,6 +1751,9 @@ class Sniptype:
         (callables, network, dialogs, clipboard, paste) to a background thread.
         """
         try:
+            if self.hotkey_router.press(key):
+                self.typed_text = ""
+                return
             if hasattr(key, 'char') and key.char:
                 self._handle_char(key.char)
             elif key == Key.enter:
@@ -1697,6 +1772,13 @@ class Sniptype:
                 key="listener-error",
                 cooldown_seconds=10,
             )
+
+    def on_release(self, key):
+        """Release hotkey state without touching GUI, disk, or snippet data."""
+        try:
+            self.hotkey_router.release(key)
+        except Exception as e:
+            self.logger.error(f"Erro ao liberar atalho de teclado: {e}")
 
     def _handle_char(self, char):
         """Append a typed character and run trigger detection."""
@@ -1900,6 +1982,10 @@ class Sniptype:
                 inserted = self.run_slow_snippet(lookup)
             else:
                 inserted = self.expand_snippet(lookup)
+            if inserted:
+                reference = self._workflow_ref(trigger)
+                if reference is not None:
+                    self.workflow_state.record_success(reference)
             # Only re-emit the terminator when text was actually inserted, so a
             # cancelled form dialog or a failed paste does not leave a stray char.
             if append_text and inserted:
@@ -1937,6 +2023,44 @@ class Sniptype:
     # =====================================================================
     # SNIPPET MANAGEMENT GUI
     # =====================================================================
+
+    def _save_hotkey_bindings(self, bindings):
+        """Persist valid hotkeys, replacing the live router only after success."""
+        normalized, invalid = normalize_hotkeys(bindings)
+        if invalid:
+            return False
+        previous = self.settings
+        updated = dict(previous)
+        existing = previous.get("hotkeys", {})
+        existing = dict(existing) if isinstance(existing, dict) else {}
+        updated["hotkeys"] = {**existing, **normalized}
+        if not save_settings(self.settings_file, updated):
+            return False
+        self.settings = updated
+        self.hotkey_router = HotkeyRouter(
+            updated["hotkeys"],
+            self._dispatch_hotkey_action,
+        )
+        return True
+
+    def configure_hotkeys(self, icon=None, item=None):
+        """Open the optional workflow-hotkey editor on the GUI thread."""
+        try:
+            self.gui.submit(self._show_hotkey_settings)
+        except Exception as e:
+            self.logger.error(f"Erro ao abrir configurações de atalhos: {e}")
+
+    def _show_hotkey_settings(self, tk_root):
+        """GUI-thread callback for editing and atomically saving hotkeys."""
+        from hotkey_dialog import run_hotkey_dialog
+
+        result = run_hotkey_dialog(tk_root, self.settings.get("hotkeys", {}))
+        if result is None:
+            return
+        if self._save_hotkey_bindings(result):
+            self.notify_status("Atalhos salvos.", key="hotkeys-saved")
+        else:
+            self.notify_error("Não foi possível salvar os atalhos.", key="hotkeys-save")
 
     def manage_snippets_gui(self, icon, item):
         """Open (or re-focus) the snippet manager window."""
@@ -4029,9 +4153,14 @@ class Sniptype:
     def toggle_enabled(self, icon, item):
         """Enable/disable snippet expansion."""
         self.enabled = not self.enabled
-        icon.icon = self.load_tray_icon()
+        if icon is not None:
+            icon.icon = self.load_tray_icon()
         status = "ativada" if self.enabled else "desativada"
         self.notify_status(f"Expansão de snippets {status}.", key="toggle-enabled")
+
+    def edit_last_snippet(self, icon=None, item=None):
+        """Queue the manager at the most recently successful snippet."""
+        self._dispatch_hotkey_action("edit_last")
     
     
     def reload_snippets(self, icon, item):
@@ -4407,7 +4536,10 @@ class Sniptype:
     
     def run_keyboard_listener(self):
         """Run the keyboard listener in a separate thread."""
-        self.listener = keyboard.Listener(on_press=self.on_press)
+        self.listener = keyboard.Listener(
+            on_press=self.on_press,
+            on_release=self.on_release,
+        )
         self.listener.start()
         self.listener.join()
     
@@ -4484,6 +4616,8 @@ class Sniptype:
             ),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Gerenciar Snippets", self.manage_snippets_gui, default=True),
+            pystray.MenuItem("Editar último snippet", self.edit_last_snippet),
+            pystray.MenuItem("Configurar atalhos", self.configure_hotkeys),
             pystray.MenuItem("Recarregar Snippets", self.reload_snippets),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Backup agora", self.tray_backup_now),
