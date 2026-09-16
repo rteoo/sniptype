@@ -252,20 +252,25 @@ def _render_value(field, value):
     return parsed.strftime(field.output_format)
 
 
-def render_form(compiled, values):
-    """Render a compiled form in one pass using submitted values/defaults."""
+def render_form_values(compiled, values):
+    """Validate submitted values and return rendered text per field name."""
     if not isinstance(compiled, CompiledForm):
-        raise TypeError("render_form expects a CompiledForm")
+        raise TypeError("render_form_values expects a CompiledForm")
     if not isinstance(values, dict):
         raise FormValidationError("Form values must be an object.")
     allowed = set(compiled.field_names)
     extra = set(values) - allowed
     if extra:
         raise FormValidationError("Unknown form values: " + ", ".join(sorted(extra)) + ".")
-    rendered = {
+    return {
         field.name: _render_value(field, values.get(field.name))
         for field in compiled.fields
     }
+
+
+def render_form(compiled, values):
+    """Render a compiled form in one pass using submitted values/defaults."""
+    rendered = render_form_values(compiled, values)
     return VARIABLE_RE.sub(
         lambda match: rendered.get(match.group(1), match.group(0)),
         compiled.template,
@@ -281,5 +286,6 @@ __all__ = [
     "compile_form",
     "infer_legacy_fields",
     "render_form",
+    "render_form_values",
     "validate_form_fields",
 ]
