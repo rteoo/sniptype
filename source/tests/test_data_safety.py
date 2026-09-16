@@ -107,6 +107,52 @@ class SaveSnippetsTests(unittest.TestCase):
         with open(self.app.snippets_file, encoding="utf-8") as handle:
             self.assertEqual(metadata, json.load(handle)["__sniptype__"])
 
+    def test_metadata_aware_save_protects_and_mirrors_the_whole_document(self):
+        metadata = {
+            "kind": "sniptype_metadata",
+            "schema_version": 1,
+            "groups": {"g": {"label": "Work"}},
+            "items": {"static": {"xhi": {"group_id": "g", "favorite": True}}, "mappings": {}},
+        }
+        with open(self.app.snippets_file, "w", encoding="utf-8") as handle:
+            json.dump({"xhi": "before", "__sniptype__": metadata}, handle)
+        self.app.reload_snippets_from_disk()
+        mirror = os.path.join(self.tmp, "mirror")
+        self.app.settings = {"mirror_dir": mirror}
+
+        self.assertTrue(self.app.save_snippets({"xhi": "after"}))
+
+        with open(self.app.snippets_file, encoding="utf-8") as handle:
+            self.assertEqual(metadata, json.load(handle)["__sniptype__"])
+        with open(os.path.join(mirror, "snippets.json"), encoding="utf-8") as handle:
+            self.assertEqual(metadata, json.load(handle)["__sniptype__"])
+        backed_up = []
+        for path in bs.list_backups(self.app.backups_dir):
+            with open(path, encoding="utf-8") as handle:
+                backed_up.append(json.load(handle))
+        self.assertIn({"xhi": "before", "__sniptype__": metadata}, backed_up)
+
+    def test_export_library_copies_metadata_document_without_runtime_keys(self):
+        metadata = {
+            "kind": "sniptype_metadata",
+            "schema_version": 1,
+            "groups": {},
+            "items": {"static": {"xhi": {"favorite": True}}, "mappings": {}},
+        }
+        with open(self.app.snippets_file, "w", encoding="utf-8") as handle:
+            json.dump({"xhi": "hello", "__sniptype__": metadata}, handle)
+        self.app.reload_snippets_from_disk()
+        destination = os.path.join(self.tmp, "exported.json")
+
+        ok, error = self.app.export_library(destination)
+
+        self.assertTrue(ok, error)
+        with open(destination, encoding="utf-8") as handle:
+            exported = json.load(handle)
+        self.assertEqual({"xhi", "__sniptype__"}, set(exported))
+        self.assertEqual("hello", exported["xhi"])
+        self.assertEqual(metadata, exported["__sniptype__"])
+
     def test_malformed_metadata_survives_save_while_content_remains_runtime_only(self):
         raw_metadata = {"schema_version": "future-ish", "opaque": ["keep"]}
         with open(self.app.snippets_file, "w", encoding="utf-8") as handle:
