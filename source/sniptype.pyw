@@ -138,6 +138,8 @@ from variable_support import (
     resolve_form_variables,
     resolve_inline,
 )
+from form_support import compile_form, render_form
+from form_dialog import FormDialog
 from gui_support import (
     center_dialog,
     center_on_screen,
@@ -1284,11 +1286,27 @@ class Sniptype:
                     if classify_variable(n, self.snippets, prefixes) == "form_field"
                 ]
                 form_data = {}
+                form_metadata = self._static_form_metadata(trigger)
+                compiled_form = None
+                if form_metadata is not None:
+                    compiled_form = compile_form(
+                        plain,
+                        form_metadata.get("fields", []),
+                        self.snippets,
+                    )
+                    form_names = list(compiled_form.field_names)
                 if form_names:
-                    form_data = self._show_form_dialog(form_names)
+                    if compiled_form is None:
+                        form_data = self._show_form_dialog(form_names)
+                    else:
+                        form_data = self._show_form_dialog(form_names, compiled_form)
                     if form_data is None:
                         return False  # user cancelled — nothing inserted
-                result = resolve_form_variables(plain, form_data)
+                result = (
+                    render_form(compiled_form, form_data)
+                    if compiled_form is not None
+                    else resolve_form_variables(plain, form_data)
+                )
                 if is_rich_text_payload(raw):
                     result = rebuild_rich_text(raw, result)
                 time.sleep(0.05)
@@ -1313,13 +1331,49 @@ class Sniptype:
             )
             return False
     
-    def _show_form_dialog(self, field_names):
+    def _show_form_dialog(self, field_names, compiled_form=None):
         """
         Show a modal dialog for form-fill variables.
         Called from a worker thread; the dialog is built on the shared GUI
         thread and this call blocks until it closes.
+        ``compiled_form`` selects the structured field controls.  Omitting it
+        preserves the legacy one-entry-per-name behavior used by old callers.
         Returns {field_name: value} or None if the user cancels.
         """
+        if compiled_form is not None:
+            def build_structured(root):
+                form_dialog = FormDialog(root, compiled_form)
+                dialog = form_dialog.window
+                dialog.withdraw()
+                self._set_window_icon(dialog)
+                center_on_screen(dialog)
+                first_control = form_dialog._controls.get(field_names[0]) if field_names else None
+                cancel_activation = focus_modal_input(
+                    dialog,
+                    first_control,
+                    self.gui.submit,
+                )
+                try:
+                    dialog.wait_window(dialog)
+                finally:
+                    cancel_activation()
+                return form_dialog.controller.result
+
+            try:
+                return self._run_modal_dialog(
+                    build_structured,
+                    None,
+                    f"campos ({', '.join(field_names)})",
+                )
+            except Exception as e:
+                self.logger.error(f"Erro no diálogo estruturado de campos: {e}")
+                self.notify_error(
+                    f"Erro ao abrir diálogo de campos: {e}",
+                    key="form-dialog-error",
+                    cooldown_seconds=5,
+                )
+                return None
+
         def build(root):
             ui = ui_theme.bind(root)
             result = [None]
@@ -1698,6 +1752,17 @@ class Sniptype:
         if result is not None:
             self._dispatch_expansion(potential_trigger, len(potential_trigger) + 1, append_text=terminator_char)
 
+    def _static_form_metadata(self, stored_key):
+        """Return persisted form metadata for a static stored identity, if any."""
+        metadata = self.library_metadata
+        if not isinstance(metadata, dict):
+            return None
+        items = metadata.get("items", {})
+        static_items = items.get("static", {}) if isinstance(items, dict) else {}
+        item = static_items.get(stored_key, {}) if isinstance(static_items, dict) else {}
+        form = item.get("form") if isinstance(item, dict) else None
+        return form if isinstance(form, dict) else None
+
     def _find_direct_target(self, typed_text, terminated):
         """Find one compiled direct candidate and apply its app policy.
 
@@ -1755,7 +1820,25 @@ class Sniptype:
                 worker_target = trigger
             else:
                 worker_target = trigger.effective_trigger
-        self.task_runner.start(self._run_expansion, worker_target, append_text, name="expand")
+        effective = (
+            trigger.effective_trigger
+            if isinstance(trigger, ExpansionTarget)
+            else trigger
+        )
+        # Snapshot the selected route with the immutable target. A manager save
+        # may rebuild the index before the worker starts; that refresh must not
+        # turn an already-selected form or slow expansion into the plain path.
+        slow_route = (
+            effective in self.trigger_index["slow_triggers"]
+            or effective in self.trigger_index["form_triggers"]
+        )
+        self.task_runner.start(
+            self._run_expansion,
+            worker_target,
+            append_text,
+            slow_route,
+            name="expand",
+        )
 
     def _secure_input_blocks_expansion(self):
         """True when macOS Secure Keyboard Entry is swallowing synthesized input.
@@ -1793,7 +1876,7 @@ class Sniptype:
             self.keyboard_controller.release(Key.backspace)
             time.sleep(self.erase_key_delay)
 
-    def _run_expansion(self, trigger, append_text=""):
+    def _run_expansion(self, trigger, append_text="", slow_route=None):
         """Worker entry point: produce and insert the expansion for a trigger.
 
         The trigger text is already erased. This is wrapped so no expansion error
@@ -1808,7 +1891,12 @@ class Sniptype:
                 if isinstance(trigger, ExpansionTarget) and trigger.source_kind == "static"
                 else effective
             )
-            if effective in self.trigger_index["slow_triggers"] or effective in self.trigger_index["form_triggers"]:
+            if slow_route is None:
+                slow_route = (
+                    effective in self.trigger_index["slow_triggers"]
+                    or effective in self.trigger_index["form_triggers"]
+                )
+            if slow_route:
                 inserted = self.run_slow_snippet(lookup)
             else:
                 inserted = self.expand_snippet(lookup)
