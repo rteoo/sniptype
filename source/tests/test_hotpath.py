@@ -67,6 +67,95 @@ class ImmediateModeTests(unittest.TestCase):
         self.app.task_runner.start.assert_not_called()
 
 
+class WorkflowHotkeyIntegrationTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.app = make_app(self.tmp, {"xhi": "hello", "_codes": {"city": "GYN"}})
+        self.app.gui = mock.Mock()
+        self.app.task_runner = mock.Mock()
+
+    def test_listener_routes_hotkey_without_gui_work_and_release_rearms(self):
+        self.app.hotkey_router = tx.HotkeyRouter(
+            {"open_manager": "<ctrl>+<shift>+m"},
+            self.app._dispatch_hotkey_action,
+        )
+
+        self.assertIsNone(self.app.on_press(Key.ctrl))
+        self.assertIsNone(self.app.on_press(Key.shift))
+        self.app.typed_text = "partial"
+        self.app.on_press(KeyCode.from_char("m"))
+        self.assertEqual("", self.app.typed_text)
+        self.app.gui.submit.assert_not_called()
+        self.assertEqual(self.app._run_hotkey_action, self.app.task_runner.start.call_args.args[0])
+        self.assertEqual("open_manager", self.app.task_runner.start.call_args.args[1])
+
+        self.app.on_release(Key.ctrl)
+        self.app.on_release(Key.shift)
+        self.app.on_release(KeyCode.from_char("m"))
+        self.app.task_runner.reset_mock()
+        self.app.on_press(Key.ctrl)
+        self.app.on_press(Key.shift)
+        self.app.on_press(KeyCode.from_char("m"))
+        self.assertEqual(1, self.app.task_runner.start.call_count)
+
+    def test_edit_last_and_toggle_actions_queue_safe_seams(self):
+        reference = tx.SnippetRef("static", "xhi")
+        self.app.workflow_state.record_success(reference)
+
+        self.app._run_hotkey_action("edit_last")
+        self.assertEqual(reference, self.app._pending_manager_target)
+        self.app.gui.submit.assert_called_once_with(self.app._show_manager_window)
+
+        self.app.gui.reset_mock()
+        self.app._run_hotkey_action("toggle_enabled")
+        self.app.gui.submit.assert_called_once_with(self.app._toggle_enabled_from_hotkey)
+        self.app.icon = None
+        self.assertTrue(self.app.enabled)
+        self.app._toggle_enabled_from_hotkey()
+        self.assertFalse(self.app.enabled)
+
+    def test_success_records_static_mapping_and_renamed_dynamic_stable_refs(self):
+        self.app.expand_snippet = mock.Mock(return_value=True)
+        self.app._run_expansion("xhi")
+        self.assertEqual(tx.SnippetRef("static", "xhi"), self.app.workflow_state.last_successful_item)
+
+        self.app.expand_snippet.reset_mock()
+        self.app._run_expansion("codescity")
+        self.assertEqual(
+            tx.SnippetRef("mapping", "city", "_codes"),
+            self.app.workflow_state.last_successful_item,
+        )
+
+        self.app.dynamic_registry = {"stable": {"trigger": "xnow"}}
+        self.app.snippets["xnow"] = lambda: "now"
+        self.app.refresh_runtime_indexes()
+        target = self.app.trigger_index["direct_targets_by_last_char"]["w"][0]
+        self.app.dynamic_registry = {}
+        self.app._run_expansion(target)
+        self.assertEqual(tx.SnippetRef("dynamic", "stable"), self.app.workflow_state.last_successful_item)
+
+    def test_failed_or_cancelled_expansion_does_not_record(self):
+        self.app.expand_snippet = mock.Mock(return_value=False)
+        self.app._run_expansion("xhi")
+        self.assertIsNone(self.app.workflow_state.last_successful_item)
+
+    def test_hotkey_router_changes_only_after_atomic_settings_save(self):
+        self.app.settings_file = os.path.join(self.tmp, "settings.json")
+        self.app.settings = {"hotkeys": {"open_manager": "<ctrl>+m"}, "future": 1}
+        original_router = self.app.hotkey_router
+
+        with mock.patch.object(tx, "save_settings", return_value=False):
+            self.assertFalse(self.app._save_hotkey_bindings({"open_manager": "<alt>+m"}))
+        self.assertIs(original_router, self.app.hotkey_router)
+        self.assertEqual("<ctrl>+m", self.app.settings["hotkeys"]["open_manager"])
+
+        with mock.patch.object(tx, "save_settings", return_value=True) as save:
+            self.assertTrue(self.app._save_hotkey_bindings({"open_manager": "<alt>+m"}))
+        save.assert_called_once()
+        self.assertEqual("<alt>+m", self.app.settings["hotkeys"]["open_manager"])
+        self.assertIsNot(original_router, self.app.hotkey_router)
+
+
 class TerminatorModeTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()

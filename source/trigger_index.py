@@ -103,6 +103,7 @@ def compile_trigger_index(
     metadata=None,
     terminator_mode=False,
     global_terminator_mode=None,
+    dynamic_identities=None,
 ):
     """Precompute trigger lookup structures for the keyboard hot path.
 
@@ -131,7 +132,12 @@ def compile_trigger_index(
         if callable(value):
             # Registry-backed dynamics keep their existing global policy and
             # stable key; metadata never scopes a dynamic callable.
-            target = ExpansionTarget(trigger, "dynamic", trigger)
+            stable_identity = (
+                dynamic_identities.get(trigger, trigger)
+                if isinstance(dynamic_identities, dict)
+                else trigger
+            )
+            target = ExpansionTarget(trigger, "dynamic", stable_identity)
             terminated = bool(terminator_mode)
             application_policy = ApplicationPolicy()
         else:

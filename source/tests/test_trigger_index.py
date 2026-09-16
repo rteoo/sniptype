@@ -35,6 +35,18 @@ class TriggerIndexTests(unittest.TestCase):
     def test_compile_trigger_index_preserves_direct_trigger_order(self):
         self.assertEqual(("abc", "xbc", "xname"), self.index["direct_triggers"])
 
+    def test_compiled_dynamic_target_keeps_registry_stable_identity(self):
+        index = compile_trigger_index(
+            {"xrenamed": lambda: "value"},
+            set(),
+            dynamic_identities={"xrenamed": "stable-dynamic-id"},
+        )
+
+        self.assertEqual(
+            ExpansionTarget("xrenamed", "dynamic", "stable-dynamic-id"),
+            index["direct_targets"][0],
+        )
+
     def test_compile_trigger_index_groups_by_last_character(self):
         self.assertEqual(("abc", "xbc"), self.index["direct_by_last_char"]["c"])
         self.assertEqual(("xname",), self.index["direct_by_last_char"]["e"])
