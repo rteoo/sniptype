@@ -464,6 +464,16 @@ def set_form_metadata(metadata, item_key, form):
     return state
 
 
+def set_mapping_form_metadata(metadata, container_key, item_key, form):
+    """Set structured form metadata for one mapping item."""
+    if not isinstance(form, Mapping):
+        raise TypeError("form metadata must be a mapping")
+    state = _mutable_metadata(metadata)
+    mappings = _item_container(state, "mappings")
+    mappings.setdefault(container_key, {}).setdefault(item_key, {})["form"] = copy.deepcopy(dict(form))
+    return state
+
+
 def remove_form_metadata(metadata, item_key):
     """Remove structured form metadata from a static item."""
     state = _mutable_metadata(metadata)
@@ -510,6 +520,17 @@ def duplicate_static_item_metadata(metadata, source_key, destination_key):
     return state
 
 
+def rename_static_item_metadata(metadata, source_key, destination_key):
+    """Move static item metadata to a new stored key without changing it."""
+    state = _mutable_metadata(metadata)
+    items = _item_container(state)
+    if destination_key in items:
+        raise ValueError(f"static item already exists: {destination_key}")
+    if source_key in items:
+        items[destination_key] = items.pop(source_key)
+    return state
+
+
 __all__ = [
     "LibraryMetadata",
     "MetadataReadOnlyError",
@@ -521,10 +542,12 @@ __all__ = [
     "create_group",
     "delete_group",
     "duplicate_static_item_metadata",
+    "rename_static_item_metadata",
     "merge_metadata",
     "normalize_metadata",
     "remove_form_metadata",
     "set_form_metadata",
+    "set_mapping_form_metadata",
     "split_library_document",
     "toggle_favorite",
     "toggle_mapping_favorite",

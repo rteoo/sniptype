@@ -10,7 +10,9 @@ from manager_actions import (
     delete_group,
     duplicate_static,
     remove_form,
+    rename_static,
     set_form,
+    set_mapping_form,
     toggle_favorite,
     toggle_mapping_favorite,
     unassign_item,
@@ -59,6 +61,26 @@ class ManagerActionTests(unittest.TestCase):
 
         self.assertEqual("legacy", result.snippets["copy"])
         self.assertEqual({"favorite": False}, result.metadata["items"]["static"]["copy"])
+
+    def test_rename_preserves_group_form_and_favorite_metadata(self):
+        snippets = {"old": "Hello %%name%%"}
+        metadata = {
+            "groups": {"work": {"label": "Work", "prefix": "w"}},
+            "items": {"static": {"old": {
+                "group_id": "work",
+                "favorite": True,
+                "form": {"fields": [{"name": "name"}]},
+            }}, "mappings": {}},
+        }
+
+        result = rename_static(snippets, metadata, "old", "new")
+
+        self.assertNotIn("old", result.snippets)
+        self.assertEqual("Hello %%name%%", result.snippets["new"])
+        self.assertEqual(
+            metadata["items"]["static"]["old"],
+            result.metadata["items"]["static"]["new"],
+        )
 
     def test_set_form_rejects_invalid_field_definition_without_mutating_inputs(self):
         snippets = {"x": "%%field%%"}
@@ -155,6 +177,22 @@ class ManagerActionTests(unittest.TestCase):
         self.assertEqual({"items": {"static": {}, "mappings": {}}}, metadata)
         with self.assertRaises(KeyError):
             toggle_mapping_favorite(snippets, metadata, "_codes", "missing")
+
+    def test_mapping_form_is_validated_and_stored_under_mapping_item(self):
+        snippets = {"_codes": {"__prefix__": "c", "hello": "Hi %%name%%"}}
+
+        result = set_mapping_form(
+            snippets,
+            {},
+            "_codes",
+            "hello",
+            {"fields": [{"name": "name", "type": "multiline"}]},
+        )
+
+        self.assertEqual(
+            "multiline",
+            result.metadata["items"]["mappings"]["_codes"]["hello"]["form"]["fields"][0]["type"],
+        )
 
     def test_reachability_hazards_are_returned_separately_from_success(self):
         snippets = {"a": "short", "ba": "long"}
