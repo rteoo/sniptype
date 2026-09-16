@@ -3,6 +3,13 @@ from dataclasses import dataclass
 from whatsapp_support import build_whatsapp_url, normalize_phone_number
 
 
+class _ActionCompleted:
+    """Truthful success marker for actions that intentionally insert no text."""
+
+
+ACTION_COMPLETED = _ActionCompleted()
+
+
 @dataclass(frozen=True)
 class WhatsAppActionMode:
     clipboard_first: bool
@@ -94,6 +101,7 @@ def execute_whatsapp_action(
                     cooldown_seconds=5,
                 )
 
+    opened = False
     if mode.open_browser:
         try:
             opened, open_error = open_url(url)
@@ -109,5 +117,4 @@ def execute_whatsapp_action(
 
     if mode.return_url:
         return url
-
-    return None
+    return ACTION_COMPLETED if opened else None

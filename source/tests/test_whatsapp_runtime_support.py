@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import Mock
 
-from whatsapp_runtime_support import execute_whatsapp_action
+from whatsapp_runtime_support import ACTION_COMPLETED, execute_whatsapp_action
 
 
 class WhatsAppRuntimeSupportTests(unittest.TestCase):
@@ -21,7 +21,7 @@ class WhatsAppRuntimeSupportTests(unittest.TestCase):
             notify_error=notify_error,
         )
 
-        self.assertIsNone(result)
+        self.assertIs(ACTION_COMPLETED, result)
         ask_input.assert_not_called()
         set_clipboard_content.assert_called_once_with("https://wa.me/5511999999999")
         open_url.assert_called_once_with("https://wa.me/5511999999999")
@@ -65,7 +65,7 @@ class WhatsAppRuntimeSupportTests(unittest.TestCase):
             notify_error=notify_error,
         )
 
-        self.assertIsNone(result)
+        self.assertIs(ACTION_COMPLETED, result)
         ask_input.assert_called_once_with()
         set_clipboard_content.assert_called_once_with(
             "https://wa.me/5511999999999?text=Mensagem%20pronta"
@@ -109,7 +109,7 @@ class WhatsAppRuntimeSupportTests(unittest.TestCase):
             notify_error=notify_error,
         )
 
-        self.assertIsNone(result)
+        self.assertIs(ACTION_COMPLETED, result)
         ask_input.assert_called_once_with()
         open_url.assert_called_once_with("https://wa.me/5511999999999")
         notify_error.assert_called_once()

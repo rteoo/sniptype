@@ -44,6 +44,7 @@ class ManagerRowBuildTests(unittest.TestCase):
         self.assertEqual("xnow", rows[2].effective_trigger)
         self.assertFalse(rows[2].favorite)
         self.assertEqual("xhello → wxhello", format_trigger_pair(rows[0]))
+        self.assertEqual("acme → codacme", format_trigger_pair(rows[1]))
         self.assertEqual("xdate → xnow", format_trigger_pair(rows[2]))
         with self.assertRaises(AttributeError):
             rows[0].favorite = False

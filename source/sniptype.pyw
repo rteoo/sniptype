@@ -118,13 +118,15 @@ from dynamic_registry import (
     build_dynamic_snippets,
     composed_mapping_triggers,
     effective_trigger,
+    is_enabled,
     load_registry,
     reference_entries_by_category,
     validate_rename,
 )
+from group_policy import validate_effective_triggers
 from sync_export import STATE_FILENAME as SYNC_STATE_FILENAME, export_bundle
 from whatsapp_support import normalize_phone_number
-from whatsapp_runtime_support import execute_whatsapp_action
+from whatsapp_runtime_support import ACTION_COMPLETED, execute_whatsapp_action
 from rich_text_support import (
     clear_text_styles,
     configure_rich_text_widget,
@@ -747,6 +749,18 @@ class Sniptype:
         if data is None:
             return False, "Backup inválido: formato inesperado."
 
+        restored_snippets, restored_metadata = split_library_document(data)
+        restored_metadata = normalize_metadata(
+            restored_metadata,
+            self._metadata_available_items(restored_snippets),
+        )
+        collision_error = self._library_collision_error(
+            restored_snippets,
+            restored_metadata,
+        )
+        if collision_error:
+            return False, f"Backup inválido: {collision_error}"
+
         if not self._backup_current_library():
             return False, "Falha ao criar backup de segurança; restauração cancelada."
         try:
@@ -803,6 +817,9 @@ class Sniptype:
             merged_metadata,
             self._metadata_available_items(merged),
         )
+        collision_error = self._library_collision_error(merged, merged_metadata)
+        if collision_error:
+            return False, f"Falha ao importar: {collision_error}"
 
         if not self._backup_current_library():
             return False, "Falha ao criar backup de segurança; importação cancelada."
@@ -831,6 +848,18 @@ class Sniptype:
         return {"static": static, "mappings": mappings}
 
     _imported_metadata_winners = _metadata_available_items
+
+    @staticmethod
+    def _library_collision_error(snippets, metadata):
+        """Describe exact static effective-trigger collisions, if any."""
+        collisions = validate_effective_triggers(snippets, metadata)["collisions"]
+        if not collisions:
+            return None
+        details = "; ".join(
+            f"'{trigger}' ({', '.join(stored_keys)})"
+            for trigger, stored_keys in collisions
+        )
+        return f"conflito de triggers efetivos: {details}."
 
     def open_data_folder(self):
         """Open the user data directory in the OS file manager."""
@@ -1354,6 +1383,8 @@ class Sniptype:
                 return True
 
             result = func()
+            if result is ACTION_COMPLETED:
+                return ACTION_COMPLETED
             if not result:
                 return False
             self.notify_snippet_failure(trigger, result)
@@ -2058,10 +2089,12 @@ class Sniptype:
                     or effective in self.trigger_index["form_triggers"]
                 )
             if slow_route:
-                inserted = self.run_slow_snippet(lookup)
+                outcome = self.run_slow_snippet(lookup)
             else:
-                inserted = self.expand_snippet(lookup)
-            if inserted:
+                outcome = self.expand_snippet(lookup)
+            completed = outcome is True or outcome is ACTION_COMPLETED
+            inserted = outcome is True
+            if completed:
                 reference = self._workflow_ref(trigger)
                 if reference is not None:
                     self.workflow_state.record_success(reference)
@@ -2176,7 +2209,7 @@ class Sniptype:
         triggers.update(
             effective_trigger(key, entry)
             for key, entry in registry.items()
-            if isinstance(entry, dict) and entry.get("enabled", True)
+            if is_enabled(entry, key=key)
         )
         return triggers
 
@@ -4042,6 +4075,15 @@ class Sniptype:
             bg=ui.card,
             fg=ui.text_strong,
         ).grid(row=2, column=0, sticky="w")
+        mapping_effective_trigger_var = tk.StringVar(value="Efetivo: —")
+        tk.Label(
+            frame_right,
+            textvariable=mapping_effective_trigger_var,
+            font=ui.font(8),
+            bg=ui.card,
+            fg=ui.text_muted,
+            anchor="e",
+        ).grid(row=2, column=0, sticky="e")
         entry_name = tk.Entry(
             frame_right,
             font=ui.font(10),
@@ -4162,16 +4204,30 @@ class Sniptype:
             mapping = self.snippets.get(current_type, {})
             if not isinstance(mapping, dict):
                 mapping = {}
+            rows = {
+                row.stored_trigger: row
+                for row in self._manager_rows()
+                if row.kind == "mapping" and row.container == current_type
+            }
             has_rows = False
             for key in iter_filtered_mapping_items(mapping, query):
                 if not key:
                     continue  # a blank key cannot be a Treeview row iid
+                values = snippet_row_values(key, mapping.get(key, ""))
+                row = rows.get(key)
+                if row is not None:
+                    values = (format_trigger_pair(row),) + values[1:]
                 tree_map.insert("", tk.END, iid=key,
-                                values=snippet_row_values(key, mapping.get(key, "")))
+                                values=values)
                 has_rows = True
             (tree_map if has_rows else empty_mapping_label).tkraise()
             update_total_count()
             update_example_label()
+            edited_row = rows.get(entry_name.get().strip())
+            mapping_effective_trigger_var.set(
+                f"Efetivo: {edited_row.effective_trigger}"
+                if edited_row else "Efetivo: —"
+            )
 
         def add_new_type():
             dialog = tk.Toplevel(root)
@@ -4312,6 +4368,9 @@ class Sniptype:
                         and candidate.container == current_type
                         and candidate.stored_trigger == key), None)
             mapping_favorite_var.set(bool(row and row.favorite))
+            mapping_effective_trigger_var.set(
+                f"Efetivo: {row.effective_trigger}" if row else "Efetivo: —"
+            )
             update_format_status()
 
         def select_mapping_target(descriptor):
@@ -4425,12 +4484,14 @@ class Sniptype:
             entry_name.delete(0, tk.END)
             load_value_into_text_widget(text_value, "")
             mapping_favorite_var.set(False)
+            mapping_effective_trigger_var.set("Efetivo: —")
             update_format_status()
 
         def on_new_map():
             entry_name.delete(0, tk.END)
             load_value_into_text_widget(text_value, "")
             mapping_favorite_var.set(False)
+            mapping_effective_trigger_var.set("Efetivo: —")
             update_format_status()
             entry_name.focus_set()
 
@@ -4611,11 +4672,11 @@ class Sniptype:
                     ).pack(side=tk.LEFT)
                     trigger_label = tk.Label(
                         row,
-                        text=trigger,
+                        text=key if key == trigger else f"{key} → {trigger}",
                         font=ui.mono_font(10, "bold"),
                         fg=ui.link,
                         bg=ui.card,
-                        width=12,
+                        width=24,
                         anchor="w",
                     )
                     trigger_label.pack(side=tk.LEFT)
@@ -4804,7 +4865,9 @@ class Sniptype:
         """Ask for a new trigger name, validate it, then persist and refresh."""
         new_trigger = simpledialog.askstring(
             "Renomear trigger",
-            f"Novo trigger para '{current_trigger}':",
+            f"Identificador armazenado: {key}\n"
+            f"Trigger efetivo atual: {current_trigger}\n\n"
+            "Novo trigger efetivo:",
             initialvalue=current_trigger,
             parent=root,
         )

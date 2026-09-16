@@ -561,6 +561,38 @@ class BackupRestoreImportTests(unittest.TestCase):
         self.assertTrue(ok, error)
         self.assertEqual(metadata, self.app.library_metadata)
 
+    def test_import_and_restore_reject_exact_effective_trigger_collisions(self):
+        colliding = {
+            "a": "one",
+            "xa": "two",
+            "__sniptype__": {
+                "kind": "sniptype_metadata",
+                "schema_version": 1,
+                "groups": {"prefixed": {"prefix": "x", "enabled": True}},
+                "items": {
+                    "static": {"a": {"group_id": "prefixed"}},
+                    "mappings": {},
+                },
+            },
+        }
+        candidate = os.path.join(self.tmp, "colliding.json")
+        with open(candidate, "w", encoding="utf-8") as handle:
+            json.dump(colliding, handle)
+
+        for operation in (
+            lambda: self.app.import_library(candidate, mode="replace"),
+            lambda: self.app.import_library(candidate, mode="merge"),
+            lambda: self.app.restore_backup(candidate),
+        ):
+            with self.subTest(operation=operation):
+                with mock.patch.object(self.app, "_backup_current_library") as backup:
+                    ok, error = operation()
+                self.assertFalse(ok)
+                self.assertIn("conflito de triggers efetivos", error.lower())
+                backup.assert_not_called()
+                with open(self.app.snippets_file, encoding="utf-8") as handle:
+                    self.assertEqual({"xhi": "hello"}, json.load(handle))
+
     def test_import_rejects_non_object_json(self):
         src = os.path.join(self.tmp, "bad.json")
         with open(src, "w", encoding="utf-8") as handle:

@@ -16,6 +16,7 @@ import runtime_support
 from app_module import sniptype as tx  # .pyw is not importable off Windows
 from pynput.keyboard import Key, KeyCode
 from rich_text_support import build_rich_text_payload
+from whatsapp_runtime_support import ACTION_COMPLETED
 
 
 def make_app(base_dir, snippets, stub_inserter=True):
@@ -179,6 +180,35 @@ class WorkflowHotkeyIntegrationTests(unittest.TestCase):
         self.app.expand_snippet = mock.Mock(return_value=False)
         self.app._run_expansion("xhi")
         self.assertIsNone(self.app.workflow_state.last_successful_item)
+
+    def test_action_only_success_records_without_inserting_a_terminator(self):
+        self.app.dynamic_registry = {
+            "xwapp": {"provider": "whatsapp", "mode": "open", "slow": True},
+        }
+        self.app.snippets["xwapp"] = lambda: ACTION_COMPLETED
+        self.app.refresh_runtime_indexes()
+        target = next(
+            candidate
+            for candidate in self.app.trigger_index["direct_targets"]
+            if candidate.effective_trigger == "xwapp"
+        )
+        self.app.run_slow_snippet = mock.Mock(return_value=ACTION_COMPLETED)
+
+        self.app._run_expansion(target, append_text=" ", slow_route=True)
+
+        self.assertEqual(
+            tx.SnippetRef("dynamic", "xwapp"),
+            self.app.workflow_state.last_successful_item,
+        )
+        self.app.keyboard_controller.type.assert_not_called()
+
+    def test_action_only_slow_result_is_not_inserted_as_text(self):
+        self.app.snippets["xwapp"] = lambda: ACTION_COMPLETED
+
+        result = self.app.run_slow_snippet("xwapp")
+
+        self.assertIs(ACTION_COMPLETED, result)
+        self.app.text_inserter.insert_text.assert_not_called()
 
     def test_hotkey_router_changes_only_after_atomic_settings_save(self):
         self.app.settings_file = os.path.join(self.tmp, "settings.json")

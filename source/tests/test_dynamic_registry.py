@@ -169,11 +169,11 @@ class BuildDynamicSnippetsTests(unittest.TestCase):
         self.assertEqual(set(), slow)
         self.assertEqual({"xnow": "first"}, identities)
 
-    def test_stock_cancel_returns_marker(self):
+    def test_stock_cancel_returns_none(self):
         self.ctx._ticker = None
         registry = {"xcot": {"provider": "stock", "method": "cotacao", "dialog": "Cotação"}}
         snippets, _ = dr.build_dynamic_snippets(registry, self.ctx)
-        self.assertEqual(snippets["xcot"](), "[Cancelado]")
+        self.assertIsNone(snippets["xcot"]())
 
 
 class ReferenceEntriesTests(unittest.TestCase):

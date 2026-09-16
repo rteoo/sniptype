@@ -40,6 +40,19 @@ class ManagerRuntimeTests(unittest.TestCase):
         self.assertEqual("ccity", mapping.effective_trigger)
         self.assertEqual("dynamic", tx.Sniptype._manager_target(app, SnippetRef("dynamic", "xdate")).kind)
 
+    def test_manager_collision_set_excludes_invalid_dynamic_enabled_value(self):
+        app = self._app()
+        app.dynamic_registry = {
+            "invalid": {"trigger": "today", "enabled": "false"},
+            "disabled": {"trigger": "tomorrow", "enabled": False},
+            "active": {"trigger": "now", "enabled": True},
+        }
+
+        self.assertEqual(
+            {"ccity", "now"},
+            tx.Sniptype._manager_dynamic_triggers(app),
+        )
+
     def test_failed_manager_save_does_not_publish_copy_on_write_state(self):
         app = self._app()
         original_snippets, original_metadata = app.snippets, app.library_metadata

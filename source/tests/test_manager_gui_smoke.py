@@ -298,6 +298,15 @@ class ManagerGuiSmokeTests(unittest.TestCase):
         tree = trees[0]
         return {iid: tuple(tree.item(iid, "values"))[1:] for iid in tree.get_children()}
 
+    def _tree_trigger_values(self, frame):
+        trees = [w for w in _descendants(frame) if isinstance(w, ttk.Treeview)]
+        self.assertTrue(trees, "expected a snippet Treeview")
+        tree = trees[0]
+        return {
+            iid: tuple(tree.item(iid, "values"))[0]
+            for iid in tree.get_children()
+        }
+
     def test_mapping_tree_shows_preview_and_markers(self):
         self.app.snippets["_cpf_numbers"] = {
             "__prefix__": "cpf",
@@ -312,6 +321,44 @@ class ManagerGuiSmokeTests(unittest.TestCase):
         self.assertEqual(("123.456.789-00", ""), rows["alice"])
         self.assertEqual(("CPF oficial", "RT"), rows["assinada"])
         self.assertEqual(("CPF de %%titular%%", "%%"), rows["modelo"])
+
+    def test_mapping_tree_shows_stored_and_effective_triggers(self):
+        self.app.snippets["_cpf_numbers"] = {
+            "__prefix__": "cpf",
+            "alice": "123.456.789-00",
+        }
+
+        triggers = self._on_gui(
+            lambda root: self._tree_trigger_values(self._build_mappings_tab(root))
+        )
+
+        self.assertEqual("alice → cpfalice", triggers["alice"])
+
+    def test_dynamic_registry_shows_stored_and_effective_triggers(self):
+        self.app.dynamic_registry = {
+            "stable": {
+                "provider": "datetime",
+                "category": "datetime",
+                "description": "Renamed date",
+                "trigger": "renamed",
+                "enabled": True,
+            }
+        }
+
+        def build(shared_root):
+            root = tk.Toplevel(shared_root)
+            root.withdraw()
+            frame = tk.Frame(root)
+            self.app._create_dynamic_snippets_tab(frame, root)
+            root.update_idletasks()
+            return [
+                widget.cget("text")
+                for widget in _descendants(frame)
+                if isinstance(widget, tk.Label)
+            ]
+
+        labels = self._on_gui(build)
+        self.assertIn("stable → renamed", labels)
 
     def test_mapping_tab_counts_every_type_not_just_the_selected_one(self):
         self.app.snippets["_cpf_numbers"] = {"__prefix__": "cpf", "alice": "1", "bruno": "2"}
