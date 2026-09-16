@@ -210,6 +210,44 @@ class WorkflowHotkeyIntegrationTests(unittest.TestCase):
         self.assertIs(ACTION_COMPLETED, result)
         self.app.text_inserter.insert_text.assert_not_called()
 
+    def test_failed_text_inserter_result_is_not_recorded_as_success(self):
+        self.app.text_inserter.insert_text.return_value = False
+
+        with mock.patch.object(tx.time, "sleep"):
+            self.app._run_expansion("xhi")
+
+        self.assertIsNone(self.app.workflow_state.last_successful_item)
+
+    def test_failed_form_inserter_result_is_not_recorded_as_success(self):
+        self.app.snippets["xform"] = "Hello %%name%%"
+        self.app.refresh_runtime_indexes()
+        self.app._show_form_dialog = mock.Mock(return_value={"name": "Ana"})
+        self.app.text_inserter.insert_text.return_value = False
+
+        with mock.patch.object(tx.time, "sleep"):
+            self.app._run_expansion("xform")
+
+        self.assertIsNone(self.app.workflow_state.last_successful_item)
+
+    def test_renamed_whatsapp_insert_trigger_preserves_generated_link(self):
+        self.app.dynamic_registry = {
+            "xlwapp": {
+                "provider": "whatsapp",
+                "mode": "insert",
+                "trigger": "savewa",
+                "enabled": True,
+            }
+        }
+        self.app.dynamic_identities = {"savewa": "xlwapp"}
+        self.app.snippets["savewa"] = lambda: "https://wa.me/5511999999999"
+        self.app.text_inserter.insert_text.return_value = True
+
+        with mock.patch.object(tx.time, "sleep"), \
+                mock.patch.object(tx.Clipboard, "set_content") as clipboard:
+            self.assertTrue(self.app.run_slow_snippet("savewa"))
+
+        clipboard.assert_called_once_with("https://wa.me/5511999999999")
+
     def test_hotkey_router_changes_only_after_atomic_settings_save(self):
         self.app.settings_file = os.path.join(self.tmp, "settings.json")
         self.app.settings = {"hotkeys": {"open_manager": "<ctrl>+m"}, "future": 1}

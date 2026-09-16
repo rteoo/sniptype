@@ -82,6 +82,19 @@ class ManagerRuntimeTests(unittest.TestCase):
         app.refresh_runtime_indexes.assert_called_once_with()
         app._refresh_manager_lists.assert_called_once_with()
 
+    def test_tray_reload_queues_open_manager_refresh_on_gui_thread(self):
+        app = self._app()
+        app.manager_window = object()
+        app.gui = mock.Mock()
+        app.load_snippets = mock.Mock(return_value={"updated": "value"})
+        app.notify_status = mock.Mock()
+
+        tx.Sniptype.reload_snippets(app, None, None)
+
+        self.assertEqual({"updated": "value"}, app.snippets)
+        app.refresh_runtime_indexes.assert_called_once_with()
+        app.gui.submit.assert_called_once_with(app._refresh_manager_lists)
+
 
 if __name__ == "__main__":
     unittest.main()

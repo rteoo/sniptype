@@ -1298,7 +1298,9 @@ class Sniptype:
 
             try:
                 time.sleep(0.05)
-                self.text_inserter.insert_text(snippet)
+                inserted = self.text_inserter.insert_text(snippet)
+                if inserted is False:
+                    return False
 
                 self.expansion_failed = False
                 self.last_expansion_time = time.time()
@@ -1379,8 +1381,8 @@ class Sniptype:
                 if is_rich_text_payload(raw):
                     result = rebuild_rich_text(raw, result)
                 time.sleep(0.05)
-                self.text_inserter.insert_text(result)
-                return True
+                inserted = self.text_inserter.insert_text(result)
+                return inserted is not False
 
             result = func()
             if result is ACTION_COMPLETED:
@@ -1389,8 +1391,10 @@ class Sniptype:
                 return False
             self.notify_snippet_failure(trigger, result)
             time.sleep(0.05)
-            self.text_inserter.insert_text(result)
-            if trigger == "xlwapp":
+            inserted = self.text_inserter.insert_text(result)
+            if inserted is False:
+                return False
+            if self._is_whatsapp_insert_trigger(trigger):
                 Clipboard.set_content(result)
             return True
         except Exception as e:
@@ -1401,6 +1405,29 @@ class Sniptype:
                 cooldown_seconds=5,
             )
             return False
+
+    def _is_whatsapp_insert_trigger(self, trigger):
+        """Recognize the insert-link action after a registry trigger rename."""
+        if trigger == "xlwapp":
+            return True
+        identities = getattr(self, "dynamic_identities", {})
+        stable_key = identities.get(trigger) if isinstance(identities, dict) else None
+        registry = getattr(self, "dynamic_registry", {})
+        if stable_key is None:
+            stable_key = next(
+                (
+                    key for key, entry in registry.items()
+                    if is_enabled(entry, key=key)
+                    and effective_trigger(key, entry) == trigger
+                ),
+                None,
+            )
+        entry = registry.get(stable_key) if stable_key is not None else None
+        return (
+            isinstance(entry, dict)
+            and entry.get("provider") == "whatsapp"
+            and entry.get("mode") == "insert"
+        )
     
     def _show_form_dialog(self, field_names, compiled_form=None):
         """
@@ -5008,6 +5035,8 @@ class Sniptype:
         try:
             self.snippets = self.load_snippets()
             self.refresh_runtime_indexes()
+            if self.manager_window is not None:
+                self.gui.submit(self._refresh_manager_lists)
             self.notify_status("Snippets recarregados com sucesso.", key="reload-snippets")
         except Exception as e:
             self.notify_error(
