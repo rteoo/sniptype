@@ -1,6 +1,35 @@
+from dataclasses import dataclass
+
 from rich_text_support import extract_plain_text
+from group_policy import (
+    ApplicationPolicy,
+    application_policy_allows,
+    effective_trigger,
+    get_static_item_metadata,
+    item_group_policy,
+    resolve_terminator_policy,
+)
 from snippet_utils import check_dynamic_pattern, get_dynamic_prefixes
 from variable_support import find_variable_names, has_form_variables
+
+
+@dataclass(frozen=True)
+class ExpansionTarget:
+    """Immutable direct-expansion identity captured during index compilation."""
+
+    effective_trigger: str
+    source_kind: str
+    stable_identity: str
+
+    @property
+    def trigger(self):
+        """Compatibility spelling used by callers that call it just a trigger."""
+        return self.effective_trigger
+
+    @property
+    def source_identity(self):
+        """Compatibility spelling for the stable source identity."""
+        return self.stable_identity
 
 
 def _is_indexable_trigger(trigger):
@@ -62,7 +91,19 @@ def _compute_slow_ref_triggers(snippets, slow_snippets):
     return slow_ref_triggers
 
 
-def compile_trigger_index(snippets, slow_snippets):
+def _sort_buckets(buckets):
+    for bucket in buckets.values():
+        bucket.sort(key=lambda target: len(target.effective_trigger), reverse=True)
+    return {key: tuple(value) for key, value in buckets.items()}
+
+
+def compile_trigger_index(
+    snippets,
+    slow_snippets,
+    metadata=None,
+    terminator_mode=False,
+    global_terminator_mode=None,
+):
     """Precompute trigger lookup structures for the keyboard hot path.
 
     Within each last-character bucket, triggers are ordered longest-first so a
@@ -70,21 +111,66 @@ def compile_trigger_index(snippets, slow_snippets):
     (deterministic match; fixes the insertion-order hazard). Ties keep source
     order for stability.
     """
+    if global_terminator_mode is not None:
+        terminator_mode = global_terminator_mode
+
     direct_triggers = []
     direct_by_last_char = {}
+    direct_targets = []
+    direct_targets_by_last_char = {}
+    immediate_targets_by_last_char = {}
+    terminated_targets_by_last_char = {}
+    application_policies = {}
 
-    for trigger in snippets.keys():
+    for trigger, value in snippets.items():
         # An empty key has no last char (crash below) and would suffix-match
         # every keystroke; an ``_``-prefixed key is a mapping container.
         if not _is_indexable_trigger(trigger):
             continue
 
-        direct_triggers.append(trigger)
-        last_char = trigger[-1]
-        direct_by_last_char.setdefault(last_char, []).append(trigger)
+        if callable(value):
+            # Registry-backed dynamics keep their existing global policy and
+            # stable key; metadata never scopes a dynamic callable.
+            target = ExpansionTarget(trigger, "dynamic", trigger)
+            terminated = bool(terminator_mode)
+            application_policy = ApplicationPolicy()
+        else:
+            group = item_group_policy(metadata, trigger)
+            if not group.enabled:
+                continue
+            item_metadata = get_static_item_metadata(metadata, trigger)
+            target = ExpansionTarget(
+                effective_trigger(trigger, metadata, item_metadata),
+                "static",
+                trigger,
+            )
+            terminated = resolve_terminator_policy(
+                item_metadata,
+                metadata,
+                terminator_mode,
+            )
+            application_policy = group.applications
 
-    for last_char, bucket in direct_by_last_char.items():
-        bucket.sort(key=len, reverse=True)  # stable: equal lengths keep source order
+        direct_targets.append(target)
+        direct_triggers.append(target.effective_trigger)
+        last_char = target.effective_trigger[-1]
+        direct_by_last_char.setdefault(last_char, []).append(target.effective_trigger)
+        direct_targets_by_last_char.setdefault(last_char, []).append(target)
+        target_buckets = (
+            terminated_targets_by_last_char
+            if terminated
+            else immediate_targets_by_last_char
+        )
+        target_buckets.setdefault(last_char, []).append(target)
+        application_policies[target.stable_identity] = application_policy
+
+    direct_by_last_char = {
+        key: tuple(sorted(value, key=len, reverse=True))
+        for key, value in direct_by_last_char.items()
+    }
+    direct_targets_by_last_char = _sort_buckets(direct_targets_by_last_char)
+    immediate_targets_by_last_char = _sort_buckets(immediate_targets_by_last_char)
+    terminated_targets_by_last_char = _sort_buckets(terminated_targets_by_last_char)
 
     dynamic_prefixes = get_dynamic_prefixes(snippets)
     bare_mapping_by_last_char = {}
@@ -98,30 +184,101 @@ def compile_trigger_index(snippets, slow_snippets):
         for bucket in bare_mapping_by_last_char.values():
             bucket.sort(key=len, reverse=True)
 
+    slow_triggers = set(slow_snippets) | _compute_slow_ref_triggers(snippets, slow_snippets)
+    form_triggers = _compute_form_triggers(snippets, dynamic_prefixes)
+    raw_slow_triggers = set(slow_triggers)
+    raw_form_triggers = set(form_triggers)
+    static_ids = {
+        trigger
+        for trigger, value in snippets.items()
+        if _is_indexable_trigger(trigger) and not callable(value)
+    }
+    slow_triggers.difference_update(static_ids)
+    form_triggers.difference_update(static_ids)
+    for target in direct_targets:
+        if target.source_kind != "static":
+            continue
+        if target.stable_identity in raw_slow_triggers:
+            slow_triggers.add(target.effective_trigger)
+        if target.stable_identity in raw_form_triggers:
+            form_triggers.add(target.effective_trigger)
+
     return {
         "direct_triggers": tuple(direct_triggers),
-        "direct_by_last_char": {key: tuple(value) for key, value in direct_by_last_char.items()},
+        "direct_by_last_char": direct_by_last_char,
+        "direct_targets": tuple(direct_targets),
+        "direct_targets_by_last_char": direct_targets_by_last_char,
+        "direct_immediate_by_last_char": immediate_targets_by_last_char,
+        "direct_terminated_by_last_char": terminated_targets_by_last_char,
+        "direct_immediate_targets_by_last_char": immediate_targets_by_last_char,
+        "direct_terminated_targets_by_last_char": terminated_targets_by_last_char,
+        "immediate_by_last_char": immediate_targets_by_last_char,
+        "terminated_by_last_char": terminated_targets_by_last_char,
+        "application_policies": application_policies,
+        "global_terminator_mode": bool(terminator_mode),
         "dynamic_prefixes": dynamic_prefixes,
         "ordered_prefixes": tuple(dynamic_prefixes.keys()),
         "bare_mapping_by_last_char": {
             key: tuple(value) for key, value in bare_mapping_by_last_char.items()
         },
-        "slow_triggers": frozenset(slow_snippets) | _compute_slow_ref_triggers(snippets, slow_snippets),
-        "form_triggers": frozenset(_compute_form_triggers(snippets, dynamic_prefixes)),
+        "slow_triggers": frozenset(slow_triggers),
+        "form_triggers": frozenset(form_triggers),
     }
 
 
-def find_direct_trigger(typed_text, trigger_index):
-    """Return the longest direct trigger that matches the current suffix."""
+def target_application_policy(target, trigger_index):
+    """Return a target's compiled application policy without metadata access."""
+    return trigger_index.get("application_policies", {}).get(
+        target.stable_identity,
+        ApplicationPolicy(),
+    )
+
+
+def target_is_allowed(target, trigger_index, executable=None, *, windows=True):
+    """Evaluate a compiled target without scanning metadata at match time."""
+    policy = target_application_policy(target, trigger_index)
+    return application_policy_allows(policy, executable, windows=windows)
+
+
+def find_direct_candidate(typed_text, trigger_index, terminated=False):
+    """Return the longest suffix candidate before application-policy I/O."""
     if not typed_text:
         return None
 
-    candidates = trigger_index["direct_by_last_char"].get(typed_text[-1], ())
-    for trigger in candidates:
-        if typed_text.endswith(trigger):
-            return trigger
+    bucket_name = (
+        "direct_terminated_by_last_char"
+        if terminated
+        else "direct_immediate_by_last_char"
+    )
+    candidates = trigger_index.get(bucket_name, {}).get(typed_text[-1], ())
+    for target in candidates:
+        if typed_text.endswith(target.effective_trigger):
+            return target
 
     return None
+
+
+def find_direct_target(
+    typed_text,
+    trigger_index,
+    terminated=False,
+    executable=None,
+    *,
+    windows=True,
+):
+    """Return the longest allowed target, never falling back after denial."""
+    target = find_direct_candidate(typed_text, trigger_index, terminated)
+    if target is None:
+        return None
+    if not target_is_allowed(target, trigger_index, executable, windows=windows):
+        return None
+    return target
+
+
+def find_direct_trigger(typed_text, trigger_index, terminated=False):
+    """Return the longest direct trigger that matches the current suffix."""
+    target = find_direct_target(typed_text, trigger_index, terminated)
+    return target.effective_trigger if target is not None else None
 
 
 def find_dynamic_trigger(snippets, typed_text, trigger_index):
