@@ -56,7 +56,12 @@ from library_metadata import (
     normalize_metadata,
     split_library_document,
 )
-from trigger_index import compile_trigger_index, find_direct_trigger, find_dynamic_trigger
+from trigger_index import (
+    ExpansionTarget,
+    compile_trigger_index,
+    find_dynamic_trigger,
+    target_is_allowed,
+)
 from clipboard_support import Clipboard
 from runtime_support import (
     AppLogger,
@@ -1426,7 +1431,12 @@ class Sniptype:
 
     def rebuild_trigger_index(self):
         """Rebuild compiled trigger metadata after snippet changes."""
-        self.trigger_index = compile_trigger_index(self.snippets, self.slow_snippets)
+        self.trigger_index = compile_trigger_index(
+            self.snippets,
+            self.slow_snippets,
+            metadata=self.library_metadata,
+            terminator_mode=self.terminator_mode,
+        )
 
     def _validate_trigger_warnings(self, trigger):
         """Return save-time warnings for a proposed static trigger."""
@@ -1457,8 +1467,15 @@ class Sniptype:
         (prefix + item name) plus a small safety margin, so a long mapping item
         can never be truncated out of the typed-text buffer and fail to match.
         """
-        self.max_trigger_length = calculate_max_trigger_length_with_mappings(self.snippets) + TRIGGER_BUFFER_MARGIN
         self.rebuild_trigger_index()
+        direct_max = max(
+            (len(target.effective_trigger) for target in self.trigger_index["direct_targets"]),
+            default=0,
+        )
+        self.max_trigger_length = max(
+            calculate_max_trigger_length_with_mappings(self.snippets),
+            direct_max,
+        ) + TRIGGER_BUFFER_MARGIN
 
     def _store_static_snippet(self, trigger, value):
         """Apply a static-editor save to the in-memory maps.
@@ -1629,37 +1646,94 @@ class Sniptype:
 
     def _handle_char(self, char):
         """Append a typed character and run trigger detection."""
+        if self.trigger_index.get("global_terminator_mode") != self.terminator_mode:
+            # Settings changes normally refresh the index immediately. Keep
+            # direct in-memory toggles backward compatible with one rebuild,
+            # rather than scanning policy on every keypress.
+            self.rebuild_trigger_index()
         self.typed_text += char
         if len(self.typed_text) > self.max_trigger_length:
             self.typed_text = self.typed_text[-self.max_trigger_length:]
 
-        if self.terminator_mode:
-            if char in TERMINATOR_CHARS:
-                self._detect_terminated(char)
-            return
-
-        self._detect_immediate()
+        immediate_candidate = self._detect_immediate()
+        if char in TERMINATOR_CHARS and not immediate_candidate:
+            self._detect_terminated(char)
 
     def _detect_immediate(self):
         """Immediate mode: expand as soon as a trigger suffix matches."""
-        trigger = find_direct_trigger(self.typed_text, self.trigger_index)
-        if trigger:
-            self._dispatch_expansion(trigger, len(trigger))
-            return
-        potential_trigger, result = find_dynamic_trigger(self.snippets, self.typed_text, self.trigger_index)
+        target, candidate_found = self._find_direct_target(self.typed_text, False)
+        if candidate_found:
+            if target is not None:
+                self._dispatch_expansion(target, len(target.effective_trigger))
+            return True
+        if self.terminator_mode:
+            return False
+        potential_trigger, result = find_dynamic_trigger(
+            self.snippets,
+            self.typed_text,
+            self.trigger_index,
+        )
         if result is not None:
             self._dispatch_expansion(potential_trigger, len(potential_trigger))
+            return True
+        return False
 
     def _detect_terminated(self, terminator_char):
         """Terminator mode: expand only when a word-ending char follows a trigger."""
         body = self.typed_text[:-1]  # drop the terminator just typed
-        trigger = find_direct_trigger(body, self.trigger_index)
-        if trigger:
-            self._dispatch_expansion(trigger, len(trigger) + 1, append_text=terminator_char)
+        target, candidate_found = self._find_direct_target(body, True)
+        if candidate_found:
+            if target is not None:
+                self._dispatch_expansion(
+                    target,
+                    len(target.effective_trigger) + 1,
+                    append_text=terminator_char,
+                )
+            return
+        # Mappings and registry-backed dynamics intentionally retain the global
+        # terminator policy; they are checked only in this branch.
+        if not self.terminator_mode:
             return
         potential_trigger, result = find_dynamic_trigger(self.snippets, body, self.trigger_index)
         if result is not None:
             self._dispatch_expansion(potential_trigger, len(potential_trigger) + 1, append_text=terminator_char)
+
+    def _find_direct_target(self, typed_text, terminated):
+        """Find one compiled direct candidate and apply its app policy.
+
+        The bucket is precompiled, so this performs no metadata or disk work on
+        the listener.  ``candidate_found`` distinguishes a denied longest match
+        from no direct match and prevents a shorter/dynamic fallback.
+        """
+        if not typed_text:
+            return None, False
+        bucket_name = (
+            "direct_terminated_by_last_char"
+            if terminated
+            else "direct_immediate_by_last_char"
+        )
+        candidates = self.trigger_index.get(bucket_name, {}).get(typed_text[-1], ())
+        for target in candidates:
+            if typed_text.endswith(target.effective_trigger):
+                if self._target_application_allowed(target):
+                    return target, True
+                return None, True
+        return None, False
+
+    def _target_application_allowed(self, target):
+        """Resolve foreground identity only for a candidate needing it."""
+        policy = self.trigger_index.get("application_policies", {}).get(target.stable_identity)
+        if policy is None or policy.mode == "all":
+            return True
+        executable = None
+        if platform_support.IS_WINDOWS:
+            executable = platform_support.foreground_executable_name()
+        return target_is_allowed(
+            target,
+            self.trigger_index,
+            executable,
+            windows=platform_support.IS_WINDOWS,
+        )
 
     def _dispatch_expansion(self, trigger, erase_length, append_text=""):
         """Erase the typed trigger and run the expansion on a worker thread."""
@@ -1668,7 +1742,20 @@ class Sniptype:
             return
         self._erase_chars(erase_length)
         self.typed_text = ""
-        self.task_runner.start(self._run_expansion, trigger, append_text, name="expand")
+        worker_target = trigger
+        if isinstance(trigger, ExpansionTarget):
+            # Metadata-aware expansions retain the stable stored identity while
+            # carrying the effective trigger across a concurrent index refresh.
+            metadata_present = getattr(self.library_metadata, "present", None)
+            if metadata_present is None:
+                metadata_present = bool(self.library_metadata)
+            if metadata_present or (
+                trigger.effective_trigger != trigger.stable_identity
+            ):
+                worker_target = trigger
+            else:
+                worker_target = trigger.effective_trigger
+        self.task_runner.start(self._run_expansion, worker_target, append_text, name="expand")
 
     def _secure_input_blocks_expansion(self):
         """True when macOS Secure Keyboard Entry is swallowing synthesized input.
@@ -1715,19 +1802,25 @@ class Sniptype:
         if not self.enabled:
             return
         try:
-            if trigger in self.trigger_index["slow_triggers"] or trigger in self.trigger_index["form_triggers"]:
-                inserted = self.run_slow_snippet(trigger)
+            effective = trigger.effective_trigger if isinstance(trigger, ExpansionTarget) else trigger
+            lookup = (
+                trigger.stable_identity
+                if isinstance(trigger, ExpansionTarget) and trigger.source_kind == "static"
+                else effective
+            )
+            if effective in self.trigger_index["slow_triggers"] or effective in self.trigger_index["form_triggers"]:
+                inserted = self.run_slow_snippet(lookup)
             else:
-                inserted = self.expand_snippet(trigger)
+                inserted = self.expand_snippet(lookup)
             # Only re-emit the terminator when text was actually inserted, so a
             # cancelled form dialog or a failed paste does not leave a stray char.
             if append_text and inserted:
                 self.keyboard_controller.type(append_text)
         except Exception as e:
-            self.logger.error(f"Erro na expansão de {trigger}: {e}")
+            self.logger.error(f"Erro na expansão de {getattr(trigger, 'effective_trigger', trigger)}: {e}")
             self.notify_error(
-                f"Falha ao expandir {trigger}: {e}",
-                key=f"expand-error:{trigger}",
+                f"Falha ao expandir {getattr(trigger, 'effective_trigger', trigger)}: {e}",
+                key=f"expand-error:{getattr(trigger, 'effective_trigger', trigger)}",
                 cooldown_seconds=5,
             )
 

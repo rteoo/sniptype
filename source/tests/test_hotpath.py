@@ -88,6 +88,164 @@ class TerminatorModeTests(unittest.TestCase):
         self.assertEqual(args.args[2], " ")  # terminator re-typed after expansion
 
 
+class GroupPolicyHotpathTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def _app(self, snippets, metadata, *, terminator_mode=False):
+        app = make_app(self.tmp, snippets)
+        app.library_metadata = metadata
+        app.terminator_mode = terminator_mode
+        app.refresh_runtime_indexes()
+        app._erase_chars = mock.Mock()
+        return app
+
+    def test_foreground_identity_is_queried_only_after_a_scoped_candidate(self):
+        metadata = {
+            "groups": {
+                "allow": {
+                    "applications": {
+                        "mode": "allow",
+                        "executables": ["editor.exe"],
+                    }
+                }
+            },
+            "items": {"static": {"xhi": {"group_id": "allow"}}},
+        }
+        app = self._app({"xhi": "hello"}, metadata)
+        with mock.patch.object(
+            tx.platform_support,
+            "IS_WINDOWS",
+            True,
+        ), mock.patch.object(
+            tx.platform_support,
+            "foreground_executable_name",
+            return_value="editor.exe",
+        ) as identity:
+            app._handle_char("z")
+            identity.assert_not_called()
+            app._handle_char("x")
+            app._handle_char("h")
+            app._handle_char("i")
+        identity.assert_called_once_with()
+
+    def test_denied_longest_candidate_leaves_buffer_and_does_not_dispatch(self):
+        metadata = {
+            "groups": {
+                "deny": {
+                    "applications": {
+                        "mode": "deny",
+                        "executables": ["blocked.exe"],
+                    }
+                }
+            },
+            "items": {"static": {"x": {"group_id": "deny"}, "wx": {"group_id": "deny"}}},
+        }
+        app = self._app({"x": "short", "wx": "long"}, metadata)
+        with mock.patch.object(tx.platform_support, "IS_WINDOWS", True), \
+                mock.patch.object(
+                    tx.platform_support,
+                    "foreground_executable_name",
+                    return_value="blocked.exe",
+                ):
+            app._handle_char("w")
+            app._handle_char("x")
+        app._erase_chars.assert_not_called()
+        app.task_runner.start.assert_not_called()
+        self.assertEqual("wx", app.typed_text)
+
+    def test_prefixed_target_passes_stable_identity_to_worker(self):
+        metadata = {
+            "groups": {"work": {"prefix": "w"}},
+            "items": {"static": {"xhi": {"group_id": "work"}}},
+        }
+        app = self._app({"xhi": "hello"}, metadata)
+        for char in "wxhi":
+            app._handle_char(char)
+        args = app.task_runner.start.call_args
+        target = args.args[1]
+        self.assertEqual("wxhi", target.effective_trigger)
+        self.assertEqual("xhi", target.stable_identity)
+        self.assertEqual(4, app._erase_chars.call_args.args[0])
+
+    def test_mixed_immediate_and_terminated_groups_use_separate_buckets(self):
+        metadata = {
+            "groups": {
+                "immediate": {"terminator": "immediate"},
+                "terminated": {"terminator": "terminator"},
+            },
+            "items": {
+                "static": {
+                    "xfast": {"group_id": "immediate"},
+                    "xslow": {"group_id": "terminated"},
+                }
+            },
+        }
+        app = self._app(
+            {"xfast": "fast", "xslow": "slow"},
+            metadata,
+            terminator_mode=True,
+        )
+        for char in "xfast":
+            app._handle_char(char)
+        self.assertEqual("xfast", app.task_runner.start.call_args.args[1].effective_trigger)
+        app.task_runner.reset_mock()
+        app._erase_chars.reset_mock()
+        for char in "xslow ":
+            app._handle_char(char)
+        args = app.task_runner.start.call_args
+        self.assertEqual("xslow", args.args[1].effective_trigger)
+        self.assertEqual(" ", args.args[2])
+
+    def test_group_terminator_policy_works_when_global_mode_is_immediate(self):
+        metadata = {
+            "groups": {"terminated": {"terminator": "terminator"}},
+            "items": {"static": {"xslow": {"group_id": "terminated"}}},
+        }
+        app = self._app({"xslow": "slow"}, metadata, terminator_mode=False)
+
+        for char in "xslow":
+            app._handle_char(char)
+        app.task_runner.start.assert_not_called()
+        app._handle_char(" ")
+
+        args = app.task_runner.start.call_args
+        self.assertEqual("xslow", args.args[1].effective_trigger)
+        self.assertEqual(" ", args.args[2])
+
+    def test_group_prefix_contributes_to_trigger_buffer_length(self):
+        prefix = "department-" * 8
+        metadata = {
+            "groups": {"long": {"prefix": prefix}},
+            "items": {"static": {"x": {"group_id": "long"}}},
+        }
+        app = self._app({"x": "value"}, metadata)
+
+        self.assertGreaterEqual(
+            app.max_trigger_length,
+            len(prefix + "x") + tx.TRIGGER_BUFFER_MARGIN,
+        )
+
+    def test_queued_target_keeps_stable_identity_across_index_refresh(self):
+        metadata = {
+            "groups": {"work": {"prefix": "w"}},
+            "items": {"static": {"xhi": {"group_id": "work"}}},
+        }
+        app = self._app({"xhi": "hello"}, metadata)
+        for char in "wxhi":
+            app._handle_char(char)
+        target = app.task_runner.start.call_args.args[1]
+        app.task_runner.reset_mock()
+        app.library_metadata = {
+            "groups": {"other": {"prefix": "z"}},
+            "items": {"static": {"xhi": {"group_id": "other"}}},
+        }
+        app.refresh_runtime_indexes()
+        with mock.patch.object(app, "expand_snippet", return_value=True) as expand:
+            app._run_expansion(target)
+        expand.assert_called_once_with("xhi")
+
+
 class ListenerResilienceTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
