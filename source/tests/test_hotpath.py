@@ -15,6 +15,7 @@ import clipboard_support
 import runtime_support
 from app_module import sniptype as tx  # .pyw is not importable off Windows
 from pynput.keyboard import Key, KeyCode
+from rich_text_support import build_rich_text_payload
 
 
 def make_app(base_dir, snippets, stub_inserter=True):
@@ -785,6 +786,162 @@ class FormRoutingTests(unittest.TestCase):
 
         dialog.assert_called_once_with(["spec"])
         app.text_inserter.insert_text.assert_called_once_with("Write this: be concise")
+
+    def test_structured_form_renders_defaults_and_uses_one_pass_values(self):
+        app = make_app(self.tmp, {
+            "xform": "Olá %%cliente%%, %%nome%%",
+            "cliente": "equipe",
+        })
+        app.library_metadata = {
+            "items": {
+                "static": {
+                    "xform": {
+                        "form": {
+                            "fields": [{"name": "nome", "default": "Cliente"}]
+                        }
+                    }
+                }
+            }
+        }
+        app.refresh_runtime_indexes()
+        with mock.patch.object(app, "_show_form_dialog", return_value={}) as dialog, \
+                mock.patch.object(tx.time, "sleep"):
+            app._run_expansion("xform")
+
+        dialog.assert_called_once()
+        self.assertEqual(["nome"], dialog.call_args.args[0])
+        self.assertEqual("Olá equipe, Cliente", app.text_inserter.insert_text.call_args.args[0])
+
+        app.text_inserter.reset_mock()
+        dialog.reset_mock()
+        with mock.patch.object(app, "_show_form_dialog", return_value={"nome": "%%literal%%"}) as literal_dialog, \
+                mock.patch.object(tx.time, "sleep"):
+            app._run_expansion("xform")
+        literal_dialog.assert_called_once()
+        self.assertEqual("Olá equipe, %%literal%%", app.text_inserter.insert_text.call_args.args[0])
+
+    def test_structured_form_supports_all_field_types(self):
+        app = make_app(self.tmp, {
+            "xform": "%%name%%|%%body%%|%%kind%%|%%when%%|%%maybe%%",
+        })
+        app.library_metadata = {
+            "items": {
+                "static": {
+                    "xform": {"form": {"fields": [
+                        {"name": "name", "type": "text"},
+                        {"name": "body", "type": "multiline"},
+                        {"name": "kind", "type": "choice", "options": ["A", "B"]},
+                        {"name": "when", "type": "date", "default": "2026-09-16", "output_format": "%Y/%m/%d"},
+                        {"name": "maybe", "type": "optional", "content": "[ok]"},
+                    ]}}
+                }
+            }
+        }
+        app.refresh_runtime_indexes()
+        values = {"name": "Ana", "body": "linha 1\nlinha 2", "kind": "B",
+                  "when": "2026-09-17", "maybe": True}
+        with mock.patch.object(app, "_show_form_dialog", return_value=values) as dialog, \
+                mock.patch.object(tx.time, "sleep"):
+            app._run_expansion("xform")
+        dialog.assert_called_once()
+        self.assertEqual(
+            "Ana|linha 1\nlinha 2|B|2026/09/17|[ok]",
+            app.text_inserter.insert_text.call_args.args[0],
+        )
+
+    def test_structured_form_cancel_inserts_nothing_or_reemits_terminator(self):
+        app = make_app(self.tmp, {"xform": "Olá %%nome%%"})
+        app.library_metadata = {
+            "items": {"static": {"xform": {"form": {"fields": [{"name": "nome"}]}}}}
+        }
+        app.refresh_runtime_indexes()
+        with mock.patch.object(app, "_show_form_dialog", return_value=None) as dialog, \
+                mock.patch.object(tx.time, "sleep"):
+            app._run_expansion("xform", append_text=" ")
+        dialog.assert_called_once()
+        app.text_inserter.insert_text.assert_not_called()
+        app.keyboard_controller.type.assert_not_called()
+
+    def test_structured_form_rebuilds_rich_spans_after_expansion(self):
+        rich = build_rich_text_payload(
+            "Olá %%nome%%", [{"tag": "bold", "start": 0, "end": len("Olá %%nome%%")}]
+        )
+        app = make_app(self.tmp, {"xrich": rich})
+        app.library_metadata = {
+            "items": {
+                "static": {
+                    "xrich": {"form": {"fields": [{"name": "nome"}]}}
+                }
+            }
+        }
+        app.refresh_runtime_indexes()
+        with mock.patch.object(app, "_show_form_dialog", return_value={"nome": "Alexander"}), \
+                mock.patch.object(tx.time, "sleep"):
+            app._run_expansion("xrich")
+
+        result = app.text_inserter.insert_text.call_args.args[0]
+        self.assertEqual("Olá Alexander", result["text"])
+        self.assertEqual([{"tag": "bold", "start": 0, "end": len("Olá Alexander")}], result["spans"])
+
+    def test_prefixed_structured_form_keeps_stable_key_for_worker(self):
+        app = make_app(self.tmp, {"xform": "Olá %%nome%%"})
+        app.library_metadata = {
+            "groups": {"work": {"prefix": "w"}},
+            "items": {
+                "static": {
+                    "xform": {
+                        "group_id": "work",
+                        "form": {"fields": [{"name": "nome"}]},
+                    }
+                }
+            },
+        }
+        app.refresh_runtime_indexes()
+        with mock.patch.object(app, "_show_form_dialog", return_value={"nome": "Ana"}) as dialog, \
+                mock.patch.object(tx.time, "sleep"):
+            for char in "wxform":
+                app._handle_char(char)
+            target = app.task_runner.start.call_args.args[1]
+            self.assertEqual("xform", target.stable_identity)
+            app._run_expansion(target)
+
+        self.assertEqual("xform", target.stable_identity)
+        self.assertIsNotNone(dialog.call_args.args[1])
+        app.text_inserter.insert_text.assert_called_once_with("Olá Ana")
+
+    def test_dispatch_snapshots_slow_route_across_index_refresh(self):
+        app = make_app(self.tmp, {"xform": "Olá %%nome%%"})
+        app.library_metadata = {
+            "groups": {"work": {"prefix": "w"}},
+            "items": {
+                "static": {
+                    "xform": {
+                        "group_id": "work",
+                        "form": {"fields": [{"name": "nome"}]},
+                    }
+                }
+            },
+        }
+        app.refresh_runtime_indexes()
+
+        with mock.patch.object(tx.time, "sleep"):
+            for char in "wxform":
+                app._handle_char(char)
+
+        worker_target = app.task_runner.start.call_args.args[1]
+        slow_route = app.task_runner.start.call_args.args[3]
+        self.assertTrue(slow_route)
+
+        # Simulate a manager refresh before the queued worker gets CPU time.
+        app.trigger_index = dict(app.trigger_index)
+        app.trigger_index["slow_triggers"] = frozenset()
+        app.trigger_index["form_triggers"] = frozenset()
+        with mock.patch.object(app, "run_slow_snippet", return_value=True) as slow, \
+                mock.patch.object(app, "expand_snippet") as plain:
+            app._run_expansion(worker_target, "", slow_route)
+
+        slow.assert_called_once_with("xform")
+        plain.assert_not_called()
 
 
 class InsertionTimingWiringTests(unittest.TestCase):
