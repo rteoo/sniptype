@@ -1968,9 +1968,14 @@ class Sniptype:
         # Snapshot the selected route with the immutable target. A manager save
         # may rebuild the index before the worker starts; that refresh must not
         # turn an already-selected form or slow expansion into the plain path.
+        # Keep this seam tolerant of a minimal app instance. Platform gate
+        # tests and shutdown-adjacent callers may exercise dispatch before an
+        # index has been published; a missing snapshot means the legacy plain
+        # route, not a listener-thread exception.
+        trigger_index = getattr(self, "trigger_index", {})
         slow_route = (
-            effective in self.trigger_index["slow_triggers"]
-            or effective in self.trigger_index["form_triggers"]
+            effective in trigger_index.get("slow_triggers", ())
+            or effective in trigger_index.get("form_triggers", ())
         )
         self.task_runner.start(
             self._run_expansion,
