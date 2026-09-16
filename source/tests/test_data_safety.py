@@ -60,6 +60,20 @@ class SaveSnippetsTests(unittest.TestCase):
         with mock.patch.object(tx, "write_json_atomic", side_effect=OSError("disk full")):
             self.assertFalse(self.app.save_snippets({"xhi": "x"}))
 
+    def test_save_failure_does_not_normalize_metadata_in_memory(self):
+        self.app.library_metadata.update({
+            "kind": "sniptype_metadata",
+            "schema_version": 1,
+            "groups": {},
+            "items": {"static": {"missing": {"favorite": True}}, "mappings": {}},
+        })
+        before = self.app.library_metadata.copy()
+
+        with mock.patch.object(tx, "write_json_atomic", side_effect=OSError("disk full")):
+            self.assertFalse(self.app.save_snippets({"xhi": "x"}))
+
+        self.assertEqual(before, self.app.library_metadata)
+
     def test_backup_failure_aborts_before_replacing_live_library(self):
         with mock.patch.object(tx, "create_backup", side_effect=OSError("locked")), \
                 mock.patch.object(tx, "write_json_atomic") as write:
@@ -75,6 +89,36 @@ class SaveSnippetsTests(unittest.TestCase):
         with open(self.app.snippets_file, encoding="utf-8") as handle:
             data = json.load(handle)
         self.assertNotIn("xnow", data)
+
+    def test_metadata_is_loaded_outside_runtime_and_reassembled_on_save(self):
+        metadata = {
+            "kind": "sniptype_metadata",
+            "schema_version": 1,
+            "groups": {"g": {"label": "Work"}},
+            "items": {"static": {"xhi": {"group_id": "g"}}, "mappings": {}},
+        }
+        with open(self.app.snippets_file, "w", encoding="utf-8") as handle:
+            json.dump({"xhi": "hello", "__sniptype__": metadata}, handle)
+
+        self.app.reload_snippets_from_disk()
+        self.assertNotIn("__sniptype__", self.app.snippets)
+        self.assertEqual(metadata, self.app.library_metadata)
+        self.assertTrue(self.app.save_snippets(self.app.snippets))
+        with open(self.app.snippets_file, encoding="utf-8") as handle:
+            self.assertEqual(metadata, json.load(handle)["__sniptype__"])
+
+    def test_malformed_metadata_survives_save_while_content_remains_runtime_only(self):
+        raw_metadata = {"schema_version": "future-ish", "opaque": ["keep"]}
+        with open(self.app.snippets_file, "w", encoding="utf-8") as handle:
+            json.dump({"xhi": "hello", "__sniptype__": raw_metadata}, handle)
+
+        self.app.reload_snippets_from_disk()
+        self.assertTrue(self.app.library_metadata.read_only)
+        self.assertTrue(self.app.save_snippets({"xhi": "changed"}))
+        with open(self.app.snippets_file, encoding="utf-8") as handle:
+            saved = json.load(handle)
+        self.assertEqual("changed", saved["xhi"])
+        self.assertEqual(raw_metadata, saved["__sniptype__"])
 
 
 def write_bundled_registry(registry):
@@ -381,6 +425,54 @@ class BackupRestoreImportTests(unittest.TestCase):
         self.assertIn("xbye", self.app.snippets)
         self.assertNotIn("xhi", self._static())
 
+    def test_import_replace_replaces_metadata_with_imported_document(self):
+        src = os.path.join(self.tmp, "incoming.json")
+        metadata = {
+            "kind": "sniptype_metadata",
+            "schema_version": 1,
+            "groups": {"incoming": {"label": "Imported"}},
+            "items": {"static": {"xbye": {"group_id": "incoming"}}, "mappings": {}},
+        }
+        with open(src, "w", encoding="utf-8") as handle:
+            json.dump({"xbye": "goodbye", "__sniptype__": metadata}, handle)
+        ok, error = self.app.import_library(src, mode="replace")
+        self.assertTrue(ok, error)
+        self.assertEqual(metadata, self.app.library_metadata)
+        with open(self.app.snippets_file, encoding="utf-8") as handle:
+            self.assertEqual(metadata, json.load(handle)["__sniptype__"])
+
+    def test_import_merge_applies_metadata_for_imported_winning_content(self):
+        src = os.path.join(self.tmp, "incoming.json")
+        metadata = {
+            "kind": "sniptype_metadata",
+            "schema_version": 1,
+            "groups": {"incoming": {"label": "Imported"}},
+            "items": {"static": {"xbye": {"group_id": "incoming", "favorite": True}}, "mappings": {}},
+        }
+        with open(src, "w", encoding="utf-8") as handle:
+            json.dump({"xbye": "goodbye", "__sniptype__": metadata}, handle)
+
+        ok, error = self.app.import_library(src, mode="merge")
+
+        self.assertTrue(ok, error)
+        self.assertEqual(metadata["groups"], self.app.library_metadata["groups"])
+        self.assertEqual(
+            metadata["items"]["static"]["xbye"],
+            self.app.library_metadata["items"]["static"]["xbye"],
+        )
+
+    def test_import_merge_rejects_future_metadata_without_replacing_library(self):
+        src = os.path.join(self.tmp, "future.json")
+        future = {"kind": "sniptype_metadata", "schema_version": 99, "future": True}
+        with open(src, "w", encoding="utf-8") as handle:
+            json.dump({"xbye": "goodbye", "__sniptype__": future}, handle)
+
+        ok, error = self.app.import_library(src, mode="merge")
+
+        self.assertFalse(ok)
+        self.assertIn("metadados", error.lower())
+        self.assertIn("xhi", self.app.snippets)
+
     def test_import_merge(self):
         src = os.path.join(self.tmp, "incoming.json")
         with open(src, "w", encoding="utf-8") as handle:
@@ -389,6 +481,22 @@ class BackupRestoreImportTests(unittest.TestCase):
         self.assertTrue(ok, error)
         self.assertIn("xbye", self.app.snippets)
         self.assertIn("xhi", self._static())
+
+    def test_restore_backup_preserves_metadata_block(self):
+        backup = os.path.join(self.tmp, "with-metadata.json")
+        metadata = {
+            "kind": "sniptype_metadata",
+            "schema_version": 1,
+            "groups": {"restored": {"label": "Restored"}},
+            "items": {"static": {"xrestored": {"group_id": "restored"}}, "mappings": {}},
+        }
+        with open(backup, "w", encoding="utf-8") as handle:
+            json.dump({"xrestored": "value", "__sniptype__": metadata}, handle)
+
+        ok, error = self.app.restore_backup(backup)
+
+        self.assertTrue(ok, error)
+        self.assertEqual(metadata, self.app.library_metadata)
 
     def test_import_rejects_non_object_json(self):
         src = os.path.join(self.tmp, "bad.json")

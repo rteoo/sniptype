@@ -967,6 +967,18 @@ class CallSiteTests(unittest.TestCase):
         self.assertEqual(self.read_bundle()["generator"]["version"], self.tx.APP_VERSION)
         self.assertIsNotNone(self.tx.APP_VERSION)
 
+    def test_reserved_metadata_never_becomes_a_sync_entry(self):
+        metadata = {
+            "kind": "sniptype_metadata",
+            "schema_version": 1,
+            "groups": {},
+            "items": {},
+        }
+        bundle = se.build_bundle({"xhi": "hello", "__sniptype__": metadata}, {})
+
+        self.assertEqual(["xhi"], triggers(bundle))
+        self.assertNotIn("__sniptype__", triggers(bundle))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -36,6 +36,7 @@ from snippet_utils import (
     get_dynamic_prefixes,
     write_json_atomic,
 )
+from library_metadata import split_library_document
 from variable_support import classify_variable, find_variable_names
 
 SCHEMA_VERSION = 1
@@ -410,6 +411,10 @@ def build_bundle(static_snippets, registry, app_version=None, now=None, logger=N
 
     ``now`` and ``app_version`` are injectable so tests can assert exact output.
     """
+    # The desktop document carries metadata under a reserved root key.  Keep
+    # this pure entry point safe for direct callers too: metadata is never a
+    # mobile snippet or variable surface.
+    static_snippets, _metadata = split_library_document(static_snippets)
     accept_set = build_accept_set(registry, logger)
     accepted_triggers = [trigger for _key, trigger, _entry in accept_set]
 
