@@ -876,6 +876,39 @@ class FormRoutingTests(unittest.TestCase):
         dialog.assert_called_once_with(["spec"])
         app.text_inserter.insert_text.assert_called_once_with("Write this: be concise")
 
+    def test_mapping_structured_form_uses_nested_metadata(self):
+        app = make_app(self.tmp, {
+            "_template_codes": {
+                "__prefix__": "prompt",
+                "spec": "Write this: %%spec%%",
+            },
+        })
+        app.library_metadata = {
+            "items": {
+                "static": {},
+                "mappings": {
+                    "_template_codes": {
+                        "spec": {
+                            "form": {
+                                "fields": [
+                                    {"name": "spec", "type": "multiline", "default": "concise"}
+                                ]
+                            }
+                        }
+                    }
+                },
+            }
+        }
+        app.refresh_runtime_indexes()
+
+        with mock.patch.object(app, "_show_form_dialog", return_value={}) as dialog, \
+                mock.patch.object(tx.time, "sleep"):
+            app._run_expansion("promptspec")
+
+        dialog.assert_called_once()
+        self.assertEqual("multiline", dialog.call_args.args[1].fields[0].type)
+        app.text_inserter.insert_text.assert_called_once_with("Write this: concise")
+
     def test_structured_form_renders_defaults_and_uses_one_pass_values(self):
         app = make_app(self.tmp, {
             "xform": "Olá %%cliente%%, %%nome%%",

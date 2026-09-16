@@ -19,9 +19,11 @@ from library_metadata import (
     create_group as metadata_create_group,
     delete_group as metadata_delete_group,
     duplicate_static_item_metadata,
+    rename_static_item_metadata,
     normalize_metadata,
     remove_form_metadata as metadata_remove_form_metadata,
     set_form_metadata as metadata_set_form_metadata,
+    set_mapping_form_metadata as metadata_set_mapping_form_metadata,
     toggle_favorite as metadata_toggle_favorite,
     toggle_mapping_favorite as metadata_toggle_mapping_favorite,
     unassign_static_item as metadata_unassign_static_item,
@@ -180,6 +182,32 @@ def duplicate_static(
     return _finish(content, state, dynamic_triggers)
 
 
+def rename_static(
+    snippets,
+    metadata,
+    source_key,
+    destination_key,
+    *,
+    dynamic_triggers=(),
+):
+    """Rename a static stored key while preserving all of its metadata."""
+    content, state = _begin(snippets, metadata)
+    if source_key not in content or callable(content[source_key]):
+        raise KeyError(f"unknown static item: {source_key}")
+    if destination_key in content:
+        raise ValueError(f"static item already exists: {destination_key}")
+    if (
+        not isinstance(destination_key, str)
+        or not destination_key
+        or destination_key.startswith("_")
+    ):
+        raise ValueError("destination_key must be a non-empty non-reserved string")
+    content[destination_key] = content.pop(source_key)
+    state = rename_static_item_metadata(state, source_key, destination_key)
+    _check_collisions(content, state, (destination_key,), dynamic_triggers)
+    return _finish(content, state, dynamic_triggers)
+
+
 def create_group(
     snippets,
     metadata,
@@ -269,6 +297,37 @@ def set_form(snippets, metadata, item_key, form, *, dynamic_triggers=()):
     return _finish(content, state, dynamic_triggers)
 
 
+def set_mapping_form(
+    snippets,
+    metadata,
+    container_key,
+    item_key,
+    form,
+    *,
+    dynamic_triggers=(),
+):
+    """Set validated structured form metadata for one mapping item."""
+    content, state = _begin(snippets, metadata)
+    container = content.get(container_key)
+    if (
+        not isinstance(container, Mapping)
+        or item_key == "__prefix__"
+        or item_key not in container
+        or callable(container[item_key])
+    ):
+        raise KeyError(f"unknown mapping item: {container_key}:{item_key}")
+    from form_support import compile_form
+
+    compile_form(extract_plain_text(container[item_key]), form, content)
+    state = metadata_set_mapping_form_metadata(
+        state,
+        container_key,
+        item_key,
+        form,
+    )
+    return _finish(content, state, dynamic_triggers)
+
+
 def remove_form(snippets, metadata, item_key, *, dynamic_triggers=()):
     """Remove structured form metadata from an existing static item."""
     content, state = _begin(snippets, metadata)
@@ -334,10 +393,12 @@ __all__ = [
     "delete_group",
     "duplicate_static",
     "duplicate_static_item",
+    "rename_static",
     "remove_form",
     "remove_form_metadata",
     "set_form",
     "set_form_metadata",
+    "set_mapping_form",
     "toggle_favorite",
     "toggle_mapping_favorite",
     "unassign_item",
