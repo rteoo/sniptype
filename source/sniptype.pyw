@@ -1276,6 +1276,9 @@ class Sniptype:
         else:
             snippet, _ = self.check_dynamic_pattern(trigger)
         
+        if snippet is ACTION_COMPLETED:
+            return ACTION_COMPLETED
+
         if snippet is not None:
             if is_callable_snippet:
                 self.notify_snippet_failure(trigger, snippet)
@@ -1408,8 +1411,6 @@ class Sniptype:
 
     def _is_whatsapp_insert_trigger(self, trigger):
         """Recognize the insert-link action after a registry trigger rename."""
-        if trigger == "xlwapp":
-            return True
         identities = getattr(self, "dynamic_identities", {})
         stable_key = identities.get(trigger) if isinstance(identities, dict) else None
         registry = getattr(self, "dynamic_registry", {})
@@ -3369,22 +3370,34 @@ class Sniptype:
             **ui.button_chrome(compact=True), **ui.button_colors(),
         )
         form_button.pack(side=tk.RIGHT, padx=(4, 0))
-        if getattr(self.library_metadata, "read_only", False):
-            tk.Label(
-                frame_right,
-                text="Metadados somente leitura: grupos, favoritos e formulários estão desativados.",
-                bg=ui.card,
-                fg=ui.warning,
-                font=ui.font(8),
-                anchor="w",
-            ).grid(row=9, column=0, sticky="ew", pady=(ui.space_xs, 0))
-            for widget in (group_new_button, group_edit_button, group_delete_button,
-                           item_group_combo, item_favorite_check, form_button,
-                           btn_duplicate, btn_rename):
-                try:
-                    widget.configure(state=tk.DISABLED)
-                except tk.TclError:
-                    pass
+        metadata_warning = tk.Label(
+            frame_right,
+            text="Metadados somente leitura: grupos, favoritos e formulários estão desativados.",
+            bg=ui.card,
+            fg=ui.warning,
+            font=ui.font(8),
+            anchor="w",
+        )
+        metadata_warning.grid(row=9, column=0, sticky="ew", pady=(ui.space_xs, 0))
+        metadata_widgets = (
+            group_new_button,
+            group_edit_button,
+            group_delete_button,
+            item_favorite_check,
+            form_button,
+            btn_duplicate,
+            btn_rename,
+        )
+
+        def refresh_metadata_controls():
+            read_only = bool(getattr(self.library_metadata, "read_only", False))
+            for widget in metadata_widgets:
+                widget.configure(state=tk.DISABLED if read_only else tk.NORMAL)
+            item_group_combo.configure(state=tk.DISABLED if read_only else "readonly")
+            if read_only:
+                metadata_warning.grid()
+            else:
+                metadata_warning.grid_remove()
 
         self._bind_mousewheel(text_value, text_value)
 
@@ -3829,9 +3842,13 @@ class Sniptype:
         for widget in (entry_trigger, text_value, tree):
             widget.bind("<Control-s>", lambda _event: (on_save(), "break")[1])
 
-        refresh_group_menu()
-        refresh_listbox()
-        self._register_manager_refresher(refresh_listbox)
+        def refresh_static_tab():
+            refresh_group_menu()
+            refresh_metadata_controls()
+            refresh_listbox()
+
+        refresh_static_tab()
+        self._register_manager_refresher(refresh_static_tab)
         search_entry.focus_set()
 
     def _create_dynamic_mappings_tab(self, parent, root, set_count=None):
@@ -4197,9 +4214,14 @@ class Sniptype:
             **ui.button_colors(),
         )
         mapping_form_button.pack(side=tk.LEFT, padx=(ui.space_sm, 0))
-        if getattr(self.library_metadata, "read_only", False):
-            mapping_favorite_check.configure(state=tk.DISABLED)
-            mapping_form_button.configure(state=tk.DISABLED)
+        def refresh_mapping_metadata_controls():
+            state = (
+                tk.DISABLED
+                if getattr(self.library_metadata, "read_only", False)
+                else tk.NORMAL
+            )
+            mapping_favorite_check.configure(state=state)
+            mapping_form_button.configure(state=state)
         tk.Button(
             btn_frame,
             text="Prévia",
@@ -4590,7 +4612,6 @@ class Sniptype:
                 refresh_mapping_list()
                 self.notify_status(f"Item '{name}' excluído.", key=f"delete-map:{current_type}:{name}")
 
-        refresh_type_list()
         mapping_type.trace_add("write", lambda *_: on_type_changed())
         tree_map.bind("<<TreeviewSelect>>", load_selected_mapping)
         btn_new_map.configure(command=on_new_map)
@@ -4603,10 +4624,11 @@ class Sniptype:
         def refresh_all_mappings():
             # A restore/import can drop the selected type entirely, so the type
             # list has to be rebuilt before the items are.
+            refresh_mapping_metadata_controls()
             refresh_type_list()
             refresh_mapping_list()
 
-        refresh_mapping_list()
+        refresh_all_mappings()
         self._register_manager_refresher(refresh_all_mappings)
 
     def _create_reference_tab(
@@ -4737,6 +4759,7 @@ class Sniptype:
             self._bind_mousewheel_descendants(inner, canvas)
 
         populate()
+        self._register_manager_refresher(populate)
 
         tk.Label(
             main,
@@ -4806,6 +4829,8 @@ class Sniptype:
             logger=self.logger,
         )
         self.reload_snippets_from_disk()
+        if getattr(self, "manager_window", None) is not None:
+            self.gui.submit(self._refresh_manager_lists)
         self.export_sync_bundle()
         state = "ativado" if enabled else "desativado"
         trigger = effective_trigger(key, self.dynamic_registry.get(key, {}))

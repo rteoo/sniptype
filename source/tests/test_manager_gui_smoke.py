@@ -21,6 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from app_module import sniptype as tx  # .pyw is not importable off Windows
 from gui_thread import GuiThread
+from library_metadata import LibraryMetadata
 from platform_support import IS_MAC
 
 TK_AVAILABLE = False
@@ -359,6 +360,103 @@ class ManagerGuiSmokeTests(unittest.TestCase):
 
         labels = self._on_gui(build)
         self.assertIn("stable → renamed", labels)
+
+    def test_refresh_hook_rebuilds_dynamic_registry_rows(self):
+        self.app.dynamic_registry = {
+            "stable": {
+                "provider": "datetime",
+                "category": "datetime",
+                "description": "Original",
+                "trigger": "original",
+                "enabled": True,
+            }
+        }
+
+        def build(shared_root):
+            root = tk.Toplevel(shared_root)
+            root.withdraw()
+            frame = tk.Frame(root)
+            self.app._create_dynamic_snippets_tab(frame, root)
+            root.update_idletasks()
+            return frame
+
+        frame = self._on_gui(build)
+        self.app.dynamic_registry["stable"]["trigger"] = "updated"
+
+        def refresh(_root):
+            self.app._refresh_manager_lists()
+            return [
+                widget.cget("text")
+                for widget in _descendants(frame)
+                if isinstance(widget, tk.Label)
+            ]
+
+        self.assertIn("stable → updated", self._on_gui(refresh))
+
+    def test_refresh_hook_updates_metadata_controls_and_group_choices(self):
+        def build(shared_root):
+            root = tk.Toplevel(shared_root)
+            root.withdraw()
+            static_frame = tk.Frame(root)
+            mapping_frame = tk.Frame(root)
+            self.app._create_static_snippets_tab(static_frame, root)
+            self.app._create_dynamic_mappings_tab(mapping_frame, root)
+            root.update_idletasks()
+            return static_frame, mapping_frame
+
+        static_frame, mapping_frame = self._on_gui(build)
+        self.app.library_metadata = LibraryMetadata(
+            {
+                "kind": "sniptype_metadata",
+                "schema_version": 1,
+                "groups": {"work": {"label": "Work"}},
+                "items": {"static": {}, "mappings": {}},
+            },
+            raw_block={"schema_version": 99},
+            read_only=True,
+            present=True,
+        )
+
+        def refresh_and_states(_root):
+            self.app._refresh_manager_lists()
+            group_menu = next(
+                widget for widget in _descendants(static_frame)
+                if isinstance(widget, tk.Menubutton)
+                and str(widget.cget("text")) == "Grupo"
+            )
+            group_buttons = [
+                widget for widget in group_menu.master.winfo_children()
+                if isinstance(widget, tk.Button)
+            ]
+            static_controls = group_buttons + [
+                widget for widget in _descendants(static_frame)
+                if isinstance(widget, (tk.Button, tk.Checkbutton))
+                and str(widget.cget("text")) in {
+                    "Favorito", "Formulário", "Duplicar", "Renomear",
+                }
+            ]
+            mapping_controls = [
+                widget
+                for widget in _descendants(mapping_frame)
+                if isinstance(widget, (tk.Button, tk.Checkbutton))
+                and str(widget.cget("text")) in {"Favorito", "Formulário"}
+            ]
+            combos = [
+                widget for widget in _descendants(static_frame)
+                if isinstance(widget, ttk.Combobox)
+            ]
+            return (
+                [str(widget.cget("state")) for widget in static_controls],
+                [str(widget.cget("state")) for widget in mapping_controls],
+                tuple(combos[0].cget("values")),
+            )
+
+        static_controls, mapping_controls, group_values = self._on_gui(refresh_and_states)
+        self.assertTrue(static_controls)
+        self.assertTrue(mapping_controls)
+        self.assertEqual({"disabled"}, set(static_controls))
+        self.assertEqual({"disabled"}, set(mapping_controls))
+        self.assertIn("work", group_values)
 
     def test_mapping_tab_counts_every_type_not_just_the_selected_one(self):
         self.app.snippets["_cpf_numbers"] = {"__prefix__": "cpf", "alice": "1", "bruno": "2"}
