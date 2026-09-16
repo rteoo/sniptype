@@ -8,7 +8,7 @@ not certification of the current release.
 
 | Category | Documents and scope |
 | --- | --- |
-| Active contracts | [Sync format](sync-design.md): implemented desktop export and historical mobile consumer requirements. |
+| Active contracts and plans | [Sync format](sync-design.md): implemented desktop export and historical mobile consumer requirements. [TextExpander features 2–4](textexpander-features-2-4-plan.md): approved implementation sequence for richer fill-ins, groups/application policy, and workflow shortcuts. |
 | Implemented design records | [Variables and tray](features-plan.md), [WhatsApp actions](whatsapp-plan.md), and [WhatsApp v2](whatsapp_v2-plan.md). Current behavior is in the linked source/tests, not old rollout commands. |
 | Platform design and historical host evidence | [Tk/AppKit threading](macos-threading.md) and [macOS insertion](macos-insertion.md). A new Mac package still needs physical focus, TCC, paste, and startup checks. |
 | Historical audits and plans | [July audit](audit-report.md), [phased remediation](improvement-plan.md), [original refactor proposal](refactor-plan.md), and [September cleanup audit](cleanup-audit-2026-09.md). Dates, counts, and unresolved-at-audit labels are snapshots. |
