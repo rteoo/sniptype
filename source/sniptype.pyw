@@ -50,6 +50,12 @@ from snippet_utils import (
     write_json_atomic,
     check_dynamic_pattern as resolve_dynamic_pattern,
 )
+from library_metadata import (
+    build_library_document,
+    merge_metadata,
+    normalize_metadata,
+    split_library_document,
+)
 from trigger_index import compile_trigger_index, find_direct_trigger, find_dynamic_trigger
 from clipboard_support import Clipboard
 from runtime_support import (
@@ -348,6 +354,7 @@ class Sniptype:
         self.shadowed_static_snippets = {}
 
         # Load snippets before anything else
+        self.library_metadata = split_library_document({})[1]
         self.snippets = self.load_snippets()
         self.refresh_runtime_indexes()
 
@@ -415,21 +422,38 @@ class Sniptype:
         """Load snippets from the JSON file and add the dynamic ones."""
         self.logger.info(f"➡ Usando arquivo de snippets: {os.path.abspath(self.snippets_file)}")
 
+        self.library_metadata = split_library_document({})[1]
         if os.path.exists(self.snippets_file):
             try:
-                static_snippets = validate_static_snippets(load_json_file(self.snippets_file))
-                if static_snippets is None:
+                document = validate_static_snippets(load_json_file(self.snippets_file))
+                if document is None:
                     self.logger.warning("⚠ Formato inesperado em snippets.json; tentando restaurar.")
-                    static_snippets = self.recover_snippets_file("formato inválido")
-                else:
-                    self.logger.info(f"✓ Snippets carregados do arquivo: {len(static_snippets)} snippets")
+                    document = self.recover_snippets_file("formato inválido")
             except Exception as e:
                 self.logger.error(f"⚠ Erro ao carregar snippets: {e}")
-                static_snippets = self.recover_snippets_file(str(e))
+                document = self.recover_snippets_file(str(e))
         else:
             self.logger.info("ℹ Primeira execução: criando arquivo de snippets padrão")
-            static_snippets = self.get_default_snippets()
-            self.save_snippets(static_snippets)
+            document = self.get_default_snippets()
+            self.save_snippets(document)
+
+        static_snippets, metadata = split_library_document(document)
+        self.library_metadata = normalize_metadata(
+            metadata,
+            self._metadata_available_items(static_snippets),
+        )
+        if self.library_metadata.read_only:
+            issue = "malformados" if self.library_metadata.malformed else "de uma versão mais nova"
+            self.logger.warning(
+                f"⚠ Metadados {issue}; snippets carregados em modo de compatibilidade somente leitura."
+            )
+            self.notify_error(
+                f"Os metadados da biblioteca são {issue}. Os snippets continuam funcionando, "
+                "mas grupos, formulários e favoritos não podem ser alterados nesta versão.",
+                key="library-metadata-read-only",
+                cooldown_seconds=60,
+            )
+        self.logger.info(f"✓ Snippets carregados do arquivo: {len(static_snippets)} snippets")
 
         # Add dynamic snippets
         dynamic_snippets = self.get_dynamic_snippets()
@@ -534,6 +558,11 @@ class Sniptype:
         earlier state.
         """
         saveable = build_saveable_snippets(snippets, self.shadowed_static_snippets)
+        normalized_metadata = normalize_metadata(
+            self.library_metadata,
+            self._metadata_available_items(saveable),
+        )
+        document = build_library_document(saveable, normalized_metadata)
         try:
             # Only back up a valid prior file, so a corrupt on-disk copy can never
             # become the newest backup and defeat recovery.
@@ -550,7 +579,8 @@ class Sniptype:
             self.logger.warning(f"Falha ao remover backups antigos: {e}")
 
         try:
-            write_json_atomic(self.snippets_file, saveable)
+            write_json_atomic(self.snippets_file, document)
+            self.library_metadata = normalized_metadata
             self.logger.info("✓ snippets.json salvo com sucesso.")
         except Exception as e:
             self.logger.error(f"Erro ao salvar snippets: {e}")
@@ -597,13 +627,14 @@ class Sniptype:
             return
 
         try:
-            static_snippets = validate_static_snippets(load_json_file(self.snippets_file))
+            document = validate_static_snippets(load_json_file(self.snippets_file))
         except Exception as e:
             self.logger.warning(f"Bundle de sincronização ignorado: falha ao ler snippets.json ({e}).")
             return
-        if static_snippets is None:
+        if document is None:
             self.logger.warning("Bundle de sincronização ignorado: snippets.json com formato inválido.")
             return
+        static_snippets, _metadata = split_library_document(document)
 
         try:
             registry = load_registry(
@@ -706,15 +737,36 @@ class Sniptype:
         if data is None:
             return False, "Arquivo inválido: o JSON precisa ser um objeto."
 
+        imported_snippets, imported_metadata = split_library_document(data)
+        if mode == "merge":
+            current = build_saveable_snippets(self.snippets, self.shadowed_static_snippets)
+            merged = {**current, **imported_snippets}
+            try:
+                merged_metadata = merge_metadata(
+                    self.library_metadata,
+                    imported_metadata,
+                    {
+                        "mode": "merge",
+                        "imported_items": self._imported_metadata_winners(imported_snippets),
+                    },
+                )
+            except ValueError as e:
+                return False, f"Falha ao importar metadados: {e}"
+        else:
+            merged = imported_snippets
+            merged_metadata = imported_metadata
+
+        merged_metadata = normalize_metadata(
+            merged_metadata,
+            self._metadata_available_items(merged),
+        )
+
         if not self._backup_current_library():
             return False, "Falha ao criar backup de segurança; importação cancelada."
-        if mode == "merge":
-            merged = {**build_saveable_snippets(self.snippets, self.shadowed_static_snippets), **data}
-        else:
-            merged = data
+        document = build_library_document(merged, merged_metadata)
 
         try:
-            write_json_atomic(self.snippets_file, merged)
+            write_json_atomic(self.snippets_file, document)
         except Exception as e:
             return False, f"Falha ao importar: {e}"
 
@@ -722,6 +774,20 @@ class Sniptype:
         self.export_sync_bundle()
         self.reload_snippets_from_disk()
         return True, None
+
+    @staticmethod
+    def _metadata_available_items(imported_snippets):
+        """Return static and nested mapping keys whose imported content wins."""
+        static = set()
+        mappings = {}
+        for key, value in imported_snippets.items():
+            if key.startswith("_") and isinstance(value, dict):
+                mappings[key] = {item for item in value if item != "__prefix__"}
+            else:
+                static.add(key)
+        return {"static": static, "mappings": mappings}
+
+    _imported_metadata_winners = _metadata_available_items
 
     def open_data_folder(self):
         """Open the user data directory in the OS file manager."""
