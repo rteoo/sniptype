@@ -134,6 +134,47 @@ class WorkflowHotkeyIntegrationTests(unittest.TestCase):
         self.app._run_expansion(target)
         self.assertEqual(tx.SnippetRef("dynamic", "stable"), self.app.workflow_state.last_successful_item)
 
+    def test_mapping_ref_wins_when_same_stored_static_key_is_not_the_runtime_route(self):
+        self.app.snippets["codescity"] = "static"
+        self.app.library_metadata = {
+            "groups": {"work": {"prefix": "w", "enabled": True}},
+            "items": {
+                "static": {"codescity": {"group_id": "work"}},
+                "mappings": {},
+            },
+        }
+        self.app.refresh_runtime_indexes()
+        self.app.expand_snippet = mock.Mock(return_value=True)
+
+        self.app._run_expansion("codescity")
+
+        self.assertEqual(
+            tx.SnippetRef("mapping", "city", "_codes"),
+            self.app.workflow_state.last_successful_item,
+        )
+
+    def test_duplicate_dynamic_trigger_records_the_callable_winner(self):
+        self.app.dynamic_registry = {
+            "first": {"provider": "datetime", "format": "%Y", "trigger": "xnow"},
+            "second": {"provider": "datetime", "format": "%d", "trigger": "xnow"},
+        }
+        dynamic = self.app.get_dynamic_snippets()
+        self.app.snippets.update(dynamic)
+        self.app.refresh_runtime_indexes()
+        target = next(
+            candidate
+            for candidate in self.app.trigger_index["direct_targets"]
+            if candidate.effective_trigger == "xnow"
+        )
+        self.app.expand_snippet = mock.Mock(return_value=True)
+
+        self.app._run_expansion(target)
+
+        self.assertEqual(
+            tx.SnippetRef("dynamic", "first"),
+            self.app.workflow_state.last_successful_item,
+        )
+
     def test_failed_or_cancelled_expansion_does_not_record(self):
         self.app.expand_snippet = mock.Mock(return_value=False)
         self.app._run_expansion("xhi")

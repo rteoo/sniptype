@@ -206,6 +206,15 @@ def build_manager_rows(snippets, metadata=None, dynamic_registry=None):
     return tuple(rows)
 
 
+def format_trigger_pair(row):
+    """Show stored and effective trigger identities without duplicating equals."""
+    if not isinstance(row, ManagerRow):
+        raise TypeError("format_trigger_pair expects a ManagerRow")
+    if row.stored_trigger == row.effective_trigger:
+        return row.stored_trigger
+    return f"{row.stored_trigger} → {row.effective_trigger}"
+
+
 def filter_manager_rows(rows, filter_name=FILTER_ALL, *, workflow_state=None, group_id=None):
     """Apply a virtual manager filter while preserving row or history order."""
     rows = tuple(rows or ())
@@ -226,7 +235,10 @@ def filter_manager_rows(rows, filter_name=FILTER_ALL, *, workflow_state=None, gr
         )
 
     if filter_name == UNGROUPED_FILTER:
-        selected_group = None
+        return tuple(
+            row for row in rows
+            if row.kind == "static" and row.group_id is None
+        )
     elif filter_name == "group":
         selected_group = group_id
     elif isinstance(filter_name, tuple) and len(filter_name) == 2 and filter_name[0] == "group":
@@ -297,6 +309,7 @@ __all__ = [
     "build_navigation_target",
     "filter_manager_rows",
     "find_manager_target",
+    "format_trigger_pair",
     "lookup_manager_target",
     "manager_rows_for_filter",
     "navigation_target",

@@ -111,6 +111,137 @@ class LibraryMetadataTests(unittest.TestCase):
         self.assertEqual(document, build_library_document(snippets, metadata))
         self.assertEqual({"x": "changed", METADATA_KEY: raw}, build_library_document({"x": "changed"}, metadata))
 
+    def test_semantically_malformed_schema_one_is_preserved_read_only(self):
+        raw = {
+            "kind": "sniptype_metadata",
+            "schema_version": SCHEMA_VERSION,
+            "groups": {"work": {"enabled": "yes"}},
+            "items": {
+                "static": {"x": {"group_id": "work"}},
+                "mappings": {},
+            },
+        }
+
+        snippets, metadata = split_library_document({"x": "value", METADATA_KEY: raw})
+        normalized = normalize_metadata(metadata, {"static": {"x"}, "mappings": {}})
+
+        self.assertEqual({"x": "value"}, snippets)
+        self.assertTrue(normalized.read_only)
+        self.assertTrue(normalized.malformed)
+        self.assertEqual(raw, normalized.raw_block)
+        self.assertEqual(
+            {"x": "changed", METADATA_KEY: raw},
+            build_library_document({"x": "changed"}, normalized),
+        )
+
+    def test_malformed_group_application_policy_is_preserved_read_only(self):
+        raw = {
+            "kind": "sniptype_metadata",
+            "schema_version": SCHEMA_VERSION,
+            "groups": {
+                "work": {
+                    "applications": {"mode": "allow", "executables": [""]},
+                }
+            },
+            "items": {"static": {}, "mappings": {}},
+        }
+
+        _, metadata = split_library_document({METADATA_KEY: raw})
+        normalized = normalize_metadata(metadata, {"static": set(), "mappings": {}})
+
+        self.assertTrue(normalized.read_only)
+        self.assertTrue(normalized.malformed)
+        self.assertEqual(raw, normalized.raw_block)
+
+    def test_malformed_form_and_item_metadata_are_preserved_read_only(self):
+        cases = (
+            {"favorite": "yes"},
+            {"form": {"fields": [{"name": "name", "type": "unknown"}]}},
+        )
+        for item in cases:
+            with self.subTest(item=item):
+                raw = {
+                    "kind": "sniptype_metadata",
+                    "schema_version": SCHEMA_VERSION,
+                    "groups": {},
+                    "items": {"static": {"x": item}, "mappings": {}},
+                }
+                _, metadata = split_library_document({METADATA_KEY: raw})
+                normalized = normalize_metadata(metadata, {"static": {"x"}, "mappings": {}})
+                self.assertTrue(normalized.read_only)
+                self.assertTrue(normalized.malformed)
+                self.assertEqual(raw, normalized.raw_block)
+
+    def test_executable_policies_are_persisted_as_casefolded_basenames(self):
+        metadata = {
+            "kind": "sniptype_metadata",
+            "schema_version": SCHEMA_VERSION,
+            "groups": {
+                "work": {
+                    "label": "Work",
+                    "applications": {
+                        "mode": "allow",
+                        "executables": [
+                            r"C:\\Program Files\\Foo.EXE",
+                            "foo.exe",
+                            "BAR.Exe",
+                        ],
+                        "extension": {"keep": True},
+                    },
+                    "extension": {"keep": "group"},
+                }
+            },
+            "items": {"static": {"x": {"group_id": "work"}}, "mappings": {}},
+            "extension": {"keep": "top"},
+        }
+        original = copy.deepcopy(metadata)
+
+        normalized = normalize_metadata(metadata, {"static": {"x"}, "mappings": {}})
+
+        applications = normalized["groups"]["work"]["applications"]
+        self.assertEqual(["foo.exe", "bar.exe"], applications["executables"])
+        self.assertEqual({"keep": True}, applications["extension"])
+        self.assertEqual({"keep": "group"}, normalized["groups"]["work"]["extension"])
+        self.assertEqual({"keep": "top"}, normalized["extension"])
+        self.assertEqual(metadata, original)
+        self.assertEqual(
+            ["foo.exe", "bar.exe"],
+            build_library_document({"x": "value"}, normalized)[METADATA_KEY]["groups"]["work"]["applications"]["executables"],
+        )
+
+    def test_merge_normalizes_imported_executables_before_group_matching(self):
+        existing = {
+            "kind": "sniptype_metadata",
+            "schema_version": SCHEMA_VERSION,
+            "groups": {
+                "work": {
+                    "applications": {"mode": "allow", "executables": ["foo.exe"]},
+                }
+            },
+            "items": {"static": {}, "mappings": {}},
+        }
+        imported = {
+            "kind": "sniptype_metadata",
+            "schema_version": SCHEMA_VERSION,
+            "groups": {
+                "work": {
+                    "applications": {
+                        "mode": "allow",
+                        "executables": [r"C:\Program Files\Foo.EXE"],
+                    },
+                }
+            },
+            "items": {"static": {}, "mappings": {}},
+        }
+
+        merged = merge_metadata(existing, imported, "merge")
+
+        self.assertEqual(("work",), tuple(merged["groups"]))
+        self.assertEqual(
+            ["foo.exe"],
+            merged["groups"]["work"]["applications"]["executables"],
+        )
+
     def test_future_schema_is_preserved_read_only(self):
         future = {"kind": "sniptype_metadata", "schema_version": 99, "new": {"x": 1}}
         snippets, metadata = split_library_document({"x": "value", METADATA_KEY: future})
