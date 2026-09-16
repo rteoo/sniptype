@@ -210,6 +210,15 @@ class WorkflowHotkeyIntegrationTests(unittest.TestCase):
         self.assertIs(ACTION_COMPLETED, result)
         self.app.text_inserter.insert_text.assert_not_called()
 
+    def test_action_only_fast_result_is_not_inserted_as_text(self):
+        self.app.snippets["xwapp"] = lambda: ACTION_COMPLETED
+        self.app.trigger_index["slow_triggers"] = frozenset()
+
+        result = self.app.expand_snippet("xwapp")
+
+        self.assertIs(ACTION_COMPLETED, result)
+        self.app.text_inserter.insert_text.assert_not_called()
+
     def test_failed_text_inserter_result_is_not_recorded_as_success(self):
         self.app.text_inserter.insert_text.return_value = False
 
@@ -247,6 +256,24 @@ class WorkflowHotkeyIntegrationTests(unittest.TestCase):
             self.assertTrue(self.app.run_slow_snippet("savewa"))
 
         clipboard.assert_called_once_with("https://wa.me/5511999999999")
+
+    def test_non_whatsapp_action_named_xlwapp_does_not_replace_clipboard(self):
+        self.app.dynamic_registry = {
+            "custom": {
+                "provider": "datetime",
+                "trigger": "xlwapp",
+                "enabled": True,
+            }
+        }
+        self.app.dynamic_identities = {"xlwapp": "custom"}
+        self.app.snippets["xlwapp"] = lambda: "ordinary output"
+        self.app.text_inserter.insert_text.return_value = True
+
+        with mock.patch.object(tx.time, "sleep"), \
+                mock.patch.object(tx.Clipboard, "set_content") as clipboard:
+            self.assertTrue(self.app.run_slow_snippet("xlwapp"))
+
+        clipboard.assert_not_called()
 
     def test_hotkey_router_changes_only_after_atomic_settings_save(self):
         self.app.settings_file = os.path.join(self.tmp, "settings.json")
