@@ -40,7 +40,7 @@ To run from source with Python installed:
 ```powershell
 git clone https://github.com/rteoo/sniptype.git
 cd sniptype\source
-python -m pip install -r requirements.txt
+python -m pip install --require-hashes -r ../requirements-release.lock
 python sniptype.pyw
 ```
 
