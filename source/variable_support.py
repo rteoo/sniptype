@@ -20,6 +20,7 @@ import re
 
 from rich_text_support import extract_plain_text
 from snippet_utils import check_dynamic_pattern, get_dynamic_prefixes
+from whatsapp_runtime_support import ACTION_COMPLETED
 
 VARIABLE_RE = re.compile(r'%%([^%\s]+)%%')
 
@@ -135,7 +136,7 @@ def _resolve_dynamic(name, snippets, notify_failure):
         if notify_failure:
             notify_failure(name, f"[Erro: {e}]")
         return ""
-    if not result:
+    if result is ACTION_COMPLETED or not result:
         return ""
     if notify_failure:
         notify_failure(name, result)

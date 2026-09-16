@@ -15,7 +15,7 @@ insertion, or macOS focus handling.
 This status records the current implementation state, not a release
 certification. The source and focused tests cover the metadata boundary,
 richer forms, groups/application policy, workflow state, preview, and optional
-hotkeys. The complete source suite passes (1,333 tests, 57 platform/display
+hotkeys. The complete source suite passes (1,334 tests, 57 platform/display
 skips), including disposable-data recovery/import, mirror, and sync contracts.
 Ruff was unavailable in the validation environment. Packaged smoke and physical
 cross-application/platform checks remain required before calling the feature
