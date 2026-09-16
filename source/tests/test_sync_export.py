@@ -979,6 +979,45 @@ class CallSiteTests(unittest.TestCase):
         self.assertEqual(["xhi"], triggers(bundle))
         self.assertNotIn("__sniptype__", triggers(bundle))
 
+    def test_form_metadata_is_not_leaked_into_mobile_entry(self):
+        metadata = {
+            "kind": "sniptype_metadata",
+            "schema_version": 1,
+            "groups": {"work": {"label": "Work", "prefix": "w"}},
+            "items": {
+                "static": {
+                    "xform": {
+                        "group_id": "work",
+                        "favorite": True,
+                        "form": {
+                            "fields": [{
+                                "name": "cliente",
+                                "type": "choice",
+                                "default": "Ana",
+                                "options": ["Ana", "Bia"],
+                            }]
+                        },
+                    }
+                },
+                "mappings": {},
+            },
+        }
+        bundle = build({
+            "xform": "Olá %%cliente%%",
+            "__sniptype__": metadata,
+        })
+
+        self.assertEqual(
+            {
+                "trigger": "xform",
+                "text": "Olá %%cliente%%",
+                "kind": "text",
+                "source": "static",
+                "input": {"clipboard": False, "fields": ["cliente"], "dynamic_refs": [], "residual": []},
+            },
+            entry_for(bundle, "xform"),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
