@@ -28,6 +28,43 @@ Rich-text snippets are dictionaries shaped like:
 
 Style spans are range based. When text changes, keep spans normalized and clipped through `rich_text_support.py` helpers.
 
+## Metadata and workflow surfaces
+
+The current source implements the approved TextExpander benchmark surfaces;
+the full source suite and disposable-library contracts pass, while packaged and
+physical desktop validation remain pending. The persisted `__sniptype__` block
+is schema version 1 and is
+joined to `snippets.json` for atomic save, backup, restore, replace import,
+merge import, and mirror flows. Sync export re-reads that document and strips
+the metadata before bundle compilation. It is also split before runtime merge
+and never enters snippet counts, variables, trigger indexes, or dynamic maps.
+Missing metadata is legacy-compatible. A malformed or future-schema block is
+kept as raw data and exposed read-only: content remains usable, but metadata
+mutations are refused until a compatible implementation is available.
+
+Group metadata supplies label, notes, `prefix`, `enabled`, `terminator`, and
+application policy. A group's effective trigger is `prefix + stored key`; the
+stored identity and `%%snippet_ref%%` names do not change. `inherit` follows
+the global terminator setting, while `immediate` and `terminator` override it.
+Only enabled groups contribute direct static triggers. Exact effective-trigger
+collisions are blocked; suffix reachability is a separate warning/confirmation
+condition. Application rules are Windows-only, compare a case-folded executable
+basename, and are an accidental-expansion control rather than authentication.
+Allow rules fail closed when identity is unknown or the platform is unsupported.
+
+Form metadata supports validated `text`, `multiline`, `choice`, `date`, and
+`optional` fields, including defaults, repeated names, and ISO-date input with
+an explicit output format. Favorites persist for static and mapping items;
+Recent and edit-last hold session-only stable references, never snippet content.
+Preview resolves local references and renders clipboard/dynamic values as
+explicitly unavailable placeholders. It does not read the clipboard, invoke a
+provider, open a browser, insert text, or update workflow history.
+
+The three optional workflow hotkeys (open manager, edit last, toggle enabled)
+are unset by default. All of these features remain local/private unless the
+user opts into a mirror or mobile export destination, both of which contain
+plaintext library data.
+
 ## Runtime Notes
 
 This is a Windows-first app using `pynput` for keyboard hooks, `pystray` for the tray icon, `tkinter` for GUI, `ctypes` for Win32 clipboard and mutex calls, and clipboard paste as the primary insertion path. OS-specific decisions are centralized in `source\platform_support.py` (paste modifier, single-instance strategy, autostart install/remove behind the tray toggle, the Windows-only `PYSTRAY_BACKEND` pin, and the tray/Tk threading seam); adding a macOS/Linux backend should extend that module rather than scatter `sys.platform` checks.
