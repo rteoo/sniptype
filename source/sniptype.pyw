@@ -298,6 +298,7 @@ class Sniptype:
         self.macos_permission_window = None
         self._manager_notebook = None
         self._manager_tab_selectors = {}
+        self._manager_preview_controller = None
         # Cached macOS TCC probe. Like the autostart cache, the tray menu only
         # ever reads this: pystray re-evaluates `visible=` on every render and
         # the probe is a TCC round-trip. Empty (all unknown) off macOS.
@@ -2471,8 +2472,7 @@ class Sniptype:
             self._create_backups_tab(tab_backups, root)
 
             def on_close():
-                self._manager_notebook = None
-                self.manager_window = None
+                self._release_manager_ui_refs()
                 root.destroy()
                 # Tk variables must be collected on this
                 # thread; a later GC on the tray thread can abort Tcl.
@@ -2484,8 +2484,7 @@ class Sniptype:
             root.focus_force()
 
         except Exception as e:
-            self._manager_notebook = None
-            self.manager_window = None
+            self._release_manager_ui_refs()
             self.logger.error(f"Erro na GUI de gerenciamento: {e}")
             self.notify_error(
                 f"Erro ao abrir gerenciador: {e}",
@@ -2785,6 +2784,14 @@ class Sniptype:
         renders it must repopulate or it silently shows the old library.
         """
         self._manager_refreshers.append(refresher)
+
+    def _release_manager_ui_refs(self):
+        """Drop widget callbacks while still running on the GUI thread."""
+        self._manager_notebook = None
+        self.manager_window = None
+        self._manager_refreshers = []
+        self._manager_tab_selectors = {}
+        self._manager_preview_controller = None
 
     def _refresh_manager_lists(self):
         for refresher in list(self._manager_refreshers):

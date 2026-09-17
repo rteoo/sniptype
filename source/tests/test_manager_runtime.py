@@ -95,6 +95,22 @@ class ManagerRuntimeTests(unittest.TestCase):
         app.refresh_runtime_indexes.assert_called_once_with()
         app.gui.submit.assert_called_once_with(app._refresh_manager_lists)
 
+    def test_release_manager_ui_refs_drops_widget_callbacks_and_controllers(self):
+        app = self._app()
+        app._manager_notebook = object()
+        app.manager_window = object()
+        app._manager_refreshers = [object()]
+        app._manager_tab_selectors = {"static": object()}
+        app._manager_preview_controller = object()
+
+        tx.Sniptype._release_manager_ui_refs(app)
+
+        self.assertIsNone(app._manager_notebook)
+        self.assertIsNone(app.manager_window)
+        self.assertEqual([], app._manager_refreshers)
+        self.assertEqual({}, app._manager_tab_selectors)
+        self.assertIsNone(app._manager_preview_controller)
+
 
 if __name__ == "__main__":
     unittest.main()
