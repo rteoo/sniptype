@@ -8,7 +8,7 @@ not certification of the current release.
 
 | Category | Documents and scope |
 | --- | --- |
-| Active contracts | [Sync format](sync-design.md): implemented desktop export and historical mobile consumer requirements. |
+| Active contracts and plans | [Sync format](sync-design.md): implemented desktop export and historical mobile consumer requirements; desktop metadata remains local. [TextExpander features 2–4](textexpander-features-2-4-plan.md): source implementation and automated validation complete; release smoke pending. |
 | Implemented design records | [Variables and tray](features-plan.md), [WhatsApp actions](whatsapp-plan.md), and [WhatsApp v2](whatsapp_v2-plan.md). Current behavior is in the linked source/tests, not old rollout commands. |
 | Platform design and historical host evidence | [Tk/AppKit threading](macos-threading.md) and [macOS insertion](macos-insertion.md). A new Mac package still needs physical focus, TCC, paste, and startup checks. |
 | Historical audits and plans | [July audit](audit-report.md), [phased remediation](improvement-plan.md), [original refactor proposal](refactor-plan.md), and [September cleanup audit](cleanup-audit-2026-09.md). Dates, counts, and unresolved-at-audit labels are snapshots. |
@@ -30,6 +30,12 @@ names. No private repository links are needed to preserve the design evidence.
 The sync producer is [sync_export.py](../sync_export.py), with
 [behavioral tests](../tests/test_sync_export.py). The iOS sections describe an
 external consumer contract; this repository does not verify an iOS application.
+
+The current feature implementation is local/private by default: schema-v1
+metadata, groups and application policy, structured forms, favorites,
+session-only Recent/edit-last, preview, and optional hotkeys are documented in
+the runtime reference and README. No release or physical desktop validation is
+claimed here; see the feature plan for the remaining final-validation matrix.
 
 Voice-specific contracts, plans, and research now belong to the independent
 Snipvoice project in the sibling `../snipvoice` directory. Its extraction record

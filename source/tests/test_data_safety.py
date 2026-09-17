@@ -60,6 +60,20 @@ class SaveSnippetsTests(unittest.TestCase):
         with mock.patch.object(tx, "write_json_atomic", side_effect=OSError("disk full")):
             self.assertFalse(self.app.save_snippets({"xhi": "x"}))
 
+    def test_save_failure_does_not_normalize_metadata_in_memory(self):
+        self.app.library_metadata.update({
+            "kind": "sniptype_metadata",
+            "schema_version": 1,
+            "groups": {},
+            "items": {"static": {"missing": {"favorite": True}}, "mappings": {}},
+        })
+        before = self.app.library_metadata.copy()
+
+        with mock.patch.object(tx, "write_json_atomic", side_effect=OSError("disk full")):
+            self.assertFalse(self.app.save_snippets({"xhi": "x"}))
+
+        self.assertEqual(before, self.app.library_metadata)
+
     def test_backup_failure_aborts_before_replacing_live_library(self):
         with mock.patch.object(tx, "create_backup", side_effect=OSError("locked")), \
                 mock.patch.object(tx, "write_json_atomic") as write:
@@ -75,6 +89,82 @@ class SaveSnippetsTests(unittest.TestCase):
         with open(self.app.snippets_file, encoding="utf-8") as handle:
             data = json.load(handle)
         self.assertNotIn("xnow", data)
+
+    def test_metadata_is_loaded_outside_runtime_and_reassembled_on_save(self):
+        metadata = {
+            "kind": "sniptype_metadata",
+            "schema_version": 1,
+            "groups": {"g": {"label": "Work"}},
+            "items": {"static": {"xhi": {"group_id": "g"}}, "mappings": {}},
+        }
+        with open(self.app.snippets_file, "w", encoding="utf-8") as handle:
+            json.dump({"xhi": "hello", "__sniptype__": metadata}, handle)
+
+        self.app.reload_snippets_from_disk()
+        self.assertNotIn("__sniptype__", self.app.snippets)
+        self.assertEqual(metadata, self.app.library_metadata)
+        self.assertTrue(self.app.save_snippets(self.app.snippets))
+        with open(self.app.snippets_file, encoding="utf-8") as handle:
+            self.assertEqual(metadata, json.load(handle)["__sniptype__"])
+
+    def test_metadata_aware_save_protects_and_mirrors_the_whole_document(self):
+        metadata = {
+            "kind": "sniptype_metadata",
+            "schema_version": 1,
+            "groups": {"g": {"label": "Work"}},
+            "items": {"static": {"xhi": {"group_id": "g", "favorite": True}}, "mappings": {}},
+        }
+        with open(self.app.snippets_file, "w", encoding="utf-8") as handle:
+            json.dump({"xhi": "before", "__sniptype__": metadata}, handle)
+        self.app.reload_snippets_from_disk()
+        mirror = os.path.join(self.tmp, "mirror")
+        self.app.settings = {"mirror_dir": mirror}
+
+        self.assertTrue(self.app.save_snippets({"xhi": "after"}))
+
+        with open(self.app.snippets_file, encoding="utf-8") as handle:
+            self.assertEqual(metadata, json.load(handle)["__sniptype__"])
+        with open(os.path.join(mirror, "snippets.json"), encoding="utf-8") as handle:
+            self.assertEqual(metadata, json.load(handle)["__sniptype__"])
+        backed_up = []
+        for path in bs.list_backups(self.app.backups_dir):
+            with open(path, encoding="utf-8") as handle:
+                backed_up.append(json.load(handle))
+        self.assertIn({"xhi": "before", "__sniptype__": metadata}, backed_up)
+
+    def test_export_library_copies_metadata_document_without_runtime_keys(self):
+        metadata = {
+            "kind": "sniptype_metadata",
+            "schema_version": 1,
+            "groups": {},
+            "items": {"static": {"xhi": {"favorite": True}}, "mappings": {}},
+        }
+        with open(self.app.snippets_file, "w", encoding="utf-8") as handle:
+            json.dump({"xhi": "hello", "__sniptype__": metadata}, handle)
+        self.app.reload_snippets_from_disk()
+        destination = os.path.join(self.tmp, "exported.json")
+
+        ok, error = self.app.export_library(destination)
+
+        self.assertTrue(ok, error)
+        with open(destination, encoding="utf-8") as handle:
+            exported = json.load(handle)
+        self.assertEqual({"xhi", "__sniptype__"}, set(exported))
+        self.assertEqual("hello", exported["xhi"])
+        self.assertEqual(metadata, exported["__sniptype__"])
+
+    def test_malformed_metadata_survives_save_while_content_remains_runtime_only(self):
+        raw_metadata = {"schema_version": "future-ish", "opaque": ["keep"]}
+        with open(self.app.snippets_file, "w", encoding="utf-8") as handle:
+            json.dump({"xhi": "hello", "__sniptype__": raw_metadata}, handle)
+
+        self.app.reload_snippets_from_disk()
+        self.assertTrue(self.app.library_metadata.read_only)
+        self.assertTrue(self.app.save_snippets({"xhi": "changed"}))
+        with open(self.app.snippets_file, encoding="utf-8") as handle:
+            saved = json.load(handle)
+        self.assertEqual("changed", saved["xhi"])
+        self.assertEqual(raw_metadata, saved["__sniptype__"])
 
 
 def write_bundled_registry(registry):
@@ -243,6 +333,23 @@ class DynamicToggleCollisionTests(unittest.TestCase):
             self.assertTrue(self.app._toggle_registry_entry("xfree", True))
         ask.assert_not_called()
 
+    def test_group_prefix_controls_whether_static_trigger_collides(self):
+        self.app.library_metadata = {
+            "groups": {"work": {"prefix": "w", "enabled": True}},
+            "items": {
+                "static": {"xhi": {"group_id": "work"}},
+                "mappings": {},
+            },
+        }
+        with mock.patch.object(tx.messagebox, "askyesno") as ask:
+            self.assertTrue(self.app._confirm_dynamic_shadows_static("xhi"))
+        ask.assert_not_called()
+
+        self.app.dynamic_registry["xhi"]["trigger"] = "wxhi"
+        with mock.patch.object(tx.messagebox, "askyesno", return_value=False) as ask:
+            self.assertFalse(self.app._confirm_dynamic_shadows_static("xhi"))
+        ask.assert_called_once()
+
     def test_disabling_never_prompts(self):
         with mock.patch.object(tx.messagebox, "askyesno") as ask:
             self.assertTrue(self.app._toggle_registry_entry("xfree", False))
@@ -381,6 +488,54 @@ class BackupRestoreImportTests(unittest.TestCase):
         self.assertIn("xbye", self.app.snippets)
         self.assertNotIn("xhi", self._static())
 
+    def test_import_replace_replaces_metadata_with_imported_document(self):
+        src = os.path.join(self.tmp, "incoming.json")
+        metadata = {
+            "kind": "sniptype_metadata",
+            "schema_version": 1,
+            "groups": {"incoming": {"label": "Imported"}},
+            "items": {"static": {"xbye": {"group_id": "incoming"}}, "mappings": {}},
+        }
+        with open(src, "w", encoding="utf-8") as handle:
+            json.dump({"xbye": "goodbye", "__sniptype__": metadata}, handle)
+        ok, error = self.app.import_library(src, mode="replace")
+        self.assertTrue(ok, error)
+        self.assertEqual(metadata, self.app.library_metadata)
+        with open(self.app.snippets_file, encoding="utf-8") as handle:
+            self.assertEqual(metadata, json.load(handle)["__sniptype__"])
+
+    def test_import_merge_applies_metadata_for_imported_winning_content(self):
+        src = os.path.join(self.tmp, "incoming.json")
+        metadata = {
+            "kind": "sniptype_metadata",
+            "schema_version": 1,
+            "groups": {"incoming": {"label": "Imported"}},
+            "items": {"static": {"xbye": {"group_id": "incoming", "favorite": True}}, "mappings": {}},
+        }
+        with open(src, "w", encoding="utf-8") as handle:
+            json.dump({"xbye": "goodbye", "__sniptype__": metadata}, handle)
+
+        ok, error = self.app.import_library(src, mode="merge")
+
+        self.assertTrue(ok, error)
+        self.assertEqual(metadata["groups"], self.app.library_metadata["groups"])
+        self.assertEqual(
+            metadata["items"]["static"]["xbye"],
+            self.app.library_metadata["items"]["static"]["xbye"],
+        )
+
+    def test_import_merge_rejects_future_metadata_without_replacing_library(self):
+        src = os.path.join(self.tmp, "future.json")
+        future = {"kind": "sniptype_metadata", "schema_version": 99, "future": True}
+        with open(src, "w", encoding="utf-8") as handle:
+            json.dump({"xbye": "goodbye", "__sniptype__": future}, handle)
+
+        ok, error = self.app.import_library(src, mode="merge")
+
+        self.assertFalse(ok)
+        self.assertIn("metadados", error.lower())
+        self.assertIn("xhi", self.app.snippets)
+
     def test_import_merge(self):
         src = os.path.join(self.tmp, "incoming.json")
         with open(src, "w", encoding="utf-8") as handle:
@@ -389,6 +544,54 @@ class BackupRestoreImportTests(unittest.TestCase):
         self.assertTrue(ok, error)
         self.assertIn("xbye", self.app.snippets)
         self.assertIn("xhi", self._static())
+
+    def test_restore_backup_preserves_metadata_block(self):
+        backup = os.path.join(self.tmp, "with-metadata.json")
+        metadata = {
+            "kind": "sniptype_metadata",
+            "schema_version": 1,
+            "groups": {"restored": {"label": "Restored"}},
+            "items": {"static": {"xrestored": {"group_id": "restored"}}, "mappings": {}},
+        }
+        with open(backup, "w", encoding="utf-8") as handle:
+            json.dump({"xrestored": "value", "__sniptype__": metadata}, handle)
+
+        ok, error = self.app.restore_backup(backup)
+
+        self.assertTrue(ok, error)
+        self.assertEqual(metadata, self.app.library_metadata)
+
+    def test_import_and_restore_reject_exact_effective_trigger_collisions(self):
+        colliding = {
+            "a": "one",
+            "xa": "two",
+            "__sniptype__": {
+                "kind": "sniptype_metadata",
+                "schema_version": 1,
+                "groups": {"prefixed": {"prefix": "x", "enabled": True}},
+                "items": {
+                    "static": {"a": {"group_id": "prefixed"}},
+                    "mappings": {},
+                },
+            },
+        }
+        candidate = os.path.join(self.tmp, "colliding.json")
+        with open(candidate, "w", encoding="utf-8") as handle:
+            json.dump(colliding, handle)
+
+        for operation in (
+            lambda: self.app.import_library(candidate, mode="replace"),
+            lambda: self.app.import_library(candidate, mode="merge"),
+            lambda: self.app.restore_backup(candidate),
+        ):
+            with self.subTest(operation=operation):
+                with mock.patch.object(self.app, "_backup_current_library") as backup:
+                    ok, error = operation()
+                self.assertFalse(ok)
+                self.assertIn("conflito de triggers efetivos", error.lower())
+                backup.assert_not_called()
+                with open(self.app.snippets_file, encoding="utf-8") as handle:
+                    self.assertEqual({"xhi": "hello"}, json.load(handle))
 
     def test_import_rejects_non_object_json(self):
         src = os.path.join(self.tmp, "bad.json")

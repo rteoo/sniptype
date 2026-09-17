@@ -831,6 +831,133 @@ class TextTargetTests(unittest.TestCase):
             )
 
 
+class ForegroundExecutableTests(unittest.TestCase):
+    def setUp(self):
+        ps._foreground_executable_cache.clear()
+
+    def _win32(self, path=None, *, hwnd=42, pid=31415, process_handle=9001):
+        user32 = mock.Mock()
+        kernel32 = mock.Mock()
+        user32.GetForegroundWindow.return_value = hwnd
+
+        def get_pid(_hwnd, output):
+            output._obj.value = pid
+            return 1
+
+        user32.GetWindowThreadProcessId.side_effect = get_pid
+        kernel32.OpenProcess.return_value = process_handle
+
+        if path is not None:
+            def query(_handle, _flags, output, size):
+                output.value = path
+                size._obj.value = len(path)
+                return 1
+
+            kernel32.QueryFullProcessImageNameW.side_effect = query
+        return user32, kernel32
+
+    def test_non_windows_is_a_no_op(self):
+        with mock.patch.object(ps, "IS_WINDOWS", False), \
+                mock.patch.object(ps, "_win32_user32") as user32, \
+                mock.patch.object(ps, "_win32_kernel32") as kernel32:
+            self.assertIsNone(ps.foreground_executable_name())
+        user32.assert_not_called()
+        kernel32.assert_not_called()
+
+    def test_returns_casefolded_basename_for_unicode_path(self):
+        user32, kernel32 = self._win32(
+            r"C:\Program Files\Éditeur\Outlook.EXE"
+        )
+        with mock.patch.object(ps, "IS_WINDOWS", True), \
+                mock.patch.object(ps, "_win32_user32", return_value=user32), \
+                mock.patch.object(ps, "_win32_kernel32", return_value=kernel32):
+            self.assertEqual("outlook.exe", ps.foreground_executable_name())
+        kernel32.OpenProcess.assert_called_once_with(
+            ps.PROCESS_QUERY_LIMITED_INFORMATION, False, 31415
+        )
+        kernel32.QueryFullProcessImageNameW.assert_called_once()
+        kernel32.CloseHandle.assert_called_once_with(9001)
+
+    def test_access_denied_returns_unknown_without_closing_invalid_handle(self):
+        user32, kernel32 = self._win32(r"C:\Nope\secret.exe", process_handle=0)
+        with mock.patch.object(ps, "IS_WINDOWS", True), \
+                mock.patch.object(ps, "_win32_user32", return_value=user32), \
+                mock.patch.object(ps, "_win32_kernel32", return_value=kernel32):
+            self.assertIsNone(ps.foreground_executable_name())
+        kernel32.QueryFullProcessImageNameW.assert_not_called()
+        kernel32.CloseHandle.assert_not_called()
+
+    def test_vanished_window_or_process_returns_unknown(self):
+        user32, kernel32 = self._win32(None, hwnd=0)
+        with mock.patch.object(ps, "IS_WINDOWS", True), \
+                mock.patch.object(ps, "_win32_user32", return_value=user32), \
+                mock.patch.object(ps, "_win32_kernel32", return_value=kernel32):
+            self.assertIsNone(ps.foreground_executable_name())
+        user32.GetWindowThreadProcessId.assert_not_called()
+        kernel32.OpenProcess.assert_not_called()
+
+        user32, kernel32 = self._win32(None, pid=0)
+        with mock.patch.object(ps, "IS_WINDOWS", True), \
+                mock.patch.object(ps, "_win32_user32", return_value=user32), \
+                mock.patch.object(ps, "_win32_kernel32", return_value=kernel32):
+            self.assertIsNone(ps.foreground_executable_name())
+        kernel32.OpenProcess.assert_not_called()
+
+    def test_query_failure_still_closes_process_handle(self):
+        user32, kernel32 = self._win32(None)
+        kernel32.QueryFullProcessImageNameW.return_value = 0
+        with mock.patch.object(ps, "IS_WINDOWS", True), \
+                mock.patch.object(ps, "_win32_user32", return_value=user32), \
+                mock.patch.object(ps, "_win32_kernel32", return_value=kernel32):
+            self.assertIsNone(ps.foreground_executable_name())
+        kernel32.CloseHandle.assert_called_once_with(9001)
+
+    def test_query_failure_is_not_cached_and_next_query_can_succeed(self):
+        user32, kernel32 = self._win32(r"C:\Apps\Editor.EXE")
+        successful_query = kernel32.QueryFullProcessImageNameW.side_effect
+        kernel32.QueryFullProcessImageNameW.side_effect = None
+        kernel32.QueryFullProcessImageNameW.return_value = 0
+        with mock.patch.object(ps, "IS_WINDOWS", True), \
+                mock.patch.object(ps, "_win32_user32", return_value=user32), \
+                mock.patch.object(ps, "_win32_kernel32", return_value=kernel32):
+            self.assertIsNone(ps.foreground_executable_name())
+            kernel32.QueryFullProcessImageNameW.side_effect = successful_query
+            self.assertEqual("editor.exe", ps.foreground_executable_name())
+        self.assertEqual(2, kernel32.OpenProcess.call_count)
+        self.assertEqual(2, kernel32.CloseHandle.call_count)
+
+    def test_cache_is_keyed_by_hwnd_and_pid_and_is_bounded(self):
+        user32, kernel32 = self._win32(r"C:\Apps\Editor.EXE")
+        with mock.patch.object(ps, "IS_WINDOWS", True), \
+                mock.patch.object(ps, "_win32_user32", return_value=user32), \
+                mock.patch.object(ps, "_win32_kernel32", return_value=kernel32):
+            self.assertEqual("editor.exe", ps.foreground_executable_name())
+            self.assertEqual("editor.exe", ps.foreground_executable_name())
+        user32.GetForegroundWindow.assert_has_calls([mock.call(), mock.call()])
+        self.assertEqual(2, user32.GetForegroundWindow.call_count)
+        kernel32.OpenProcess.assert_called_once()
+        kernel32.CloseHandle.assert_called_once_with(9001)
+
+        original_limit = ps.FOREGROUND_EXECUTABLE_CACHE_SIZE
+        try:
+            ps.FOREGROUND_EXECUTABLE_CACHE_SIZE = 2
+            ps._foreground_executable_cache.clear()
+            for hwnd in (1, 2, 3):
+                user32, kernel32 = self._win32(
+                    rf"C:\Apps\{hwnd}.EXE", hwnd=hwnd, pid=hwnd
+                )
+                with mock.patch.object(ps, "IS_WINDOWS", True), \
+                        mock.patch.object(ps, "_win32_user32", return_value=user32), \
+                        mock.patch.object(ps, "_win32_kernel32", return_value=kernel32):
+                    self.assertEqual(f"{hwnd}.exe", ps.foreground_executable_name())
+            self.assertLessEqual(
+                len(ps._foreground_executable_cache),
+                ps.FOREGROUND_EXECUTABLE_CACHE_SIZE,
+            )
+        finally:
+            ps.FOREGROUND_EXECUTABLE_CACHE_SIZE = original_limit
+
+
 class ApplicationActivationBarrierTests(unittest.TestCase):
     """Accessory dialogs wait for native activation before revealing Tk."""
 

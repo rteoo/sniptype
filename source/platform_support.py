@@ -19,6 +19,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections import OrderedDict
 
 try:
     import fcntl as _fcntl
@@ -252,6 +253,85 @@ def restore_frontmost_application(app):
 def _win32_user32():
     """Return the Win32 user32 DLL. Isolated so tests never patch ctypes.windll."""
     return ctypes.windll.user32
+
+
+def _win32_kernel32():
+    """Return the Win32 kernel32 DLL used by process identity queries."""
+    return ctypes.windll.kernel32
+
+
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+FOREGROUND_EXECUTABLE_CACHE_SIZE = 32
+_foreground_executable_cache = OrderedDict()
+_foreground_executable_cache_lock = threading.Lock()
+
+
+def foreground_executable_name():
+    """Return the foreground process's case-folded executable basename.
+
+    This is a Windows-only, best-effort query for application policy. It never
+    exposes or logs the full process path. A foreground window or process can
+    disappear between each native call, and access can be denied, so every
+    failure returns ``None``. Results are cached by ``(HWND, PID)`` in a small
+    bounded cache because this helper is called only after a trigger matches.
+    """
+    if not IS_WINDOWS:
+        return None
+
+    try:
+        user32 = _win32_user32()
+        hwnd = user32.GetForegroundWindow()
+        if not hwnd:
+            return None
+
+        process_id = ctypes.c_ulong(0)
+        if not user32.GetWindowThreadProcessId(hwnd, ctypes.byref(process_id)):
+            return None
+        pid = int(process_id.value)
+        if pid <= 0:
+            return None
+    except Exception:
+        return None
+
+    cache_key = (int(hwnd), pid)
+    with _foreground_executable_cache_lock:
+        if cache_key in _foreground_executable_cache:
+            result = _foreground_executable_cache.pop(cache_key)
+            _foreground_executable_cache[cache_key] = result
+            return result
+
+    result = None
+    try:
+        kernel32 = _win32_kernel32()
+        process_handle = kernel32.OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION,
+            False,
+            pid,
+        )
+        if process_handle:
+            try:
+                path_buffer = ctypes.create_unicode_buffer(32768)
+                path_length = ctypes.c_uint32(len(path_buffer))
+                if kernel32.QueryFullProcessImageNameW(
+                    process_handle,
+                    0,
+                    path_buffer,
+                    ctypes.byref(path_length),
+                ):
+                    basename = ntpath.basename(path_buffer.value)
+                    result = basename.casefold() or None
+            finally:
+                kernel32.CloseHandle(process_handle)
+    except Exception:
+        # The process may close or deny access at any point in the sequence.
+        result = None
+
+    if result is not None:
+        with _foreground_executable_cache_lock:
+            _foreground_executable_cache[cache_key] = result
+            while len(_foreground_executable_cache) > FOREGROUND_EXECUTABLE_CACHE_SIZE:
+                _foreground_executable_cache.popitem(last=False)
+    return result
 
 
 def capture_text_target():
@@ -679,7 +759,6 @@ def _pid_is_running(pid):
     if IS_WINDOWS:
         import ctypes
 
-        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
         STILL_ACTIVE = 259
         kernel32 = ctypes.windll.kernel32
         handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)

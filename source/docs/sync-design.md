@@ -14,6 +14,12 @@ because they predate this repository's current issue sequence.
 - **Conflicts**: none by construction. Desktop is the source of truth; the bundle is a full snapshot; mobile is read-only and replaces wholesale. Two-way sync is explicitly v2.
 - **Privacy**: the bundle is plaintext personal data (CPFs, CNPJs, addresses, phones) sitting in a folder a cloud provider can read. That exposure is real and is documented, not waved away. Encryption at rest is a named v2 door.
 
+The desktop `__sniptype__` metadata block is intentionally not part of the
+mobile v1 contract. The exporter may expose form field names derived from
+`%%name%%` tokens in an entry's `input.fields`, but it does not export desktop
+widget definitions, defaults, group or prefix policy, application rules,
+terminator settings, favorites, Recent/edit-last state, or workflow hotkeys.
+
 Everything below is the detail those four decisions need in order to be implemented without a second design pass.
 
 ---
@@ -144,6 +150,18 @@ The split matters: "update the iOS app" is only truthful for the forward-version
 **RTF and style spans are not exported.** The keyboard extension inserts via `textDocumentProxy.insertText`, which is plain text; `html` exists for the container app and a future share-sheet path. Spans and RTF stay desktop-only.
 
 **Mapping values follow exactly the same rules as static values** — variable resolution, rich-text flattening, `kind`. A `source: "mapping"` entry with `kind: "rich_text"` or with an `input` block is legal.
+
+#### Desktop metadata remains desktop-only
+
+The schema-v1 `__sniptype__` block stays in the local desktop library and is
+protected by desktop backup/import/save semantics; it is never copied into
+`sniptype_bundle.json`. Mobile v1 can therefore display that a compiled entry
+needs a form and list the names found in its tokens, but it cannot reproduce the
+desktop form editor or its `text`, `multiline`, `choice`, `date`, and `optional`
+widget definitions, defaults, options, or date formats. Group workflow metadata
+(`group_id`, prefixes, enabled/terminator/application policy), favorites,
+Recent/edit-last, and hotkeys likewise remain local. This keeps the mobile file
+compiled, read-only, and free of a second desktop-policy implementation.
 
 **v1 mobile behaviour for entries with `input`**: show them in the library with a visible marker, allow search to match them, and make the row tappable so that tapping explains *why* it can't be inserted (missing field / needs the desktop). Do not insert. Without Full Access the extension has no clipboard and no dialog surface, so a partial insertion would paste literal `%%cliente%%` into a customer's message. Whether the **container app** later offers to fill the fields and hand the result to the pasteboard is left open — it has both affordances, and nothing here forecloses it.
 

@@ -136,7 +136,7 @@ def _stock_provider(trigger, entry, context):
     def run_stock():
         ticker = context.ask_ticker_input(label)
         if not ticker:
-            return "[Cancelado]"
+            return None
         return getattr(context.b3_consultor, attr)(ticker)
 
     return run_stock
@@ -196,7 +196,7 @@ def effective_trigger(key, entry):
     return key
 
 
-def build_dynamic_snippets(registry, context, logger=None):
+def build_dynamic_snippets(registry, context, logger=None, *, include_identities=False):
     """Bind enabled registry entries to provider callables.
 
     Returns (snippets, slow_triggers): a dict of trigger -> callable and the set
@@ -205,6 +205,7 @@ def build_dynamic_snippets(registry, context, logger=None):
     """
     snippets = {}
     slow_triggers = set()
+    identities = {}
 
     for key, entry in registry.items():
         if not is_enabled(entry, logger=logger, key=key):
@@ -226,9 +227,12 @@ def build_dynamic_snippets(registry, context, logger=None):
                 logger.warning(f"Método inválido em '{key}' (provider {provider_name}); ignorado.")
             continue
         snippets[trigger] = callable_snippet
+        identities[trigger] = key
         if entry.get("slow"):
             slow_triggers.add(trigger)
 
+    if include_identities:
+        return snippets, slow_triggers, identities
     return snippets, slow_triggers
 
 
@@ -264,7 +268,7 @@ def composed_mapping_triggers(snippets):
     return composed
 
 
-def validate_rename(registry, key, new_trigger, snippets=None):
+def validate_rename(registry, key, new_trigger, snippets=None, metadata=None):
     """Validate a proposed rename of registry entry ``key`` to ``new_trigger``.
 
     Returns (errors, warnings). Errors block the rename because the trigger would
@@ -292,9 +296,19 @@ def validate_rename(registry, key, new_trigger, snippets=None):
     if candidate in other_dynamic:
         errors.append(f"Já existe um snippet dinâmico com o trigger '{candidate}'.")
 
+    from group_policy import (
+        effective_trigger as static_effective_trigger,
+        static_item_enabled,
+    )
+
     static_triggers = {
-        name for name, value in snippets.items()
-        if not name.startswith("_") and not callable(value)
+        static_effective_trigger(name, metadata)
+        for name, value in snippets.items()
+        if isinstance(name, str)
+        and name
+        and not name.startswith("_")
+        and not callable(value)
+        and static_item_enabled(metadata, name)
     }
     if candidate in static_triggers:
         errors.append(f"Já existe um snippet estático com o trigger '{candidate}'.")
