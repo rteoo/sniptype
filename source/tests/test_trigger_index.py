@@ -1,6 +1,18 @@
 import unittest
 
-from trigger_index import compile_trigger_index, find_direct_trigger, find_dynamic_trigger
+from group_policy import (
+    application_policy_allows,
+    effective_trigger,
+    validate_effective_triggers,
+)
+from trigger_index import (
+    ExpansionTarget,
+    compile_trigger_index,
+    find_direct_candidate,
+    find_direct_target,
+    find_direct_trigger,
+    find_dynamic_trigger,
+)
 
 
 class TriggerIndexTests(unittest.TestCase):
@@ -22,6 +34,18 @@ class TriggerIndexTests(unittest.TestCase):
 
     def test_compile_trigger_index_preserves_direct_trigger_order(self):
         self.assertEqual(("abc", "xbc", "xname"), self.index["direct_triggers"])
+
+    def test_compiled_dynamic_target_keeps_registry_stable_identity(self):
+        index = compile_trigger_index(
+            {"xrenamed": lambda: "value"},
+            set(),
+            dynamic_identities={"xrenamed": "stable-dynamic-id"},
+        )
+
+        self.assertEqual(
+            ExpansionTarget("xrenamed", "dynamic", "stable-dynamic-id"),
+            index["direct_targets"][0],
+        )
 
     def test_compile_trigger_index_groups_by_last_character(self):
         self.assertEqual(("abc", "xbc"), self.index["direct_by_last_char"]["c"])
@@ -262,6 +286,134 @@ class EmptyKeyRegressionTests(unittest.TestCase):
         snippets = {"": "Dólar hoje: %%xdolar%%", "xdolar": lambda: "R$5"}
         index = compile_trigger_index(snippets, {"xdolar"})
         self.assertNotIn("", index["slow_triggers"])
+
+
+class GroupPolicyIndexTests(unittest.TestCase):
+    def setUp(self):
+        self.snippets = {
+            "xhello": "Hello",
+            "xsecret": "Secret",
+            "xdisabled": "Disabled %%name%%",
+            "xallow": "Allow",
+            "xdeny": "Deny",
+            "xdynamic": lambda: "dynamic",
+        }
+        self.metadata = {
+            "groups": {
+                "work": {
+                    "label": "Work",
+                    "prefix": "w",
+                    "terminator": "immediate",
+                },
+                "disabled": {"enabled": False},
+                "allow": {
+                    "applications": {
+                        "mode": "allow",
+                        "executables": [r"C:\\Apps\\Editor.EXE"],
+                    },
+                },
+                "deny": {
+                    "applications": {
+                        "mode": "deny",
+                        "executables": ["secret.exe"],
+                    },
+                },
+            },
+            "items": {
+                "static": {
+                    "xhello": {"group_id": "work"},
+                    "xdisabled": {"group_id": "disabled"},
+                    "xallow": {"group_id": "allow"},
+                    "xdeny": {"group_id": "deny"},
+                }
+            },
+        }
+
+    def test_effective_trigger_keeps_stable_identity_and_filters_disabled_group(self):
+        index = compile_trigger_index(
+            self.snippets,
+            set(),
+            metadata=self.metadata,
+            terminator_mode=True,
+        )
+
+        self.assertEqual("wxhello", effective_trigger("xhello", self.metadata))
+        self.assertIn("wxhello", index["direct_triggers"])
+        self.assertNotIn("xdisabled", index["direct_triggers"])
+        self.assertNotIn("xdisabled", index["form_triggers"])
+        target = find_direct_target("typed wxhello", index)
+        self.assertEqual(
+            ExpansionTarget("wxhello", "static", "xhello"),
+            target,
+        )
+        self.assertEqual("wxhello", target.trigger)
+
+    def test_mixed_terminator_buckets_are_longest_first(self):
+        index = compile_trigger_index(
+            {**self.snippets, "wx": "short"},
+            set(),
+            metadata=self.metadata,
+            terminator_mode=True,
+        )
+
+        self.assertEqual(
+            ("wxhello",),
+            tuple(target.effective_trigger for target in index["direct_immediate_by_last_char"]["o"]),
+        )
+        self.assertIn(
+            "xsecret",
+            tuple(target.effective_trigger for target in index["direct_terminated_by_last_char"]["t"]),
+        )
+        self.assertEqual("wxhello", find_direct_trigger("wxhello", index))
+        self.assertIsNone(find_direct_target("wxhello", index, terminated=True))
+
+    def test_allow_and_deny_policies_fail_closed_or_permit_unknown_as_defined(self):
+        index = compile_trigger_index(self.snippets, set(), metadata=self.metadata)
+
+        self.assertEqual(
+            "xallow", find_direct_target("xallow", index, executable="editor.exe").stable_identity
+        )
+        self.assertIsNone(find_direct_target("xallow", index, executable=None))
+        self.assertIsNone(find_direct_target("xallow", index, executable="other.exe"))
+        self.assertIsNotNone(find_direct_target("xdeny", index, executable=None))
+        self.assertIsNone(find_direct_target("xdeny", index, executable="SECRET.EXE"))
+        self.assertFalse(
+            application_policy_allows(
+                {"mode": "allow", "executables": ["editor.exe"]},
+                "editor.exe",
+                windows=False,
+            )
+        )
+
+    def test_candidate_can_be_found_before_foreground_identity_query(self):
+        index = compile_trigger_index(self.snippets, set(), metadata=self.metadata)
+
+        candidate = find_direct_candidate("typed xallow", index)
+
+        self.assertEqual("xallow", candidate.stable_identity)
+
+    def test_denied_longest_match_does_not_fall_back_to_shorter_trigger(self):
+        snippets = {"x": "short", "wx": "long"}
+        metadata = {
+            "groups": {
+                "deny": {
+                    "applications": {"mode": "deny", "executables": ["blocked.exe"]}
+                }
+            },
+            "items": {"static": {"wx": {"group_id": "deny"}}},
+        }
+        index = compile_trigger_index(snippets, set(), metadata=metadata)
+        self.assertIsNone(find_direct_target("wx", index, executable="blocked.exe"))
+
+    def test_collision_and_reachability_validation_use_effective_triggers(self):
+        snippets = {"x": "one", "wx": "two", "a": "three", "ba": "four"}
+        metadata = {
+            "groups": {"p": {"prefix": "w"}},
+            "items": {"static": {"x": {"group_id": "p"}}},
+        }
+        result = validate_effective_triggers(snippets, metadata)
+        self.assertIn(("wx", ("x", "wx")), result["collisions"])
+        self.assertIn(("a", "ba"), result["reachability_warnings"])
 
 
 if __name__ == "__main__":

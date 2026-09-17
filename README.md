@@ -29,6 +29,8 @@ An optional terminator mode waits for a following space or punctuation mark.
   bundled registry.
 - Automatic rotating backups, corrupt-file quarantine, library import/export,
   and an optional deterministic mobile sync bundle.
+- Schema-v1 metadata for groups, structured forms, favorites, and workflow
+  navigation, kept inside the same backed-up library document.
 - Per-user installation with no administrator rights required.
 - No telemetry or keystroke logging.
 
@@ -103,6 +105,36 @@ For example, `Hello, %%name%%` asks for `name` and inserts the completed text.
 Variables also work in rich-text snippets; style spans are normalized after
 substitution.
 
+## Metadata and workflow
+
+New manager state is stored under the reserved `__sniptype__` entry in
+`snippets.json`; it is not a snippet, trigger, variable, mapping, or sync entry.
+Schema-v1 metadata is backed up, restored, imported, mirrored, and joined to
+the library atomically. A malformed or newer metadata block is preserved
+unchanged and loaded read-only, so valid snippets continue to expand while
+groups, forms, and favorites remain unavailable until a compatible version can
+edit them. Missing metadata keeps the legacy library behavior.
+
+Groups provide labels, prefixes, enabled state, terminator policy, and optional
+Windows executable allow/deny rules. A prefix changes only the effective
+trigger (`prefix + stored key`); the stored key and snippet references remain
+stable. Executable matching uses a case-folded basename and is an accidental-
+expansion control, not an authentication boundary. Allow rules fail closed
+when Windows identity cannot be established or the platform is unsupported.
+
+Structured forms support text, multiline, choice, date, and optional fields,
+with validated defaults, repeated names, and ISO date input rendered through an
+explicit format. Favorites persist for static and mapping items. Recent and
+edit-last are session-only identity references (no content history is written).
+Preview resolves local references and shows explicit clipboard/dynamic
+placeholders; it never reads the clipboard, calls providers, opens a browser,
+inserts text, or records usage.
+
+Optional workflow hotkeys are unset by default. The implementation is local and
+private by default: no account, hosted sync, telemetry, or keystroke history is
+added. If `sync_export_dir` or `mirror_dir` is configured, the selected
+destination receives plaintext user data.
+
 ## Configuration
 
 Optional settings live in `%USERPROFILE%\.sniptype\settings.json` by default,
@@ -147,9 +179,10 @@ therefore expose sensitive library content to that provider.
 
 ## Platform status and limitations
 
-Sniptype is Windows-first. CI runs the unit suite on Windows, macOS, and Linux,
-with Python 3.12 and 3.14, but packaged desktop behavior is verified most deeply
-on Windows.
+Sniptype is Windows-first. CI runs the unit suite on Windows with Python 3.12
+and 3.14, plus one current-Python lane on macOS and Linux. The Linux lane also
+runs focused Ruff checks. Packaged desktop behavior is verified most deeply on
+Windows.
 
 - **Windows password fields:** Sniptype does not currently detect password or
   other protected fields. Disable expansion from the tray before entering a

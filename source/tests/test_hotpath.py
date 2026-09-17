@@ -15,6 +15,8 @@ import clipboard_support
 import runtime_support
 from app_module import sniptype as tx  # .pyw is not importable off Windows
 from pynput.keyboard import Key, KeyCode
+from rich_text_support import build_rich_text_payload
+from whatsapp_runtime_support import ACTION_COMPLETED
 
 
 def make_app(base_dir, snippets, stub_inserter=True):
@@ -66,6 +68,230 @@ class ImmediateModeTests(unittest.TestCase):
         self.app.task_runner.start.assert_not_called()
 
 
+class WorkflowHotkeyIntegrationTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.app = make_app(self.tmp, {"xhi": "hello", "_codes": {"city": "GYN"}})
+        self.app.gui = mock.Mock()
+        self.app.task_runner = mock.Mock()
+
+    def test_listener_routes_hotkey_without_gui_work_and_release_rearms(self):
+        self.app.hotkey_router = tx.HotkeyRouter(
+            {"open_manager": "<ctrl>+<shift>+m"},
+            self.app._dispatch_hotkey_action,
+        )
+
+        self.assertIsNone(self.app.on_press(Key.ctrl))
+        self.assertIsNone(self.app.on_press(Key.shift))
+        self.app.typed_text = "partial"
+        self.app.on_press(KeyCode.from_char("m"))
+        self.assertEqual("", self.app.typed_text)
+        self.app.gui.submit.assert_not_called()
+        self.assertEqual(self.app._run_hotkey_action, self.app.task_runner.start.call_args.args[0])
+        self.assertEqual("open_manager", self.app.task_runner.start.call_args.args[1])
+
+        self.app.on_release(Key.ctrl)
+        self.app.on_release(Key.shift)
+        self.app.on_release(KeyCode.from_char("m"))
+        self.app.task_runner.reset_mock()
+        self.app.on_press(Key.ctrl)
+        self.app.on_press(Key.shift)
+        self.app.on_press(KeyCode.from_char("m"))
+        self.assertEqual(1, self.app.task_runner.start.call_count)
+
+    def test_edit_last_and_toggle_actions_queue_safe_seams(self):
+        reference = tx.SnippetRef("static", "xhi")
+        self.app.workflow_state.record_success(reference)
+
+        self.app._run_hotkey_action("edit_last")
+        self.assertEqual(reference, self.app._pending_manager_target)
+        self.app.gui.submit.assert_called_once_with(self.app._show_manager_window)
+
+        self.app.gui.reset_mock()
+        self.app._run_hotkey_action("toggle_enabled")
+        self.app.gui.submit.assert_called_once_with(self.app._toggle_enabled_from_hotkey)
+        self.app.icon = None
+        self.assertTrue(self.app.enabled)
+        self.app._toggle_enabled_from_hotkey()
+        self.assertFalse(self.app.enabled)
+
+    def test_success_records_static_mapping_and_renamed_dynamic_stable_refs(self):
+        self.app.expand_snippet = mock.Mock(return_value=True)
+        self.app._run_expansion("xhi")
+        self.assertEqual(tx.SnippetRef("static", "xhi"), self.app.workflow_state.last_successful_item)
+
+        self.app.expand_snippet.reset_mock()
+        self.app._run_expansion("codescity")
+        self.assertEqual(
+            tx.SnippetRef("mapping", "city", "_codes"),
+            self.app.workflow_state.last_successful_item,
+        )
+
+        self.app.dynamic_registry = {"stable": {"trigger": "xnow"}}
+        self.app.snippets["xnow"] = lambda: "now"
+        self.app.refresh_runtime_indexes()
+        target = self.app.trigger_index["direct_targets_by_last_char"]["w"][0]
+        self.app.dynamic_registry = {}
+        self.app._run_expansion(target)
+        self.assertEqual(tx.SnippetRef("dynamic", "stable"), self.app.workflow_state.last_successful_item)
+
+    def test_mapping_ref_wins_when_same_stored_static_key_is_not_the_runtime_route(self):
+        self.app.snippets["codescity"] = "static"
+        self.app.library_metadata = {
+            "groups": {"work": {"prefix": "w", "enabled": True}},
+            "items": {
+                "static": {"codescity": {"group_id": "work"}},
+                "mappings": {},
+            },
+        }
+        self.app.refresh_runtime_indexes()
+        self.app.expand_snippet = mock.Mock(return_value=True)
+
+        self.app._run_expansion("codescity")
+
+        self.assertEqual(
+            tx.SnippetRef("mapping", "city", "_codes"),
+            self.app.workflow_state.last_successful_item,
+        )
+
+    def test_duplicate_dynamic_trigger_records_the_callable_winner(self):
+        self.app.dynamic_registry = {
+            "first": {"provider": "datetime", "format": "%Y", "trigger": "xnow"},
+            "second": {"provider": "datetime", "format": "%d", "trigger": "xnow"},
+        }
+        dynamic = self.app.get_dynamic_snippets()
+        self.app.snippets.update(dynamic)
+        self.app.refresh_runtime_indexes()
+        target = next(
+            candidate
+            for candidate in self.app.trigger_index["direct_targets"]
+            if candidate.effective_trigger == "xnow"
+        )
+        self.app.expand_snippet = mock.Mock(return_value=True)
+
+        self.app._run_expansion(target)
+
+        self.assertEqual(
+            tx.SnippetRef("dynamic", "first"),
+            self.app.workflow_state.last_successful_item,
+        )
+
+    def test_failed_or_cancelled_expansion_does_not_record(self):
+        self.app.expand_snippet = mock.Mock(return_value=False)
+        self.app._run_expansion("xhi")
+        self.assertIsNone(self.app.workflow_state.last_successful_item)
+
+    def test_action_only_success_records_without_inserting_a_terminator(self):
+        self.app.dynamic_registry = {
+            "xwapp": {"provider": "whatsapp", "mode": "open", "slow": True},
+        }
+        self.app.snippets["xwapp"] = lambda: ACTION_COMPLETED
+        self.app.refresh_runtime_indexes()
+        target = next(
+            candidate
+            for candidate in self.app.trigger_index["direct_targets"]
+            if candidate.effective_trigger == "xwapp"
+        )
+        self.app.run_slow_snippet = mock.Mock(return_value=ACTION_COMPLETED)
+
+        self.app._run_expansion(target, append_text=" ", slow_route=True)
+
+        self.assertEqual(
+            tx.SnippetRef("dynamic", "xwapp"),
+            self.app.workflow_state.last_successful_item,
+        )
+        self.app.keyboard_controller.type.assert_not_called()
+
+    def test_action_only_slow_result_is_not_inserted_as_text(self):
+        self.app.snippets["xwapp"] = lambda: ACTION_COMPLETED
+
+        result = self.app.run_slow_snippet("xwapp")
+
+        self.assertIs(ACTION_COMPLETED, result)
+        self.app.text_inserter.insert_text.assert_not_called()
+
+    def test_action_only_fast_result_is_not_inserted_as_text(self):
+        self.app.snippets["xwapp"] = lambda: ACTION_COMPLETED
+        self.app.trigger_index["slow_triggers"] = frozenset()
+
+        result = self.app.expand_snippet("xwapp")
+
+        self.assertIs(ACTION_COMPLETED, result)
+        self.app.text_inserter.insert_text.assert_not_called()
+
+    def test_failed_text_inserter_result_is_not_recorded_as_success(self):
+        self.app.text_inserter.insert_text.return_value = False
+
+        with mock.patch.object(tx.time, "sleep"):
+            self.app._run_expansion("xhi")
+
+        self.assertIsNone(self.app.workflow_state.last_successful_item)
+
+    def test_failed_form_inserter_result_is_not_recorded_as_success(self):
+        self.app.snippets["xform"] = "Hello %%name%%"
+        self.app.refresh_runtime_indexes()
+        self.app._show_form_dialog = mock.Mock(return_value={"name": "Ana"})
+        self.app.text_inserter.insert_text.return_value = False
+
+        with mock.patch.object(tx.time, "sleep"):
+            self.app._run_expansion("xform")
+
+        self.assertIsNone(self.app.workflow_state.last_successful_item)
+
+    def test_renamed_whatsapp_insert_trigger_preserves_generated_link(self):
+        self.app.dynamic_registry = {
+            "xlwapp": {
+                "provider": "whatsapp",
+                "mode": "insert",
+                "trigger": "savewa",
+                "enabled": True,
+            }
+        }
+        self.app.dynamic_identities = {"savewa": "xlwapp"}
+        self.app.snippets["savewa"] = lambda: "https://wa.me/5511999999999"
+        self.app.text_inserter.insert_text.return_value = True
+
+        with mock.patch.object(tx.time, "sleep"), \
+                mock.patch.object(tx.Clipboard, "set_content") as clipboard:
+            self.assertTrue(self.app.run_slow_snippet("savewa"))
+
+        clipboard.assert_called_once_with("https://wa.me/5511999999999")
+
+    def test_non_whatsapp_action_named_xlwapp_does_not_replace_clipboard(self):
+        self.app.dynamic_registry = {
+            "custom": {
+                "provider": "datetime",
+                "trigger": "xlwapp",
+                "enabled": True,
+            }
+        }
+        self.app.dynamic_identities = {"xlwapp": "custom"}
+        self.app.snippets["xlwapp"] = lambda: "ordinary output"
+        self.app.text_inserter.insert_text.return_value = True
+
+        with mock.patch.object(tx.time, "sleep"), \
+                mock.patch.object(tx.Clipboard, "set_content") as clipboard:
+            self.assertTrue(self.app.run_slow_snippet("xlwapp"))
+
+        clipboard.assert_not_called()
+
+    def test_hotkey_router_changes_only_after_atomic_settings_save(self):
+        self.app.settings_file = os.path.join(self.tmp, "settings.json")
+        self.app.settings = {"hotkeys": {"open_manager": "<ctrl>+m"}, "future": 1}
+        original_router = self.app.hotkey_router
+
+        with mock.patch.object(tx, "save_settings", return_value=False):
+            self.assertFalse(self.app._save_hotkey_bindings({"open_manager": "<alt>+m"}))
+        self.assertIs(original_router, self.app.hotkey_router)
+        self.assertEqual("<ctrl>+m", self.app.settings["hotkeys"]["open_manager"])
+
+        with mock.patch.object(tx, "save_settings", return_value=True) as save:
+            self.assertTrue(self.app._save_hotkey_bindings({"open_manager": "<alt>+m"}))
+        save.assert_called_once()
+        self.assertEqual("<alt>+m", self.app.settings["hotkeys"]["open_manager"])
+        self.assertIsNot(original_router, self.app.hotkey_router)
+
+
 class TerminatorModeTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
@@ -86,6 +312,164 @@ class TerminatorModeTests(unittest.TestCase):
         args = self.app.task_runner.start.call_args
         self.assertEqual(args.args[1], "xhi")
         self.assertEqual(args.args[2], " ")  # terminator re-typed after expansion
+
+
+class GroupPolicyHotpathTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def _app(self, snippets, metadata, *, terminator_mode=False):
+        app = make_app(self.tmp, snippets)
+        app.library_metadata = metadata
+        app.terminator_mode = terminator_mode
+        app.refresh_runtime_indexes()
+        app._erase_chars = mock.Mock()
+        return app
+
+    def test_foreground_identity_is_queried_only_after_a_scoped_candidate(self):
+        metadata = {
+            "groups": {
+                "allow": {
+                    "applications": {
+                        "mode": "allow",
+                        "executables": ["editor.exe"],
+                    }
+                }
+            },
+            "items": {"static": {"xhi": {"group_id": "allow"}}},
+        }
+        app = self._app({"xhi": "hello"}, metadata)
+        with mock.patch.object(
+            tx.platform_support,
+            "IS_WINDOWS",
+            True,
+        ), mock.patch.object(
+            tx.platform_support,
+            "foreground_executable_name",
+            return_value="editor.exe",
+        ) as identity:
+            app._handle_char("z")
+            identity.assert_not_called()
+            app._handle_char("x")
+            app._handle_char("h")
+            app._handle_char("i")
+        identity.assert_called_once_with()
+
+    def test_denied_longest_candidate_leaves_buffer_and_does_not_dispatch(self):
+        metadata = {
+            "groups": {
+                "deny": {
+                    "applications": {
+                        "mode": "deny",
+                        "executables": ["blocked.exe"],
+                    }
+                }
+            },
+            "items": {"static": {"x": {"group_id": "deny"}, "wx": {"group_id": "deny"}}},
+        }
+        app = self._app({"x": "short", "wx": "long"}, metadata)
+        with mock.patch.object(tx.platform_support, "IS_WINDOWS", True), \
+                mock.patch.object(
+                    tx.platform_support,
+                    "foreground_executable_name",
+                    return_value="blocked.exe",
+                ):
+            app._handle_char("w")
+            app._handle_char("x")
+        app._erase_chars.assert_not_called()
+        app.task_runner.start.assert_not_called()
+        self.assertEqual("wx", app.typed_text)
+
+    def test_prefixed_target_passes_stable_identity_to_worker(self):
+        metadata = {
+            "groups": {"work": {"prefix": "w"}},
+            "items": {"static": {"xhi": {"group_id": "work"}}},
+        }
+        app = self._app({"xhi": "hello"}, metadata)
+        for char in "wxhi":
+            app._handle_char(char)
+        args = app.task_runner.start.call_args
+        target = args.args[1]
+        self.assertEqual("wxhi", target.effective_trigger)
+        self.assertEqual("xhi", target.stable_identity)
+        self.assertEqual(4, app._erase_chars.call_args.args[0])
+
+    def test_mixed_immediate_and_terminated_groups_use_separate_buckets(self):
+        metadata = {
+            "groups": {
+                "immediate": {"terminator": "immediate"},
+                "terminated": {"terminator": "terminator"},
+            },
+            "items": {
+                "static": {
+                    "xfast": {"group_id": "immediate"},
+                    "xslow": {"group_id": "terminated"},
+                }
+            },
+        }
+        app = self._app(
+            {"xfast": "fast", "xslow": "slow"},
+            metadata,
+            terminator_mode=True,
+        )
+        for char in "xfast":
+            app._handle_char(char)
+        self.assertEqual("xfast", app.task_runner.start.call_args.args[1].effective_trigger)
+        app.task_runner.reset_mock()
+        app._erase_chars.reset_mock()
+        for char in "xslow ":
+            app._handle_char(char)
+        args = app.task_runner.start.call_args
+        self.assertEqual("xslow", args.args[1].effective_trigger)
+        self.assertEqual(" ", args.args[2])
+
+    def test_group_terminator_policy_works_when_global_mode_is_immediate(self):
+        metadata = {
+            "groups": {"terminated": {"terminator": "terminator"}},
+            "items": {"static": {"xslow": {"group_id": "terminated"}}},
+        }
+        app = self._app({"xslow": "slow"}, metadata, terminator_mode=False)
+
+        for char in "xslow":
+            app._handle_char(char)
+        app.task_runner.start.assert_not_called()
+        app._handle_char(" ")
+
+        args = app.task_runner.start.call_args
+        self.assertEqual("xslow", args.args[1].effective_trigger)
+        self.assertEqual(" ", args.args[2])
+
+    def test_group_prefix_contributes_to_trigger_buffer_length(self):
+        prefix = "department-" * 8
+        metadata = {
+            "groups": {"long": {"prefix": prefix}},
+            "items": {"static": {"x": {"group_id": "long"}}},
+        }
+        app = self._app({"x": "value"}, metadata)
+
+        self.assertGreaterEqual(
+            app.max_trigger_length,
+            len(prefix + "x") + tx.TRIGGER_BUFFER_MARGIN,
+        )
+
+    def test_queued_target_keeps_stable_identity_across_index_refresh(self):
+        metadata = {
+            "groups": {"work": {"prefix": "w"}},
+            "items": {"static": {"xhi": {"group_id": "work"}}},
+        }
+        app = self._app({"xhi": "hello"}, metadata)
+        for char in "wxhi":
+            app._handle_char(char)
+        target = app.task_runner.start.call_args.args[1]
+        app.task_runner.reset_mock()
+        app.library_metadata = {
+            "groups": {"other": {"prefix": "z"}},
+            "items": {"static": {"xhi": {"group_id": "other"}}},
+        }
+        app.refresh_runtime_indexes()
+        with mock.patch.object(app, "expand_snippet", return_value=True) as expand:
+            app._run_expansion(target)
+        expand.assert_called_once_with("xhi")
 
 
 class ListenerResilienceTests(unittest.TestCase):
@@ -627,6 +1011,195 @@ class FormRoutingTests(unittest.TestCase):
 
         dialog.assert_called_once_with(["spec"])
         app.text_inserter.insert_text.assert_called_once_with("Write this: be concise")
+
+    def test_mapping_structured_form_uses_nested_metadata(self):
+        app = make_app(self.tmp, {
+            "_template_codes": {
+                "__prefix__": "prompt",
+                "spec": "Write this: %%spec%%",
+            },
+        })
+        app.library_metadata = {
+            "items": {
+                "static": {},
+                "mappings": {
+                    "_template_codes": {
+                        "spec": {
+                            "form": {
+                                "fields": [
+                                    {"name": "spec", "type": "multiline", "default": "concise"}
+                                ]
+                            }
+                        }
+                    }
+                },
+            }
+        }
+        app.refresh_runtime_indexes()
+
+        with mock.patch.object(app, "_show_form_dialog", return_value={}) as dialog, \
+                mock.patch.object(tx.time, "sleep"):
+            app._run_expansion("promptspec")
+
+        dialog.assert_called_once()
+        self.assertEqual("multiline", dialog.call_args.args[1].fields[0].type)
+        app.text_inserter.insert_text.assert_called_once_with("Write this: concise")
+
+    def test_structured_form_renders_defaults_and_uses_one_pass_values(self):
+        app = make_app(self.tmp, {
+            "xform": "Olá %%cliente%%, %%nome%%",
+            "cliente": "equipe",
+        })
+        app.library_metadata = {
+            "items": {
+                "static": {
+                    "xform": {
+                        "form": {
+                            "fields": [{"name": "nome", "default": "Cliente"}]
+                        }
+                    }
+                }
+            }
+        }
+        app.refresh_runtime_indexes()
+        with mock.patch.object(app, "_show_form_dialog", return_value={}) as dialog, \
+                mock.patch.object(tx.time, "sleep"):
+            app._run_expansion("xform")
+
+        dialog.assert_called_once()
+        self.assertEqual(["nome"], dialog.call_args.args[0])
+        self.assertEqual("Olá equipe, Cliente", app.text_inserter.insert_text.call_args.args[0])
+
+        app.text_inserter.reset_mock()
+        dialog.reset_mock()
+        with mock.patch.object(app, "_show_form_dialog", return_value={"nome": "%%literal%%"}) as literal_dialog, \
+                mock.patch.object(tx.time, "sleep"):
+            app._run_expansion("xform")
+        literal_dialog.assert_called_once()
+        self.assertEqual("Olá equipe, %%literal%%", app.text_inserter.insert_text.call_args.args[0])
+
+    def test_structured_form_supports_all_field_types(self):
+        app = make_app(self.tmp, {
+            "xform": "%%name%%|%%body%%|%%kind%%|%%when%%|%%maybe%%",
+        })
+        app.library_metadata = {
+            "items": {
+                "static": {
+                    "xform": {"form": {"fields": [
+                        {"name": "name", "type": "text"},
+                        {"name": "body", "type": "multiline"},
+                        {"name": "kind", "type": "choice", "options": ["A", "B"]},
+                        {"name": "when", "type": "date", "default": "2026-09-16", "output_format": "%Y/%m/%d"},
+                        {"name": "maybe", "type": "optional", "content": "[ok]"},
+                    ]}}
+                }
+            }
+        }
+        app.refresh_runtime_indexes()
+        values = {"name": "Ana", "body": "linha 1\nlinha 2", "kind": "B",
+                  "when": "2026-09-17", "maybe": True}
+        with mock.patch.object(app, "_show_form_dialog", return_value=values) as dialog, \
+                mock.patch.object(tx.time, "sleep"):
+            app._run_expansion("xform")
+        dialog.assert_called_once()
+        self.assertEqual(
+            "Ana|linha 1\nlinha 2|B|2026/09/17|[ok]",
+            app.text_inserter.insert_text.call_args.args[0],
+        )
+
+    def test_structured_form_cancel_inserts_nothing_or_reemits_terminator(self):
+        app = make_app(self.tmp, {"xform": "Olá %%nome%%"})
+        app.library_metadata = {
+            "items": {"static": {"xform": {"form": {"fields": [{"name": "nome"}]}}}}
+        }
+        app.refresh_runtime_indexes()
+        with mock.patch.object(app, "_show_form_dialog", return_value=None) as dialog, \
+                mock.patch.object(tx.time, "sleep"):
+            app._run_expansion("xform", append_text=" ")
+        dialog.assert_called_once()
+        app.text_inserter.insert_text.assert_not_called()
+        app.keyboard_controller.type.assert_not_called()
+
+    def test_structured_form_rebuilds_rich_spans_after_expansion(self):
+        rich = build_rich_text_payload(
+            "Olá %%nome%%", [{"tag": "bold", "start": 0, "end": len("Olá %%nome%%")}]
+        )
+        app = make_app(self.tmp, {"xrich": rich})
+        app.library_metadata = {
+            "items": {
+                "static": {
+                    "xrich": {"form": {"fields": [{"name": "nome"}]}}
+                }
+            }
+        }
+        app.refresh_runtime_indexes()
+        with mock.patch.object(app, "_show_form_dialog", return_value={"nome": "Alexander"}), \
+                mock.patch.object(tx.time, "sleep"):
+            app._run_expansion("xrich")
+
+        result = app.text_inserter.insert_text.call_args.args[0]
+        self.assertEqual("Olá Alexander", result["text"])
+        self.assertEqual([{"tag": "bold", "start": 0, "end": len("Olá Alexander")}], result["spans"])
+
+    def test_prefixed_structured_form_keeps_stable_key_for_worker(self):
+        app = make_app(self.tmp, {"xform": "Olá %%nome%%"})
+        app.library_metadata = {
+            "groups": {"work": {"prefix": "w"}},
+            "items": {
+                "static": {
+                    "xform": {
+                        "group_id": "work",
+                        "form": {"fields": [{"name": "nome"}]},
+                    }
+                }
+            },
+        }
+        app.refresh_runtime_indexes()
+        with mock.patch.object(app, "_show_form_dialog", return_value={"nome": "Ana"}) as dialog, \
+                mock.patch.object(tx.time, "sleep"):
+            for char in "wxform":
+                app._handle_char(char)
+            target = app.task_runner.start.call_args.args[1]
+            self.assertEqual("xform", target.stable_identity)
+            app._run_expansion(target)
+
+        self.assertEqual("xform", target.stable_identity)
+        self.assertIsNotNone(dialog.call_args.args[1])
+        app.text_inserter.insert_text.assert_called_once_with("Olá Ana")
+
+    def test_dispatch_snapshots_slow_route_across_index_refresh(self):
+        app = make_app(self.tmp, {"xform": "Olá %%nome%%"})
+        app.library_metadata = {
+            "groups": {"work": {"prefix": "w"}},
+            "items": {
+                "static": {
+                    "xform": {
+                        "group_id": "work",
+                        "form": {"fields": [{"name": "nome"}]},
+                    }
+                }
+            },
+        }
+        app.refresh_runtime_indexes()
+
+        with mock.patch.object(tx.time, "sleep"):
+            for char in "wxform":
+                app._handle_char(char)
+
+        worker_target = app.task_runner.start.call_args.args[1]
+        slow_route = app.task_runner.start.call_args.args[3]
+        self.assertTrue(slow_route)
+
+        # Simulate a manager refresh before the queued worker gets CPU time.
+        app.trigger_index = dict(app.trigger_index)
+        app.trigger_index["slow_triggers"] = frozenset()
+        app.trigger_index["form_triggers"] = frozenset()
+        with mock.patch.object(app, "run_slow_snippet", return_value=True) as slow, \
+                mock.patch.object(app, "expand_snippet") as plain:
+            app._run_expansion(worker_target, "", slow_route)
+
+        slow.assert_called_once_with("xform")
+        plain.assert_not_called()
 
 
 class InsertionTimingWiringTests(unittest.TestCase):
