@@ -51,9 +51,10 @@ Use `pythonw sniptype.pyw` after setup when you do not need console output.
 ### Releases and installer
 
 The current stable release is
-[`v4.0.0`](https://github.com/rteoo/sniptype/releases/tag/v4.0.0) for Windows.
-This major release restores Sniptype's focused text/keyboard expansion scope;
-voice transcription now lives in the independent Snipvoice project. v4.0.0 has
+[`v5.0.0`](https://github.com/rteoo/sniptype/releases/tag/v5.0.0) for Windows.
+This major release adds local workflow features to Sniptype's focused
+text/keyboard expansion scope;
+voice transcription now lives in the independent Snipvoice project. v5.0.0 has
 no macOS package; the older macOS ARM64 package remains available as the
 [`v3.5.0-beta.2` preview](https://github.com/rteoo/sniptype/releases/tag/v3.5.0-beta.2).
 See the [development guide](source/docs/development.md) to build

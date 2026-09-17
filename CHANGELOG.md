@@ -2,6 +2,46 @@
 
 All notable changes to Sniptype are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [5.0.0] — 2026-09-17
+
+Sniptype keeps its local, keyboard-first boundary and adds a complete workflow
+layer for organizing and safely using a larger snippet library.
+
+### Added
+
+- Structured forms with text, multiline, choice, date, optional, repeated-name,
+  and validated-default fields.
+- Metadata-backed groups with labels, notes, prefixes, enabled state, terminator
+  policy, and Windows executable allow/deny rules.
+- Safe preview, metadata-aware duplicate, edit-last, favorites, recent items,
+  and configurable workflow hotkeys.
+- Foreground application resolution and group-aware trigger routing.
+
+### Changed
+
+- The manager now provides form and group editors, workflow navigation, and
+  transactional actions while keeping legacy metadata-free libraries compatible.
+- Library metadata is versioned under the reserved `__sniptype__` entry and
+  remains covered by backup, restore, import, mirror, and sync-export flows.
+- Preview is side-effect free: it does not read the clipboard, call dynamic
+  providers, open a browser, insert text, or record usage.
+
+### Fixed
+
+- Workflow hotkey dialogs remain responsive and close through the shared GUI
+  thread correctly.
+- Trigger dispatch preserves stable snippet identities across index refreshes,
+  prefixes, renames, and workflow actions.
+- Group application policies are evaluated before trigger erasure, with safe
+  failure when the foreground Windows identity cannot be established.
+- Release/build dependency handling is pinned and startup quoting is hardened.
+
+### Privacy
+
+- The new workflow layer remains local and private by default: no account,
+  hosted sync, telemetry, passive phrase harvesting, or persistent keystroke
+  history is added.
+
 ## [4.0.0] — 2026-09-14
 
 Sniptype returns to its original text and keyboard input scope. Voice capture,
@@ -483,7 +523,7 @@ behavioral change and warrants a major version bump.
 
 ## Versioning Strategy
 
-- **Stable channel**: the latest `vMAJOR.MINOR.PATCH` tag and non-prerelease artifact; currently `v3.5.0` for Windows.
+- **Stable channel**: the latest `vMAJOR.MINOR.PATCH` tag and non-prerelease artifact; currently `v5.0.0` for Windows.
 - **Beta channel**: a preview with an explicit `beta` channel label; the macOS package remains `v3.5.0-beta.2` pending its packaged desktop validation.
 - **Beta tags**: use `vMAJOR.MINOR.PATCH-beta.N` and mark the corresponding GitHub Release as a prerelease.
 - **Promotion**: beta becomes stable only after the full supported-OS test matrix and packaged desktop smoke tests pass. Promotion removes the channel suffix without changing the tested product version.
