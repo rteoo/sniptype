@@ -1,12 +1,13 @@
 name: CI
 
 on:
+  # Branch-push checks attach to the exact head commit and satisfy required
+  # status checks. Manual workflow_dispatch runs are useful for diagnosis but
+  # GitHub intentionally excludes them from pull-request status evaluation.
   push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
 
-# A newer commit supersedes older validation for the same branch or PR.
+# A newer commit supersedes older validation for the same branch.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
