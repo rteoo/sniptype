@@ -179,9 +179,10 @@ therefore expose sensitive library content to that provider.
 
 ## Platform status and limitations
 
-Sniptype is Windows-first. CI runs the unit suite on Windows, macOS, and Linux,
-with Python 3.12 and 3.14, but packaged desktop behavior is verified most deeply
-on Windows.
+Sniptype is Windows-first. CI runs the unit suite on Windows with Python 3.12
+and 3.14, plus one current-Python lane on macOS and Linux. The Linux lane also
+runs focused Ruff checks. Packaged desktop behavior is verified most deeply on
+Windows.
 
 - **Windows password fields:** Sniptype does not currently detect password or
   other protected fields. Disable expansion from the tray before entering a
