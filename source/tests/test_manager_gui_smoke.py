@@ -80,8 +80,7 @@ class ManagerGuiSmokeTests(unittest.TestCase):
 
     def tearDown(self):
         def cleanup(root):
-            self.app._manager_notebook = None
-            self.app.manager_window = None
+            self.app._release_manager_ui_refs()
             for child in list(root.winfo_children()):
                 try:
                     child.destroy()
@@ -421,8 +420,7 @@ class ManagerGuiSmokeTests(unittest.TestCase):
             self.app._refresh_manager_lists()
             group_menu = next(
                 widget for widget in _descendants(static_frame)
-                if isinstance(widget, tk.Menubutton)
-                and str(widget.cget("text")) == "Grupo"
+                if isinstance(widget, tk.OptionMenu)
             )
             group_buttons = [
                 widget for widget in group_menu.master.winfo_children()
