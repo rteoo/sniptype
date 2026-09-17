@@ -1,11 +1,12 @@
 import os
 import sys
+import threading
 import unittest
 from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from hotkey_dialog import ACTION_LABELS, ACTIONS, HotkeyDialogController
+from hotkey_dialog import ACTION_LABELS, ACTIONS, HotkeyDialog, HotkeyDialogController
 
 
 class FakeEntry:
@@ -73,6 +74,23 @@ class HotkeyDialogControllerTests(unittest.TestCase):
 
         self.assertTrue(controller.save())
         normalizer.assert_called_once()
+
+
+class HotkeyDialogWindowTests(unittest.TestCase):
+    def test_run_does_not_grab_the_shared_tk_root(self):
+        window = mock.Mock(spec=["focus_force", "wait_window"])
+        first_control = mock.Mock()
+        dialog = HotkeyDialog.__new__(HotkeyDialog)
+        dialog._owner_thread = threading.current_thread()
+        dialog.window = window
+        dialog._controls = {"open_manager": first_control}
+        dialog.controller = mock.Mock(result=None)
+
+        self.assertIsNone(dialog.run())
+
+        window.focus_force.assert_called_once_with()
+        first_control.focus_set.assert_called_once_with()
+        window.wait_window.assert_called_once_with()
 
 
 if __name__ == "__main__":
