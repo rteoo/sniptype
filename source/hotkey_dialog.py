@@ -161,9 +161,8 @@ class HotkeyDialog:
         self.window.destroy()
 
     def run(self):
-        """Block via Tk's wait_window and return normalized bindings or ``None``."""
+        """Wait for this window without grabbing every shared-root window."""
         self._assert_owner()
-        self.window.grab_set()
         self.window.focus_force()
         first = next(iter(self._controls.values()), None)
         if first is not None:

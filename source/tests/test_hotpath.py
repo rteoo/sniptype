@@ -115,6 +115,21 @@ class WorkflowHotkeyIntegrationTests(unittest.TestCase):
         self.app._toggle_enabled_from_hotkey()
         self.assertFalse(self.app.enabled)
 
+    def test_hotkey_editor_uses_visible_manager_as_its_parent(self):
+        shared_root = object()
+        manager = mock.Mock()
+        manager.winfo_exists.return_value = True
+        self.app.manager_window = manager
+
+        with mock.patch(
+            "hotkey_dialog.run_hotkey_dialog", return_value=None
+        ) as run_dialog:
+            self.app._show_hotkey_settings(shared_root)
+
+        run_dialog.assert_called_once_with(
+            manager, self.app.settings.get("hotkeys", {})
+        )
+
     def test_success_records_static_mapping_and_renamed_dynamic_stable_refs(self):
         self.app.expand_snippet = mock.Mock(return_value=True)
         self.app._run_expansion("xhi")

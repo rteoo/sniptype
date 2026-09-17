@@ -2195,7 +2195,15 @@ class Sniptype:
         """GUI-thread callback for editing and atomically saving hotkeys."""
         from hotkey_dialog import run_hotkey_dialog
 
-        result = run_hotkey_dialog(tk_root, self.settings.get("hotkeys", {}))
+        parent = tk_root
+        manager = self.manager_window
+        try:
+            if manager is not None and bool(manager.winfo_exists()):
+                parent = manager
+        except Exception:
+            pass
+
+        result = run_hotkey_dialog(parent, self.settings.get("hotkeys", {}))
         if result is None:
             return
         if self._save_hotkey_bindings(result):
