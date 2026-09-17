@@ -6,6 +6,7 @@ dict so the app always has working defaults. Writes are atomic.
 
 import math
 
+from hotkey_support import ACTIONS, normalize_hotkeys
 from snippet_utils import load_json_file, write_json_atomic
 
 
@@ -16,6 +17,7 @@ RUNTIME_SETTING_DEFAULTS = {
     "stock_cache_seconds": 600,
     "mirror_dir": None,
     "sync_export_dir": None,
+    "hotkeys": {action: None for action in ACTIONS},
 }
 
 
@@ -76,6 +78,21 @@ def normalize_runtime_settings(settings):
 
     for key, default in invalid.items():
         normalized[key] = default
+
+    if "hotkeys" in normalized:
+        raw_hotkeys = normalized["hotkeys"]
+        bindings, hotkey_errors = normalize_hotkeys(raw_hotkeys)
+        if isinstance(raw_hotkeys, dict):
+            normalized["hotkeys"] = {
+                **raw_hotkeys,
+                **bindings,
+            }
+            if hotkey_errors:
+                invalid["hotkeys"] = hotkey_errors
+        else:
+            normalized["hotkeys"] = dict(RUNTIME_SETTING_DEFAULTS["hotkeys"])
+            invalid["hotkeys"] = hotkey_errors
+
     return normalized, invalid
 
 

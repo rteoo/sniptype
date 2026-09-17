@@ -43,6 +43,7 @@ from snippet_utils import (
     build_saveable_snippets,
     calculate_max_trigger_length_with_mappings,
     find_shadowed_statics,
+    get_dynamic_prefixes,
     get_default_snippets as get_static_default_snippets,
     load_json_file,
     merge_snippets,
@@ -50,7 +51,18 @@ from snippet_utils import (
     write_json_atomic,
     check_dynamic_pattern as resolve_dynamic_pattern,
 )
-from trigger_index import compile_trigger_index, find_direct_trigger, find_dynamic_trigger
+from library_metadata import (
+    build_library_document,
+    merge_metadata,
+    normalize_metadata,
+    split_library_document,
+)
+from trigger_index import (
+    ExpansionTarget,
+    compile_trigger_index,
+    find_dynamic_trigger,
+    target_is_allowed,
+)
 from clipboard_support import Clipboard
 from runtime_support import (
     AppLogger,
@@ -79,7 +91,9 @@ from app_paths import (
     migrate_snippets,
     needs_migration,
 )
-from settings_support import load_settings, normalize_runtime_settings
+from settings_support import load_settings, normalize_runtime_settings, save_settings
+from hotkey_support import HotkeyRouter, normalize_hotkeys
+from workflow_support import SnippetRef, WorkflowState
 from validation_support import validate_trigger
 import macos_permissions
 import ui_theme
@@ -104,13 +118,15 @@ from dynamic_registry import (
     build_dynamic_snippets,
     composed_mapping_triggers,
     effective_trigger,
+    is_enabled,
     load_registry,
     reference_entries_by_category,
     validate_rename,
 )
+from group_policy import validate_effective_triggers
 from sync_export import STATE_FILENAME as SYNC_STATE_FILENAME, export_bundle
 from whatsapp_support import normalize_phone_number
-from whatsapp_runtime_support import execute_whatsapp_action
+from whatsapp_runtime_support import ACTION_COMPLETED, execute_whatsapp_action
 from rich_text_support import (
     clear_text_styles,
     configure_rich_text_widget,
@@ -126,6 +142,33 @@ from variable_support import (
     find_variable_names,
     resolve_form_variables,
     resolve_inline,
+)
+from form_support import compile_form, render_form
+from form_dialog import FormDialog
+from preview_support import resolve_preview
+from preview_dialog import PreviewDialogController
+from manager_actions import (
+    MetadataReadOnlyError,
+    assign_item as manager_assign_item,
+    create_group as manager_create_group,
+    delete_group as manager_delete_group,
+    duplicate_static as manager_duplicate_static,
+    rename_static as manager_rename_static,
+    set_form as manager_set_form,
+    set_mapping_form as manager_set_mapping_form,
+    toggle_favorite as manager_toggle_favorite,
+    toggle_mapping_favorite as manager_toggle_mapping_favorite,
+    update_group as manager_update_group,
+)
+from manager_view_support import (
+    FILTER_ALL,
+    FILTER_FAVORITES,
+    FILTER_RECENT,
+    UNGROUPED_FILTER,
+    build_manager_rows,
+    filter_manager_rows,
+    find_manager_target,
+    format_trigger_pair,
 )
 from gui_support import (
     center_dialog,
@@ -251,8 +294,11 @@ class Sniptype:
         # of it, marshaled onto its thread. Started in run().
         self.gui = GuiThread(logger=self.logger)
         self.manager_window = None
+        self._pending_manager_target = None
         self.macos_permission_window = None
         self._manager_notebook = None
+        self._manager_tab_selectors = {}
+        self._manager_preview_controller = None
         # Cached macOS TCC probe. Like the autostart cache, the tray menu only
         # ever reads this: pystray re-evaluates `visible=` on every render and
         # the probe is a TCC round-trip. Empty (all unknown) off macOS.
@@ -291,6 +337,11 @@ class Sniptype:
         self.notification_history = load_notification_history(self.notification_history_file)
         self.settings, invalid_runtime_settings = normalize_runtime_settings(
             load_settings(self.settings_file)
+        )
+        self.workflow_state = WorkflowState()
+        self.hotkey_router = HotkeyRouter(
+            self.settings.get("hotkeys", {}),
+            self._dispatch_hotkey_action,
         )
         # Opt-in: expand only after a terminator (space/punctuation). Default off
         # to preserve the existing expand-on-last-character muscle memory.
@@ -348,6 +399,7 @@ class Sniptype:
         self.shadowed_static_snippets = {}
 
         # Load snippets before anything else
+        self.library_metadata = split_library_document({})[1]
         self.snippets = self.load_snippets()
         self.refresh_runtime_indexes()
 
@@ -415,21 +467,38 @@ class Sniptype:
         """Load snippets from the JSON file and add the dynamic ones."""
         self.logger.info(f"➡ Usando arquivo de snippets: {os.path.abspath(self.snippets_file)}")
 
+        self.library_metadata = split_library_document({})[1]
         if os.path.exists(self.snippets_file):
             try:
-                static_snippets = validate_static_snippets(load_json_file(self.snippets_file))
-                if static_snippets is None:
+                document = validate_static_snippets(load_json_file(self.snippets_file))
+                if document is None:
                     self.logger.warning("⚠ Formato inesperado em snippets.json; tentando restaurar.")
-                    static_snippets = self.recover_snippets_file("formato inválido")
-                else:
-                    self.logger.info(f"✓ Snippets carregados do arquivo: {len(static_snippets)} snippets")
+                    document = self.recover_snippets_file("formato inválido")
             except Exception as e:
                 self.logger.error(f"⚠ Erro ao carregar snippets: {e}")
-                static_snippets = self.recover_snippets_file(str(e))
+                document = self.recover_snippets_file(str(e))
         else:
             self.logger.info("ℹ Primeira execução: criando arquivo de snippets padrão")
-            static_snippets = self.get_default_snippets()
-            self.save_snippets(static_snippets)
+            document = self.get_default_snippets()
+            self.save_snippets(document)
+
+        static_snippets, metadata = split_library_document(document)
+        self.library_metadata = normalize_metadata(
+            metadata,
+            self._metadata_available_items(static_snippets),
+        )
+        if self.library_metadata.read_only:
+            issue = "malformados" if self.library_metadata.malformed else "de uma versão mais nova"
+            self.logger.warning(
+                f"⚠ Metadados {issue}; snippets carregados em modo de compatibilidade somente leitura."
+            )
+            self.notify_error(
+                f"Os metadados da biblioteca são {issue}. Os snippets continuam funcionando, "
+                "mas grupos, formulários e favoritos não podem ser alterados nesta versão.",
+                key="library-metadata-read-only",
+                cooldown_seconds=60,
+            )
+        self.logger.info(f"✓ Snippets carregados do arquivo: {len(static_snippets)} snippets")
 
         # Add dynamic snippets
         dynamic_snippets = self.get_dynamic_snippets()
@@ -526,7 +595,7 @@ class Sniptype:
         except OSError as e:
             self.logger.warning(f"Falha ao criar backup de inicialização: {e}")
 
-    def save_snippets(self, snippets: dict) -> bool:
+    def save_snippets(self, snippets: dict, metadata=None) -> bool:
         """Save static snippets to disk, backing up the previous copy first.
 
         Returns True on success, False on failure. A rotating backup of the
@@ -534,6 +603,12 @@ class Sniptype:
         earlier state.
         """
         saveable = build_saveable_snippets(snippets, self.shadowed_static_snippets)
+        metadata_source = self.library_metadata if metadata is None else metadata
+        normalized_metadata = normalize_metadata(
+            metadata_source,
+            self._metadata_available_items(saveable),
+        )
+        document = build_library_document(saveable, normalized_metadata)
         try:
             # Only back up a valid prior file, so a corrupt on-disk copy can never
             # become the newest backup and defeat recovery.
@@ -550,7 +625,8 @@ class Sniptype:
             self.logger.warning(f"Falha ao remover backups antigos: {e}")
 
         try:
-            write_json_atomic(self.snippets_file, saveable)
+            write_json_atomic(self.snippets_file, document)
+            self.library_metadata = normalized_metadata
             self.logger.info("✓ snippets.json salvo com sucesso.")
         except Exception as e:
             self.logger.error(f"Erro ao salvar snippets: {e}")
@@ -597,13 +673,14 @@ class Sniptype:
             return
 
         try:
-            static_snippets = validate_static_snippets(load_json_file(self.snippets_file))
+            document = validate_static_snippets(load_json_file(self.snippets_file))
         except Exception as e:
             self.logger.warning(f"Bundle de sincronização ignorado: falha ao ler snippets.json ({e}).")
             return
-        if static_snippets is None:
+        if document is None:
             self.logger.warning("Bundle de sincronização ignorado: snippets.json com formato inválido.")
             return
+        static_snippets, _metadata = split_library_document(document)
 
         try:
             registry = load_registry(
@@ -673,6 +750,18 @@ class Sniptype:
         if data is None:
             return False, "Backup inválido: formato inesperado."
 
+        restored_snippets, restored_metadata = split_library_document(data)
+        restored_metadata = normalize_metadata(
+            restored_metadata,
+            self._metadata_available_items(restored_snippets),
+        )
+        collision_error = self._library_collision_error(
+            restored_snippets,
+            restored_metadata,
+        )
+        if collision_error:
+            return False, f"Backup inválido: {collision_error}"
+
         if not self._backup_current_library():
             return False, "Falha ao criar backup de segurança; restauração cancelada."
         try:
@@ -706,15 +795,39 @@ class Sniptype:
         if data is None:
             return False, "Arquivo inválido: o JSON precisa ser um objeto."
 
+        imported_snippets, imported_metadata = split_library_document(data)
+        if mode == "merge":
+            current = build_saveable_snippets(self.snippets, self.shadowed_static_snippets)
+            merged = {**current, **imported_snippets}
+            try:
+                merged_metadata = merge_metadata(
+                    self.library_metadata,
+                    imported_metadata,
+                    {
+                        "mode": "merge",
+                        "imported_items": self._imported_metadata_winners(imported_snippets),
+                    },
+                )
+            except ValueError as e:
+                return False, f"Falha ao importar metadados: {e}"
+        else:
+            merged = imported_snippets
+            merged_metadata = imported_metadata
+
+        merged_metadata = normalize_metadata(
+            merged_metadata,
+            self._metadata_available_items(merged),
+        )
+        collision_error = self._library_collision_error(merged, merged_metadata)
+        if collision_error:
+            return False, f"Falha ao importar: {collision_error}"
+
         if not self._backup_current_library():
             return False, "Falha ao criar backup de segurança; importação cancelada."
-        if mode == "merge":
-            merged = {**build_saveable_snippets(self.snippets, self.shadowed_static_snippets), **data}
-        else:
-            merged = data
+        document = build_library_document(merged, merged_metadata)
 
         try:
-            write_json_atomic(self.snippets_file, merged)
+            write_json_atomic(self.snippets_file, document)
         except Exception as e:
             return False, f"Falha ao importar: {e}"
 
@@ -722,6 +835,32 @@ class Sniptype:
         self.export_sync_bundle()
         self.reload_snippets_from_disk()
         return True, None
+
+    @staticmethod
+    def _metadata_available_items(imported_snippets):
+        """Return static and nested mapping keys whose imported content wins."""
+        static = set()
+        mappings = {}
+        for key, value in imported_snippets.items():
+            if key.startswith("_") and isinstance(value, dict):
+                mappings[key] = {item for item in value if item != "__prefix__"}
+            else:
+                static.add(key)
+        return {"static": static, "mappings": mappings}
+
+    _imported_metadata_winners = _metadata_available_items
+
+    @staticmethod
+    def _library_collision_error(snippets, metadata):
+        """Describe exact static effective-trigger collisions, if any."""
+        collisions = validate_effective_triggers(snippets, metadata)["collisions"]
+        if not collisions:
+            return None
+        details = "; ".join(
+            f"'{trigger}' ({', '.join(stored_keys)})"
+            for trigger, stored_keys in collisions
+        )
+        return f"conflito de triggers efetivos: {details}."
 
     def open_data_folder(self):
         """Open the user data directory in the OS file manager."""
@@ -1077,10 +1216,14 @@ class Sniptype:
         The set of slow triggers is derived from the registry (never hardcoded),
         so adding or disabling a trigger is a data change, not a code change.
         """
-        snippets, slow_triggers = build_dynamic_snippets(
-            self.dynamic_registry, self, logger=self.logger
+        snippets, slow_triggers, identities = build_dynamic_snippets(
+            self.dynamic_registry,
+            self,
+            logger=self.logger,
+            include_identities=True,
         )
         self.slow_snippets = slow_triggers
+        self.dynamic_identities = identities
         return snippets
 
     # =====================================================================
@@ -1134,6 +1277,9 @@ class Sniptype:
         else:
             snippet, _ = self.check_dynamic_pattern(trigger)
         
+        if snippet is ACTION_COMPLETED:
+            return ACTION_COMPLETED
+
         if snippet is not None:
             if is_callable_snippet:
                 self.notify_snippet_failure(trigger, snippet)
@@ -1156,7 +1302,9 @@ class Sniptype:
 
             try:
                 time.sleep(0.05)
-                self.text_inserter.insert_text(snippet)
+                inserted = self.text_inserter.insert_text(snippet)
+                if inserted is False:
+                    return False
 
                 self.expansion_failed = False
                 self.last_expansion_time = time.time()
@@ -1213,24 +1361,44 @@ class Sniptype:
                     if classify_variable(n, self.snippets, prefixes) == "form_field"
                 ]
                 form_data = {}
+                form_metadata = self._form_metadata_for_trigger(trigger)
+                compiled_form = None
+                if form_metadata is not None:
+                    compiled_form = compile_form(
+                        plain,
+                        form_metadata.get("fields", []),
+                        self.snippets,
+                    )
+                    form_names = list(compiled_form.field_names)
                 if form_names:
-                    form_data = self._show_form_dialog(form_names)
+                    if compiled_form is None:
+                        form_data = self._show_form_dialog(form_names)
+                    else:
+                        form_data = self._show_form_dialog(form_names, compiled_form)
                     if form_data is None:
                         return False  # user cancelled — nothing inserted
-                result = resolve_form_variables(plain, form_data)
+                result = (
+                    render_form(compiled_form, form_data)
+                    if compiled_form is not None
+                    else resolve_form_variables(plain, form_data)
+                )
                 if is_rich_text_payload(raw):
                     result = rebuild_rich_text(raw, result)
                 time.sleep(0.05)
-                self.text_inserter.insert_text(result)
-                return True
+                inserted = self.text_inserter.insert_text(result)
+                return inserted is not False
 
             result = func()
+            if result is ACTION_COMPLETED:
+                return ACTION_COMPLETED
             if not result:
                 return False
             self.notify_snippet_failure(trigger, result)
             time.sleep(0.05)
-            self.text_inserter.insert_text(result)
-            if trigger == "xlwapp":
+            inserted = self.text_inserter.insert_text(result)
+            if inserted is False:
+                return False
+            if self._is_whatsapp_insert_trigger(trigger):
                 Clipboard.set_content(result)
             return True
         except Exception as e:
@@ -1241,14 +1409,71 @@ class Sniptype:
                 cooldown_seconds=5,
             )
             return False
+
+    def _is_whatsapp_insert_trigger(self, trigger):
+        """Recognize the insert-link action after a registry trigger rename."""
+        identities = getattr(self, "dynamic_identities", {})
+        stable_key = identities.get(trigger) if isinstance(identities, dict) else None
+        registry = getattr(self, "dynamic_registry", {})
+        if stable_key is None:
+            stable_key = next(
+                (
+                    key for key, entry in registry.items()
+                    if is_enabled(entry, key=key)
+                    and effective_trigger(key, entry) == trigger
+                ),
+                None,
+            )
+        entry = registry.get(stable_key) if stable_key is not None else None
+        return (
+            isinstance(entry, dict)
+            and entry.get("provider") == "whatsapp"
+            and entry.get("mode") == "insert"
+        )
     
-    def _show_form_dialog(self, field_names):
+    def _show_form_dialog(self, field_names, compiled_form=None):
         """
         Show a modal dialog for form-fill variables.
         Called from a worker thread; the dialog is built on the shared GUI
         thread and this call blocks until it closes.
+        ``compiled_form`` selects the structured field controls.  Omitting it
+        preserves the legacy one-entry-per-name behavior used by old callers.
         Returns {field_name: value} or None if the user cancels.
         """
+        if compiled_form is not None:
+            def build_structured(root):
+                form_dialog = FormDialog(root, compiled_form)
+                dialog = form_dialog.window
+                dialog.withdraw()
+                self._set_window_icon(dialog)
+                center_on_screen(dialog)
+                first_control = form_dialog._controls.get(field_names[0]) if field_names else None
+                cancel_activation = focus_modal_input(
+                    dialog,
+                    first_control,
+                    self.gui.submit,
+                )
+                try:
+                    dialog.wait_window(dialog)
+                finally:
+                    cancel_activation()
+                return form_dialog.controller.result
+
+            try:
+                return self._run_modal_dialog(
+                    build_structured,
+                    None,
+                    f"campos ({', '.join(field_names)})",
+                )
+            except Exception as e:
+                self.logger.error(f"Erro no diálogo estruturado de campos: {e}")
+                self.notify_error(
+                    f"Erro ao abrir diálogo de campos: {e}",
+                    key="form-dialog-error",
+                    cooldown_seconds=5,
+                )
+                return None
+
         def build(root):
             ui = ui_theme.bind(root)
             result = [None]
@@ -1360,7 +1585,23 @@ class Sniptype:
 
     def rebuild_trigger_index(self):
         """Rebuild compiled trigger metadata after snippet changes."""
-        self.trigger_index = compile_trigger_index(self.snippets, self.slow_snippets)
+        dynamic_identities = dict(getattr(self, "dynamic_identities", {}))
+        # Compatibility for tests/custom embedders that replace the registry
+        # directly instead of going through ``load_snippets``. Supported reload
+        # paths already carry the exact binder winner in ``dynamic_identities``.
+        for stable_key, entry in self.dynamic_registry.items():
+            if not isinstance(stable_key, str) or not isinstance(entry, dict):
+                continue
+            trigger = effective_trigger(stable_key, entry)
+            if trigger not in dynamic_identities and callable(self.snippets.get(trigger)):
+                dynamic_identities[trigger] = stable_key
+        self.trigger_index = compile_trigger_index(
+            self.snippets,
+            self.slow_snippets,
+            metadata=self.library_metadata,
+            terminator_mode=self.terminator_mode,
+            dynamic_identities=dynamic_identities,
+        )
 
     def _validate_trigger_warnings(self, trigger):
         """Return save-time warnings for a proposed static trigger."""
@@ -1391,8 +1632,15 @@ class Sniptype:
         (prefix + item name) plus a small safety margin, so a long mapping item
         can never be truncated out of the typed-text buffer and fail to match.
         """
-        self.max_trigger_length = calculate_max_trigger_length_with_mappings(self.snippets) + TRIGGER_BUFFER_MARGIN
         self.rebuild_trigger_index()
+        direct_max = max(
+            (len(target.effective_trigger) for target in self.trigger_index["direct_targets"]),
+            default=0,
+        )
+        self.max_trigger_length = max(
+            calculate_max_trigger_length_with_mappings(self.snippets),
+            direct_max,
+        ) + TRIGGER_BUFFER_MARGIN
 
     def _store_static_snippet(self, trigger, value):
         """Apply a static-editor save to the in-memory maps.
@@ -1534,6 +1782,68 @@ class Sniptype:
     # =====================================================================
     # KEYBOARD LISTENER
     # =====================================================================
+    def _dispatch_hotkey_action(self, action):
+        """Queue a workflow action away from the keyboard listener callback."""
+        self.task_runner.start(
+            self._run_hotkey_action,
+            action,
+            name=f"hotkey-{action}",
+        )
+
+    def _run_hotkey_action(self, action):
+        """Perform one configured workflow action through its safe seam."""
+        try:
+            if action == "edit_last":
+                self._pending_manager_target = self.workflow_state.last_successful_item
+            if action in ("open_manager", "edit_last"):
+                self.gui.submit(self._show_manager_window)
+            elif action == "toggle_enabled":
+                self.gui.submit(self._toggle_enabled_from_hotkey)
+        except Exception as e:
+            self.logger.error(f"Falha no atalho de fluxo '{action}': {e}")
+
+    def _toggle_enabled_from_hotkey(self, _root=None):
+        """Apply the enabled toggle on the GUI thread, where tray state is safe."""
+        self.toggle_enabled(self.icon, None)
+
+    def _workflow_ref(self, trigger):
+        """Resolve a completed expansion to its stable workflow reference."""
+        if isinstance(trigger, ExpansionTarget):
+            if trigger.source_kind == "static":
+                return SnippetRef("static", trigger.stable_identity)
+            if trigger.source_kind == "mapping":
+                # Current compiled direct targets are static-only; mappings
+                # resolve through the legacy string path below. Keep a future
+                # mapping target from raising because its container is not
+                # carried by ExpansionTarget.
+                return None
+            return SnippetRef("dynamic", trigger.stable_identity)
+
+        if not isinstance(trigger, str) or not trigger:
+            return None
+        # A raw string can still name a direct target in compatibility calls.
+        # Prefer the compiled route because a stored key may be disabled or may
+        # have a group prefix while the same typed text belongs to a mapping.
+        for target in getattr(self, "trigger_index", {}).get("direct_targets", ()):
+            if target.effective_trigger == trigger:
+                return self._workflow_ref(target)
+        value = self.snippets.get(trigger)
+        if callable(value):
+            for stable_key, entry in self.dynamic_registry.items():
+                if effective_trigger(stable_key, entry) == trigger:
+                    return SnippetRef("dynamic", stable_key)
+            return SnippetRef("dynamic", trigger)
+        for prefix, container in get_dynamic_prefixes(self.snippets).items():
+            if not trigger.startswith(prefix) or len(trigger) <= len(prefix):
+                continue
+            item = trigger[len(prefix):]
+            mapping = self.snippets.get(container)
+            if isinstance(mapping, dict) and item in mapping and item != "__prefix__":
+                return SnippetRef("mapping", item, container)
+        if trigger in self.snippets and not trigger.startswith("_"):
+            return SnippetRef("static", trigger)
+        return None
+
     def on_press(self, key):
         """Detect a trigger on the listener thread; expand on a worker thread.
 
@@ -1542,6 +1852,9 @@ class Sniptype:
         (callables, network, dialogs, clipboard, paste) to a background thread.
         """
         try:
+            if self.hotkey_router.press(key):
+                self.typed_text = ""
+                return
             if hasattr(key, 'char') and key.char:
                 self._handle_char(key.char)
             elif key == Key.enter:
@@ -1561,39 +1874,147 @@ class Sniptype:
                 cooldown_seconds=10,
             )
 
+    def on_release(self, key):
+        """Release hotkey state without touching GUI, disk, or snippet data."""
+        try:
+            self.hotkey_router.release(key)
+        except Exception as e:
+            self.logger.error(f"Erro ao liberar atalho de teclado: {e}")
+
     def _handle_char(self, char):
         """Append a typed character and run trigger detection."""
+        if self.trigger_index.get("global_terminator_mode") != self.terminator_mode:
+            # Settings changes normally refresh the index immediately. Keep
+            # direct in-memory toggles backward compatible with one rebuild,
+            # rather than scanning policy on every keypress.
+            self.rebuild_trigger_index()
         self.typed_text += char
         if len(self.typed_text) > self.max_trigger_length:
             self.typed_text = self.typed_text[-self.max_trigger_length:]
 
-        if self.terminator_mode:
-            if char in TERMINATOR_CHARS:
-                self._detect_terminated(char)
-            return
-
-        self._detect_immediate()
+        immediate_candidate = self._detect_immediate()
+        if char in TERMINATOR_CHARS and not immediate_candidate:
+            self._detect_terminated(char)
 
     def _detect_immediate(self):
         """Immediate mode: expand as soon as a trigger suffix matches."""
-        trigger = find_direct_trigger(self.typed_text, self.trigger_index)
-        if trigger:
-            self._dispatch_expansion(trigger, len(trigger))
-            return
-        potential_trigger, result = find_dynamic_trigger(self.snippets, self.typed_text, self.trigger_index)
+        target, candidate_found = self._find_direct_target(self.typed_text, False)
+        if candidate_found:
+            if target is not None:
+                self._dispatch_expansion(target, len(target.effective_trigger))
+            return True
+        if self.terminator_mode:
+            return False
+        potential_trigger, result = find_dynamic_trigger(
+            self.snippets,
+            self.typed_text,
+            self.trigger_index,
+        )
         if result is not None:
             self._dispatch_expansion(potential_trigger, len(potential_trigger))
+            return True
+        return False
 
     def _detect_terminated(self, terminator_char):
         """Terminator mode: expand only when a word-ending char follows a trigger."""
         body = self.typed_text[:-1]  # drop the terminator just typed
-        trigger = find_direct_trigger(body, self.trigger_index)
-        if trigger:
-            self._dispatch_expansion(trigger, len(trigger) + 1, append_text=terminator_char)
+        target, candidate_found = self._find_direct_target(body, True)
+        if candidate_found:
+            if target is not None:
+                self._dispatch_expansion(
+                    target,
+                    len(target.effective_trigger) + 1,
+                    append_text=terminator_char,
+                )
+            return
+        # Mappings and registry-backed dynamics intentionally retain the global
+        # terminator policy; they are checked only in this branch.
+        if not self.terminator_mode:
             return
         potential_trigger, result = find_dynamic_trigger(self.snippets, body, self.trigger_index)
         if result is not None:
             self._dispatch_expansion(potential_trigger, len(potential_trigger) + 1, append_text=terminator_char)
+
+    def _static_form_metadata(self, stored_key):
+        """Return persisted form metadata for a static stored identity, if any."""
+        metadata = self.library_metadata
+        if not isinstance(metadata, dict):
+            return None
+        items = metadata.get("items", {})
+        static_items = items.get("static", {}) if isinstance(items, dict) else {}
+        item = static_items.get(stored_key, {}) if isinstance(static_items, dict) else {}
+        form = item.get("form") if isinstance(item, dict) else None
+        return form if isinstance(form, dict) else None
+
+    def _mapping_identity(self, trigger):
+        """Return ``(container, item)`` for a composed mapping trigger."""
+        if not isinstance(trigger, str):
+            return None
+        for prefix, container in get_dynamic_prefixes(self.snippets).items():
+            if not trigger.startswith(prefix) or len(trigger) <= len(prefix):
+                continue
+            item = trigger[len(prefix):]
+            mapping = self.snippets.get(container)
+            if isinstance(mapping, dict) and item in mapping and item != "__prefix__":
+                return container, item
+        return None
+
+    def _mapping_form_metadata(self, container, item_key):
+        metadata = self.library_metadata
+        if not isinstance(metadata, dict):
+            return None
+        items = metadata.get("items", {})
+        mappings = items.get("mappings", {}) if isinstance(items, dict) else {}
+        container_metadata = mappings.get(container, {}) if isinstance(mappings, dict) else {}
+        item = container_metadata.get(item_key, {}) if isinstance(container_metadata, dict) else {}
+        form = item.get("form") if isinstance(item, dict) else None
+        return form if isinstance(form, dict) else None
+
+    def _form_metadata_for_trigger(self, trigger):
+        form = self._static_form_metadata(trigger)
+        if form is not None:
+            return form
+        identity = self._mapping_identity(trigger)
+        if identity is None:
+            return None
+        return self._mapping_form_metadata(*identity)
+
+    def _find_direct_target(self, typed_text, terminated):
+        """Find one compiled direct candidate and apply its app policy.
+
+        The bucket is precompiled, so this performs no metadata or disk work on
+        the listener.  ``candidate_found`` distinguishes a denied longest match
+        from no direct match and prevents a shorter/dynamic fallback.
+        """
+        if not typed_text:
+            return None, False
+        bucket_name = (
+            "direct_terminated_by_last_char"
+            if terminated
+            else "direct_immediate_by_last_char"
+        )
+        candidates = self.trigger_index.get(bucket_name, {}).get(typed_text[-1], ())
+        for target in candidates:
+            if typed_text.endswith(target.effective_trigger):
+                if self._target_application_allowed(target):
+                    return target, True
+                return None, True
+        return None, False
+
+    def _target_application_allowed(self, target):
+        """Resolve foreground identity only for a candidate needing it."""
+        policy = self.trigger_index.get("application_policies", {}).get(target.stable_identity)
+        if policy is None or policy.mode == "all":
+            return True
+        executable = None
+        if platform_support.IS_WINDOWS:
+            executable = platform_support.foreground_executable_name()
+        return target_is_allowed(
+            target,
+            self.trigger_index,
+            executable,
+            windows=platform_support.IS_WINDOWS,
+        )
 
     def _dispatch_expansion(self, trigger, erase_length, append_text=""):
         """Erase the typed trigger and run the expansion on a worker thread."""
@@ -1602,7 +2023,43 @@ class Sniptype:
             return
         self._erase_chars(erase_length)
         self.typed_text = ""
-        self.task_runner.start(self._run_expansion, trigger, append_text, name="expand")
+        worker_target = trigger
+        if isinstance(trigger, ExpansionTarget):
+            # Metadata-aware expansions retain the stable stored identity while
+            # carrying the effective trigger across a concurrent index refresh.
+            metadata_present = getattr(self.library_metadata, "present", None)
+            if metadata_present is None:
+                metadata_present = bool(self.library_metadata)
+            if metadata_present or (
+                trigger.effective_trigger != trigger.stable_identity
+            ):
+                worker_target = trigger
+            else:
+                worker_target = trigger.effective_trigger
+        effective = (
+            trigger.effective_trigger
+            if isinstance(trigger, ExpansionTarget)
+            else trigger
+        )
+        # Snapshot the selected route with the immutable target. A manager save
+        # may rebuild the index before the worker starts; that refresh must not
+        # turn an already-selected form or slow expansion into the plain path.
+        # Keep this seam tolerant of a minimal app instance. Platform gate
+        # tests and shutdown-adjacent callers may exercise dispatch before an
+        # index has been published; a missing snapshot means the legacy plain
+        # route, not a listener-thread exception.
+        trigger_index = getattr(self, "trigger_index", {})
+        slow_route = (
+            effective in trigger_index.get("slow_triggers", ())
+            or effective in trigger_index.get("form_triggers", ())
+        )
+        self.task_runner.start(
+            self._run_expansion,
+            worker_target,
+            append_text,
+            slow_route,
+            name="expand",
+        )
 
     def _secure_input_blocks_expansion(self):
         """True when macOS Secure Keyboard Entry is swallowing synthesized input.
@@ -1640,7 +2097,7 @@ class Sniptype:
             self.keyboard_controller.release(Key.backspace)
             time.sleep(self.erase_key_delay)
 
-    def _run_expansion(self, trigger, append_text=""):
+    def _run_expansion(self, trigger, append_text="", slow_route=None):
         """Worker entry point: produce and insert the expansion for a trigger.
 
         The trigger text is already erased. This is wrapped so no expansion error
@@ -1649,19 +2106,36 @@ class Sniptype:
         if not self.enabled:
             return
         try:
-            if trigger in self.trigger_index["slow_triggers"] or trigger in self.trigger_index["form_triggers"]:
-                inserted = self.run_slow_snippet(trigger)
+            effective = trigger.effective_trigger if isinstance(trigger, ExpansionTarget) else trigger
+            lookup = (
+                trigger.stable_identity
+                if isinstance(trigger, ExpansionTarget) and trigger.source_kind == "static"
+                else effective
+            )
+            if slow_route is None:
+                slow_route = (
+                    effective in self.trigger_index["slow_triggers"]
+                    or effective in self.trigger_index["form_triggers"]
+                )
+            if slow_route:
+                outcome = self.run_slow_snippet(lookup)
             else:
-                inserted = self.expand_snippet(trigger)
+                outcome = self.expand_snippet(lookup)
+            completed = outcome is True or outcome is ACTION_COMPLETED
+            inserted = outcome is True
+            if completed:
+                reference = self._workflow_ref(trigger)
+                if reference is not None:
+                    self.workflow_state.record_success(reference)
             # Only re-emit the terminator when text was actually inserted, so a
             # cancelled form dialog or a failed paste does not leave a stray char.
             if append_text and inserted:
                 self.keyboard_controller.type(append_text)
         except Exception as e:
-            self.logger.error(f"Erro na expansão de {trigger}: {e}")
+            self.logger.error(f"Erro na expansão de {getattr(trigger, 'effective_trigger', trigger)}: {e}")
             self.notify_error(
-                f"Falha ao expandir {trigger}: {e}",
-                key=f"expand-error:{trigger}",
+                f"Falha ao expandir {getattr(trigger, 'effective_trigger', trigger)}: {e}",
+                key=f"expand-error:{getattr(trigger, 'effective_trigger', trigger)}",
                 cooldown_seconds=5,
             )
 
@@ -1691,6 +2165,44 @@ class Sniptype:
     # SNIPPET MANAGEMENT GUI
     # =====================================================================
 
+    def _save_hotkey_bindings(self, bindings):
+        """Persist valid hotkeys, replacing the live router only after success."""
+        normalized, invalid = normalize_hotkeys(bindings)
+        if invalid:
+            return False
+        previous = self.settings
+        updated = dict(previous)
+        existing = previous.get("hotkeys", {})
+        existing = dict(existing) if isinstance(existing, dict) else {}
+        updated["hotkeys"] = {**existing, **normalized}
+        if not save_settings(self.settings_file, updated):
+            return False
+        self.settings = updated
+        self.hotkey_router = HotkeyRouter(
+            updated["hotkeys"],
+            self._dispatch_hotkey_action,
+        )
+        return True
+
+    def configure_hotkeys(self, icon=None, item=None):
+        """Open the optional workflow-hotkey editor on the GUI thread."""
+        try:
+            self.gui.submit(self._show_hotkey_settings)
+        except Exception as e:
+            self.logger.error(f"Erro ao abrir configurações de atalhos: {e}")
+
+    def _show_hotkey_settings(self, tk_root):
+        """GUI-thread callback for editing and atomically saving hotkeys."""
+        from hotkey_dialog import run_hotkey_dialog
+
+        result = run_hotkey_dialog(tk_root, self.settings.get("hotkeys", {}))
+        if result is None:
+            return
+        if self._save_hotkey_bindings(result):
+            self.notify_status("Atalhos salvos.", key="hotkeys-saved")
+        else:
+            self.notify_error("Não foi possível salvar os atalhos.", key="hotkeys-save")
+
     def manage_snippets_gui(self, icon, item):
         """Open (or re-focus) the snippet manager window."""
         try:
@@ -1703,12 +2215,134 @@ class Sniptype:
                 cooldown_seconds=5,
             )
 
+    def _manager_rows(self):
+        """Return the immutable local projection used by manager navigation."""
+        return build_manager_rows(
+            self.snippets,
+            getattr(self, "library_metadata", None),
+            getattr(self, "dynamic_registry", None),
+        )
+
+    def _manager_target(self, target):
+        """Resolve a workflow reference without touching disk or GUI state."""
+        return find_manager_target(self._manager_rows(), target)
+
+    def _manager_dynamic_triggers(self):
+        """Return dynamic routes for pure manager collision validation."""
+        triggers = {
+            key for key, value in self.snippets.items()
+            if isinstance(key, str) and callable(value)
+        }
+        triggers.update(composed_mapping_triggers(self.snippets))
+        registry = getattr(self, "dynamic_registry", {})
+        triggers.update(
+            effective_trigger(key, entry)
+            for key, entry in registry.items()
+            if is_enabled(entry, key=key)
+        )
+        return triggers
+
+    def _persist_manager_action(self, result):
+        """Persist a copy-on-write manager result, then publish it in memory.
+
+        ``save_snippets`` accepts the proposed metadata as an argument so a
+        failed atomic write cannot expose a half-applied manager edit.
+        """
+        try:
+            if not self.save_snippets(result.snippets, metadata=result.metadata):
+                return False
+        except MetadataReadOnlyError:
+            return False
+        self.snippets = result.snippets
+        self.library_metadata = result.metadata
+        self.refresh_runtime_indexes()
+        self._refresh_manager_lists()
+        return True
+
+    def _select_manager_target(self, target):
+        """Select a pending target in its tab, returning whether it was found."""
+        if target is None:
+            return True
+        descriptor = self._manager_target(target)
+        if descriptor is None:
+            self.notify_status("O item não está mais disponível.", key="manager-target-missing")
+            return False
+        selector = self._manager_tab_selectors.get(descriptor.tab)
+        if selector is None or not selector(descriptor):
+            self.notify_status("O item não está mais disponível.", key="manager-target-missing")
+            return False
+        return True
+
+    def _show_manager_filter_dialog(self, root, filter_name, title):
+        """Show a cross-kind Favorites/Recent chooser and navigate on activate."""
+        ui = ui_theme.theme()
+        rows = filter_manager_rows(
+            self._manager_rows(),
+            filter_name,
+            workflow_state=self.workflow_state,
+        )
+        dialog = tk.Toplevel(root)
+        dialog.title(title)
+        dialog.transient(root)
+        dialog.configure(bg=ui.surface)
+        dialog.minsize(460, 300)
+        self._set_window_icon(dialog)
+        body = tk.Frame(dialog, bg=ui.surface, padx=ui.space_lg, pady=ui.space_lg)
+        body.pack(fill="both", expand=True)
+        listbox = tk.Listbox(
+            body,
+            exportselection=False,
+            **ui.listbox_colors(),
+            font=ui.font(),
+        )
+        listbox.pack(fill="both", expand=True)
+        kind_labels = {"static": "Snippet", "mapping": "Mapeamento", "dynamic": "Dinâmico"}
+        for row in rows:
+            listbox.insert(
+                tk.END,
+                f"{kind_labels.get(row.kind, row.kind)}  •  {row.effective_trigger}",
+            )
+        if rows:
+            listbox.selection_set(0)
+        else:
+            listbox.insert(tk.END, "Nenhum item disponível.")
+            listbox.configure(state=tk.DISABLED)
+
+        def activate(_event=None):
+            selection = listbox.curselection()
+            if not selection or not rows:
+                return
+            if self._select_manager_target(rows[selection[0]].ref):
+                dialog.destroy()
+
+        listbox.bind("<Double-Button-1>", activate)
+        listbox.bind("<Return>", activate)
+        buttons = tk.Frame(body, bg=ui.surface)
+        buttons.pack(fill="x", pady=(ui.space_sm, 0))
+        tk.Button(
+            buttons,
+            text="Abrir",
+            command=activate,
+            **ui.button_chrome(compact=True),
+            **ui.button_colors(accent=True),
+        ).pack(side="right")
+        tk.Button(
+            buttons,
+            text="Fechar",
+            command=dialog.destroy,
+            **ui.button_chrome(compact=True),
+            **ui.button_colors(),
+        ).pack(side="right", padx=(0, ui.space_sm))
+        return dialog
+
     def _show_manager_window(self, tk_root):
         """Build the manager window, or raise the one already open.
 
         GUI thread only. In-process window tracking replaces the old Win32
         FindWindowW lookup now that every window hangs off the shared root.
         """
+        pending_target = self._pending_manager_target
+        self._pending_manager_target = None
         window = self.manager_window
         try:
             already_open = window is not None and bool(window.winfo_exists())
@@ -1719,10 +2353,12 @@ class Sniptype:
             window.deiconify()
             window.lift()
             window.focus_force()
+            self._select_manager_target(pending_target)
             return
 
         self.manager_window = None
         self._build_manager_window(tk_root)
+        self._select_manager_target(pending_target)
 
     def _build_manager_window(self, tk_root):
         """Construct the management window as a Toplevel of the shared root."""
@@ -1778,6 +2414,23 @@ class Sniptype:
             )
             bell_button.grid(row=0, column=1, rowspan=2, sticky="e")
 
+            tk.Button(
+                header,
+                text="Editar último",
+                width=ui.button_width(13),
+                **ui.button_chrome(compact=True),
+                **ui.button_colors(),
+                command=self.edit_last_snippet,
+            ).grid(row=0, column=2, rowspan=2, sticky="e", padx=(ui.space_sm, 0))
+            tk.Button(
+                header,
+                text="Atalhos",
+                width=ui.button_width(9),
+                **ui.button_chrome(compact=True),
+                **ui.button_colors(),
+                command=lambda: self.configure_hotkeys(),
+            ).grid(row=0, column=3, rowspan=2, sticky="e", padx=(ui.space_sm, 0))
+
             tk.Frame(root, bg=ui.divider, height=1).grid(
                 row=1, column=0, sticky="ew"
             )
@@ -1810,6 +2463,7 @@ class Sniptype:
             # Tabs are rebuilt with the window; drop the previous window's
             # callbacks so they can't fire against destroyed widgets.
             self._manager_refreshers = []
+            self._manager_tab_selectors = {}
             self._create_static_snippets_tab(
                 tab_static, root, set_count=tab_counter(tab_static, "Snippets"))
             self._create_dynamic_mappings_tab(
@@ -1818,8 +2472,7 @@ class Sniptype:
             self._create_backups_tab(tab_backups, root)
 
             def on_close():
-                self._manager_notebook = None
-                self.manager_window = None
+                self._release_manager_ui_refs()
                 root.destroy()
                 # Tk variables must be collected on this
                 # thread; a later GC on the tray thread can abort Tcl.
@@ -1831,8 +2484,7 @@ class Sniptype:
             root.focus_force()
 
         except Exception as e:
-            self._manager_notebook = None
-            self.manager_window = None
+            self._release_manager_ui_refs()
             self.logger.error(f"Erro na GUI de gerenciamento: {e}")
             self.notify_error(
                 f"Erro ao abrir gerenciador: {e}",
@@ -2132,6 +2784,14 @@ class Sniptype:
         renders it must repopulate or it silently shows the old library.
         """
         self._manager_refreshers.append(refresher)
+
+    def _release_manager_ui_refs(self):
+        """Drop widget callbacks while still running on the GUI thread."""
+        self._manager_notebook = None
+        self.manager_window = None
+        self._manager_refreshers = []
+        self._manager_tab_selectors = {}
+        self._manager_preview_controller = None
 
     def _refresh_manager_lists(self):
         for refresher in list(self._manager_refreshers):
@@ -2456,7 +3116,7 @@ class Sniptype:
         )
         frame_left.grid(row=0, column=0, sticky="nsew", padx=(0, ui.space_md))
         frame_left.grid_columnconfigure(0, weight=1)
-        frame_left.grid_rowconfigure(4, weight=1)
+        frame_left.grid_rowconfigure(5, weight=1)
 
         tk.Label(
             frame_left,
@@ -2499,13 +3159,69 @@ class Sniptype:
             ipady=5,
         )
 
+        filter_var = tk.StringVar(value=FILTER_ALL)
+        group_var = tk.StringVar(value="")
+        filter_frame = tk.Frame(frame_left, bg=ui.card)
+        filter_frame.grid(row=4, column=0, sticky="ew", pady=(0, ui.space_sm))
+        view_buttons = tk.Frame(filter_frame, bg=ui.card)
+        view_buttons.pack(fill="x")
+        tk.Button(
+            view_buttons,
+            text="Todos",
+            command=lambda: (group_var.set(""), filter_var.set(FILTER_ALL)),
+            **ui.button_chrome(compact=True),
+            **ui.button_colors(),
+        ).pack(side=tk.LEFT, padx=(0, 4))
+        tk.Button(
+            view_buttons,
+            text="Favoritos",
+            command=lambda: self._show_manager_filter_dialog(
+                root, FILTER_FAVORITES, "Favoritos"
+            ),
+            **ui.button_chrome(compact=True),
+            **ui.button_colors(),
+        ).pack(side=tk.LEFT, padx=(0, 4))
+        tk.Button(
+            view_buttons,
+            text="Recentes",
+            command=lambda: self._show_manager_filter_dialog(
+                root, FILTER_RECENT, "Recentes"
+            ),
+            **ui.button_chrome(compact=True),
+            **ui.button_colors(),
+        ).pack(side=tk.LEFT)
+        group_controls = tk.Frame(filter_frame, bg=ui.card)
+        group_controls.pack(fill="x", pady=(ui.space_xs, 0))
+        group_menu = tk.OptionMenu(group_controls, group_var, "")
+        group_menu.configure(
+            text="Grupo",
+            **ui.button_chrome(compact=True),
+            **ui.button_colors(),
+        )
+        group_menu.pack(side=tk.LEFT)
+        group_new_button = tk.Button(
+            group_controls, text="Novo", command=lambda: on_create_group(),
+            **ui.button_chrome(compact=True), **ui.button_colors(),
+        )
+        group_new_button.pack(side=tk.LEFT, padx=(ui.space_sm, 0))
+        group_edit_button = tk.Button(
+            group_controls, text="Editar", command=lambda: on_edit_group(),
+            **ui.button_chrome(compact=True), **ui.button_colors(),
+        )
+        group_edit_button.pack(side=tk.LEFT, padx=(4, 0))
+        group_delete_button = tk.Button(
+            group_controls, text="Excluir", command=lambda: on_delete_group(),
+            **ui.button_chrome(compact=True), **ui.button_colors(danger=True),
+        )
+        group_delete_button.pack(side=tk.LEFT, padx=(4, 0))
+
         listbox_shell = tk.Frame(
             frame_left,
             bg=ui.card,
             highlightbackground=ui.border,
             highlightthickness=1,
         )
-        listbox_shell.grid(row=4, column=0, sticky="nsew")
+        listbox_shell.grid(row=5, column=0, sticky="nsew")
         listbox_shell.grid_columnconfigure(0, weight=1)
         listbox_shell.grid_rowconfigure(0, weight=1)
 
@@ -2549,7 +3265,7 @@ class Sniptype:
 
         tk.Label(
             frame_right,
-            text="Trigger",
+            text="Trigger armazenado",
             font=ui.font(9, "bold"),
             bg=ui.card,
             fg=ui.text_strong,
@@ -2570,6 +3286,15 @@ class Sniptype:
             pady=(ui.space_xs, ui.space_md),
             ipady=5,
         )
+        effective_trigger_var = tk.StringVar(value="Efetivo: —")
+        tk.Label(
+            frame_right,
+            textvariable=effective_trigger_var,
+            font=ui.font(8),
+            bg=ui.card,
+            fg=ui.text_muted,
+            anchor="e",
+        ).grid(row=2, column=0, sticky="e")
 
         tk.Label(
             frame_right,
@@ -2628,13 +3353,106 @@ class Sniptype:
         btn_delete.pack(side=tk.LEFT, padx=(ui.space_lg, 0))
         btn_save.pack(side=tk.RIGHT)
 
+        item_group_var = tk.StringVar(value="")
+        item_favorite_var = tk.BooleanVar(value=False)
+        item_frame = tk.Frame(frame_right, bg=ui.card)
+        item_frame.grid(row=8, column=0, sticky="ew", pady=(ui.space_sm, 0))
+        tk.Label(item_frame, text="Grupo:", bg=ui.card, fg=ui.text_muted, font=ui.font(8)).pack(side=tk.LEFT)
+        item_group_combo = ttk.Combobox(item_frame, textvariable=item_group_var, state="readonly", width=18)
+        item_group_combo.pack(side=tk.LEFT, padx=(4, ui.space_md))
+        item_favorite_check = tk.Checkbutton(
+            item_frame,
+            text="Favorito",
+            variable=item_favorite_var,
+            **ui.checkbutton_colors(ui.card),
+            command=lambda: on_toggle_favorite(),
+        )
+        item_favorite_check.pack(side=tk.LEFT)
+        tk.Button(
+            item_frame, text="Prévia", command=lambda: on_preview(),
+            **ui.button_chrome(compact=True), **ui.button_colors(),
+        ).pack(side=tk.RIGHT, padx=(4, 0))
+        form_button = tk.Button(
+            item_frame, text="Formulário", command=lambda: on_edit_form(),
+            **ui.button_chrome(compact=True), **ui.button_colors(),
+        )
+        form_button.pack(side=tk.RIGHT, padx=(4, 0))
+        metadata_warning = tk.Label(
+            frame_right,
+            text="Metadados somente leitura: grupos, favoritos e formulários estão desativados.",
+            bg=ui.card,
+            fg=ui.warning,
+            font=ui.font(8),
+            anchor="w",
+        )
+        metadata_warning.grid(row=9, column=0, sticky="ew", pady=(ui.space_xs, 0))
+        metadata_widgets = (
+            group_new_button,
+            group_edit_button,
+            group_delete_button,
+            item_favorite_check,
+            form_button,
+            btn_duplicate,
+            btn_rename,
+        )
+
+        def refresh_metadata_controls():
+            read_only = bool(getattr(self.library_metadata, "read_only", False))
+            for widget in metadata_widgets:
+                widget.configure(state=tk.DISABLED if read_only else tk.NORMAL)
+            item_group_combo.configure(state=tk.DISABLED if read_only else "readonly")
+            if read_only:
+                metadata_warning.grid()
+            else:
+                metadata_warning.grid_remove()
+
         self._bind_mousewheel(text_value, text_value)
 
+        visible_rows = {}
+
+        def refresh_group_menu():
+            menu = group_menu["menu"]
+            menu.delete(0, tk.END)
+            menu.add_command(label="Grupo", command=lambda: (group_var.set(""), filter_var.set(FILTER_ALL)))
+            menu.add_command(
+                label="Sem grupo",
+                command=lambda: (group_var.set(""), filter_var.set(UNGROUPED_FILTER)),
+            )
+            groups = self.library_metadata.get("groups", {}) if isinstance(self.library_metadata, dict) else {}
+            for group_id, definition in groups.items():
+                label = definition.get("label", group_id) if isinstance(definition, dict) else group_id
+                menu.add_command(
+                    label=str(label),
+                    command=lambda selected=str(group_id): (group_var.set(selected), filter_var.set("group")),
+                )
+            item_group_combo.configure(values=("",) + tuple(str(group_id) for group_id in groups))
+
         def get_static_visible_snippets():
+            rows = [row for row in filter_manager_rows(
+                self._manager_rows(),
+                filter_var.get(),
+                workflow_state=self.workflow_state,
+                group_id=group_var.get() or None,
+            ) if row.kind == "static"]
+            allowed = {row.stored_trigger: row for row in rows}
             visible = filter_static_snippets(self.snippets, search_var.get())
+            visible = {
+                key: value for key, value in visible.items()
+                if key in allowed
+                or (
+                    isinstance(key, str)
+                    and any(
+                        key == row.stored_trigger
+                        and row.effective_trigger.casefold().find(search_var.get().casefold()) >= 0
+                        for row in allowed.values()
+                    )
+                )
+            }
             # A blank key cannot be a Treeview row iid (or a trigger); hand-
             # edited data must not produce a phantom row or skew the count.
             visible.pop("", None)
+            visible_rows.clear()
+            visible_rows.update({key: allowed[key] for key in visible if key in allowed})
             return visible
 
         static_snips = get_static_visible_snippets()
@@ -2644,11 +3462,19 @@ class Sniptype:
             static_snips.clear()
             static_snips.update(get_static_visible_snippets())
             for key in sorted(static_snips.keys()):
+                row = visible_rows.get(key)
+                display_trigger = format_trigger_pair(row) if row else key
                 tree.insert("", tk.END, iid=key,
-                            values=snippet_row_values(key, static_snips[key]))
+                            values=(display_trigger,) + snippet_row_values(key, static_snips[key])[1:])
             (tree if static_snips else empty_label).tkraise()
             if set_count is not None:
                 set_count(len(static_snips))
+            edited_key = entry_trigger.get().strip()
+            edited_row = visible_rows.get(edited_key)
+            effective_trigger_var.set(
+                f"Efetivo: {edited_row.effective_trigger}"
+                if edited_row else "Efetivo: —"
+            )
 
         def load_selected(event=None):
             selection = tree.selection()
@@ -2658,11 +3484,196 @@ class Sniptype:
             entry_trigger.delete(0, tk.END)
             entry_trigger.insert(0, key)
             load_value_into_text_widget(text_value, static_snips.get(key, ""))
+            row = next((candidate for candidate in self._manager_rows()
+                        if candidate.kind == "static" and candidate.stored_trigger == key), None)
+            item_group_var.set(row.group_id if row and row.group_id else "")
+            item_favorite_var.set(bool(row and row.favorite))
+            effective_trigger_var.set(
+                f"Efetivo: {row.effective_trigger}" if row else "Efetivo: —"
+            )
             update_format_status()
+
+        def select_static_target(descriptor):
+            if descriptor.kind != "static":
+                return False
+            group_var.set("")
+            filter_var.set(FILTER_ALL)
+            search_var.set("")
+            refresh_listbox()
+            if not tree.exists(descriptor.row_id):
+                return False
+            try:
+                if self._manager_notebook is not None:
+                    self._manager_notebook.select(parent)
+            except Exception:
+                pass
+            tree.selection_set(descriptor.row_id)
+            tree.focus(descriptor.row_id)
+            tree.see(descriptor.row_id)
+            load_selected()
+            return True
+
+        self._manager_tab_selectors["static"] = select_static_target
+
+        def current_static_key():
+            key = entry_trigger.get().strip()
+            return key if key in self.snippets and not callable(self.snippets.get(key)) else None
+
+        def manager_action_failed(title="Gerenciador"):
+            if getattr(self.library_metadata, "read_only", False):
+                messagebox.showwarning(
+                    title,
+                    "Os metadados da biblioteca são somente leitura nesta versão; "
+                    "favoritos, grupos e formulários não podem ser alterados.",
+                    parent=root,
+                )
+            else:
+                messagebox.showerror(title, "Não foi possível salvar a alteração.", parent=root)
+
+        def on_create_group():
+            from group_dialog import run_group_dialog
+            definition = run_group_dialog(root)
+            if definition is None:
+                return
+            try:
+                result = manager_create_group(
+                    self.snippets, self.library_metadata,
+                    definition=definition,
+                    dynamic_triggers=self._manager_dynamic_triggers(),
+                )
+                if self._persist_manager_action(result):
+                    refresh_group_menu()
+                    self.notify_status("Grupo criado.", key="manager-group-create")
+                else:
+                    manager_action_failed("Criar grupo")
+            except (KeyError, ValueError, MetadataReadOnlyError) as error:
+                self.logger.warning(f"Manager group creation failed: {error}")
+                manager_action_failed("Criar grupo")
+
+        def on_edit_group():
+            group_id = group_var.get()
+            groups = self.library_metadata.get("groups", {}) if isinstance(self.library_metadata, dict) else {}
+            if not group_id or group_id not in groups:
+                messagebox.showwarning("Grupo", "Selecione um grupo para editar.", parent=root)
+                return
+            from group_dialog import run_group_dialog
+            definition = run_group_dialog(root, groups[group_id], title="Editar grupo")
+            if definition is None:
+                return
+            try:
+                result = manager_update_group(
+                    self.snippets, self.library_metadata, group_id, definition,
+                    dynamic_triggers=self._manager_dynamic_triggers(),
+                )
+                if self._persist_manager_action(result):
+                    refresh_group_menu()
+                    self.notify_status("Grupo atualizado.", key=f"manager-group-edit:{group_id}")
+                else:
+                    manager_action_failed("Editar grupo")
+            except (KeyError, ValueError, MetadataReadOnlyError) as error:
+                self.logger.warning(f"Manager group update failed: {error}")
+                manager_action_failed("Editar grupo")
+
+        def on_delete_group():
+            group_id = group_var.get()
+            if not group_id:
+                messagebox.showwarning("Grupo", "Selecione um grupo para excluir.", parent=root)
+                return
+            if not messagebox.askyesno("Excluir grupo", "Excluir o grupo selecionado?", parent=root):
+                return
+            try:
+                result = manager_delete_group(
+                    self.snippets, self.library_metadata, group_id,
+                    dynamic_triggers=self._manager_dynamic_triggers(),
+                )
+                if self._persist_manager_action(result):
+                    group_var.set("")
+                    refresh_group_menu()
+                    self.notify_status("Grupo excluído.", key=f"manager-group-delete:{group_id}")
+                else:
+                    manager_action_failed("Excluir grupo")
+            except (KeyError, ValueError, MetadataReadOnlyError) as error:
+                self.logger.warning(f"Manager group deletion failed: {error}")
+                manager_action_failed("Excluir grupo")
+
+        def on_toggle_favorite():
+            key = current_static_key()
+            if key is None:
+                return
+            try:
+                result = manager_toggle_favorite(
+                    self.snippets, self.library_metadata, key,
+                    item_favorite_var.get(),
+                    dynamic_triggers=self._manager_dynamic_triggers(),
+                )
+                if not self._persist_manager_action(result):
+                    item_favorite_var.set(not item_favorite_var.get())
+                    manager_action_failed()
+            except (KeyError, ValueError, MetadataReadOnlyError) as error:
+                item_favorite_var.set(not item_favorite_var.get())
+                self.logger.warning(f"Manager favorite update failed: {error}")
+                manager_action_failed()
+
+        def on_group_assignment(_event=None):
+            key = current_static_key()
+            if key is None:
+                return
+            try:
+                if item_group_var.get():
+                    result = manager_assign_item(
+                        self.snippets, self.library_metadata, key, item_group_var.get(),
+                        dynamic_triggers=self._manager_dynamic_triggers(),
+                    )
+                else:
+                    from manager_actions import unassign_item as manager_unassign_item
+                    result = manager_unassign_item(
+                        self.snippets, self.library_metadata, key,
+                        dynamic_triggers=self._manager_dynamic_triggers(),
+                    )
+                if not self._persist_manager_action(result):
+                    manager_action_failed()
+            except (KeyError, ValueError, MetadataReadOnlyError) as error:
+                self.logger.warning(f"Manager group assignment failed: {error}")
+                manager_action_failed()
+
+        def on_edit_form():
+            key = current_static_key()
+            if key is None:
+                return
+            from form_editor_dialog import run_form_editor
+            definition = self._static_form_metadata(key)
+            form = run_form_editor(
+                root, definition, self.snippets,
+                template=extract_plain_text(self.snippets[key]),
+            )
+            if form is None:
+                return
+            try:
+                result = manager_set_form(
+                    self.snippets, self.library_metadata, key, form,
+                    dynamic_triggers=self._manager_dynamic_triggers(),
+                )
+                if not self._persist_manager_action(result):
+                    manager_action_failed()
+            except (KeyError, ValueError, MetadataReadOnlyError) as error:
+                self.logger.warning(f"Manager form update failed: {error}")
+                manager_action_failed()
+
+        def on_preview():
+            key = current_static_key()
+            if key is None:
+                return
+            result = resolve_preview(self.snippets[key], self.snippets, self._static_form_metadata(key))
+            controller = getattr(self, "_manager_preview_controller", None)
+            if controller is None or controller.shared_root is not root:
+                controller = PreviewDialogController(root)
+                self._manager_preview_controller = controller
+            controller.show(result, title=f"Prévia — {key}")
 
         def on_new():
             entry_trigger.delete(0, tk.END)
             load_value_into_text_widget(text_value, "")
+            effective_trigger_var.set("Efetivo: —")
             update_format_status()
             entry_trigger.focus_set()
 
@@ -2741,15 +3752,35 @@ class Sniptype:
             self.notify_status(f"Snippet '{trigger}' excluído.", key=f"delete-static:{trigger}")
 
         def on_duplicate():
-            value = serialize_text_widget_content(text_value)
-            if not extract_plain_text(value).strip():
-                messagebox.showwarning("Aviso", "Nada para duplicar.")
+            source_key = current_static_key()
+            if source_key is None:
+                messagebox.showwarning("Duplicar", "Selecione um snippet salvo.", parent=root)
                 return
-            # Keep the value, clear the trigger so the user names the copy.
+            destination = simpledialog.askstring("Duplicar", "Novo trigger:", parent=root)
+            if destination is None:
+                return
+            destination = destination.strip()
+            if not destination:
+                return
+            try:
+                result = manager_duplicate_static(
+                    self.snippets, self.library_metadata, source_key, destination,
+                    dynamic_triggers=self._manager_dynamic_triggers(),
+                )
+                if not self._persist_manager_action(result):
+                    manager_action_failed("Duplicar")
+                    return
+            except (KeyError, ValueError, MetadataReadOnlyError) as error:
+                self.logger.warning(f"Manager duplicate failed: {error}")
+                manager_action_failed("Duplicar")
+                return
             entry_trigger.delete(0, tk.END)
-            update_format_status()
-            entry_trigger.focus_set()
-            messagebox.showinfo("Duplicar", "Informe um novo trigger e clique em Salvar para criar a cópia.")
+            entry_trigger.insert(0, destination)
+            refresh_listbox()
+            if tree.exists(destination):
+                tree.selection_set(destination)
+                load_selected()
+            self.notify_status(f"Snippet '{destination}' duplicado.", key=f"duplicate-static:{destination}")
 
         def on_rename():
             old_trigger = entry_trigger.get().strip()
@@ -2780,19 +3811,25 @@ class Sniptype:
                 "Avisos sobre este trigger:\n\n• " + "\n• ".join(warnings) + "\n\nRenomear mesmo assim?",
             ):
                 return
-            value = self.snippets[old_trigger]
-            self.snippets[new_trigger] = value
-            del self.snippets[old_trigger]
-            shadowed = self.shadowed_static_snippets.pop(old_trigger, None)
-            if not self.save_snippets(self.snippets):
-                # Roll back the in-memory rename on failure.
-                self.snippets[old_trigger] = value
-                self.snippets.pop(new_trigger, None)
-                if shadowed is not None:
-                    self.shadowed_static_snippets[old_trigger] = shadowed
-                messagebox.showerror("Erro ao salvar", "Não foi possível gravar snippets.json.")
+            try:
+                result = manager_rename_static(
+                    self.snippets,
+                    self.library_metadata,
+                    old_trigger,
+                    new_trigger,
+                    dynamic_triggers=self._manager_dynamic_triggers(),
+                )
+                if not self._persist_manager_action(result):
+                    messagebox.showerror(
+                        "Erro ao salvar",
+                        "Não foi possível gravar snippets.json.",
+                        parent=root,
+                    )
+                    return
+            except (KeyError, ValueError, MetadataReadOnlyError) as error:
+                self.logger.warning(f"Manager rename failed: {error}")
+                messagebox.showwarning("Renomear", str(error), parent=root)
                 return
-            self.refresh_runtime_indexes()
             entry_trigger.delete(0, tk.END)
             entry_trigger.insert(0, new_trigger)
             refresh_listbox()
@@ -2804,13 +3841,21 @@ class Sniptype:
         btn_duplicate.configure(command=on_duplicate)
         btn_rename.configure(command=on_rename)
         btn_delete.configure(command=on_delete)
+        item_group_combo.bind("<<ComboboxSelected>>", on_group_assignment)
         search_var.trace_add("write", lambda *_: refresh_listbox())
+        filter_var.trace_add("write", lambda *_: refresh_listbox())
+        group_var.trace_add("write", lambda *_: refresh_listbox())
         # Ctrl+S saves the current static snippet from anywhere in the editor.
         for widget in (entry_trigger, text_value, tree):
             widget.bind("<Control-s>", lambda _event: (on_save(), "break")[1])
 
-        refresh_listbox()
-        self._register_manager_refresher(refresh_listbox)
+        def refresh_static_tab():
+            refresh_group_menu()
+            refresh_metadata_controls()
+            refresh_listbox()
+
+        refresh_static_tab()
+        self._register_manager_refresher(refresh_static_tab)
         search_entry.focus_set()
 
     def _create_dynamic_mappings_tab(self, parent, root, set_count=None):
@@ -3081,6 +4126,15 @@ class Sniptype:
             bg=ui.card,
             fg=ui.text_strong,
         ).grid(row=2, column=0, sticky="w")
+        mapping_effective_trigger_var = tk.StringVar(value="Efetivo: —")
+        tk.Label(
+            frame_right,
+            textvariable=mapping_effective_trigger_var,
+            font=ui.font(8),
+            bg=ui.card,
+            fg=ui.text_muted,
+            anchor="e",
+        ).grid(row=2, column=0, sticky="e")
         entry_name = tk.Entry(
             frame_right,
             font=ui.font(10),
@@ -3150,6 +4204,38 @@ class Sniptype:
         btn_new_map.pack(side=tk.LEFT, padx=(0, 6))
         btn_delete_map.pack(side=tk.LEFT, padx=(6, 0))
         btn_save_map.pack(side=tk.RIGHT)
+        mapping_favorite_var = tk.BooleanVar(value=False)
+        mapping_favorite_check = tk.Checkbutton(
+            btn_frame,
+            text="Favorito",
+            variable=mapping_favorite_var,
+            **ui.checkbutton_colors(ui.card),
+            command=lambda: on_toggle_mapping_favorite(),
+        )
+        mapping_favorite_check.pack(side=tk.LEFT, padx=(ui.space_sm, 0))
+        mapping_form_button = tk.Button(
+            btn_frame,
+            text="Formulário",
+            command=lambda: on_edit_mapping_form(),
+            **ui.button_chrome(compact=True),
+            **ui.button_colors(),
+        )
+        mapping_form_button.pack(side=tk.LEFT, padx=(ui.space_sm, 0))
+        def refresh_mapping_metadata_controls():
+            state = (
+                tk.DISABLED
+                if getattr(self.library_metadata, "read_only", False)
+                else tk.NORMAL
+            )
+            mapping_favorite_check.configure(state=state)
+            mapping_form_button.configure(state=state)
+        tk.Button(
+            btn_frame,
+            text="Prévia",
+            command=lambda: on_preview_mapping(),
+            **ui.button_chrome(compact=True),
+            **ui.button_colors(),
+        ).pack(side=tk.LEFT, padx=(ui.space_sm, 0))
 
         def update_total_count():
             """Tab title counts every mapping item, across all types.
@@ -3174,16 +4260,30 @@ class Sniptype:
             mapping = self.snippets.get(current_type, {})
             if not isinstance(mapping, dict):
                 mapping = {}
+            rows = {
+                row.stored_trigger: row
+                for row in self._manager_rows()
+                if row.kind == "mapping" and row.container == current_type
+            }
             has_rows = False
             for key in iter_filtered_mapping_items(mapping, query):
                 if not key:
                     continue  # a blank key cannot be a Treeview row iid
+                values = snippet_row_values(key, mapping.get(key, ""))
+                row = rows.get(key)
+                if row is not None:
+                    values = (format_trigger_pair(row),) + values[1:]
                 tree_map.insert("", tk.END, iid=key,
-                                values=snippet_row_values(key, mapping.get(key, "")))
+                                values=values)
                 has_rows = True
             (tree_map if has_rows else empty_mapping_label).tkraise()
             update_total_count()
             update_example_label()
+            edited_row = rows.get(entry_name.get().strip())
+            mapping_effective_trigger_var.set(
+                f"Efetivo: {edited_row.effective_trigger}"
+                if edited_row else "Efetivo: —"
+            )
 
         def add_new_type():
             dialog = tk.Toplevel(root)
@@ -3319,17 +4419,135 @@ class Sniptype:
             entry_name.delete(0, tk.END)
             entry_name.insert(0, key)
             load_value_into_text_widget(text_value, mapping.get(key, ""))
+            row = next((candidate for candidate in self._manager_rows()
+                        if candidate.kind == "mapping"
+                        and candidate.container == current_type
+                        and candidate.stored_trigger == key), None)
+            mapping_favorite_var.set(bool(row and row.favorite))
+            mapping_effective_trigger_var.set(
+                f"Efetivo: {row.effective_trigger}" if row else "Efetivo: —"
+            )
             update_format_status()
+
+        def select_mapping_target(descriptor):
+            if descriptor.kind != "mapping" or descriptor.container not in type_keys:
+                return False
+            index = type_keys.index(descriptor.container)
+            listbox_types.selection_clear(0, tk.END)
+            listbox_types.selection_set(index)
+            listbox_types.activate(index)
+            mapping_type.set(descriptor.container)
+            refresh_mapping_list()
+            if not tree_map.exists(descriptor.stored_trigger):
+                return False
+            try:
+                if self._manager_notebook is not None:
+                    self._manager_notebook.select(parent)
+            except Exception:
+                pass
+            tree_map.selection_set(descriptor.stored_trigger)
+            tree_map.focus(descriptor.stored_trigger)
+            tree_map.see(descriptor.stored_trigger)
+            load_selected_mapping()
+            return True
+
+        self._manager_tab_selectors["mapping"] = select_mapping_target
+
+        def on_toggle_mapping_favorite():
+            current_type = mapping_type.get()
+            key = entry_name.get().strip()
+            mapping = self.snippets.get(current_type, {})
+            if not key or not isinstance(mapping, dict) or key not in mapping:
+                return
+            try:
+                result = manager_toggle_mapping_favorite(
+                    self.snippets, self.library_metadata, current_type, key,
+                    mapping_favorite_var.get(),
+                )
+                if not self._persist_manager_action(result):
+                    mapping_favorite_var.set(not mapping_favorite_var.get())
+                    messagebox.showerror("Favorito", "Não foi possível salvar a alteração.", parent=root)
+            except (KeyError, ValueError, MetadataReadOnlyError) as error:
+                mapping_favorite_var.set(not mapping_favorite_var.get())
+                self.logger.warning(f"Mapping favorite update failed: {error}")
+                messagebox.showwarning(
+                    "Favorito",
+                    "Os metadados da biblioteca são somente leitura nesta versão." if getattr(self.library_metadata, "read_only", False) else str(error),
+                    parent=root,
+                )
+
+        def on_edit_mapping_form():
+            current_type = mapping_type.get()
+            key = entry_name.get().strip()
+            mapping = self.snippets.get(current_type, {})
+            if not key or not isinstance(mapping, dict) or key not in mapping:
+                return
+            from form_editor_dialog import run_form_editor
+            definition = self._mapping_form_metadata(current_type, key)
+            form = run_form_editor(
+                root,
+                definition,
+                self.snippets,
+                template=extract_plain_text(mapping[key]),
+                title="Editar formulário do mapeamento",
+            )
+            if form is None:
+                return
+            try:
+                result = manager_set_mapping_form(
+                    self.snippets,
+                    self.library_metadata,
+                    current_type,
+                    key,
+                    form,
+                    dynamic_triggers=self._manager_dynamic_triggers(),
+                )
+                if not self._persist_manager_action(result):
+                    messagebox.showerror(
+                        "Formulário",
+                        "Não foi possível salvar a alteração.",
+                        parent=root,
+                    )
+            except (KeyError, ValueError, MetadataReadOnlyError) as error:
+                self.logger.warning(f"Mapping form update failed: {error}")
+                messagebox.showwarning(
+                    "Formulário",
+                    "Os metadados da biblioteca são somente leitura nesta versão."
+                    if getattr(self.library_metadata, "read_only", False)
+                    else str(error),
+                    parent=root,
+                )
+
+        def on_preview_mapping():
+            current_type = mapping_type.get()
+            key = entry_name.get().strip()
+            mapping = self.snippets.get(current_type, {})
+            if not key or not isinstance(mapping, dict) or key not in mapping:
+                return
+            result = resolve_preview(
+                mapping[key],
+                self.snippets,
+                self._mapping_form_metadata(current_type, key),
+            )
+            controller = getattr(self, "_manager_preview_controller", None)
+            if controller is None or controller.shared_root is not root:
+                controller = PreviewDialogController(root)
+                self._manager_preview_controller = controller
+            controller.show(result, title=f"Prévia — {key}")
 
         def on_type_changed(*args):
             refresh_mapping_list()
             entry_name.delete(0, tk.END)
             load_value_into_text_widget(text_value, "")
+            mapping_favorite_var.set(False)
+            mapping_effective_trigger_var.set("Efetivo: —")
             update_format_status()
 
         def on_new_map():
             entry_name.delete(0, tk.END)
             load_value_into_text_widget(text_value, "")
+            mapping_favorite_var.set(False)
+            mapping_effective_trigger_var.set("Efetivo: —")
             update_format_status()
             entry_name.focus_set()
 
@@ -3401,7 +4619,6 @@ class Sniptype:
                 refresh_mapping_list()
                 self.notify_status(f"Item '{name}' excluído.", key=f"delete-map:{current_type}:{name}")
 
-        refresh_type_list()
         mapping_type.trace_add("write", lambda *_: on_type_changed())
         tree_map.bind("<<TreeviewSelect>>", load_selected_mapping)
         btn_new_map.configure(command=on_new_map)
@@ -3414,10 +4631,11 @@ class Sniptype:
         def refresh_all_mappings():
             # A restore/import can drop the selected type entirely, so the type
             # list has to be rebuilt before the items are.
+            refresh_mapping_metadata_controls()
             refresh_type_list()
             refresh_mapping_list()
 
-        refresh_mapping_list()
+        refresh_all_mappings()
         self._register_manager_refresher(refresh_all_mappings)
 
     def _create_reference_tab(
@@ -3472,7 +4690,10 @@ class Sniptype:
             lambda event: canvas.itemconfigure(canvas_window, width=event.width),
         )
 
+        dynamic_rows = {}
+
         def populate():
+            dynamic_rows.clear()
             for child in inner.winfo_children():
                 child.destroy()
             grouped = reference_entries_by_category(self.dynamic_registry)
@@ -3507,14 +4728,15 @@ class Sniptype:
                     ).pack(side=tk.LEFT)
                     trigger_label = tk.Label(
                         row,
-                        text=trigger,
+                        text=key if key == trigger else f"{key} → {trigger}",
                         font=ui.mono_font(10, "bold"),
                         fg=ui.link,
                         bg=ui.card,
-                        width=12,
+                        width=24,
                         anchor="w",
                     )
                     trigger_label.pack(side=tk.LEFT)
+                    dynamic_rows[key] = (row, trigger_label)
                     rename = (
                         lambda event=None, k=key, t=trigger:
                         self._rename_registry_entry_dialog(root, k, t, populate)
@@ -3544,6 +4766,7 @@ class Sniptype:
             self._bind_mousewheel_descendants(inner, canvas)
 
         populate()
+        self._register_manager_refresher(populate)
 
         tk.Label(
             main,
@@ -3554,6 +4777,24 @@ class Sniptype:
         ).grid(row=3, column=0, sticky="w", pady=(ui.space_md, 0))
 
         self._bind_mousewheel(canvas, canvas)
+
+        def select_dynamic_target(descriptor):
+            if descriptor.kind != "dynamic":
+                return False
+            widgets = dynamic_rows.get(descriptor.stored_trigger)
+            if widgets is None:
+                return False
+            row, trigger_label = widgets
+            try:
+                if self._manager_notebook is not None:
+                    self._manager_notebook.select(parent)
+            except Exception:
+                pass
+            row.configure(highlightbackground=ui.focus_ring, highlightthickness=1)
+            trigger_label.focus_set()
+            return True
+
+        self._manager_tab_selectors["dynamic"] = select_dynamic_target
 
     def _on_registry_checkbox(self, key, var):
         """Apply a checkbox toggle, snapping the box back when it is refused."""
@@ -3595,6 +4836,8 @@ class Sniptype:
             logger=self.logger,
         )
         self.reload_snippets_from_disk()
+        if getattr(self, "manager_window", None) is not None:
+            self.gui.submit(self._refresh_manager_lists)
         self.export_sync_bundle()
         state = "ativado" if enabled else "desativado"
         trigger = effective_trigger(key, self.dynamic_registry.get(key, {}))
@@ -3615,8 +4858,23 @@ class Sniptype:
         if trigger.startswith("_"):
             return True
 
-        value = self.snippets.get(trigger)
-        if value is not None and not callable(value):
+        static_snippets = build_saveable_snippets(
+            self.snippets,
+            self.shadowed_static_snippets,
+        )
+        static_row = next(
+            (
+                row
+                for row in build_manager_rows(
+                    static_snippets,
+                    self.library_metadata,
+                    self.dynamic_registry,
+                )
+                if row.kind == "static" and row.effective_trigger == trigger
+            ),
+            None,
+        )
+        if static_row is not None:
             self.logger.warning(
                 f"Ativar o snippet dinâmico '{trigger}' sobrepõe o snippet estático de mesmo nome."
             )
@@ -3632,7 +4890,7 @@ class Sniptype:
         # ``check_dynamic_pattern`` against the ``_``-prefixed container — so the
         # direct lookup above misses it. Enabling the dynamic entry still changes
         # what the user's typing expands to, so it needs the same confirmation.
-        if value is None and trigger in composed_mapping_triggers(self.snippets):
+        if trigger in composed_mapping_triggers(self.snippets):
             self.logger.warning(
                 f"Ativar o snippet dinâmico '{trigger}' sobrepõe um mapeamento dinâmico de mesmo nome."
             )
@@ -3666,7 +4924,9 @@ class Sniptype:
         """Ask for a new trigger name, validate it, then persist and refresh."""
         new_trigger = simpledialog.askstring(
             "Renomear trigger",
-            f"Novo trigger para '{current_trigger}':",
+            f"Identificador armazenado: {key}\n"
+            f"Trigger efetivo atual: {current_trigger}\n\n"
+            "Novo trigger efetivo:",
             initialvalue=current_trigger,
             parent=root,
         )
@@ -3676,7 +4936,17 @@ class Sniptype:
         if not new_trigger or new_trigger == current_trigger:
             return
 
-        errors, warnings = validate_rename(self.dynamic_registry, key, new_trigger, self.snippets)
+        static_snippets = build_saveable_snippets(
+            self.snippets,
+            self.shadowed_static_snippets,
+        )
+        errors, warnings = validate_rename(
+            self.dynamic_registry,
+            key,
+            new_trigger,
+            static_snippets,
+            self.library_metadata,
+        )
         if errors:
             messagebox.showerror("Trigger inválido", "\n".join(errors), parent=root)
             return
@@ -3782,9 +5052,14 @@ class Sniptype:
     def toggle_enabled(self, icon, item):
         """Enable/disable snippet expansion."""
         self.enabled = not self.enabled
-        icon.icon = self.load_tray_icon()
+        if icon is not None:
+            icon.icon = self.load_tray_icon()
         status = "ativada" if self.enabled else "desativada"
         self.notify_status(f"Expansão de snippets {status}.", key="toggle-enabled")
+
+    def edit_last_snippet(self, icon=None, item=None):
+        """Queue the manager at the most recently successful snippet."""
+        self._dispatch_hotkey_action("edit_last")
     
     
     def reload_snippets(self, icon, item):
@@ -3792,6 +5067,8 @@ class Sniptype:
         try:
             self.snippets = self.load_snippets()
             self.refresh_runtime_indexes()
+            if self.manager_window is not None:
+                self.gui.submit(self._refresh_manager_lists)
             self.notify_status("Snippets recarregados com sucesso.", key="reload-snippets")
         except Exception as e:
             self.notify_error(
@@ -4160,7 +5437,10 @@ class Sniptype:
     
     def run_keyboard_listener(self):
         """Run the keyboard listener in a separate thread."""
-        self.listener = keyboard.Listener(on_press=self.on_press)
+        self.listener = keyboard.Listener(
+            on_press=self.on_press,
+            on_release=self.on_release,
+        )
         self.listener.start()
         self.listener.join()
     
@@ -4237,6 +5517,8 @@ class Sniptype:
             ),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Gerenciar Snippets", self.manage_snippets_gui, default=True),
+            pystray.MenuItem("Editar último snippet", self.edit_last_snippet),
+            pystray.MenuItem("Configurar atalhos", self.configure_hotkeys),
             pystray.MenuItem("Recarregar Snippets", self.reload_snippets),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Backup agora", self.tray_backup_now),

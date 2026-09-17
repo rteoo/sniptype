@@ -112,6 +112,44 @@ class RuntimeSettingsNormalizationTests(unittest.TestCase):
         self.assertEqual(normalized["stock_cache_seconds"], 3600)
         self.assertEqual(normalized["sync_export_dir"], "C:/sync")
 
+    def test_hotkeys_normalize_supported_actions_and_preserve_unknown_actions(self):
+        normalized, invalid = normalize_runtime_settings({
+            "hotkeys": {
+                "open_manager": " <CTRL>+<SHIFT>+M ",
+                "edit_last": None,
+                "future_action": "<ctrl>+f",
+            }
+        })
+
+        self.assertEqual("<ctrl>+<shift>+m", normalized["hotkeys"]["open_manager"])
+        self.assertIsNone(normalized["hotkeys"]["edit_last"])
+        self.assertIsNone(normalized["hotkeys"]["toggle_enabled"])
+        self.assertEqual("<ctrl>+f", normalized["hotkeys"]["future_action"])
+        self.assertEqual({}, invalid)
+
+    def test_malformed_hotkeys_disable_only_invalid_supported_bindings(self):
+        normalized, invalid = normalize_runtime_settings({
+            "hotkeys": {
+                "open_manager": "m",
+                "edit_last": "<ctrl>+e",
+                "future_action": ["leave", "alone"],
+            }
+        })
+
+        self.assertIsNone(normalized["hotkeys"]["open_manager"])
+        self.assertEqual("<ctrl>+e", normalized["hotkeys"]["edit_last"])
+        self.assertEqual(["leave", "alone"], normalized["hotkeys"]["future_action"])
+        self.assertIn("open_manager", invalid["hotkeys"])
+
+    def test_wrong_hotkey_root_falls_back_to_disabled_bindings(self):
+        normalized, invalid = normalize_runtime_settings({"hotkeys": "<ctrl>+m"})
+
+        self.assertEqual(
+            {"open_manager": None, "edit_last": None, "toggle_enabled": None},
+            normalized["hotkeys"],
+        )
+        self.assertIn("hotkeys", invalid)
+
 
 if __name__ == "__main__":
     unittest.main()
