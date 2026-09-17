@@ -110,7 +110,9 @@ platform path and both supported Python lines without testing every redundant
 combination. Linux uses Xvfb because pynput and pystray bind to Xorg at import
 time, and that same lane runs the pinned Ruff checks selected in `ruff.toml`
 (`F401`, `F811`, and `F821`). Each matrix job has a bounded timeout, and a newer
-commit cancels older validation for the same branch or pull request.
+commit cancels older validation for the same branch. CI runs on every branch
+push so its checks attach to the exact commit used by branch protection;
+`workflow_dispatch` remains available for diagnostic reruns.
 
 Run the same focused lint command locally from the repository root:
 
