@@ -114,6 +114,68 @@ class ManagerGuiSmokeTests(unittest.TestCase):
 
         self._on_gui(build)
 
+    def test_manager_minimum_size_keeps_editor_controls_and_mapping_columns_visible(self):
+        """The smallest supported manager window must not clip its controls."""
+        def build(shared_root):
+            self.app._build_manager_window(shared_root)
+            window = self.app.manager_window
+            self.assertIsNotNone(window)
+            window.geometry("900x580")
+            window.deiconify()
+            window.update()
+
+            notebook = self.app._manager_notebook
+            tab_ids = notebook.tabs()
+
+            def is_descendant(widget, ancestor):
+                while widget is not ancestor:
+                    widget = widget.master
+                    if widget is None:
+                        return False
+                return True
+
+            for tab_id, expected_labels in (
+                (tab_ids[0], {"Novo", "Salvar", "Duplicar", "Renomear", "Excluir", "Formulário", "Prévia"}),
+                (tab_ids[1], {"Novo", "Salvar", "Excluir", "Formulário", "Prévia"}),
+            ):
+                notebook.select(tab_id)
+                window.update()
+                tab = notebook.nametowidget(tab_id)
+                editor_label = next(
+                    widget for widget in _descendants(tab)
+                    if isinstance(widget, tk.Label) and widget.cget("text") == "Editor"
+                )
+                editor_pane = editor_label.master
+                buttons = {
+                    str(widget.cget("text")): widget
+                    for widget in _descendants(editor_pane)
+                    if isinstance(widget, tk.Button)
+                    and is_descendant(widget, editor_pane)
+                }
+                self.assertTrue(expected_labels <= buttons.keys())
+                pane_right = editor_pane.winfo_rootx() + editor_pane.winfo_width()
+                for label in expected_labels:
+                    button = buttons[label]
+                    self.assertEqual(1, button.winfo_ismapped(), label)
+                    self.assertLessEqual(
+                        button.winfo_rootx() + button.winfo_width(),
+                        pane_right + 1,
+                        f"{label} extends past the editor pane",
+                    )
+
+            notebook.select(tab_ids[1])
+            window.update()
+            mapping_tab = notebook.nametowidget(tab_ids[1])
+            tree = next(widget for widget in _descendants(mapping_tab) if isinstance(widget, ttk.Treeview))
+            configured_width = sum(tree.column(column, "width") for column in tree["columns"])
+            self.assertLessEqual(
+                configured_width,
+                tree.winfo_width(),
+                "mapping columns extend beyond the visible tree",
+            )
+
+        self._on_gui(build)
+
     def test_dynamic_mappings_tab_lists_custom_types(self):
         self.app.snippets["_mail_codes"] = {"__prefix__": "mail", "team": "team@x.com"}
 

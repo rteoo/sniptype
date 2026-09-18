@@ -2754,7 +2754,8 @@ class Sniptype:
         style.layout("Manager.Treeview", style.layout("Treeview"))
 
     def _create_snippet_tree(self, shell, trigger_heading="Trigger",
-                             trigger_width=104, preview_width=186):
+                             trigger_width=104, preview_width=186,
+                             markers_width=46):
         """Build the trigger/preview/markers Treeview used by the snippet lists.
 
         ``shell`` must be a grid container whose row 0 / column 0 expands.
@@ -2772,11 +2773,20 @@ class Sniptype:
         tree.heading("trigger", text=trigger_heading, anchor="w")
         tree.heading("preview", text="Valor", anchor="w")
         tree.heading("markers", text="Tipo", anchor="center")
-        # Widths are deliberately tight: the list shares the tab with the editor
-        # pane, whose button row and format status get clipped if this grows.
-        tree.column("trigger", width=trigger_width, minwidth=76, anchor="w", stretch=False)
-        tree.column("preview", width=preview_width, minwidth=100, anchor="w", stretch=True)
-        tree.column("markers", width=46, minwidth=46, anchor="center", stretch=False)
+        # Widths are per-tab: mappings have three panes and need a compact
+        # table, while the static library can give its preview more room.
+        tree.column(
+            "trigger", width=trigger_width, minwidth=min(76, trigger_width),
+            anchor="w", stretch=False,
+        )
+        tree.column(
+            "preview", width=preview_width, minwidth=min(100, preview_width),
+            anchor="w", stretch=True,
+        )
+        tree.column(
+            "markers", width=markers_width, minwidth=markers_width,
+            anchor="center", stretch=False,
+        )
         tree.grid(row=0, column=0, sticky="nsew")
 
         scrollbar = ttk.Scrollbar(shell, orient=tk.VERTICAL, command=tree.yview)
@@ -3340,10 +3350,15 @@ class Sniptype:
 
         btn_frame = tk.Frame(frame_right, bg=ui.card)
         btn_frame.grid(row=7, column=0, sticky="ew")
+        btn_frame.grid_columnconfigure(0, weight=1)
+        primary_actions = tk.Frame(btn_frame, bg=ui.card)
+        primary_actions.grid(row=0, column=0, sticky="ew")
+        secondary_actions = tk.Frame(btn_frame, bg=ui.card)
+        secondary_actions.grid(row=1, column=0, sticky="ew", pady=(ui.space_sm, 0))
 
-        def editor_button(label, *, accent=False, danger=False):
+        def editor_button(label, *, accent=False, danger=False, parent=primary_actions):
             return tk.Button(
-                btn_frame,
+                parent,
                 text=label,
                 width=ui.button_width(10),
                 **ui.button_chrome(),
@@ -3351,25 +3366,29 @@ class Sniptype:
             )
 
         btn_new = editor_button("Novo")
-        btn_save = editor_button("Salvar", accent=True)
         btn_duplicate = editor_button("Duplicar")
         btn_rename = editor_button("Renomear")
-        btn_delete = editor_button("Excluir", danger=True)
+        btn_delete = editor_button("Excluir", danger=True, parent=secondary_actions)
+        btn_save = editor_button("Salvar", accent=True, parent=secondary_actions)
         btn_new.pack(side=tk.LEFT, padx=(0, 6))
         btn_duplicate.pack(side=tk.LEFT, padx=6)
         btn_rename.pack(side=tk.LEFT, padx=6)
-        btn_delete.pack(side=tk.LEFT, padx=(ui.space_lg, 0))
+        btn_delete.pack(side=tk.LEFT)
         btn_save.pack(side=tk.RIGHT)
 
         item_group_var = tk.StringVar(value="")
         item_favorite_var = tk.BooleanVar(value=False)
         item_frame = tk.Frame(frame_right, bg=ui.card)
         item_frame.grid(row=8, column=0, sticky="ew", pady=(ui.space_sm, 0))
-        tk.Label(item_frame, text="Grupo:", bg=ui.card, fg=ui.text_muted, font=ui.font(8)).pack(side=tk.LEFT)
-        item_group_combo = ttk.Combobox(item_frame, textvariable=item_group_var, state="readonly", width=18)
-        item_group_combo.pack(side=tk.LEFT, padx=(4, ui.space_md))
+        item_group_controls = tk.Frame(item_frame, bg=ui.card)
+        item_group_controls.pack(fill=tk.X)
+        tk.Label(item_group_controls, text="Grupo:", bg=ui.card, fg=ui.text_muted, font=ui.font(8)).pack(side=tk.LEFT)
+        item_group_combo = ttk.Combobox(item_group_controls, textvariable=item_group_var, state="readonly", width=18)
+        item_group_combo.pack(side=tk.LEFT, padx=(4, 0))
+        item_metadata_controls = tk.Frame(item_frame, bg=ui.card)
+        item_metadata_controls.pack(fill=tk.X, pady=(ui.space_sm, 0))
         item_favorite_check = tk.Checkbutton(
-            item_frame,
+            item_metadata_controls,
             text="Favorito",
             variable=item_favorite_var,
             **ui.checkbutton_colors(ui.card),
@@ -3377,11 +3396,11 @@ class Sniptype:
         )
         item_favorite_check.pack(side=tk.LEFT)
         tk.Button(
-            item_frame, text="Prévia", command=lambda: on_preview(),
+            item_metadata_controls, text="Prévia", command=lambda: on_preview(),
             **ui.button_chrome(compact=True), **ui.button_colors(),
         ).pack(side=tk.RIGHT, padx=(4, 0))
         form_button = tk.Button(
-            item_frame, text="Formulário", command=lambda: on_edit_form(),
+            item_metadata_controls, text="Formulário", command=lambda: on_edit_form(),
             **ui.button_chrome(compact=True), **ui.button_colors(),
         )
         form_button.pack(side=tk.RIGHT, padx=(4, 0))
@@ -3969,9 +3988,9 @@ class Sniptype:
 
         content = tk.Frame(main, bg=ui.surface)
         content.grid(row=2, column=0, sticky="nsew")
-        content.grid_columnconfigure(0, weight=0, minsize=150)
-        content.grid_columnconfigure(1, weight=2, minsize=250)
-        content.grid_columnconfigure(2, weight=3, minsize=380)
+        content.grid_columnconfigure(0, weight=0, minsize=140)
+        content.grid_columnconfigure(1, weight=3, minsize=270)
+        content.grid_columnconfigure(2, weight=3, minsize=360)
         content.grid_rowconfigure(0, weight=1)
 
         # Types live in a scrollable vertical list so any number of custom
@@ -4088,7 +4107,8 @@ class Sniptype:
             listbox_frame,
             trigger_heading="Identificador",
             trigger_width=88,
-            preview_width=118,
+            preview_width=80,
+            markers_width=42,
         )
         empty_mapping_label = tk.Label(
             listbox_frame,
@@ -4196,10 +4216,15 @@ class Sniptype:
 
         btn_frame = tk.Frame(frame_right, bg=ui.card)
         btn_frame.grid(row=7, column=0, sticky="ew")
+        btn_frame.grid_columnconfigure(0, weight=1)
+        primary_actions = tk.Frame(btn_frame, bg=ui.card)
+        primary_actions.grid(row=0, column=0, sticky="ew")
+        secondary_actions = tk.Frame(btn_frame, bg=ui.card)
+        secondary_actions.grid(row=1, column=0, sticky="ew", pady=(ui.space_sm, 0))
 
-        def mapping_button(label, *, accent=False, danger=False):
+        def mapping_button(label, *, accent=False, danger=False, parent=primary_actions):
             return tk.Button(
-                btn_frame,
+                parent,
                 text=label,
                 width=ui.button_width(12),
                 **ui.button_chrome(),
@@ -4207,14 +4232,16 @@ class Sniptype:
             )
 
         btn_new_map = mapping_button("Novo")
-        btn_save_map = mapping_button("Salvar", accent=True)
         btn_delete_map = mapping_button("Excluir", danger=True)
+        btn_save_map = mapping_button("Salvar", accent=True, parent=secondary_actions)
         btn_new_map.pack(side=tk.LEFT, padx=(0, 6))
-        btn_delete_map.pack(side=tk.LEFT, padx=(6, 0))
+        btn_delete_map.pack(side=tk.LEFT, padx=(ui.space_lg, 0))
         btn_save_map.pack(side=tk.RIGHT)
+        mapping_metadata_frame = tk.Frame(frame_right, bg=ui.card)
+        mapping_metadata_frame.grid(row=8, column=0, sticky="ew", pady=(ui.space_sm, 0))
         mapping_favorite_var = tk.BooleanVar(value=False)
         mapping_favorite_check = tk.Checkbutton(
-            btn_frame,
+            mapping_metadata_frame,
             text="Favorito",
             variable=mapping_favorite_var,
             **ui.checkbutton_colors(ui.card),
@@ -4222,7 +4249,7 @@ class Sniptype:
         )
         mapping_favorite_check.pack(side=tk.LEFT, padx=(ui.space_sm, 0))
         mapping_form_button = tk.Button(
-            btn_frame,
+            mapping_metadata_frame,
             text="Formulário",
             command=lambda: on_edit_mapping_form(),
             **ui.button_chrome(compact=True),
@@ -4238,7 +4265,7 @@ class Sniptype:
             mapping_favorite_check.configure(state=state)
             mapping_form_button.configure(state=state)
         tk.Button(
-            btn_frame,
+            mapping_metadata_frame,
             text="Prévia",
             command=lambda: on_preview_mapping(),
             **ui.button_chrome(compact=True),
