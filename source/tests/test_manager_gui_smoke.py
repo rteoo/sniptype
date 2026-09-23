@@ -40,6 +40,7 @@ if IS_MAC:
 else:
     try:
         import tkinter as tk
+        from tkinter import font as tkfont
         from tkinter import ttk
         _probe = GuiThread(main_thread=False)
         _probe.ensure_started()
@@ -120,7 +121,8 @@ class ManagerGuiSmokeTests(unittest.TestCase):
             self.app._build_manager_window(shared_root)
             window = self.app.manager_window
             self.assertIsNotNone(window)
-            window.geometry("900x580")
+            _, min_width, min_height = tx.ui_theme.theme().manager_window_size
+            window.geometry(f"{min_width}x{min_height}")
             window.deiconify()
             window.update()
 
@@ -154,14 +156,42 @@ class ManagerGuiSmokeTests(unittest.TestCase):
                 }
                 self.assertTrue(expected_labels <= buttons.keys())
                 pane_right = editor_pane.winfo_rootx() + editor_pane.winfo_width()
-                for label in expected_labels:
-                    button = buttons[label]
-                    self.assertEqual(1, button.winfo_ismapped(), label)
+                pane_bottom = editor_pane.winfo_rooty() + editor_pane.winfo_height()
+                favorite = next(
+                    widget for widget in _descendants(editor_pane)
+                    if isinstance(widget, tk.Checkbutton)
+                    and widget.cget("text") == "Favorito"
+                )
+                for label, widget in [*((l, buttons[l]) for l in expected_labels),
+                                      ("Favorito", favorite)]:
+                    self.assertEqual(1, widget.winfo_ismapped(), label)
                     self.assertLessEqual(
-                        button.winfo_rootx() + button.winfo_width(),
+                        widget.winfo_rootx() + widget.winfo_width(),
                         pane_right + 1,
                         f"{label} extends past the editor pane",
                     )
+                    self.assertLessEqual(
+                        widget.winfo_rooty() + widget.winfo_height(),
+                        pane_bottom + 1,
+                        f"{label} is cut off below the editor pane",
+                    )
+                content = next(
+                    widget for widget in _descendants(editor_pane)
+                    if isinstance(widget, tk.Text)
+                )
+                self.assertGreaterEqual(
+                    content.winfo_height(), 60, "the content box collapsed"
+                )
+                tree = next(
+                    widget for widget in _descendants(tab)
+                    if isinstance(widget, ttk.Treeview)
+                )
+                heading = tkfont.Font(font=tx.ui_theme.theme().font(9, "bold"))
+                self.assertGreater(
+                    tree.column("markers", "width"),
+                    heading.measure("Tipo"),
+                    "the Tipo heading is clipped",
+                )
 
             notebook.select(tab_ids[1])
             window.update()

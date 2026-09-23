@@ -176,7 +176,9 @@ from gui_support import (
     filter_static_snippets,
     focus_modal_input,
     iter_filtered_mapping_items,
+    layout_wrapping_row,
     snippet_row_values,
+    split_tree_columns,
 )
 from gui_thread import GuiThread
 
@@ -233,6 +235,12 @@ TRIGGER_BUFFER_MARGIN = 8
 
 # Characters that end a word for opt-in terminator-gated expansion.
 TERMINATOR_CHARS = frozenset(" \t\n\r.,;:!?)]}\"'")
+
+# Pixels kept for an editor's formatting toolbar plus its content box.
+EDITOR_CONTENT_MIN_HEIGHT = 140
+
+# Display labels for the persisted notification ``kind`` values.
+NOTIFICATION_KIND_LABELS = {"error": "Erro", "status": "Status", "info": "Info"}
 
 
 def get_runtime_base_dir():
@@ -2699,7 +2707,10 @@ class Sniptype:
         if not icon_path:
             return
         try:
-            window.iconbitmap(icon_path)
+            # ``default`` also covers every Toplevel created afterwards: the
+            # group, form-editor and hotkey dialogs never set an icon and
+            # showed Tk's feather.
+            window.iconbitmap(icon_path, default=icon_path)
         except Exception:
             pass
 
@@ -2754,13 +2765,15 @@ class Sniptype:
         style.layout("Manager.Treeview", style.layout("Treeview"))
 
     def _create_snippet_tree(self, shell, trigger_heading="Trigger",
-                             trigger_width=104, preview_width=186,
+                             trigger_share=0.36, trigger_min=76,
                              markers_width=46):
         """Build the trigger/preview/markers Treeview used by the snippet lists.
 
         ``shell`` must be a grid container whose row 0 / column 0 expands.
-        Widths are per-tab because the mappings tab splits the same row three
-        ways and has far less to spare.
+        The trigger and preview columns are resized to fill the visible tree
+        on every resize, so no column is ever clipped past the right edge;
+        ``trigger_share`` is per-tab because mapping identifiers carry the
+        composed trigger and need more of the row.
         """
         columns = ("trigger", "preview", "markers")
         tree = ttk.Treeview(
@@ -2773,21 +2786,28 @@ class Sniptype:
         tree.heading("trigger", text=trigger_heading, anchor="w")
         tree.heading("preview", text="Valor", anchor="w")
         tree.heading("markers", text="Tipo", anchor="center")
-        # Widths are per-tab: mappings have three panes and need a compact
-        # table, while the static library can give its preview more room.
+        # The bold heading plus its padding outgrows a fixed pixel width as
+        # soon as display scaling enlarges the font.
+        heading_font = tkfont.Font(font=ui_theme.theme().font(9, "bold"))
+        markers_width = max(markers_width, heading_font.measure("Tipo") + 24)
+        tree.column("trigger", width=trigger_min, minwidth=0, anchor="w", stretch=False)
+        tree.column("preview", width=100, minwidth=0, anchor="w", stretch=False)
         tree.column(
-            "trigger", width=trigger_width, minwidth=min(76, trigger_width),
-            anchor="w", stretch=False,
-        )
-        tree.column(
-            "preview", width=preview_width, minwidth=min(100, preview_width),
-            anchor="w", stretch=True,
-        )
-        tree.column(
-            "markers", width=markers_width, minwidth=markers_width,
+            "markers", width=markers_width, minwidth=0,
             anchor="center", stretch=False,
         )
         tree.grid(row=0, column=0, sticky="nsew")
+
+        def fit_columns(event):
+            # A couple of pixels for the tree's own border keep the last
+            # column from spilling into a horizontal overflow.
+            trigger, preview = split_tree_columns(
+                event.width - 4, markers_width, trigger_share, trigger_min, 60,
+            )
+            tree.column("trigger", width=trigger)
+            tree.column("preview", width=preview)
+
+        tree.bind("<Configure>", fit_columns, add="+")
 
         scrollbar = ttk.Scrollbar(shell, orient=tk.VERTICAL, command=tree.yview)
         tree.configure(yscrollcommand=scrollbar.set)
@@ -2885,13 +2905,18 @@ class Sniptype:
 
         entries = list(reversed(self.notification_history))
         if not entries:
-            tree.insert("", tk.END, values=("--:--:--", "status", "Nenhuma notificação registrada ainda."))
+            tree.insert("", tk.END, values=("--:--:--", "", "Nenhuma notificação registrada ainda."))
         else:
             for entry in entries:
+                kind = entry.get("kind", "info")
                 tree.insert(
                     "",
                     tk.END,
-                    values=(entry.get("time", "--:--:--"), entry.get("kind", "info"), entry.get("message", "")),
+                    values=(
+                        entry.get("time", "--:--:--"),
+                        NOTIFICATION_KIND_LABELS.get(kind, kind),
+                        entry.get("message", ""),
+                    ),
                 )
 
         self._bind_mousewheel(tree, tree)
@@ -3120,8 +3145,10 @@ class Sniptype:
             parent, bg=ui.surface, padx=ui.space_lg, pady=ui.space_lg
         )
         main.pack(fill=tk.BOTH, expand=True)
-        main.grid_columnconfigure(0, weight=2, minsize=300)
-        main.grid_columnconfigure(1, weight=3, minsize=440)
+        # A uniform group splits by weight alone; otherwise grid sizes by
+        # requested width and the editor's toolbars starve the list.
+        main.grid_columnconfigure(0, weight=2, minsize=300, uniform="panes")
+        main.grid_columnconfigure(1, weight=3, minsize=440, uniform="panes")
         main.grid_rowconfigure(0, weight=1)
 
         frame_left = tk.Frame(
@@ -3210,12 +3237,36 @@ class Sniptype:
         ).pack(side=tk.LEFT)
         group_controls = tk.Frame(filter_frame, bg=ui.card)
         group_controls.pack(fill="x", pady=(ui.space_xs, 0))
-        group_menu = tk.OptionMenu(group_controls, group_var, "")
+        # An OptionMenu always shows its variable, and group_var holds a group
+        # id that is "" for "all groups" — which rendered a blank button. It
+        # displays this label instead, kept in step with the active filter.
+        group_label_var = tk.StringVar(value="Grupo: todos")
+        group_menu = tk.OptionMenu(group_controls, group_label_var, "")
         group_menu.configure(
-            text="Grupo",
             **ui.button_chrome(compact=True),
             **ui.button_colors(),
         )
+
+        def sync_group_label(*_args):
+            selected = filter_var.get()
+            if selected == UNGROUPED_FILTER:
+                label = "sem grupo"
+            elif selected == "group" and group_var.get():
+                groups = (
+                    self.library_metadata.get("groups", {})
+                    if isinstance(self.library_metadata, dict) else {}
+                )
+                definition = groups.get(group_var.get())
+                label = (
+                    definition.get("label", group_var.get())
+                    if isinstance(definition, dict) else group_var.get()
+                )
+            else:
+                label = "todos"
+            group_label_var.set(f"Grupo: {label}")
+
+        group_var.trace_add("write", sync_group_label)
+        filter_var.trace_add("write", sync_group_label)
         group_menu.pack(side=tk.LEFT)
         group_new_button = tk.Button(
             group_controls, text="Novo", command=lambda: on_create_group(),
@@ -3264,7 +3315,9 @@ class Sniptype:
         )
         frame_right.grid(row=0, column=1, sticky="nsew")
         frame_right.grid_columnconfigure(0, weight=1)
-        frame_right.grid_rowconfigure(5, weight=1)
+        # Toolbar plus ~4 lines of text: without a floor the fixed rows took
+        # every pixel at the minimum window size and the content box vanished.
+        frame_right.grid_rowconfigure(5, weight=1, minsize=EDITOR_CONTENT_MIN_HEIGHT)
 
         tk.Label(
             frame_right,
@@ -3350,11 +3403,8 @@ class Sniptype:
 
         btn_frame = tk.Frame(frame_right, bg=ui.card)
         btn_frame.grid(row=7, column=0, sticky="ew")
-        btn_frame.grid_columnconfigure(0, weight=1)
         primary_actions = tk.Frame(btn_frame, bg=ui.card)
-        primary_actions.grid(row=0, column=0, sticky="ew")
         secondary_actions = tk.Frame(btn_frame, bg=ui.card)
-        secondary_actions.grid(row=1, column=0, sticky="ew", pady=(ui.space_sm, 0))
 
         def editor_button(label, *, accent=False, danger=False, parent=primary_actions):
             return tk.Button(
@@ -3371,39 +3421,44 @@ class Sniptype:
         btn_delete = editor_button("Excluir", danger=True, parent=secondary_actions)
         btn_save = editor_button("Salvar", accent=True, parent=secondary_actions)
         btn_new.pack(side=tk.LEFT, padx=(0, 6))
-        btn_duplicate.pack(side=tk.LEFT, padx=6)
-        btn_rename.pack(side=tk.LEFT, padx=6)
-        btn_delete.pack(side=tk.LEFT)
-        btn_save.pack(side=tk.RIGHT)
+        btn_duplicate.pack(side=tk.LEFT, padx=(0, 6))
+        btn_rename.pack(side=tk.LEFT)
+        btn_delete.pack(side=tk.LEFT, padx=(0, 6))
+        btn_save.pack(side=tk.LEFT)
+        layout_wrapping_row(
+            btn_frame, primary_actions, secondary_actions, ui.space_lg, ui.space_sm
+        )
 
         item_group_var = tk.StringVar(value="")
         item_favorite_var = tk.BooleanVar(value=False)
         item_frame = tk.Frame(frame_right, bg=ui.card)
-        item_frame.grid(row=8, column=0, sticky="ew", pady=(ui.space_sm, 0))
+        item_frame.grid(row=8, column=0, sticky="ew", pady=(ui.space_md, 0))
         item_group_controls = tk.Frame(item_frame, bg=ui.card)
-        item_group_controls.pack(fill=tk.X)
         tk.Label(item_group_controls, text="Grupo:", bg=ui.card, fg=ui.text_muted, font=ui.font(8)).pack(side=tk.LEFT)
         item_group_combo = ttk.Combobox(item_group_controls, textvariable=item_group_var, state="readonly", width=18)
-        item_group_combo.pack(side=tk.LEFT, padx=(4, 0))
-        item_metadata_controls = tk.Frame(item_frame, bg=ui.card)
-        item_metadata_controls.pack(fill=tk.X, pady=(ui.space_sm, 0))
+        item_group_combo.pack(side=tk.LEFT, padx=(4, ui.space_md))
         item_favorite_check = tk.Checkbutton(
-            item_metadata_controls,
+            item_group_controls,
             text="Favorito",
             variable=item_favorite_var,
             **ui.checkbutton_colors(ui.card),
             command=lambda: on_toggle_favorite(),
         )
         item_favorite_check.pack(side=tk.LEFT)
-        tk.Button(
-            item_metadata_controls, text="Prévia", command=lambda: on_preview(),
-            **ui.button_chrome(compact=True), **ui.button_colors(),
-        ).pack(side=tk.RIGHT, padx=(4, 0))
+        item_metadata_controls = tk.Frame(item_frame, bg=ui.card)
         form_button = tk.Button(
             item_metadata_controls, text="Formulário", command=lambda: on_edit_form(),
             **ui.button_chrome(compact=True), **ui.button_colors(),
         )
-        form_button.pack(side=tk.RIGHT, padx=(4, 0))
+        form_button.pack(side=tk.LEFT)
+        tk.Button(
+            item_metadata_controls, text="Prévia", command=lambda: on_preview(),
+            **ui.button_chrome(compact=True), **ui.button_colors(),
+        ).pack(side=tk.LEFT, padx=(4, 0))
+        layout_wrapping_row(
+            item_frame, item_group_controls, item_metadata_controls,
+            ui.space_md, ui.space_sm,
+        )
         metadata_warning = tk.Label(
             frame_right,
             text="Metadados somente leitura: grupos, favoritos e formulários estão desativados.",
@@ -3440,7 +3495,7 @@ class Sniptype:
         def refresh_group_menu():
             menu = group_menu["menu"]
             menu.delete(0, tk.END)
-            menu.add_command(label="Grupo", command=lambda: (group_var.set(""), filter_var.set(FILTER_ALL)))
+            menu.add_command(label="Todos", command=lambda: (group_var.set(""), filter_var.set(FILTER_ALL)))
             menu.add_command(
                 label="Sem grupo",
                 command=lambda: (group_var.set(""), filter_var.set(UNGROUPED_FILTER)),
@@ -3989,8 +4044,9 @@ class Sniptype:
         content = tk.Frame(main, bg=ui.surface)
         content.grid(row=2, column=0, sticky="nsew")
         content.grid_columnconfigure(0, weight=0, minsize=140)
-        content.grid_columnconfigure(1, weight=3, minsize=270)
-        content.grid_columnconfigure(2, weight=3, minsize=360)
+        # Items and editor split by weight alone (see the static tab).
+        content.grid_columnconfigure(1, weight=2, minsize=270, uniform="panes")
+        content.grid_columnconfigure(2, weight=3, minsize=360, uniform="panes")
         content.grid_rowconfigure(0, weight=1)
 
         # Types live in a scrollable vertical list so any number of custom
@@ -4106,8 +4162,7 @@ class Sniptype:
         tree_map = self._create_snippet_tree(
             listbox_frame,
             trigger_heading="Identificador",
-            trigger_width=88,
-            preview_width=80,
+            trigger_share=0.5,
             markers_width=42,
         )
         empty_mapping_label = tk.Label(
@@ -4130,7 +4185,9 @@ class Sniptype:
         )
         frame_right.grid(row=0, column=2, sticky="nsew")
         frame_right.grid_columnconfigure(0, weight=1)
-        frame_right.grid_rowconfigure(5, weight=1)
+        # Toolbar plus ~4 lines of text: without a floor the fixed rows took
+        # every pixel at the minimum window size and the content box vanished.
+        frame_right.grid_rowconfigure(5, weight=1, minsize=EDITOR_CONTENT_MIN_HEIGHT)
 
         tk.Label(
             frame_right,
@@ -4216,29 +4273,29 @@ class Sniptype:
 
         btn_frame = tk.Frame(frame_right, bg=ui.card)
         btn_frame.grid(row=7, column=0, sticky="ew")
-        btn_frame.grid_columnconfigure(0, weight=1)
         primary_actions = tk.Frame(btn_frame, bg=ui.card)
-        primary_actions.grid(row=0, column=0, sticky="ew")
         secondary_actions = tk.Frame(btn_frame, bg=ui.card)
-        secondary_actions.grid(row=1, column=0, sticky="ew", pady=(ui.space_sm, 0))
 
         def mapping_button(label, *, accent=False, danger=False, parent=primary_actions):
             return tk.Button(
                 parent,
                 text=label,
-                width=ui.button_width(12),
+                width=ui.button_width(10),
                 **ui.button_chrome(),
                 **ui.button_colors(accent=accent, danger=danger),
             )
 
         btn_new_map = mapping_button("Novo")
-        btn_delete_map = mapping_button("Excluir", danger=True)
+        btn_delete_map = mapping_button("Excluir", danger=True, parent=secondary_actions)
         btn_save_map = mapping_button("Salvar", accent=True, parent=secondary_actions)
-        btn_new_map.pack(side=tk.LEFT, padx=(0, 6))
-        btn_delete_map.pack(side=tk.LEFT, padx=(ui.space_lg, 0))
-        btn_save_map.pack(side=tk.RIGHT)
+        btn_new_map.pack(side=tk.LEFT)
+        btn_delete_map.pack(side=tk.LEFT, padx=(0, 6))
+        btn_save_map.pack(side=tk.LEFT)
+        layout_wrapping_row(
+            btn_frame, primary_actions, secondary_actions, ui.space_lg, ui.space_sm
+        )
         mapping_metadata_frame = tk.Frame(frame_right, bg=ui.card)
-        mapping_metadata_frame.grid(row=8, column=0, sticky="ew", pady=(ui.space_sm, 0))
+        mapping_metadata_frame.grid(row=8, column=0, sticky="ew", pady=(ui.space_md, 0))
         mapping_favorite_var = tk.BooleanVar(value=False)
         mapping_favorite_check = tk.Checkbutton(
             mapping_metadata_frame,
@@ -4247,7 +4304,7 @@ class Sniptype:
             **ui.checkbutton_colors(ui.card),
             command=lambda: on_toggle_mapping_favorite(),
         )
-        mapping_favorite_check.pack(side=tk.LEFT, padx=(ui.space_sm, 0))
+        mapping_favorite_check.pack(side=tk.LEFT)
         mapping_form_button = tk.Button(
             mapping_metadata_frame,
             text="Formulário",
@@ -4255,7 +4312,6 @@ class Sniptype:
             **ui.button_chrome(compact=True),
             **ui.button_colors(),
         )
-        mapping_form_button.pack(side=tk.LEFT, padx=(ui.space_sm, 0))
         def refresh_mapping_metadata_controls():
             state = (
                 tk.DISABLED
@@ -4264,13 +4320,16 @@ class Sniptype:
             )
             mapping_favorite_check.configure(state=state)
             mapping_form_button.configure(state=state)
+        # Same arrangement as the static editor: Favorito left, the item
+        # actions right-aligned.
         tk.Button(
             mapping_metadata_frame,
             text="Prévia",
             command=lambda: on_preview_mapping(),
             **ui.button_chrome(compact=True),
             **ui.button_colors(),
-        ).pack(side=tk.LEFT, padx=(ui.space_sm, 0))
+        ).pack(side=tk.RIGHT, padx=(4, 0))
+        mapping_form_button.pack(side=tk.RIGHT)
 
         def update_total_count():
             """Tab title counts every mapping item, across all types.
@@ -5530,6 +5589,11 @@ class Sniptype:
             # Cosmetic only: the tray still works, the app just also sits in the
             # Dock. Logged rather than raised for exactly that reason.
             self.logger.warning("Não foi possível ocultar o ícone do Dock.")
+
+        if gui_started and IS_WINDOWS:
+            # Default icon for every window, including a dialog opened before
+            # the manager (which otherwise sets it) ever has been.
+            self.gui.submit(self._set_window_icon)
 
         if show_manager:
             # Reuse the tray action so the manager is always marshaled through

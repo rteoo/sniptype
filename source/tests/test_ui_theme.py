@@ -230,7 +230,7 @@ class WidgetOptionTests(unittest.TestCase):
     def test_windows_keeps_its_button_widths_and_window_size(self):
         theme = ui_theme.build_theme("windows", system="windows")
         self.assertEqual(theme.button_width(12), 12)
-        self.assertEqual(theme.manager_window_size, ("1080x720", 900, 580))
+        self.assertEqual(theme.manager_window_size, ("1080x720", 940, 700))
         self.assertFalse(theme.stacked_toolbar_status)
 
     def test_fluent_spacing_and_tree_density_are_stable(self):

@@ -220,25 +220,25 @@ class GroupDialog:
         tk.Label(
             parent, text=text, anchor="w", bg=self.theme.card,
             fg=self.theme.text, font=self.theme.font(),
-        ).pack(fill="x", pady=(self.theme.space_sm, self.theme.space_xs))
+        ).pack(fill="x", padx=self.theme.space_md, pady=(self.theme.space_sm, self.theme.space_xs))
 
     def _build(self):
         self._assert_owner()
         body = tk.Frame(self.window, bg=self.theme.surface)
         body.pack(fill="both", expand=True, padx=self.theme.space_lg, pady=self.theme.space_lg)
-        card = tk.Frame(body, bg=self.theme.card)
+        card = tk.Frame(body, bg=self.theme.card, pady=self.theme.space_sm)
         card.pack(fill="both", expand=True)
 
         self._label(card, "Nome do grupo *")
-        label = tk.Entry(card, **self.theme.entry_colors(), font=self.theme.font())
+        label = tk.Entry(card, **self.theme.entry_colors(), **self.theme.field_chrome(), font=self.theme.font())
         label.pack(fill="x", padx=self.theme.space_md)
 
         self._label(card, "Notas")
-        notes = tk.Text(card, height=3, wrap="word", **self.theme.text_colors(), font=self.theme.font())
+        notes = tk.Text(card, height=3, wrap="word", **self.theme.text_colors(), **self.theme.field_chrome(), font=self.theme.font())
         notes.pack(fill="x", padx=self.theme.space_md)
 
         self._label(card, "Prefixo de runtime")
-        prefix = tk.Entry(card, **self.theme.entry_colors(), font=self.theme.font())
+        prefix = tk.Entry(card, **self.theme.entry_colors(), **self.theme.field_chrome(), font=self.theme.font())
         prefix.pack(fill="x", padx=self.theme.space_md)
 
         enabled_var = tk.BooleanVar(self.window)
@@ -267,7 +267,7 @@ class GroupDialog:
         ).pack(fill="x", padx=self.theme.space_md, pady=(self.theme.space_sm, 0))
 
         self._label(card, "Executáveis (um por linha)")
-        executables = tk.Text(card, height=4, wrap="none", **self.theme.text_colors(), font=self.theme.mono_font(8))
+        executables = tk.Text(card, height=4, wrap="none", **self.theme.text_colors(), **self.theme.field_chrome(), font=self.theme.mono_font(8))
         executables.pack(fill="both", expand=True, padx=self.theme.space_md)
 
         normalized = normalize_group(None, self._group)

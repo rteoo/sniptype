@@ -250,7 +250,7 @@ class FormDialog:
                 control_frame.pack(fill="both", expand=True)
                 control = tk.Text(
                     control_frame, height=5, wrap="word",
-                    **self.theme.text_colors(), font=self.theme.font(),
+                    **self.theme.text_colors(), **self.theme.field_chrome(), font=self.theme.font(),
                 )
                 scrollbar = ttk.Scrollbar(control_frame, orient="vertical", command=control.yview)
                 control.configure(yscrollcommand=scrollbar.set)
@@ -274,7 +274,7 @@ class FormDialog:
                 control_frame = tk.Frame(fields, bg=self.theme.card)
                 control_frame.pack(fill="x")
                 variable = tk.StringVar(self.window, value=_date_default(field))
-                control = tk.Entry(control_frame, textvariable=variable, **self.theme.entry_colors(), font=self.theme.font())
+                control = tk.Entry(control_frame, textvariable=variable, **self.theme.entry_colors(), **self.theme.field_chrome(), font=self.theme.font())
                 control.pack(side="left", fill="x", expand=True)
                 tk.Button(
                     control_frame, text="Calendário", command=lambda name=field.name: self._date_pickers[name].open(),
@@ -284,7 +284,7 @@ class FormDialog:
                 self._date_pickers[field.name] = _DatePicker(self.window, variable, self.theme)
             else:
                 variable = tk.StringVar(self.window, value=field.default)
-                control = tk.Entry(fields, textvariable=variable, **self.theme.entry_colors(), font=self.theme.font())
+                control = tk.Entry(fields, textvariable=variable, **self.theme.entry_colors(), **self.theme.field_chrome(), font=self.theme.font())
                 control.pack(fill="x")
                 self._variables[field.name] = variable
             self._controls[field.name] = control

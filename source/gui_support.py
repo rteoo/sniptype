@@ -55,6 +55,56 @@ def iter_filtered_mapping_items(mapping, query):
     return items
 
 
+def split_tree_columns(width, fixed_width, trigger_share, trigger_min, preview_min):
+    """Return ``(trigger, preview)`` widths that exactly fill ``width``.
+
+    Fixed pixel widths overflowed whenever the pane was narrower than their
+    sum, clipping the last column; the columns now follow the visible tree.
+    The trigger keeps ``trigger_min`` until even that would squeeze the
+    preview under ``preview_min``.
+    """
+    available = max(0, width - fixed_width)
+    trigger = max(trigger_min, int(available * trigger_share))
+    trigger = min(trigger, max(trigger_min, available - preview_min), available)
+    return trigger, available - trigger
+
+
+def row_fits(width, leading_width, trailing_width, gap):
+    """True when two button groups fit side by side in ``width`` pixels."""
+    return leading_width + gap + trailing_width <= width
+
+
+def layout_wrapping_row(container, leading, trailing, gap, wrap_gap):
+    """Grid ``leading`` left and ``trailing`` right, wrapping ``trailing``
+    under it only when the container is too narrow for both.
+
+    Both groups must be children of ``container``. A fixed two-row split
+    wasted a row at normal sizes; a fixed single row clipped at compact ones.
+    """
+    container.grid_columnconfigure(0, weight=1)
+    leading.grid(row=0, column=0, sticky="w")
+    state = {"wrapped": None}
+
+    def relayout(_event=None):
+        width = container.winfo_width()
+        if width <= 1:
+            return
+        wrapped = not row_fits(
+            width, leading.winfo_reqwidth(), trailing.winfo_reqwidth(), gap
+        )
+        if wrapped == state["wrapped"]:
+            return
+        state["wrapped"] = wrapped
+        if wrapped:
+            trailing.grid(row=1, column=0, sticky="e", padx=0, pady=(wrap_gap, 0))
+        else:
+            trailing.grid(row=0, column=1, sticky="e", padx=(gap, 0), pady=0)
+
+    trailing.grid(row=0, column=1, sticky="e", padx=(gap, 0))
+    container.bind("<Configure>", relayout, add="+")
+    return relayout
+
+
 def center_on_screen(dialog, vertical_divisor=2):
     """Center a dialog on the screen.
 

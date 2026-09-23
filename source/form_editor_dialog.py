@@ -260,7 +260,8 @@ class FormEditor:
         left.pack(side="left", fill="y", padx=(0, self.theme.space_md))
         self._field_list = tk.Listbox(
             left, width=27, height=16, exportselection=False,
-            **self.theme.listbox_colors(), font=self.theme.font(),
+            **self.theme.listbox_colors(), **self.theme.field_chrome(),
+            font=self.theme.font(),
         )
         self._field_list.pack(fill="both", expand=True)
         self._field_list.bind("<<ListboxSelect>>", self._on_select)
@@ -286,17 +287,17 @@ class FormEditor:
         self.optional_default_var = tk.BooleanVar(self.window, value=False)
 
         self._label(editor, "Nome")
-        self.name_entry = tk.Entry(editor, textvariable=self.name_var, **self.theme.entry_colors(), font=self.theme.font())
+        self.name_entry = tk.Entry(editor, textvariable=self.name_var, **self.theme.entry_colors(), **self.theme.field_chrome(), font=self.theme.font())
         self.name_entry.pack(fill="x")
         self._label(editor, "Rótulo")
-        self.label_entry = tk.Entry(editor, textvariable=self.label_var, **self.theme.entry_colors(), font=self.theme.font())
+        self.label_entry = tk.Entry(editor, textvariable=self.label_var, **self.theme.entry_colors(), **self.theme.field_chrome(), font=self.theme.font())
         self.label_entry.pack(fill="x")
         self._label(editor, "Tipo")
         self.type_combo = ttk.Combobox(editor, textvariable=self.type_var, state="readonly", values=FIELD_TYPES)
         self.type_combo.pack(fill="x")
         self.type_combo.bind("<<ComboboxSelected>>", self._on_type_change)
         self._label(editor, "Valor padrão")
-        self.default_entry = tk.Entry(editor, textvariable=self.default_var, **self.theme.entry_colors(), font=self.theme.font())
+        self.default_entry = tk.Entry(editor, textvariable=self.default_var, **self.theme.entry_colors(), **self.theme.field_chrome(), font=self.theme.font())
         self.default_entry.pack(fill="x")
         self.optional_default = tk.Checkbutton(
             editor, text="Selecionado por padrão", variable=self.optional_default_var,
@@ -305,15 +306,15 @@ class FormEditor:
 
         self._choice_frame = tk.Frame(editor, bg=self.theme.card)
         self._label(self._choice_frame, "Opções (uma por linha)")
-        self.options_text = tk.Text(self._choice_frame, height=5, wrap="word", **self.theme.text_colors(), font=self.theme.font())
+        self.options_text = tk.Text(self._choice_frame, height=5, wrap="word", **self.theme.text_colors(), **self.theme.field_chrome(), font=self.theme.font())
         self.options_text.pack(fill="x")
         self._optional_frame = tk.Frame(editor, bg=self.theme.card)
         self._label(self._optional_frame, "Conteúdo quando selecionado")
-        self.content_entry = tk.Entry(self._optional_frame, textvariable=self.content_var, **self.theme.entry_colors(), font=self.theme.font())
+        self.content_entry = tk.Entry(self._optional_frame, textvariable=self.content_var, **self.theme.entry_colors(), **self.theme.field_chrome(), font=self.theme.font())
         self.content_entry.pack(fill="x")
         self._date_frame = tk.Frame(editor, bg=self.theme.card)
         self._label(self._date_frame, "Formato da data")
-        self.format_entry = tk.Entry(self._date_frame, textvariable=self.format_var, **self.theme.entry_colors(), font=self.theme.font())
+        self.format_entry = tk.Entry(self._date_frame, textvariable=self.format_var, **self.theme.entry_colors(), **self.theme.field_chrome(), font=self.theme.font())
         self.format_entry.pack(fill="x")
 
         self.error_label = tk.Label(
@@ -321,7 +322,7 @@ class FormEditor:
             bg=self.theme.card, fg=self.theme.danger, font=self.theme.font(8),
         )
         self.error_label.pack(fill="x", pady=(self.theme.space_md, 0))
-        actions = tk.Frame(body, **self.theme.toolbar_frame_colors())
+        actions = tk.Frame(body, bg=self.theme.surface)
         actions.pack(fill="x", pady=(self.theme.space_md, 0))
         self._button(actions, "Cancelar", self.cancel).pack(side="right")
         self._button(actions, "Salvar", self.submit, accent=True).pack(side="right", padx=(0, self.theme.space_sm))
