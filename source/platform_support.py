@@ -850,6 +850,12 @@ def acquire_lockfile(path):
 
             owner_path = os.path.join(path, _FALLBACK_OWNER_NAME)
             try:
+                judged = os.stat(path)
+            except FileNotFoundError:
+                continue
+            except OSError:
+                return False
+            try:
                 with open(owner_path, "r", encoding="utf-8") as handle:
                     raw_pid = handle.read().strip()
             except FileNotFoundError:
@@ -894,16 +900,29 @@ def acquire_lockfile(path):
             finally:
                 os.close(reclaim_descriptor)
 
-            # The original creator may have published its PID while this
-            # contender was deciding that the empty directory was stale.
+            # The marker only proves exclusivity over whatever directory is at
+            # ``path`` *now*. A faster contender may already have reclaimed the
+            # stale lock and created its own, in which case the marker landed in
+            # the winner's lock. Proceed only if it is still the same directory
+            # with the same owner contents that were judged stale; otherwise the
+            # lock changed hands (or the original creator published its PID),
+            # so back off and take the marker back out.
+            try:
+                claimed = os.stat(path)
+            except OSError:
+                claimed = None
             try:
                 with open(owner_path, "r", encoding="utf-8") as handle:
-                    claimed_pid = int((handle.read().strip() or "0"))
-            except (FileNotFoundError, ValueError):
-                claimed_pid = 0
+                    claimed_pid = handle.read().strip()
+            except FileNotFoundError:
+                claimed_pid = ""
             except OSError:
-                claimed_pid = -1
-            if claimed_pid > 0 and _pid_is_running(claimed_pid):
+                claimed_pid = None
+            if (
+                claimed is None
+                or (claimed.st_dev, claimed.st_ino) != (judged.st_dev, judged.st_ino)
+                or claimed_pid != raw_pid
+            ):
                 try:
                     os.remove(reclaim_path)
                 except OSError:

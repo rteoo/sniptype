@@ -167,6 +167,57 @@ class LockfileTests(unittest.TestCase):
         self.assertCountEqual(results, [True, False])
         self.assertIn(self._read_lock_pid(), {1111, 2222})
 
+    def _stale_lock_with_late_contender(self, winner_step):
+        """Contender 2222 judges the 9999 lock stale; before it claims the
+        reclaim marker, ``winner_step`` replaces the lock (1111 reclaiming it).
+        Returns 2222's result. Deterministic: the interleaving is forced from
+        inside 2222's staleness check."""
+        os.mkdir(self.path)
+        with open(os.path.join(self.path, ps._FALLBACK_OWNER_NAME), "w", encoding="ascii") as handle:
+            handle.write("9999")
+        current = {"pid": 2222}
+        interleaved = []
+
+        def stale_owner(_pid):
+            # Every PID reads as dead, the winner's included, so only the
+            # lock's identity can protect the winner.
+            if not interleaved:
+                interleaved.append(True)
+                current["pid"] = 1111
+                winner_step()
+                current["pid"] = 2222
+            return False
+
+        with mock.patch.object(ps, "_fcntl", None), \
+                mock.patch.object(ps.os, "getpid", side_effect=lambda: current["pid"]), \
+                mock.patch.object(ps, "_pid_is_running", side_effect=stale_owner):
+            return ps.acquire_lockfile(self.path)
+
+    def test_late_reclaimer_cannot_remove_a_lock_the_winner_already_owns(self):
+        winner = []
+        result = self._stale_lock_with_late_contender(
+            lambda: winner.append(ps.acquire_lockfile(self.path))
+        )
+        self.assertEqual([True], winner)
+        self.assertFalse(result)
+        self.assertEqual(1111, self._read_lock_pid())
+        # The loser must not leave its marker behind in the winner's lock.
+        self.assertEqual(
+            [ps._FALLBACK_OWNER_NAME], sorted(os.listdir(self.path))
+        )
+
+    def test_late_reclaimer_cannot_remove_a_lock_before_its_pid_is_written(self):
+        def winner_mid_acquire():
+            # The winner has replaced the stale directory but not yet
+            # published its PID: the lock is fresh and empty.
+            os.rename(self.path, self.path + ".gone")
+            os.mkdir(self.path)
+
+        result = self._stale_lock_with_late_contender(winner_mid_acquire)
+        self.assertFalse(result)
+        self.assertTrue(os.path.isdir(self.path))
+        self.assertEqual([], os.listdir(self.path))
+
     def test_release_removes_own_lock(self):
         ps.acquire_lockfile(self.path)
         ps.release_lockfile(self.path)
