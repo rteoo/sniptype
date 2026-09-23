@@ -1,6 +1,6 @@
 """
 Sniptype - Windows system tray snippet expander.
-Version: 5.0.2
+Version: 5.0.3
 Channel: stable
 
 IMPORTANT: This program captures keyboard input only to expand text
