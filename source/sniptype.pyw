@@ -97,6 +97,7 @@ from workflow_support import SnippetRef, WorkflowState
 from validation_support import validate_trigger
 import macos_permissions
 import ui_theme
+import win_input
 from platform_support import (
     APP_NAME,
     AUTOSTART_ABSENT,
@@ -358,12 +359,18 @@ class Sniptype:
         # settings.json. Resolved once — they are read on the listener thread.
         timings = insertion_timings(self.settings)
         self.erase_key_delay = timings["erase_key_delay"]
+        # Windows injects the erase and the paste chord as single atomic
+        # SendInput batches; elsewhere pynput sends them key by key.
+        self.batch_keyboard = (
+            win_input.BatchKeyboard() if platform_support.IS_WINDOWS else None
+        )
         self.text_inserter = TextInserter(
             self.keyboard_controller,
             logger=self.logger,
             settle_delay=timings["clipboard_settle_delay"],
             restore_delay=timings["paste_restore_delay"],
             notify=self.notify_error,
+            batch_keyboard=self.batch_keyboard,
         )
         configure_logging(self.logs_dir)
         for key, default in invalid_runtime_settings.items():
@@ -2096,10 +2103,22 @@ class Sniptype:
         return True
 
     def _erase_chars(self, count):
-        """Backspace over ``count`` characters on the listener thread."""
-        # ceiling: the per-char sleep keeps the erase reliable across apps; with
-        # expansion now off-thread this only adds latency proportional to trigger
-        # length, not to network work (audit 2.6).
+        """Backspace over ``count`` characters on the listener thread.
+
+        This thread also pumps the Windows keyboard hook, so any sleep here
+        stalls keyboard input system-wide. With no per-key delay configured,
+        Windows sends the whole erase as one uninterruptible batch.
+        """
+        batch_keyboard = getattr(self, "batch_keyboard", None)
+        if batch_keyboard is not None and not self.erase_key_delay:
+            if not batch_keyboard.erase(count):
+                self.logger.warning(
+                    "Windows bloqueou o apagamento do gatilho "
+                    "(janela em execução como administrador?)."
+                )
+            return
+        # A configured per-key delay keeps the legacy paced erase, which does
+        # hold the listener for count * erase_key_delay.
         for _ in range(count):
             self.keyboard_controller.press(Key.backspace)
             self.keyboard_controller.release(Key.backspace)
@@ -5531,9 +5550,16 @@ class Sniptype:
     
     def run_keyboard_listener(self):
         """Run the keyboard listener in a separate thread."""
+        options = {}
+        if platform_support.IS_WINDOWS:
+            # Our own erase/paste keys must not re-enter the trigger buffer or
+            # the hotkey router: a late Ctrl+V landing mid-word would break the
+            # user's next trigger.
+            options["win32_event_filter"] = win_input.listener_event_filter
         self.listener = keyboard.Listener(
             on_press=self.on_press,
             on_release=self.on_release,
+            **options,
         )
         self.listener.start()
         self.listener.join()
