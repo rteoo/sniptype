@@ -2,6 +2,32 @@
 
 All notable changes to Sniptype are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [5.0.1] — 2026-09-23
+
+Typing and pasting are more responsive and reliable, the clipboard is always
+given back, and the manager no longer clips its controls.
+
+### Fixed
+
+- Expanding a trigger no longer stalls keyboard input across Windows: the
+  trigger erase and the Ctrl+V are each sent as one uninterruptible batch
+  instead of key by key with a pause per backspace, so keys typed right after
+  a trigger can no longer land between them.
+- Sniptype ignores its own synthesized keys, so a late paste can no longer
+  break the next trigger or reach a workflow hotkey.
+- The previous clipboard is restored after every expansion, multi-line
+  snippets included, and restoring waits for an app that is still reading
+  the clipboard instead of giving up. The WhatsApp link actions still copy
+  the link on purpose.
+- Manager lists size their columns to the window, editor buttons stay on one
+  row until space runs out, the content box no longer collapses at small
+  sizes, and the group filter shows the active filter.
+- Dialog fields show their full border, dialogs use the Sniptype icon, the
+  preview uses the app font, and notification types are shown in Portuguese.
+
+### Changed
+
+- The Windows manager window now has a minimum size of 940×700.
 ## [5.0.0] — 2026-09-17
 
 Sniptype keeps its local, keyboard-first boundary and adds a complete workflow
