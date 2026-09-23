@@ -1,7 +1,7 @@
 # Sniptype
 
 <p align="center">
-  <img src="source/sniptype-icon.png" width="128" alt="Sniptype app icon">
+  <img src="source/sniptype-app-icon.png" width="128" alt="Sniptype app icon">
 </p>
 
 <p align="center">
