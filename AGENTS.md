@@ -137,6 +137,8 @@ Use focused tests for narrow changes and run the full suite before finalizing ch
 
 Never probe Tk availability by building a throwaway `tk.Tk()` in the test process. On macOS Tk 9.0.3 a root created and destroyed outside any mainloop leaves the Aqua interpreter in a state where a *later* root destroyed from inside an `after` callback traps the whole runner (SIGTRAP, no Python traceback). `test_gui_thread` probes out of process for exactly this reason; the app itself is unaffected because it only ever builds one root.
 
+Do not give each GUI test its own `GuiThread` either. On Windows (Python 3.14.6, Tcl/Tk 8.6.15; also seen on CI's 3.12) creating a fresh Tk interpreter on a new thread over and over eventually leaves one thread's event loop wedged: no `after` timer fires and cross-thread calls go unanswered, so every later `GuiThread.call` times out. It reproduces with plain tkinter and no app code after ~100–400 interpreters, and never on the first root of a process. `test_manager_gui_smoke` therefore shares one module-level GuiThread and resets its children between tests; only `test_gui_thread`, which exists to exercise the lifecycle, creates its own.
+
 Temporary test artifacts belong in `source\tests\tmp\`, which is gitignored.
 
 Focused Ruff correctness rules are configured in `ruff.toml`; install the pinned development tool from `source/requirements-dev.txt` and run `python -m ruff check source` from the repository root. The same command runs in CI. There is no configured formatter or type checker.
