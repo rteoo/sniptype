@@ -62,7 +62,7 @@ build_installer.bat    # compile installer\Output\SniptypeSetup-<version>.exe
 `build_installer.bat` requires the Inno Setup 6 compiler (`ISCC.exe`) and compiles `installer\sniptype.iss`: a per-user install to `%LOCALAPPDATA%\Programs\Sniptype` (no admin), Start Menu/Desktop/Startup shortcuts, and a proper uninstaller that leaves `~/.sniptype` user data intact. Bump `MyAppVersion` and `MyAppChannel` in the `.iss` alongside the app release metadata.
 
 Release channels are explicit. The published Windows stable channel is the latest
-plain `vMAJOR.MINOR.PATCH` tag (`v5.0.1`); current source is `5.0.1` on the
+plain `vMAJOR.MINOR.PATCH` tag (`v5.0.2`); current source is `5.0.2` on the
 `stable` channel. The macOS ARM64 package remains the `v3.5.0-beta.2` preview.
 The app docstring owns `Version:` and
 `Channel:` for the running build, and `installer\sniptype.iss` mirrors both

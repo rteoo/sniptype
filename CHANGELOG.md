@@ -2,6 +2,13 @@
 
 All notable changes to Sniptype are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [5.0.2] — 2026-09-23
+
+### Fixed
+
+- The app icon no longer looks smaller than its neighbours in the tray, the
+  Start menu and window title bars: it is regenerated from the original
+  artwork with the surrounding padding trimmed.
 ## [5.0.1] — 2026-09-23
 
 Typing and pasting are more responsive and reliable, the clipboard is always
