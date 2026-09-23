@@ -293,13 +293,9 @@ class TextInserter:
                 )
             return
 
-        # ceiling: multi-line snippets deliberately do not restore. The CRLF
-        # comparison bug used to skip them by accident, so they have never been
-        # exposed to the restore race; enabling it while a clipboard co-writer is
-        # still the prime suspect would risk manufacturing the very bug under
-        # investigation. Re-enable once the warning above proves the cause.
-        if "\n" in expected:
-            return
+        # Every snippet restores, multi-line included: a paste must never leave
+        # the snippet on the clipboard. Actions that mean to (the WhatsApp link
+        # copy) write it themselves after insert_text returns.
         if not Clipboard.set_content(previous_text):
             self.logger.warning(
                 "Não foi possível restaurar a área de transferência anterior."

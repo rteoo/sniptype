@@ -1,3 +1,4 @@
+import gc
 import json
 import os
 import shutil
@@ -730,6 +731,13 @@ class ModalDialogFocusTests(unittest.TestCase):
 
 
 class ClipboardSerializationTests(unittest.TestCase):
+    def setUp(self):
+        # Earlier GUI test modules leave collectable Tk objects behind. If a
+        # worker thread below happens to trigger that collection, Tcl aborts
+        # the whole runner ("Tcl_AsyncDelete: async handler deleted by the
+        # wrong thread"); collecting here keeps it on the main thread.
+        gc.collect()
+
     def test_concurrent_pastes_do_not_interleave(self):
         events = []
 
@@ -854,13 +862,18 @@ class ClipboardCoWriterTests(unittest.TestCase):
         self._insert(clipboard, "bom dia")
         self.assertEqual(clipboard.value, "orig")
 
-    def test_multiline_does_not_restore(self):
-        # Deliberate: multi-line has never restored (the old CRLF comparison
-        # skipped it), and enabling it now would expose exactly the snippets
-        # under investigation to the restore race.
+    def test_multiline_restores_previous_clipboard(self):
+        # A paste must never leave the snippet behind, multi-line included
+        # (it used to be skipped and was the main source of a replaced
+        # clipboard). The CRLF round-trip must still compare as our payload.
         clipboard = FakeClipboard(initial="orig")
         self._insert(clipboard, "linha um\nlinha dois")
-        self.assertEqual(clipboard.value, "linha um\r\nlinha dois")
+        self.assertEqual(clipboard.value, "orig")
+
+    def test_multiline_with_crlf_snapshot_restores_verbatim(self):
+        clipboard = FakeClipboard(initial="antes\r\ndepois")
+        self._insert(clipboard, "linha um\nlinha dois")
+        self.assertEqual(clipboard.value, "antes\r\ndepois")
 
 
 class SlowRefRoutingTests(unittest.TestCase):

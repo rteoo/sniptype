@@ -186,9 +186,7 @@ and check, each time:
 - [ ] the trigger is **fully erased** (no leftover characters, nothing eaten
       from the text before it)
 - [ ] the payload pastes **once**, complete, with newlines intact
-- [ ] the previous clipboard is **restored** (single-line snippets only —
-      multi-line deliberately does not restore; see the ceiling comment in
-      `TextInserter._restore_clipboard`)
+- [ ] the previous clipboard is **restored**, for multi-line snippets too
 - [ ] typing the trigger **fast**, mid-sentence, produces the same result
 
 Then the failure cases:
