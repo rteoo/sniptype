@@ -1382,13 +1382,14 @@ class InsertionTimingTests(unittest.TestCase):
                 self.assertIsInstance(value, float, f"{system}.{key}")
 
     def test_windows_timings_are_the_historical_constants(self):
-        # These are the values the paste path shipped with; a macOS retune must
-        # not move them.
+        # The paste delays the path shipped with; a macOS retune must not move
+        # them. The erase delay is 0 because Windows erases in one atomic
+        # SendInput batch instead of sleeping on the keyboard-hook thread.
         self.assertEqual(
             {
                 "clipboard_settle_delay": 0.05,
                 "paste_restore_delay": 0.12,
-                "erase_key_delay": 0.01,
+                "erase_key_delay": 0.0,
             },
             ps.default_insertion_timings("windows"),
         )
@@ -1426,11 +1427,11 @@ class InsertionTimingTests(unittest.TestCase):
         for bad in (500, -0.1, "0.2", True, None, [0.2]):
             with self.subTest(bad=bad):
                 timings = ps.insertion_timings({"erase_key_delay": bad}, system="windows")
-                self.assertEqual(0.01, timings["erase_key_delay"])
+                self.assertEqual(0.0, timings["erase_key_delay"])
                 self.assertEqual(["erase_key_delay"], ps.invalid_timing_overrides({"erase_key_delay": bad}))
 
     def test_zero_is_a_valid_delay(self):
-        timings = ps.insertion_timings({"erase_key_delay": 0}, system="windows")
+        timings = ps.insertion_timings({"erase_key_delay": 0}, system="darwin")
         self.assertEqual(0.0, timings["erase_key_delay"])
         self.assertEqual([], ps.invalid_timing_overrides({"erase_key_delay": 0}))
 

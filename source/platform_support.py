@@ -68,7 +68,10 @@ _INSERTION_TIMING_DEFAULTS = {
     "windows": {
         "clipboard_settle_delay": 0.05,
         "paste_restore_delay": 0.12,
-        "erase_key_delay": 0.01,
+        # 0 selects the single atomic SendInput erase (win_input). A per-key
+        # delay here sleeps on the thread that pumps the keyboard hook, which
+        # stalls typing system-wide; set one only for an app that drops keys.
+        "erase_key_delay": 0.0,
     },
     "darwin": {
         # ``pbcopy``/``osascript`` only exit once NSPasteboard holds the payload,
