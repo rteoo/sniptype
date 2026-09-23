@@ -209,7 +209,11 @@ class PreviewDialogController:
             wrap="word",
             width=80,
             height=20,
+            font=self.theme.font(10),
+            padx=self.theme.space_sm,
+            pady=self.theme.space_sm,
             **self.theme.text_colors(),
+            **self.theme.field_chrome(),
         )
         text_widget.pack(fill="both", expand=True)
         status = tk.Label(

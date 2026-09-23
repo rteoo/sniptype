@@ -239,7 +239,13 @@ class Theme:
         """
         if self.system == "darwin":
             return ("1140x760", 980, 600)
-        return ("1080x720", 900, 580)
+        # Minimum heights are where the editors stop clipping their bottom
+        # rows (Grupo/Favorito, Formulário/Prévia) and keep a content box:
+        # measured at 100% on Windows; X11 font metrics need ~24px more
+        # (CI, Ubuntu + Xvfb), plus margin.
+        if self.system == "linux":
+            return ("1080x780", 940, 740)
+        return ("1080x720", 940, 700)
 
     @property
     def stacked_toolbar_status(self):
@@ -263,6 +269,19 @@ class Theme:
             "highlightbackground": self.border,
             "highlightcolor": self.focus_ring,
             "cursor": "hand2",
+        }
+
+    def field_chrome(self):
+        """Flat one-pixel border for ``tk.Entry``/``tk.Text``, as the manager uses.
+
+        The default sunken relief draws its right and bottom edges white, so
+        on a white card the field looked cut off at both.
+        """
+        return {
+            "relief": "flat",
+            "highlightthickness": 1,
+            "highlightbackground": self.border,
+            "highlightcolor": self.focus_ring,
         }
 
     def button_colors(self, accent=False, danger=False):

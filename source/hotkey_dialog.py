@@ -112,7 +112,8 @@ class HotkeyDialog:
                 bg=self.theme.card, fg=self.theme.text, font=self.theme.font(),
             ).pack(side="left")
             control = tk.Entry(
-                row, **self.theme.entry_colors(), font=self.theme.font(),
+                row, **self.theme.entry_colors(), **self.theme.field_chrome(),
+                font=self.theme.font(),
             )
             if normalized.get(action):
                 control.insert(0, normalized[action])

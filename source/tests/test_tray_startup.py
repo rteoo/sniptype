@@ -128,10 +128,14 @@ class RunStartupTests(unittest.TestCase):
     def test_macos_show_manager_uses_gui_submission_boundary(self):
         app, _icon, _icon_cls = self._run(main_thread=True, show_manager=True)
 
-        app.gui.submit.assert_called_once()
-        callback = app.gui.submit.call_args.args[0]
-        self.assertIs(callback.__self__, app)
-        self.assertEqual(callback.__name__, "_show_manager_window")
+        # Other startup work (the default window icon) may also be submitted;
+        # the manager itself must be, exactly once.
+        manager_calls = [
+            call.args[0] for call in app.gui.submit.call_args_list
+            if getattr(call.args[0], "__name__", "") == "_show_manager_window"
+        ]
+        self.assertEqual(1, len(manager_calls))
+        self.assertIs(manager_calls[0].__self__, app)
 
 
 class RunStartupOutputTests(unittest.TestCase):

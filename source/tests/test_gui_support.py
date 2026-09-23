@@ -264,6 +264,30 @@ class SnippetRowValuesTests(unittest.TestCase):
 
         self.assertEqual(snapshot, value)
 
+class TreeColumnSplitTests(unittest.TestCase):
+    def test_columns_exactly_fill_the_visible_width(self):
+        for width in (120, 213, 307, 993):
+            with self.subTest(width=width):
+                trigger, preview = gui_support.split_tree_columns(width, 48, 0.36, 76, 60)
+                self.assertEqual(width - 48, trigger + preview)
+
+    def test_trigger_takes_its_share_when_there_is_room(self):
+        self.assertEqual(
+            (180, 320), gui_support.split_tree_columns(548, 48, 0.36, 76, 60)
+        )
+
+    def test_trigger_minimum_holds_until_the_preview_would_starve(self):
+        self.assertEqual((76, 76), gui_support.split_tree_columns(200, 48, 0.36, 76, 60))
+        # Too narrow for both minimums: never a negative or overflowing width.
+        self.assertEqual((52, 0), gui_support.split_tree_columns(100, 48, 0.36, 76, 60))
+        self.assertEqual((0, 0), gui_support.split_tree_columns(30, 48, 0.36, 76, 60))
+
+
+class WrappingRowTests(unittest.TestCase):
+    def test_row_fits_includes_the_gap(self):
+        self.assertTrue(gui_support.row_fits(316, 200, 100, 16))
+        self.assertFalse(gui_support.row_fits(315, 200, 100, 16))
+
 
 if __name__ == "__main__":
     unittest.main()
