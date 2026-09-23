@@ -92,7 +92,7 @@ from app_paths import (
     needs_migration,
 )
 from settings_support import load_settings, normalize_runtime_settings, save_settings
-from hotkey_support import HotkeyRouter, normalize_hotkeys
+from hotkey_support import ACTIONS, HotkeyRouter, normalize_hotkeys
 from workflow_support import SnippetRef, WorkflowState
 from validation_support import validate_trigger
 import macos_permissions
@@ -178,6 +178,7 @@ from gui_support import (
     focus_modal_input,
     iter_filtered_mapping_items,
     layout_wrapping_row,
+    SectionSwitcher,
     snippet_row_values,
     split_tree_columns,
 )
@@ -306,6 +307,8 @@ class Sniptype:
         self._pending_manager_target = None
         self.macos_permission_window = None
         self._manager_notebook = None
+        self._manager_settings_tab = None
+        self._manager_settings_sections = None
         self._manager_tab_selectors = {}
         self._manager_preview_controller = None
         # Cached macOS TCC probe. Like the autostart cache, the tray menu only
@@ -355,6 +358,7 @@ class Sniptype:
         # Opt-in: expand only after a terminator (space/punctuation). Default off
         # to preserve the existing expand-on-last-character muscle memory.
         self.terminator_mode = self.settings.get("terminator_mode", False)
+        ui_theme.set_preference(self.settings.get("appearance"))
         # Clipboard/erase delays: per-OS defaults, overridable per key from
         # settings.json. Resolved once — they are read on the listener thread.
         timings = insertion_timings(self.settings)
@@ -1024,6 +1028,7 @@ class Sniptype:
             dialog.resizable(False, False)
             dialog.configure(bg=ui.surface)
             self._set_window_icon(dialog)
+            ui_theme.prepare_window(dialog, ui)
 
             container = tk.Frame(dialog, bg=ui.surface, padx=18, pady=18)
             container.pack(fill=tk.BOTH, expand=True)
@@ -1108,6 +1113,7 @@ class Sniptype:
             dialog.resizable(False, False)
             dialog.configure(bg=ui.surface)
             self._set_window_icon(dialog)
+            ui_theme.prepare_window(dialog, ui)
 
             container = tk.Frame(dialog, bg=ui.surface, padx=18, pady=18)
             container.pack(fill=tk.BOTH, expand=True)
@@ -1500,6 +1506,7 @@ class Sniptype:
             dialog.resizable(False, False)
             dialog.configure(bg=ui.surface)
             self._set_window_icon(dialog)
+            ui_theme.prepare_window(dialog, ui)
 
             tk.Label(
                 dialog,
@@ -2322,6 +2329,7 @@ class Sniptype:
         dialog.configure(bg=ui.surface)
         dialog.minsize(460, 300)
         self._set_window_icon(dialog)
+        ui_theme.prepare_window(dialog, ui)
         body = tk.Frame(dialog, bg=ui.surface, padx=ui.space_lg, pady=ui.space_lg)
         body.pack(fill="both", expand=True)
         listbox = tk.Listbox(
@@ -2410,6 +2418,7 @@ class Sniptype:
             root.configure(bg=ui.surface)
             self._set_window_icon(root)
             self._configure_manager_styles(root)
+            ui_theme.apply_window_chrome(root, ui)
 
             root.grid_columnconfigure(0, weight=1)
             root.grid_rowconfigure(2, weight=1)
@@ -2492,6 +2501,10 @@ class Sniptype:
             tab_backups = tk.Frame(notebook, bg=ui.surface)
             notebook.add(tab_backups, text="Backups")
 
+            tab_settings = tk.Frame(notebook, bg=ui.surface)
+            notebook.add(tab_settings, text="Configurações")
+            self._manager_settings_tab = tab_settings
+
             def tab_counter(tab, label):
                 return lambda count: notebook.tab(tab, text=f"{label} ({count})")
 
@@ -2505,6 +2518,7 @@ class Sniptype:
                 tab_dynamic, root, set_count=tab_counter(tab_dynamic, "Mapeamentos"))
             self._create_dynamic_snippets_tab(tab_builtin, root)
             self._create_backups_tab(tab_backups, root)
+            self._create_settings_tab(tab_settings, root)
 
             def on_close():
                 self._release_manager_ui_refs()
@@ -2721,6 +2735,286 @@ class Sniptype:
 
         refresh_backups()
 
+    def _persist_settings(self, updates):
+        """Save settings.json with ``updates`` applied; publish only on success."""
+        updated = {**self.settings, **updates}
+        if not save_settings(self.settings_file, updated):
+            return False
+        self.settings = updated
+        return True
+
+    def _create_settings_tab(self, parent, root):
+        """Configurações tab: one section at a time, chosen from a side nav."""
+        ui = ui_theme.theme()
+        main = tk.Frame(parent, bg=ui.surface, padx=ui.space_lg, pady=ui.space_lg)
+        main.pack(fill=tk.BOTH, expand=True)
+        tk.Label(
+            main,
+            text="Configurações",
+            font=ui.font(11, "bold"),
+            bg=ui.surface,
+            fg=ui.text,
+        ).pack(anchor="w")
+        tk.Label(
+            main,
+            text="Ajuste a aparência, a expansão e os atalhos do Sniptype.",
+            font=ui.font(9),
+            bg=ui.surface,
+            fg=ui.text_muted,
+        ).pack(anchor="w", pady=(ui.space_xs, ui.space_md))
+
+        body = tk.Frame(main, bg=ui.surface)
+        body.pack(fill=tk.BOTH, expand=True)
+        nav = tk.Frame(body, bg=ui.surface)
+        nav.pack(side=tk.LEFT, fill=tk.Y, padx=(0, ui.space_lg))
+        content = tk.Frame(body, bg=ui.surface)
+        content.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        sections = SectionSwitcher(ui, nav, content)
+        self._manager_settings_sections = sections
+        general = sections.add("general", "Geral")
+        hotkeys = sections.add("hotkeys", "Atalhos")
+        data = sections.add("data", "Dados")
+        self._build_appearance_card(general, root)
+        self._build_expansion_card(general)
+        self._build_hotkeys_card(hotkeys, root)
+        self._build_data_card(data)
+
+    def _settings_card(self, parent, title, description):
+        """A titled settings card; content goes in grid rows 2+ (column 1 stretches)."""
+        ui = ui_theme.theme()
+        card = tk.Frame(parent, padx=ui.space_lg, pady=ui.space_md, **ui.card_options())
+        card.pack(fill=tk.X, pady=(0, ui.space_md))
+        card.grid_columnconfigure(1, weight=1)
+        tk.Label(
+            card,
+            text=title,
+            font=ui.font(11, "bold"),
+            bg=ui.card,
+            fg=ui.text_strong,
+        ).grid(row=0, column=0, columnspan=3, sticky="w")
+        tk.Label(
+            card,
+            text=description,
+            font=ui.font(9),
+            bg=ui.card,
+            fg=ui.text_muted,
+            anchor="w",
+            justify="left",
+            wraplength=640,
+        ).grid(row=1, column=0, columnspan=3, sticky="ew", pady=(ui.space_xs, ui.space_sm))
+        return card
+
+    def _build_appearance_card(self, parent, root):
+        ui = ui_theme.theme()
+        card = self._settings_card(
+            parent,
+            "Aparência",
+            "Use o tema do sistema ou escolha uma aparência fixa. A mudança "
+            "recarrega o gerenciador sem reiniciar o Sniptype.",
+        )
+        current = ui_theme.preference()
+        labels = ui_theme.APPEARANCE_LABELS
+        display = tk.StringVar(card, labels[current])
+        status = tk.StringVar(card, ui_theme.APPEARANCE_STATUS[current])
+        ttk.Combobox(
+            card,
+            textvariable=display,
+            values=tuple(labels.values()),
+            state="readonly",
+            width=18,
+        ).grid(row=2, column=0, sticky="w")
+        tk.Label(
+            card,
+            textvariable=status,
+            font=ui.font(9),
+            bg=ui.card,
+            fg=ui.text_muted,
+            anchor="w",
+        ).grid(row=2, column=1, sticky="w", padx=(ui.space_md, 0))
+
+        def apply():
+            choice = next((key for key, label in labels.items() if label == display.get()), None)
+            if choice is None:
+                status.set("Escolha uma aparência válida.")
+                return
+            if choice == ui_theme.preference():
+                status.set(ui_theme.APPEARANCE_STATUS[choice])
+                return
+            # The editors track no dirty state, so a rebuild would silently
+            # drop typed text; ask before anything is saved.
+            if not messagebox.askyesno(
+                "Aparência",
+                "O gerenciador será recarregado para aplicar a aparência.\n\n"
+                "Edições não salvas no editor serão descartadas. Continuar?",
+                parent=root,
+            ):
+                display.set(labels[ui_theme.preference()])
+                return
+            if not self._persist_settings({"appearance": choice}):
+                status.set("Não foi possível salvar a aparência.")
+                return
+            ui_theme.set_preference(choice)
+            root.after_idle(lambda: self._reload_manager_window(root))
+
+        tk.Button(
+            card,
+            text="Aplicar aparência",
+            command=apply,
+            **ui.button_chrome(compact=True),
+            **ui.button_colors(accent=True),
+        ).grid(row=2, column=2, sticky="e")
+
+    def _reload_manager_window(self, window):
+        """Rebuild the manager in place so a new appearance takes effect. GUI thread."""
+        tk_root = window.master
+        geometry = window.geometry()
+        self._release_manager_ui_refs()
+        window.destroy()
+        # Tk variables must be collected on this thread; see on_close.
+        gc.collect()
+        self._build_manager_window(tk_root)
+        rebuilt = self.manager_window
+        if rebuilt is None:
+            return
+        rebuilt.geometry(geometry)
+        notebook = self._manager_notebook
+        if notebook is not None and self._manager_settings_tab is not None:
+            notebook.select(self._manager_settings_tab)
+
+    def _build_expansion_card(self, parent):
+        ui = ui_theme.theme()
+        card = self._settings_card(
+            parent,
+            "Expansão",
+            "Por padrão, o snippet expande no último caractere do trigger. No modo "
+            "terminador, ele só expande depois de um espaço ou sinal de pontuação, "
+            "que continua no texto; Enter não conta. Grupos com regra própria mantêm a sua.",
+        )
+        enabled = tk.BooleanVar(card, bool(self.terminator_mode))
+        status = tk.StringVar(card, "")
+
+        def toggle():
+            value = bool(enabled.get())
+            if not self._persist_settings({"terminator_mode": value}):
+                enabled.set(not value)
+                status.set("Não foi possível salvar.")
+                return
+            self.terminator_mode = value
+            self.refresh_runtime_indexes()
+            status.set("Salvo.")
+
+        tk.Checkbutton(
+            card,
+            text="Expandir só depois de espaço ou pontuação (modo terminador)",
+            variable=enabled,
+            command=toggle,
+            font=ui.font(),
+            anchor="w",
+            **ui.checkbutton_colors(ui.card),
+        ).grid(row=2, column=0, columnspan=2, sticky="w")
+        tk.Label(
+            card,
+            textvariable=status,
+            font=ui.font(9),
+            bg=ui.card,
+            fg=ui.text_muted,
+        ).grid(row=2, column=2, sticky="e")
+
+    def _build_hotkeys_card(self, parent, root):
+        from hotkey_dialog import ACTION_LABELS
+
+        ui = ui_theme.theme()
+        card = self._settings_card(
+            parent,
+            "Atalhos de teclado",
+            "Combinações opcionais para abrir o gerenciador, editar o último "
+            "snippet expandido e pausar ou retomar a expansão.",
+        )
+        values = {}
+        for row, action in enumerate(ACTIONS, 2):
+            tk.Label(
+                card,
+                text=ACTION_LABELS.get(action, action),
+                font=ui.font(),
+                bg=ui.card,
+                fg=ui.text,
+                anchor="w",
+            ).grid(row=row, column=0, sticky="w", padx=(0, ui.space_lg), pady=2)
+            value = tk.Label(card, font=ui.mono_font(), bg=ui.card, anchor="w")
+            value.grid(row=row, column=1, columnspan=2, sticky="w", pady=2)
+            values[action] = value
+
+        def refresh():
+            bindings = self.settings.get("hotkeys", {})
+            bindings = bindings if isinstance(bindings, dict) else {}
+            for action, label in values.items():
+                binding = bindings.get(action)
+                label.configure(
+                    text=binding or "Desativado",
+                    fg=ui.text if binding else ui.text_muted,
+                )
+
+        def edit():
+            self._show_hotkey_settings(root.master)
+            if card.winfo_exists():
+                refresh()
+
+        refresh()
+        tk.Button(
+            card,
+            text="Editar atalhos…",
+            command=edit,
+            **ui.button_chrome(compact=True),
+            **ui.button_colors(),
+        ).grid(row=2 + len(ACTIONS), column=0, sticky="w", pady=(ui.space_sm, 0))
+
+    def _build_data_card(self, parent):
+        ui = ui_theme.theme()
+        card = self._settings_card(
+            parent,
+            "Pasta de dados",
+            "Biblioteca, configurações, backups e logs ficam nesta pasta. Os "
+            "backups são gerenciados na aba Backups.",
+        )
+        rows = (
+            ("Pasta de dados", self.data_dir),
+            ("Cópia espelho", self.settings.get("mirror_dir") or "Desativada"),
+            ("Pacote de sincronização", self.settings.get("sync_export_dir") or "Desativado"),
+        )
+        for row, (label, value) in enumerate(rows, 2):
+            tk.Label(
+                card,
+                text=label,
+                font=ui.font(),
+                bg=ui.card,
+                fg=ui.text,
+                anchor="w",
+            ).grid(row=row, column=0, sticky="w", padx=(0, ui.space_lg), pady=2)
+            field = tk.Entry(
+                card,
+                font=ui.font(),
+                **ui.entry_colors(),
+                **ui.field_chrome(),
+            )
+            field.insert(0, value)
+            field.configure(state="readonly")
+            field.grid(row=row, column=1, columnspan=2, sticky="ew", pady=2)
+        tk.Label(
+            card,
+            text="A cópia espelho e o pacote de sincronização são definidos em settings.json.",
+            font=ui.font(8),
+            bg=ui.card,
+            fg=ui.text_muted,
+            anchor="w",
+        ).grid(row=2 + len(rows), column=0, columnspan=3, sticky="w", pady=(ui.space_xs, 0))
+        tk.Button(
+            card,
+            text="Abrir pasta",
+            command=self.open_data_folder,
+            **ui.button_chrome(compact=True),
+            **ui.button_colors(),
+        ).grid(row=3 + len(rows), column=0, sticky="w", pady=(ui.space_sm, 0))
+
     def _set_window_icon(self, window):
         icon_path = self.resolve_resource_path("sniptype.ico")
         if not icon_path:
@@ -2738,7 +3032,8 @@ class Sniptype:
         style = ttk.Style(root)
         # "vista" only exists on Windows; elsewhere this picked whatever theme
         # happened to be active and then painted Windows colors over it.
-        theme_name = ui_theme.apply_ttk_theme(style)
+        theme_name = ui_theme.apply_ttk_theme(style, resolved=ui)
+        ui_theme.apply_option_defaults(root, ui)
 
         style.configure(
             "Manager.TNotebook",
@@ -2781,6 +3076,8 @@ class Sniptype:
             font=ui.font(9, "bold"),
             padding=(8, 6),
         )
+        if theme_name == "clam":
+            ui_theme.configure_clam_colors(style, ui)
         style.layout("Manager.Treeview", style.layout("Treeview"))
 
     def _create_snippet_tree(self, shell, trigger_heading="Trigger",
@@ -2845,6 +3142,8 @@ class Sniptype:
     def _release_manager_ui_refs(self):
         """Drop widget callbacks while still running on the GUI thread."""
         self._manager_notebook = None
+        self._manager_settings_tab = None
+        self._manager_settings_sections = None
         self.manager_window = None
         self._manager_refreshers = []
         self._manager_tab_selectors = {}
@@ -2889,6 +3188,7 @@ class Sniptype:
         history_window.configure(bg=ui.surface)
         history_window.transient(root)
         self._set_window_icon(history_window)
+        ui_theme.prepare_window(history_window, ui)
 
         outer = tk.Frame(history_window, bg=ui.surface, padx=14, pady=14)
         outer.pack(fill=tk.BOTH, expand=True)
@@ -3061,6 +3361,7 @@ class Sniptype:
             picker.grab_set()
 
             picker.configure(bg=ui.surface)
+            ui_theme.prepare_window(picker, ui)
 
             search_var = tk.StringVar()
             tk.Entry(
@@ -3077,7 +3378,7 @@ class Sniptype:
             listbox = tk.Listbox(lf, font=ui.font(10), selectmode=tk.SINGLE,
                                  relief=tk.FLAT, borderwidth=0, activestyle="none",
                                  **ui.listbox_colors())
-            scrollbar = tk.Scrollbar(lf, orient=tk.VERTICAL, command=listbox.yview)
+            scrollbar = ttk.Scrollbar(lf, orient=tk.VERTICAL, command=listbox.yview)
             listbox.config(yscrollcommand=scrollbar.set)
             listbox.grid(row=0, column=0, sticky="nsew")
             scrollbar.grid(row=0, column=1, sticky="ns")
@@ -4111,7 +4412,7 @@ class Sniptype:
             exportselection=False,
             **ui.listbox_colors(),
         )
-        scrollbar_types = tk.Scrollbar(
+        scrollbar_types = ttk.Scrollbar(
             types_list_frame,
             orient=tk.VERTICAL,
             command=listbox_types.yview,
@@ -4406,6 +4707,7 @@ class Sniptype:
             dialog.grab_set()
             dialog.configure(bg=ui.surface)
             self._set_window_icon(dialog)
+            ui_theme.prepare_window(dialog, ui)
 
             body = tk.Frame(dialog, bg=ui.surface, padx=18, pady=18)
             body.pack(fill=tk.BOTH, expand=True)
@@ -5345,6 +5647,7 @@ class Sniptype:
         window.configure(bg=ui.surface)
         window.attributes("-topmost", True)
         self._set_window_icon(window)
+        ui_theme.prepare_window(window, ui)
 
         container = tk.Frame(window, bg=ui.surface, padx=18, pady=18)
         container.pack(fill=tk.BOTH, expand=True)

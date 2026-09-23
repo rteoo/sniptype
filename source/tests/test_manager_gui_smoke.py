@@ -758,6 +758,84 @@ class ManagerGuiSmokeTests(unittest.TestCase):
 
         self._on_gui(build)
 
+    def _settings_widgets(self, cls, predicate=lambda _widget: True):
+        tab = self.app._manager_settings_tab
+        return [w for w in _descendants(tab) if isinstance(w, cls) and predicate(w)]
+
+    def test_settings_tab_toggles_terminator_mode_and_persists_it(self):
+        def run(shared_root):
+            self.app._build_manager_window(shared_root)
+            self.assertIsNotNone(self.app._manager_settings_tab)
+            sections = self.app._manager_settings_sections
+            self.assertEqual(list(sections.frames), ["general", "hotkeys", "data"])
+            check, = self._settings_widgets(
+                tk.Checkbutton, lambda w: "modo terminador" in w.cget("text"))
+            self.assertFalse(self.app.terminator_mode)
+            check.invoke()
+            self.assertTrue(self.app.terminator_mode)
+            self.assertTrue(self.app.trigger_index["global_terminator_mode"])
+            self.assertTrue(tx.load_settings(self.app.settings_file)["terminator_mode"])
+            check.invoke()
+            self.assertFalse(self.app.terminator_mode)
+
+        self._on_gui(run)
+
+    def test_failed_terminator_save_keeps_the_runtime_unchanged(self):
+        def run(shared_root):
+            self.app._build_manager_window(shared_root)
+            check, = self._settings_widgets(
+                tk.Checkbutton, lambda w: "modo terminador" in w.cget("text"))
+            with mock.patch.object(tx, "save_settings", return_value=False):
+                check.invoke()
+            self.assertFalse(self.app.terminator_mode)
+            self.assertEqual(self.app.settings.get("terminator_mode", False), False)
+
+        self._on_gui(run)
+
+    def test_applying_an_appearance_rebuilds_the_manager_on_the_settings_tab(self):
+        self.addCleanup(tx.ui_theme.set_preference, "system")
+
+        def run(shared_root):
+            self.app._build_manager_window(shared_root)
+            first = self.app.manager_window
+            combo, = self._settings_widgets(ttk.Combobox)
+            combo.set(tx.ui_theme.APPEARANCE_LABELS["dark"])
+            apply, = self._settings_widgets(
+                tk.Button, lambda w: w.cget("text") == "Aplicar aparência")
+            with mock.patch.object(tx.messagebox, "askyesno", return_value=True):
+                apply.invoke()
+            first.update()
+            rebuilt = self.app.manager_window
+            self.assertIsNot(rebuilt, first)
+            self.assertFalse(first.winfo_exists())
+            self.assertTrue(tx.ui_theme.theme().is_dark)
+            self.assertEqual(tx.load_settings(self.app.settings_file)["appearance"], "dark")
+            self.assertEqual(
+                self.app._manager_notebook.select(), str(self.app._manager_settings_tab))
+            self.assertEqual(ttk.Style(rebuilt).theme_use(), "clam")
+
+        self._on_gui(run)
+
+    def test_declining_the_reload_changes_nothing(self):
+        self.addCleanup(tx.ui_theme.set_preference, "system")
+
+        def run(shared_root):
+            self.app._build_manager_window(shared_root)
+            first = self.app.manager_window
+            combo, = self._settings_widgets(ttk.Combobox)
+            combo.set(tx.ui_theme.APPEARANCE_LABELS["dark"])
+            apply, = self._settings_widgets(
+                tk.Button, lambda w: w.cget("text") == "Aplicar aparência")
+            with mock.patch.object(tx.messagebox, "askyesno", return_value=False):
+                apply.invoke()
+            first.update()
+            self.assertIs(self.app.manager_window, first)
+            self.assertEqual(tx.ui_theme.preference(), "system")
+            self.assertNotIn("appearance", tx.load_settings(self.app.settings_file))
+            self.assertEqual(combo.get(), tx.ui_theme.APPEARANCE_LABELS["system"])
+
+        self._on_gui(run)
+
     def test_manager_window_is_tracked_and_reused(self):
         """Track/reuse logic does not require constructing the manager UI."""
         first = mock.Mock()

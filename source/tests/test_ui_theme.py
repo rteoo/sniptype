@@ -8,6 +8,7 @@ platform-native.
 import os
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -24,6 +25,9 @@ FLUENT_WINDOWS_COLORS = {
     "card": "#FFFFFF",
     "field": "#FFFFFF",
     "field_hover": "#F5F9FD",
+    "control": "#E6E6E6",
+    "control_active": "#D9D9D9",
+    "control_border": "#ABABAB",
     "text": "#1B1B1B",
     "text_strong": "#242424",
     "text_muted": "#616161",
@@ -172,7 +176,16 @@ class AppearanceDetectionTests(unittest.TestCase):
             def winfo_rgb(self, _name):
                 raise AssertionError("Windows must not query Aqua colors")
 
-        self.assertEqual(ui_theme._probe_kind(Exploding(), "windows"), "windows")
+        with mock.patch.object(ui_theme, "_windows_apps_use_light_theme", return_value=True):
+            self.assertEqual(ui_theme._probe_kind(Exploding(), "windows"), "windows")
+
+    def test_windows_follows_the_apps_theme_switch(self):
+        with mock.patch.object(ui_theme, "_windows_apps_use_light_theme", return_value=False):
+            self.assertEqual(ui_theme._probe_kind(object(), "windows"), "dark")
+
+    def test_an_unreadable_windows_switch_keeps_the_light_palette(self):
+        with mock.patch.object(ui_theme, "_windows_apps_use_light_theme", return_value=None):
+            self.assertEqual(ui_theme._probe_kind(object(), "windows"), "windows")
 
 
 class ThemeCacheTests(unittest.TestCase):
@@ -209,7 +222,7 @@ class WidgetOptionTests(unittest.TestCase):
             self.assertEqual(theme.text_colors(), {})
             self.assertEqual(theme.listbox_colors(), {})
             self.assertEqual(theme.checkbutton_colors("#FFFFFF")["bg"], "#FFFFFF")
-            self.assertEqual(theme.button_colors()["bg"], "#FAFAFA")
+            self.assertEqual(theme.button_colors()["bg"], "#E6E6E6")
 
     def test_added_foregrounds_resolve_to_each_platform_default(self):
         # `text_native` is for widgets the pre-change GUI left uncolored, so it
@@ -302,7 +315,7 @@ class WidgetOptionTests(unittest.TestCase):
             theme.button_chrome(),
             {
                 "relief": "flat", "bd": 0, "padx": 12, "pady": 6,
-                "highlightthickness": 1, "highlightbackground": theme.border,
+                "highlightthickness": 1, "highlightbackground": theme.control_border,
                 "highlightcolor": theme.focus_ring, "cursor": "hand2",
             },
         )
@@ -454,6 +467,153 @@ class GuiSourceTests(unittest.TestCase):
     def test_the_windows_only_ttk_theme_is_no_longer_forced(self):
         self.assertNotIn('theme_use("vista")', self._source())
 
+
+
+def _contrast(first, second):
+    """WCAG contrast ratio between two ``#RRGGBB`` colors."""
+    def luminance(color):
+        channels = [int(color[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+        linear = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
+        return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+    high, low = sorted((luminance(first), luminance(second)), reverse=True)
+    return (high + 0.05) / (low + 0.05)
+
+
+class ContrastTests(unittest.TestCase):
+    """Legibility floors for the two opaque palettes (WCAG 2.x ratios)."""
+
+    def _palettes(self):
+        return {
+            "light": ui_theme.palette("windows", "linux"),
+            "dark": ui_theme.palette("dark", "windows"),
+        }
+
+    def test_body_and_muted_text_are_readable_on_every_surface(self):
+        for name, colors in self._palettes().items():
+            for surface in ("surface", "surface_alt", "card", "field", "control"):
+                self.assertGreaterEqual(
+                    _contrast(colors["text"], colors[surface]), 7, (name, surface))
+            for surface in ("surface", "card"):
+                self.assertGreaterEqual(
+                    _contrast(colors["text_muted"], colors[surface]), 4.5, (name, surface))
+
+    def test_tinted_buttons_keep_their_labels_readable(self):
+        for name, colors in self._palettes().items():
+            for fill in ("accent", "accent_active", "danger", "danger_active"):
+                self.assertGreaterEqual(
+                    _contrast(colors["text_on_accent"], colors[fill]), 4.5, (name, fill))
+
+    def test_selected_rows_stay_readable(self):
+        for name, colors in self._palettes().items():
+            self.assertGreaterEqual(
+                _contrast(colors["select_fg"], colors["select_bg"]), 4.5, name)
+
+    def test_neutral_buttons_stand_out_from_what_they_sit_on(self):
+        # Regression: the fill used to be #FAFAFA, ~1.04:1 against the white
+        # cards, so Novo/Editar/Duplicar read as plain text.
+        for name, colors in self._palettes().items():
+            for surface in ("card", "surface"):
+                self.assertGreaterEqual(
+                    _contrast(colors["control"], colors[surface]), 1.1, (name, surface))
+
+    def test_the_dark_palette_defines_every_light_token(self):
+        self.assertEqual(
+            set(ui_theme.palette("dark", "windows")), set(ui_theme.palette("windows", "linux")))
+
+
+class AppearancePreferenceTests(unittest.TestCase):
+
+    def setUp(self):
+        ui_theme.reset()
+        self.addCleanup(ui_theme.reset)
+
+    def test_unknown_values_fall_back_to_the_system(self):
+        for value in (None, "", "Dark", 1, "auto"):
+            self.assertEqual(ui_theme.normalize_preference(value), "system")
+        self.assertEqual(ui_theme.set_preference("bogus"), "system")
+
+    def test_labels_cover_every_choice(self):
+        self.assertEqual(set(ui_theme.APPEARANCE_LABELS), set(ui_theme.APPEARANCE_CHOICES))
+        self.assertEqual(set(ui_theme.APPEARANCE_STATUS), set(ui_theme.APPEARANCE_CHOICES))
+
+    def test_a_fixed_choice_overrides_the_windows_switch(self):
+        with mock.patch.object(ui_theme, "_windows_apps_use_light_theme", return_value=False), \
+                mock.patch.object(ui_theme, "_probe_default_size", return_value=None):
+            ui_theme.set_preference("light")
+            self.assertFalse(ui_theme.bind(object(), system="windows").is_dark)
+        with mock.patch.object(ui_theme, "_windows_apps_use_light_theme", return_value=True), \
+                mock.patch.object(ui_theme, "_probe_default_size", return_value=None):
+            ui_theme.set_preference("dark")
+            self.assertTrue(ui_theme.bind(object(), system="windows").is_dark)
+
+    def test_system_choice_follows_the_windows_switch(self):
+        with mock.patch.object(ui_theme, "_windows_apps_use_light_theme", return_value=False), \
+                mock.patch.object(ui_theme, "_probe_default_size", return_value=None):
+            theme = ui_theme.bind(object(), system="windows")
+        self.assertTrue(theme.is_dark)
+        self.assertEqual(theme.preference, "system")
+
+    def test_every_later_bind_keeps_the_choice(self):
+        # Dialogs re-bind against their own parent; they must not snap back
+        # to the system appearance.
+        ui_theme.set_preference("dark")
+        self.assertTrue(ui_theme.bind(None, system="windows").is_dark)
+        self.assertTrue(ui_theme.theme().is_dark)
+
+    def test_a_fixed_choice_on_macos_uses_the_opaque_palette(self):
+        # Aqua's dynamic names would follow the OS and override the user.
+        theme = ui_theme.build_theme("dark", system="darwin", preference="dark")
+        self.assertEqual(theme.surface, ui_theme.palette("dark", "windows")["surface"])
+        self.assertEqual(theme.text_native, "systemTextColor")
+        system = ui_theme.build_theme("dark", system="darwin", preference="system")
+        self.assertEqual(system.surface, "systemWindowBackgroundColor")
+
+
+class DarkWidgetOptionTests(unittest.TestCase):
+
+    def setUp(self):
+        self.dark = ui_theme.build_theme("dark", system="windows")
+
+    def test_classic_fields_are_painted_in_dark(self):
+        entry = self.dark.entry_colors()
+        self.assertEqual(entry["bg"], self.dark.field)
+        self.assertEqual(entry["fg"], self.dark.text)
+        self.assertEqual(entry["readonlybackground"], self.dark.surface_alt)
+        self.assertNotIn("readonlybackground", self.dark.text_colors())
+        self.assertEqual(self.dark.listbox_colors()["bg"], self.dark.field)
+
+    def test_field_colors_never_collide_with_field_chrome(self):
+        # form_editor_dialog splats both into one tk.Listbox call; a shared
+        # key is a TypeError at runtime.
+        for kind in ("windows", "dark"):
+            theme = ui_theme.build_theme(kind, system="windows")
+            self.assertFalse(set(theme.listbox_colors()) & set(theme.field_chrome()))
+            self.assertFalse(set(theme.entry_colors()) & set(theme.field_chrome()))
+
+    def test_dark_checkboxes_keep_a_visible_mark(self):
+        colors = self.dark.checkbutton_colors(self.dark.card)
+        self.assertEqual(colors["selectcolor"], self.dark.field)
+        light = ui_theme.build_theme("windows", system="windows")
+        self.assertNotIn("selectcolor", light.checkbutton_colors("#FFFFFF"))
+
+    def test_dark_selects_clam_off_macos_only(self):
+        self.assertEqual(ui_theme.ttk_theme_preference("windows", dark=True)[0], "clam")
+        self.assertEqual(ui_theme.ttk_theme_preference("linux", dark=True)[0], "clam")
+        self.assertEqual(ui_theme.ttk_theme_preference("darwin", dark=True)[0], "aqua")
+
+    def test_apply_ttk_theme_uses_the_resolved_appearance(self):
+        style = TtkThemeSelectionTests.FakeStyle(("vista", "clam", "default"))
+        self.assertEqual(ui_theme.apply_ttk_theme(style, "windows", resolved=self.dark), "clam")
+
+    def test_nav_buttons_mark_the_selected_section_with_the_accent(self):
+        self.assertEqual(self.dark.nav_button_colors("#000000", selected=True)["fg"], self.dark.accent)
+        self.assertEqual(self.dark.nav_button_colors("#000000")["fg"], self.dark.text_native)
+        self.assertEqual(ui_theme.build_theme("dark", system="darwin").nav_button_colors("#000"), {})
+
+    def test_window_chrome_is_a_no_op_off_windows(self):
+        mac = ui_theme.build_theme("light", system="darwin")
+        self.assertFalse(ui_theme.apply_window_chrome(object(), mac))
 
 if __name__ == "__main__":
     unittest.main()
