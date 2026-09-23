@@ -42,12 +42,37 @@ else:
         import tkinter as tk
         from tkinter import font as tkfont
         from tkinter import ttk
-        _probe = GuiThread(main_thread=False)
-        _probe.ensure_started()
-        _probe.stop()
+        # One root for the whole module, like the app, which builds exactly
+        # one per process. On Windows, creating a fresh Tk interpreter on a
+        # new thread over and over eventually wedges one of those threads'
+        # event loop (reproduced with plain tkinter, no app code, after ~100-
+        # 400 interpreters), so a root per test made the suite hang at random.
+        # The probe's root is that shared root.
+        _SHARED_GUI = GuiThread(main_thread=False)
+        _SHARED_GUI.ensure_started()
         TK_AVAILABLE = True
     except Exception:
         pass
+
+
+def tearDownModule():
+    if TK_AVAILABLE:
+        _SHARED_GUI.stop()
+
+
+def _reset_shared_root(app):
+    """Destroy every window a test left on the shared root."""
+    def cleanup(root):
+        app._release_manager_ui_refs()
+        for child in list(root.winfo_children()):
+            try:
+                child.destroy()
+            except Exception:
+                pass
+        # Tk variables must be collected on the thread that owns the root.
+        gc.collect()
+
+    app.gui.call(cleanup, timeout=10)
 
 
 def _make_app(base_dir):
@@ -59,12 +84,15 @@ def _make_app(base_dir):
         with mock.patch.object(tx, "get_runtime_base_dir", return_value=base_dir), \
                 mock.patch.object(tx, "get_runtime_resource_dir",
                                   return_value=os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))):
-            return tx.Sniptype()
+            app = tx.Sniptype()
     finally:
         if previous_home is None:
             os.environ.pop("SNIPTYPE_HOME", None)
         else:
             os.environ["SNIPTYPE_HOME"] = previous_home
+    if TK_AVAILABLE:
+        app.gui = _SHARED_GUI
+    return app
 
 
 def _descendants(widget):
@@ -80,21 +108,7 @@ class ManagerGuiSmokeTests(unittest.TestCase):
         self.app.gui.ensure_started()
 
     def tearDown(self):
-        def cleanup(root):
-            self.app._release_manager_ui_refs()
-            for child in list(root.winfo_children()):
-                try:
-                    child.destroy()
-                except Exception:
-                    pass
-            gc.collect()
-
-        try:
-            if self.app.gui.running:
-                self.app.gui.call(cleanup, timeout=10)
-        except Exception:
-            pass
-        self.app.gui.stop()
+        _reset_shared_root(self.app)
 
     def _on_gui(self, func):
         """Run func(root) on the GUI thread, propagating assertion failures."""
@@ -836,7 +850,8 @@ class ModalDialogSerializationTests(unittest.TestCase):
         self.results = {}
 
     def tearDown(self):
-        self.app.gui.stop()
+        # Destroying a leftover form also releases a worker still waiting on it.
+        _reset_shared_root(self.app)
 
     def _open_form(self, field):
         def worker():
