@@ -9,9 +9,7 @@ a window — neither of which a unit test of the parts alone would catch.
 """
 
 import os
-import subprocess
 import sys
-import tempfile
 import threading
 import types
 import unittest
@@ -414,36 +412,39 @@ class AppVersionFormattingTests(unittest.TestCase):
         self.assertIn('MyInstallerVersion MyAppVersion + "-beta"', installer)
         self.assertIn('MyAppDisplayVersion MyAppVersion + " beta"', installer)
 
-    @unittest.skipUnless(sys.platform == "darwin", "needs macOS sips")
-    def test_macos_release_icon_converts_from_the_shipped_ico(self):
+    def test_macos_release_icon_is_the_committed_grid_icns(self):
         repo_root = Path(__file__).resolve().parents[2]
         script = (repo_root / "build_release_macos.sh").read_text(encoding="utf-8")
-        self.assertIn("sips -s format icns", script)
-        self.assertNotIn("iconutil -c icns", script)
+        self.assertIn('cp "$REPO_DIR/source/sniptype.icns" "$ICNS"', script)
+        # No conversion of the edge-to-edge Windows .ico, which would render
+        # ~24% larger than other Mac icons and cap out at 256px.
+        self.assertNotIn("sips -s format icns", script)
         self.assertIn("CFBundleIconFile", script)
         self.assertIn('! -s "$BUNDLE_ICON"', script)
 
-        tmp_root = Path(__file__).parent / "tmp"
-        tmp_root.mkdir(exist_ok=True)
-        with tempfile.TemporaryDirectory(dir=tmp_root) as temp_dir:
-            output = Path(temp_dir) / "Sniptype.icns"
-            result = subprocess.run(
-                [
-                    "sips",
-                    "-s",
-                    "format",
-                    "icns",
-                    str(repo_root / "source" / "sniptype.ico"),
-                    "--out",
-                    str(output),
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
+    def test_macos_icns_has_every_slot_and_follows_apples_grid(self):
+        from PIL import Image
 
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertGreater(output.stat().st_size, 0)
+        icns_path = Path(__file__).resolve().parents[2] / "source" / "sniptype.icns"
+        with Image.open(icns_path) as icns:
+            sizes = set(icns.info["sizes"])
+            self.assertTrue(
+                {(16, 16, 2), (32, 32, 2), (128, 128, 1), (256, 256, 1),
+                 (512, 512, 1), (512, 512, 2)} <= sizes,
+                sizes,
+            )
+            icns.size = (512, 512)
+            icns.load(scale=2)
+            full = icns.convert("RGBA")
+        self.assertEqual((1024, 1024), full.size)
+        # Apple's template: an 824px body centered on the 1024px canvas, the
+        # margin left for the drop shadow. Allow a few pixels for the rim.
+        left, top, right, bottom = full.getchannel("A").point(
+            lambda a: 255 if a > 100 else 0
+        ).getbbox()
+        for edge in (left, top, 1024 - right, 1024 - bottom):
+            self.assertGreaterEqual(edge, 92)
+            self.assertLessEqual(edge, 112)
 
     def test_macos_release_reports_the_signing_mode_that_was_used(self):
         repo_root = Path(__file__).resolve().parents[2]

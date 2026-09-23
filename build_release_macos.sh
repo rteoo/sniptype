@@ -68,11 +68,13 @@ STAGING_ROOT="$WORK_ROOT/dist"
 STAGED_APP="$STAGING_ROOT/$APP_NAME.app"
 
 # --- App icon -------------------------------------------------------------
-# The repo ships a 256x256 .ico (Windows). Convert that source directly instead
-# of constructing a partial iconset: current iconutil rejects iconsets without
-# the 512px slots, and upscaling the source would only manufacture fake detail.
+# macOS gets its own committed .icns, not a conversion of the Windows .ico:
+# the Windows tile runs edge to edge, which renders ~24% larger than other Mac
+# icons, and the .ico tops out at 256px. source/sniptype.icns holds the same
+# tile on Apple's grid (824px body on a 1024px canvas, drop shadow in the
+# margin) with every slot up to 1024px, so no conversion or upscaling happens.
 ICNS="$WORK_ROOT/$APP_NAME.icns"
-sips -s format icns "$REPO_DIR/source/sniptype.ico" --out "$ICNS" >/dev/null
+cp "$REPO_DIR/source/sniptype.icns" "$ICNS"
 
 # --- Package --------------------------------------------------------------
 echo "Packaging $APP_NAME $APP_VERSION ($RELEASE_CHANNEL) ..."
