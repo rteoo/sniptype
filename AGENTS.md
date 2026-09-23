@@ -63,7 +63,8 @@ build_installer.bat    # compile installer\Output\SniptypeSetup-<version>.exe
 
 Release channels are explicit. The published Windows stable channel is the latest
 plain `vMAJOR.MINOR.PATCH` tag (`v5.0.3`); current source is `5.0.3` on the
-`stable` channel. The macOS ARM64 package remains the `v3.5.0-beta.2` preview.
+`stable` channel. The macOS ARM64 package is the `v5.0.4-beta.1` preview,
+built from `main` after v5.0.3; its bundle still reports 5.0.3 stable.
 The app docstring owns `Version:` and
 `Channel:` for the running build, and `installer\sniptype.iss` mirrors both
 as `MyAppVersion` and `MyAppChannel`. Beta installers are named

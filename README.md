@@ -54,9 +54,10 @@ The current stable release is
 [`v5.0.3`](https://github.com/rteoo/sniptype/releases/tag/v5.0.3) for Windows.
 The v5.0.x patch releases make typing and pasting more reliable, fix manager
 layout issues and refresh the app icon on top of v5.0.0's local workflow features;
-voice transcription now lives in the independent Snipvoice project. v5.0.3 has
-no macOS package; the older macOS ARM64 package remains available as the
-[`v3.5.0-beta.2` preview](https://github.com/rteoo/sniptype/releases/tag/v3.5.0-beta.2).
+voice transcription now lives in the independent Snipvoice project. For macOS,
+the ARM64 build is available as the
+[`v5.0.4-beta.1` preview](https://github.com/rteoo/sniptype/releases/tag/v5.0.4-beta.1),
+at feature parity with v5.0.3.
 See the [development guide](source/docs/development.md) to build
 the Windows package and installer or the macOS app locally.
 
@@ -191,7 +192,8 @@ Windows.
   not expose one dependable, non-blocking detection path to the keyboard hook.
 - **macOS:** Input Monitoring and Accessibility permissions are required.
   Secure Keyboard Entry is detected before a trigger is erased. The available
-  `v3.5.0-beta.2` preview is ARM64-only and predates the v4 scope split.
+  `v5.0.4-beta.1` preview is ARM64-only and signed with a self-signed
+  certificate, so Gatekeeper asks you to confirm its first launch.
 - **Linux:** plain-text clipboard insertion is supported through Wayland/X11
   clipboard tools; rich text is downgraded to plain text. Wayland may restrict
   global keyboard hooks.

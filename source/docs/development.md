@@ -24,8 +24,8 @@ by current Sniptype source or release builds.
 
 ## Release channels
 
-The current Windows stable release is `v5.0.3`; the macOS ARM64 package remains
-the `v3.5.0-beta.2` preview pending its packaged desktop validation. Stable tags use
+The current Windows stable release is `v5.0.3`; the macOS ARM64 package is the
+`v5.0.4-beta.1` preview pending its packaged desktop validation. Stable tags use
 `vMAJOR.MINOR.PATCH`; beta tags use `vMAJOR.MINOR.PATCH-beta.N` and their GitHub
 Releases are prereleases. Both channels share the same user-data directory and
 installer identity, so they must not run simultaneously.
