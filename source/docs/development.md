@@ -88,8 +88,11 @@ python3 -m pip install -r source/requirements.txt pyinstaller
 
 Set `PYTHON=/path/to/python` to select an interpreter and
 `CODESIGN_IDENTITY="Developer ID Application: ..."` to use a real signing
-identity. Otherwise the script tries the local `Sniptype Dev` identity and
-falls back to ad-hoc signing when that identity is unavailable or signing fails.
+identity. Otherwise the script tries the local `Sniptype Dev` identity, then
+the pre-rebrand `Txt Xpander Dev` certificate, and falls back to ad-hoc signing
+when neither is available or signing fails. Over SSH, `codesign` usually cannot
+reach the private key (`errSecInternalComponent`); build from a Terminal on the
+Mac once and allow the keychain prompt.
 
 The script builds `dist/Sniptype.app`, asserts that the generated icon is both
 present and referenced, adds `LSUIElement`, and re-signs after the plist change

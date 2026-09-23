@@ -446,6 +446,20 @@ class AppVersionFormattingTests(unittest.TestCase):
             self.assertGreaterEqual(edge, 92)
             self.assertLessEqual(edge, 112)
 
+    def test_macos_release_tries_current_then_pre_rebrand_signing_identity(self):
+        # The rebrand renamed the default to "Sniptype Dev" while existing
+        # machines kept the "Txt Xpander Dev" certificate, so every build there
+        # silently fell back to ad-hoc and lost its TCC grants.
+        repo_root = Path(__file__).resolve().parents[2]
+        script = (repo_root / "build_release_macos.sh").read_text(encoding="utf-8")
+
+        self.assertIn(
+            'DEFAULT_SIGN_IDENTITIES=("Sniptype Dev" "Txt Xpander Dev")', script
+        )
+        self.assertIn('for candidate in "${DEFAULT_SIGN_IDENTITIES[@]}"', script)
+        # Matched with its quotes, as `security find-identity` prints it.
+        self.assertIn('grep -qF "\\"$candidate\\""', script)
+
     def test_macos_release_reports_the_signing_mode_that_was_used(self):
         repo_root = Path(__file__).resolve().parents[2]
         script = (repo_root / "build_release_macos.sh").read_text(encoding="utf-8")

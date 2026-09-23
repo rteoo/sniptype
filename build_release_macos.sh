@@ -23,9 +23,12 @@ BUNDLE_ID="com.sniptype"
 # A stable signing identity is what lets the bundle keep its TCC grants across
 # rebuilds: ad-hoc signing has no identity, so macOS pins Input Monitoring and
 # Accessibility to the binary's cdhash and every build silently revokes them.
-# Try the local development identity before falling back to ad-hoc signing so
-# a fresh checkout still builds without a certificate.
-DEFAULT_SIGN_IDENTITY="Sniptype Dev"
+# Try the local development identities before falling back to ad-hoc signing
+# so a fresh checkout still builds without a certificate. "Txt Xpander Dev" is
+# the certificate created before the rebrand: renaming the default without
+# keeping it made every build on an existing machine fall back to ad-hoc, and
+# switching certificates would invalidate the grants made under the old one.
+DEFAULT_SIGN_IDENTITIES=("Sniptype Dev" "Txt Xpander Dev")
 DIST_ROOT="$REPO_DIR/dist"
 TARGET_APP="$DIST_ROOT/$APP_NAME.app"
 PREVIOUS_APP="$DIST_ROOT/$APP_NAME.app.previous"
@@ -132,9 +135,15 @@ plutil -replace SniptypeReleaseChannel -string "$RELEASE_CHANNEL" \
     || plutil -insert SniptypeReleaseChannel -string "$RELEASE_CHANNEL" \
         "$STAGED_APP/Contents/Info.plist"
 SIGN_IDENTITY="${CODESIGN_IDENTITY:-}"
-if [[ -z "$SIGN_IDENTITY" ]] \
-    && security find-identity -v -p codesigning 2>/dev/null | grep -qF "$DEFAULT_SIGN_IDENTITY"; then
-    SIGN_IDENTITY="$DEFAULT_SIGN_IDENTITY"
+if [[ -z "$SIGN_IDENTITY" ]]; then
+    AVAILABLE_IDENTITIES="$(security find-identity -v -p codesigning 2>/dev/null || true)"
+    for candidate in "${DEFAULT_SIGN_IDENTITIES[@]}"; do
+        # Quoted, so "Sniptype Dev" cannot match e.g. "Sniptype Dev 2".
+        if grep -qF "\"$candidate\"" <<<"$AVAILABLE_IDENTITIES"; then
+            SIGN_IDENTITY="$candidate"
+            break
+        fi
+    done
 fi
 if [[ -z "$SIGN_IDENTITY" ]]; then
     SIGN_IDENTITY="-"
