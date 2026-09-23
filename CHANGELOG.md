@@ -2,6 +2,13 @@
 
 All notable changes to Sniptype are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [5.0.3] — 2026-09-23
+
+### Changed
+
+- The app icon now sits on a blue rounded tile, matching Snipvoice, so it
+  reads at the same size as its neighbours in the tray and the Start menu.
+  The icon also gains the 20 and 40px sizes Windows uses at 125% scaling.
 ## [5.0.2] — 2026-09-23
 
 ### Fixed
