@@ -39,9 +39,13 @@ def make_app(base_dir, snippets, stub_inserter=True):
         else:
             os.environ["SNIPTYPE_HOME"] = previous_home
     app.keyboard_controller = mock.Mock()
+    # The real Windows batch injector would send live keys from the test run.
+    app.batch_keyboard = None
     app.task_runner = mock.Mock()
     if stub_inserter:
         app.text_inserter = mock.Mock()
+    else:
+        app.text_inserter.batch_keyboard = None
     return app
 
 
@@ -729,8 +733,8 @@ class ClipboardSerializationTests(unittest.TestCase):
     def test_concurrent_pastes_do_not_interleave(self):
         events = []
 
-        def fake_get_text():
-            return "orig"
+        def fake_read_text():
+            return True, "orig"
 
         def fake_set_content(value):
             events.append(("set", value))
@@ -738,7 +742,7 @@ class ClipboardSerializationTests(unittest.TestCase):
             events.append(("done", value))
             return True
 
-        with mock.patch.object(runtime_support.Clipboard, "get_text", fake_get_text), \
+        with mock.patch.object(runtime_support.Clipboard, "read_text", fake_read_text), \
                 mock.patch.object(runtime_support.Clipboard, "set_content", fake_set_content):
             inserter = runtime_support.TextInserter(mock.Mock(), restore_delay=0.0)
             threads = [
@@ -768,6 +772,9 @@ class FakeClipboard:
 
     def get_text(self):
         return self.value
+
+    def read_text(self):
+        return True, self.value
 
     def set_content(self, value):
         text = runtime_support.extract_plain_text(value)
@@ -1298,6 +1305,58 @@ class RuntimeSettingWiringTests(unittest.TestCase):
             self.assertTrue(
                 any(key in str(call) for call in logger.warning.call_args_list)
             )
+
+
+class ListenerNeverSleepsTests(unittest.TestCase):
+    """The listener thread pumps the Windows keyboard hook: no sleeps on it."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.app = make_app(self.tmp, {"xhi": "hello"})
+        self.batch = mock.Mock()
+        self.batch.erase.return_value = True
+        self.app.batch_keyboard = self.batch
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_trigger_erase_is_one_batch_without_sleeping(self):
+        self.app.erase_key_delay = 0.0
+        with mock.patch.object(tx.time, "sleep") as sleep:
+            for char in "xhi":
+                self.app._handle_char(char)
+
+        self.batch.erase.assert_called_once_with(3)
+        sleep.assert_not_called()
+        self.app.keyboard_controller.press.assert_not_called()
+        self.app.task_runner.start.assert_called_once()
+
+    def test_blocked_erase_is_logged(self):
+        self.app.erase_key_delay = 0.0
+        self.batch.erase.return_value = False
+        self.app.logger = mock.Mock()
+        self.app._erase_chars(3)
+        self.app.logger.warning.assert_called_once()
+
+    def test_configured_per_key_delay_keeps_the_paced_erase(self):
+        self.app.erase_key_delay = 0.02
+        with mock.patch.object(tx.time, "sleep") as sleep:
+            self.app._erase_chars(2)
+
+        self.batch.erase.assert_not_called()
+        self.assertEqual([mock.call(0.02)] * 2, sleep.mock_calls)
+        self.assertEqual(2, self.app.keyboard_controller.press.call_count)
+
+    def test_windows_listener_filters_out_its_own_injected_keys(self):
+        listener = mock.Mock()
+        with mock.patch.object(tx.platform_support, "IS_WINDOWS", True), \
+                mock.patch.object(tx.keyboard, "Listener", return_value=listener) as factory:
+            self.app.run_keyboard_listener()
+
+        self.assertIs(
+            tx.win_input.listener_event_filter,
+            factory.call_args.kwargs["win32_event_filter"],
+        )
 
 
 if __name__ == "__main__":

@@ -186,10 +186,17 @@ def normalize_clipboard_text(value):
 class TextInserter:
     """Insert snippets through the clipboard, with typed fallback."""
 
+    # Each Windows read already retries OpenClipboard for ~200 ms, so this
+    # waits up to ~1 s for a target app that is still reading our payload.
+    RESTORE_READ_ATTEMPTS = 5
+
     def __init__(self, keyboard_controller, logger=None, restore_delay=None,
-                 settle_delay=None, notify=None):
+                 settle_delay=None, notify=None, batch_keyboard=None):
         timings = default_insertion_timings()
         self.keyboard_controller = keyboard_controller
+        # win_input.BatchKeyboard on Windows: the paste chord as one atomic
+        # SendInput batch. None sends it key by key through pynput.
+        self.batch_keyboard = batch_keyboard
         self.logger = logger or AppLogger()
         # settle_delay: clipboard write -> paste. restore_delay: paste -> restore.
         # Per-OS defaults, overridable from settings.json; see platform_support.
@@ -232,7 +239,12 @@ class TextInserter:
         # format handles if that loss starts to hurt (audit 2.7).
         # The lock keeps the snapshot/set/paste/restore atomic across expansion workers.
         with _CLIPBOARD_PASTE_LOCK:
-            previous_text = Clipboard.get_text()
+            snapshot_taken, previous_text = Clipboard.read_text()
+            if not snapshot_taken:
+                self.logger.warning(
+                    "Área de transferência ocupada por outro programa; o conteúdo "
+                    "anterior não pôde ser salvo e não será restaurado."
+                )
             plain_text = extract_plain_text(value)
             if not Clipboard.set_content(value):
                 return False
@@ -252,7 +264,19 @@ class TextInserter:
         "the target app read the clipboard" signal for real data, so restoring too
         early lets a slow target paste ``previous_text`` instead of the snippet.
         """
-        current_text = Clipboard.get_text()
+        for _ in range(self.RESTORE_READ_ATTEMPTS):
+            # A target app holding the clipboard open is still reading the
+            # payload; giving up here used to leave the snippet on the
+            # clipboard. Once it lets go, the read is done and restore is safe.
+            readable, current_text = Clipboard.read_text()
+            if readable:
+                break
+        else:
+            self.logger.warning(
+                "Área de transferência ocupada por outro programa; o conteúdo "
+                "anterior não foi restaurado."
+            )
+            return
         if current_text is None:
             return
 
@@ -276,11 +300,24 @@ class TextInserter:
         # investigation. Re-enable once the warning above proves the cause.
         if "\n" in expected:
             return
-        Clipboard.set_content(previous_text)
+        if not Clipboard.set_content(previous_text):
+            self.logger.warning(
+                "Não foi possível restaurar a área de transferência anterior."
+            )
 
     def _send_paste_shortcut(self):
         from pynput.keyboard import Key
         from platform_support import paste_modifier_is_cmd
+
+        if self.batch_keyboard is not None:
+            # One batch, so a key the user is still typing cannot land between
+            # Ctrl down and V and fire as a Ctrl shortcut (Ctrl+A, Ctrl+W...).
+            if not self.batch_keyboard.paste():
+                self.logger.warning(
+                    "Windows bloqueou o atalho de colar "
+                    "(janela em execução como administrador?)."
+                )
+            return
 
         modifier = Key.cmd if paste_modifier_is_cmd() else Key.ctrl
         self.keyboard_controller.press(modifier)

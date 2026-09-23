@@ -9,6 +9,8 @@ macOS/Linux never touches ``WinDLL``.
 Backends expose the same two-method contract:
 
 ``get_text()``      -> the clipboard's plain text, or ``None`` when unavailable.
+``read_text()``     -> ``(available, text)``; ``available`` is False only when
+                       the clipboard is held by another program (Windows).
 ``set_content(v)``  -> place a snippet value (plain string or rich-text payload)
                        on the clipboard; ``True`` on success.
 """
@@ -166,19 +168,25 @@ if IS_WINDOWS:
             return False
 
         def get_text(self):
+            return self.read_text()[1]
+
+        def read_text(self):
+            """``(available, text)``: ``available`` is False while another
+            program holds the clipboard open, which ``get_text`` cannot tell
+            apart from a clipboard with no text on it."""
             if not self._open():
-                return None
+                return False, None
             try:
                 if not USER32.IsClipboardFormatAvailable(CF_UNICODETEXT):
-                    return None
+                    return True, None
                 handle = USER32.GetClipboardData(CF_UNICODETEXT)
                 if not handle:
-                    return None
+                    return True, None
                 locked = KERNEL32.GlobalLock(handle)
                 if not locked:
-                    return None
+                    return True, None
                 try:
-                    return ctypes.wstring_at(locked)
+                    return True, ctypes.wstring_at(locked)
                 finally:
                     KERNEL32.GlobalUnlock(handle)
             finally:
@@ -346,6 +354,12 @@ class PosixClipboard:
         if completed.returncode != 0:
             return None
         return completed.stdout.decode("utf-8", errors="replace")
+
+    def read_text(self):
+        """``(available, text)``. The CLI tools have no "busy" state, and an
+        empty X11 selection also exits non-zero, so every read counts as
+        available."""
+        return True, self.get_text()
 
     def _rich_text_command(self):
         """Return the argv that writes rich text, or ``None`` on this desktop.

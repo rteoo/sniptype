@@ -432,7 +432,7 @@ class TextInserterFallbackTests(unittest.TestCase):
     def test_no_prior_clipboard_skips_the_restore_step(self):
         # When there was nothing on the clipboard, there is nothing to restore.
         clipboard = mock.Mock()
-        clipboard.get_text.return_value = None
+        clipboard.read_text.return_value = (True, None)
         clipboard.set_content.return_value = True
         inserter = TextInserter(mock.Mock(), restore_delay=0.0)
 
@@ -445,10 +445,10 @@ class TextInserterFallbackTests(unittest.TestCase):
         restore.assert_not_called()
 
     def test_restore_sees_empty_clipboard_and_stays_silent(self):
-        # get_text returns the snapshot first, then None inside _restore_clipboard
+        # read_text returns the snapshot first, then None inside _restore_clipboard
         # (a target that cleared the clipboard). No warning, no restore write.
         clipboard = mock.Mock()
-        clipboard.get_text.side_effect = ["orig", None]
+        clipboard.read_text.side_effect = [(True, "orig"), (True, None)]
         clipboard.set_content.return_value = True
         logger = mock.Mock()
         inserter = TextInserter(mock.Mock(), logger=logger, restore_delay=0.0)
@@ -508,7 +508,7 @@ class TextInserterTimingTests(unittest.TestCase):
 
     def test_paste_sleeps_the_configured_settle_then_restore_delay(self):
         clipboard = mock.Mock()
-        clipboard.get_text.return_value = "orig"
+        clipboard.read_text.return_value = (True, "orig")
         clipboard.set_content.return_value = True
         inserter = TextInserter(mock.Mock(), settle_delay=0.33, restore_delay=0.44)
 
