@@ -51,9 +51,10 @@ Use `pythonw sniptype.pyw` after setup when you do not need console output.
 ### Releases and installer
 
 The current stable release is
-[`v5.0.3`](https://github.com/rteoo/sniptype/releases/tag/v5.0.3) for Windows.
-The v5.0.x patch releases make typing and pasting more reliable, fix manager
-layout issues and refresh the app icon on top of v5.0.0's local workflow features;
+[`v5.1.0`](https://github.com/rteoo/sniptype/releases/tag/v5.1.0) for Windows.
+It adds a dark theme and a Configurações tab, and makes secondary buttons
+readable in the light theme, on top of v5.0.x's more reliable typing and
+pasting and v5.0.0's local workflow features;
 voice transcription now lives in the independent Snipvoice project. For macOS,
 the ARM64 build is available as the
 [`v5.0.4-beta.1` preview](https://github.com/rteoo/sniptype/releases/tag/v5.0.4-beta.1),

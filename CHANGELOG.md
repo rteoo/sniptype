@@ -2,6 +2,23 @@
 
 All notable changes to Sniptype are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [5.1.0] — 2026-09-23
+
+Sniptype gains a dark theme and a Configurações tab, matching Snipvoice.
+
+### Added
+
+- Dark theme. Choose Sistema, Claro or Escuro in Configurações > Geral;
+  Sistema follows the Windows app theme, so a dark Windows now opens
+  Sniptype in dark. Dialogs and title bars follow the same choice.
+- Configurações tab with Geral (appearance and terminator mode), Atalhos
+  (current shortcuts and the editor) and Dados (data, mirror and sync
+  folders).
+
+### Fixed
+
+- Secondary buttons such as Novo, Editar, Duplicar and Renomear no longer
+  blend into the white panels in the light theme.
 ## [5.0.3] — 2026-09-23
 
 ### Changed
