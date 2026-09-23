@@ -8,7 +8,7 @@
 ; The running app owns migration from the legacy .txt_xpander data directory.
 
 #define MyAppName "Sniptype"
-#define MyAppVersion "5.0.1"
+#define MyAppVersion "5.0.2"
 #define MyAppChannel "stable"
 #if MyAppChannel == "beta"
   #define MyAppDisplayVersion MyAppVersion + " beta"
