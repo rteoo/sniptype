@@ -233,6 +233,13 @@ class WidgetOptionTests(unittest.TestCase):
         self.assertEqual(theme.manager_window_size, ("1080x720", 940, 700))
         self.assertFalse(theme.stacked_toolbar_status)
 
+    def test_linux_minimum_leaves_room_for_x11_font_metrics(self):
+        theme = ui_theme.build_theme("windows", system="linux")
+        geometry, min_width, min_height = theme.manager_window_size
+        self.assertEqual((940, 740), (min_width, min_height))
+        # The default must not start below the minimum.
+        self.assertGreaterEqual(int(geometry.split("x")[1]), min_height)
+
     def test_fluent_spacing_and_tree_density_are_stable(self):
         theme = ui_theme.build_theme("windows", system="windows")
         self.assertEqual(

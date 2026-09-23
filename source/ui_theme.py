@@ -239,9 +239,12 @@ class Theme:
         """
         if self.system == "darwin":
             return ("1140x760", 980, 600)
-        # Measured at 100% scaling: any smaller and the editors clip their
-        # bottom rows (Grupo/Favorito, Formulário/Prévia) or leave the
-        # content box without height.
+        # Minimum heights are where the editors stop clipping their bottom
+        # rows (Grupo/Favorito, Formulário/Prévia) and keep a content box:
+        # measured at 100% on Windows; X11 font metrics need ~24px more
+        # (CI, Ubuntu + Xvfb), plus margin.
+        if self.system == "linux":
+            return ("1080x780", 940, 740)
         return ("1080x720", 940, 700)
 
     @property
