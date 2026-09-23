@@ -1,3 +1,5 @@
+import tkinter as tk
+
 import platform_support
 
 from rich_text_support import extract_plain_text, is_rich_text_payload
@@ -189,3 +191,60 @@ def focus_modal_input(dialog, initial_widget, submit):
             raise RuntimeError(state["failure"])
 
     return cancel
+
+
+class SectionSwitcher:
+    """Show one of several section frames at a time, chosen from a nav column.
+
+    Hidden sections keep their widgets alive, so callers keep addressing them
+    directly; only the chosen frame is packed into ``container``. Shared
+    shape with Snipvoice's Configurações page.
+    """
+
+    def __init__(self, ui, nav, container):
+        self.ui = ui
+        self.nav = nav
+        self.container = container
+        self.frames = {}
+        self.buttons = {}
+        self.markers = {}
+        self.current = None
+
+    def add(self, key, title):
+        bg = self.nav.cget("background")
+        item = tk.Frame(self.nav, bg=bg)
+        marker = tk.Frame(item, bg=bg, width=3)
+        chrome = self.ui.button_chrome(compact=True)
+        if chrome:
+            # Keep the keyboard focus ring, but no idle border around each item.
+            chrome["highlightbackground"] = bg
+        button = tk.Button(
+            item, text=title, font=self.ui.font(9), anchor="w",
+            command=lambda: self.select(key),
+            **self.ui.nav_button_colors(bg), **chrome,
+        )
+        item.pack(side="top", fill="x", pady=1)
+        marker.pack(side="left", fill="y")
+        button.pack(side="left", fill="x", expand=True)
+        frame = tk.Frame(self.container, bg=self.ui.surface)
+        self.frames[key] = frame
+        self.buttons[key] = button
+        self.markers[key] = marker
+        if self.current is None:
+            self.select(key)
+        return frame
+
+    def select(self, key):
+        if key == self.current:
+            return
+        bg = self.nav.cget("background")
+        if self.current is not None:
+            self.frames[self.current].pack_forget()
+            self.buttons[self.current].configure(
+                font=self.ui.font(9), **self.ui.nav_button_colors(bg))
+            self.markers[self.current].configure(bg=bg)
+        self.current = key
+        self.frames[key].pack(fill="both", expand=True)
+        self.buttons[key].configure(
+            font=self.ui.font(9, "bold"), **self.ui.nav_button_colors(bg, selected=True))
+        self.markers[key].configure(bg=self.ui.accent)

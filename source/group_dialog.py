@@ -203,6 +203,7 @@ class GroupDialog:
         self.window.title(title)
         self.window.transient(parent)
         self.window.configure(bg=self.theme.surface)
+        ui_theme.prepare_window(self.window, self.theme)
         self.window.minsize(520, 520)
         self.window.protocol("WM_DELETE_WINDOW", self.cancel)
         self._group = group or {}

@@ -95,6 +95,16 @@ class RuntimeSettingsNormalizationTests(unittest.TestCase):
             },
         )
 
+    def test_appearance_accepts_only_known_choices(self):
+        for value in ("system", "light", "dark"):
+            normalized, invalid = normalize_runtime_settings({"appearance": value})
+            self.assertEqual(normalized["appearance"], value)
+            self.assertEqual(invalid, {})
+        for value in ("Dark", "", None, 1):
+            normalized, invalid = normalize_runtime_settings({"appearance": value})
+            self.assertEqual(normalized["appearance"], "system")
+            self.assertEqual(set(invalid), {"appearance"})
+
     def test_valid_runtime_values_are_preserved(self):
         settings = {
             "terminator_mode": True,

@@ -102,6 +102,7 @@ class _DatePicker:
         self.window.transient(self.parent)
         self.window.resizable(False, False)
         self.window.configure(bg=self.theme.card)
+        ui_theme.prepare_window(self.window, self.theme)
         self._build()
         self.window.grab_set()
 
@@ -186,6 +187,7 @@ class FormDialog:
         self.window.title(title)
         self.window.transient(parent)
         self.window.configure(bg=self.theme.surface)
+        ui_theme.prepare_window(self.window, self.theme)
         self.window.minsize(350, 300)
         self.window.protocol("WM_DELETE_WINDOW", self.cancel)
         self._variables = {}

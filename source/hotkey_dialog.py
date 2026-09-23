@@ -79,6 +79,7 @@ class HotkeyDialog:
         self.window.title(title)
         self.window.transient(parent)
         self.window.configure(bg=self.theme.surface)
+        ui_theme.prepare_window(self.window, self.theme)
         self.window.minsize(420, 260)
         self.window.protocol("WM_DELETE_WINDOW", self.cancel)
         self._controls = {}
