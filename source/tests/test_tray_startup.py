@@ -369,19 +369,19 @@ class AppVersionFormattingTests(unittest.TestCase):
     def test_stable_version_has_no_channel_suffix(self):
         self.assertEqual(
             tx.format_app_version("3.2.1", "stable"),
-            "Sniptype v3.2.1",
+            "SnipType v3.2.1",
         )
 
     def test_beta_version_has_an_explicit_channel_suffix(self):
         self.assertEqual(
             tx.format_app_version("3.3.0", "beta"),
-            "Sniptype v3.3.0 beta",
+            "SnipType v3.3.0 beta",
         )
 
     def test_running_build_is_the_5_1_0_stable_release(self):
         self.assertEqual(tx.APP_VERSION, "5.1.0")
         self.assertEqual(tx.RELEASE_CHANNEL, "stable")
-        self.assertEqual(tx.APP_DISPLAY_NAME, "Sniptype v5.1.0")
+        self.assertEqual(tx.APP_DISPLAY_NAME, "SnipType v5.1.0")
 
     def test_older_source_without_a_channel_is_treated_as_stable(self):
         with mock.patch.object(tx, "__doc__", "Version: 9.8.7"):
@@ -395,7 +395,7 @@ class AppVersionFormattingTests(unittest.TestCase):
     def test_missing_version_has_a_clear_fallback(self):
         self.assertEqual(
             tx.format_app_version(None),
-            "Sniptype — versão desconhecida",
+            "SnipType — versão desconhecida",
         )
 
     def test_windows_installer_matches_the_stable_metadata(self):
@@ -405,6 +405,7 @@ class AppVersionFormattingTests(unittest.TestCase):
         )
         self.assertIn('#define MyAppVersion "5.1.0"', installer)
         self.assertIn('#define MyAppChannel "stable"', installer)
+        self.assertIn('#define MyAppName "SnipType"', installer)
         self.assertIn(
             "OutputBaseFilename=SniptypeSetup-{#MyInstallerVersion}",
             installer,

@@ -214,7 +214,7 @@ def build_prompt_message(status):
         return ""
 
     lines = [
-        "O Sniptype precisa de permissões do macOS para funcionar.",
+        "O SnipType precisa de permissões do macOS para funcionar.",
         "",
     ]
     for name in missing:
@@ -224,10 +224,10 @@ def build_prompt_message(status):
         "Sem elas o app abre normalmente, mas nada é expandido:",
         "o macOS bloqueia a captura do atalho em silêncio.",
         "",
-        "O Sniptype não armazena nem envia o que você digita;",
+        "O SnipType não armazena nem envia o que você digita;",
         "todo o processamento acontece no seu Mac.",
         "",
-        "Abra o painel, marque o Sniptype na lista e reinicie o app.",
+        "Abra o painel, marque o SnipType na lista e reinicie o app.",
     ]
     return "\n".join(lines)
 
@@ -268,7 +268,7 @@ def recheck_outcome(previous, current):
 
     if not still_denied:
         return RECHECK_RESOLVED, (
-            "Permissões concedidas. Reinicie o Sniptype para que a captura "
+            "Permissões concedidas. Reinicie o SnipType para que a captura "
             "de teclado passe a funcionar."
         )
 
@@ -276,10 +276,10 @@ def recheck_outcome(previous, current):
     if len(still_denied) < len(was_denied):
         return RECHECK_PARTIAL, (
             f"Ainda falta: {names}. Conceda a permissão restante e reinicie o "
-        "Sniptype."
+        "SnipType."
         )
     return RECHECK_PENDING, (
-        f"Nada mudou: {names} continua sem permissão. Marque o Sniptype na "
+        f"Nada mudou: {names} continua sem permissão. Marque o SnipType na "
         "lista do painel do macOS."
     )
 

@@ -1,7 +1,7 @@
-# Sniptype
+# SnipType
 
 <p align="center">
-  <img src="source/sniptype-app-icon.png" width="128" alt="Sniptype app icon">
+  <img src="source/sniptype-app-icon.png" width="128" alt="SnipType app icon">
 </p>
 
 <p align="center">
@@ -15,7 +15,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT license"></a>
 </p>
 
-Type a short trigger such as `xmail`; Sniptype erases it and inserts the full
+Type a short trigger such as `xmail`; SnipType erases it and inserts the full
 value. Expansion normally fires as soon as the last trigger character is typed.
 An optional terminator mode waits for a following space or punctuation mark.
 
@@ -52,6 +52,8 @@ Use `pythonw sniptype.pyw` after setup when you do not need console output.
 
 The current stable release is
 [`v5.1.0`](https://github.com/rteoo/sniptype/releases/tag/v5.1.0) for Windows.
+Current source uses the SnipType display name; already published binaries
+retain their packaged name until a new build is released.
 It adds a dark theme and a Configurações tab, and makes secondary buttons
 readable in the light theme, on top of v5.0.x's more reliable typing and
 pasting and v5.0.0's local workflow features;
@@ -69,7 +71,7 @@ The installer is currently unsigned, so Windows SmartScreen may show
 
 ## First use
 
-1. Start Sniptype and find its icon in the system tray or macOS menu bar.
+1. Start SnipType and find its icon in the system tray or macOS menu bar.
 2. Open **Gerenciar Snippets** from the tray menu.
 3. Add a trigger and its replacement text, then save.
 4. Type the trigger in another application.
@@ -152,7 +154,7 @@ to configure the runtime settings below.
 | `bcb_timeout`, `bcb_cache_seconds` | Tune Central Bank request timeout and cache duration |
 | `stock_cache_seconds` | Tune market-data cache duration |
 
-`sync_export_dir` must already exist; Sniptype deliberately does not create it.
+`sync_export_dir` must already exist; SnipType deliberately does not create it.
 Both mirror and sync output contain plaintext user data.
 
 Dynamic trigger overrides live in `dynamic_snippets.json` in the same user-data
@@ -165,7 +167,7 @@ dynamic tab's enable toggle to save a valid boolean.
 
 ## Data safety and privacy
 
-Sniptype stores its live library, settings, rotating backups, and logs under
+SnipType stores its live library, settings, rotating backups, and logs under
 `%USERPROFILE%\.sniptype` by default. Set `SNIPTYPE_HOME` to use another local
 directory. Every successful save backs up the previous library; a corrupt file
 is quarantined and restored from the newest valid backup when possible.
@@ -182,12 +184,12 @@ therefore expose sensitive library content to that provider.
 
 ## Platform status and limitations
 
-Sniptype is Windows-first. CI runs the unit suite on Windows with Python 3.12
+SnipType is Windows-first. CI runs the unit suite on Windows with Python 3.12
 and 3.14, plus one current-Python lane on macOS and Linux. The Linux lane also
 runs focused Ruff checks. Packaged desktop behavior is verified most deeply on
 Windows.
 
-- **Windows password fields:** Sniptype does not currently detect password or
+- **Windows password fields:** SnipType does not currently detect password or
   other protected fields. Disable expansion from the tray before entering a
   password or other sensitive value. Native and browser password controls do
   not expose one dependable, non-blocking detection path to the keyboard hook.
@@ -206,10 +208,10 @@ Windows.
 
 Voice input now lives in [Snipvoice](https://github.com/rteoo/snipvoice), an
 independent app for local voice capture and transcription. Snipvoice owns its
-model management, corrections, and recording history, while Sniptype v4.0.0
+model management, corrections, and recording history, while SnipType v4.0.0
 and later remain focused on text and keyboard expansion.
 
-Sniptype releases before v4.0.0 retain their original voice behavior. Existing
+SnipType releases before v4.0.0 retain their original voice behavior. Existing
 `~/.sniptype/voice-history` data, voice settings, and cached models are left
 untouched; Snipvoice uses separate data and cache folders without automatic
 migration.
@@ -227,6 +229,6 @@ The deeper architecture and completed audit roadmap are documented in
 
 ## License
 
-Sniptype is released under the [MIT License](LICENSE). Packaged builds include
+SnipType is released under the [MIT License](LICENSE). Packaged builds include
 the applicable dependency attribution index in
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

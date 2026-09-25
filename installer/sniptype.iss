@@ -7,7 +7,7 @@
 ; on uninstall — the installer only manages the program files under {app}.
 ; The running app owns migration from the legacy .txt_xpander data directory.
 
-#define MyAppName "Sniptype"
+#define MyAppName "SnipType"
 #define MyAppVersion "5.1.0"
 #define MyAppChannel "stable"
 #if MyAppChannel == "beta"

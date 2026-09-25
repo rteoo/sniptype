@@ -27,7 +27,7 @@ except ImportError:  # Windows uses the named mutex in the real app.
     _fcntl = None
 
 
-APP_NAME = "Sniptype"
+APP_NAME = "SnipType"
 APPLICATION_ACTIVATION_TIMEOUT_SECONDS = 2.0
 _LOCKFILE_HANDLES = {}
 _LOCKFILE_HANDLES_LOCK = threading.Lock()
@@ -512,7 +512,7 @@ def activate_application_when_ready(
         timer = threading.Timer(
             timeout_seconds,
             fail,
-            args=("Timed out waiting for Sniptype to receive keyboard focus",),
+            args=("Timed out waiting for SnipType to receive keyboard focus",),
         )
         timer.daemon = True
         state["timer"] = timer
@@ -526,10 +526,10 @@ def activate_application_when_ready(
         if app.isActive():
             complete()
         elif not activation_accepted:
-            fail("macOS refused to activate Sniptype")
+            fail("macOS refused to activate SnipType")
         return cancel
     except Exception as exc:
-        fail(f"Could not activate Sniptype: {exc}")
+        fail(f"Could not activate SnipType: {exc}")
         return cancel
 
 
