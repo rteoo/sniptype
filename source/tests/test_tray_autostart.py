@@ -100,6 +100,15 @@ class ResolveStateTests(unittest.TestCase):
         self.assertEqual(self.app._autostart_state, tx.AUTOSTART_CURRENT)
         install.assert_called_once()
 
+    def test_packaged_build_is_managed_without_touching_a_shortcut(self):
+        with mock.patch.object(tx, "is_msix_packaged", return_value=True),                 mock.patch.object(tx, "read_autostart_command") as read,                 mock.patch.object(tx, "install_autostart") as install:
+            self.app.resolve_autostart_state()
+        self.assertEqual(self.app._autostart_state, tx.AUTOSTART_MANAGED)
+        read.assert_not_called()
+        install.assert_not_called()
+        self.assertFalse(self.app.autostart_is_enabled())
+        self.assertEqual(self.app.autostart_menu_label(), "Iniciar com o sistema…")
+
     def test_resolve_skips_when_the_lock_is_already_held(self):
         """A toggle in flight holds the lock; the startup resolve must back off
         rather than race it — and must not touch disk or change the cache."""
@@ -160,6 +169,23 @@ class ToggleTests(unittest.TestCase):
         self.assertEqual(self.app._autostart_state, tx.AUTOSTART_CURRENT)
         self.app.notify_status.assert_called_once()
         self.app.notify_error.assert_not_called()
+
+    def test_packaged_toggle_opens_windows_startup_settings(self):
+        self.app._autostart_state = tx.AUTOSTART_MANAGED
+        with mock.patch.object(tx, "open_startup_settings") as open_settings,                 mock.patch.object(tx, "install_autostart") as install,                 mock.patch.object(tx, "remove_autostart") as remove:
+            self.app._apply_autostart_toggle()
+        open_settings.assert_called_once_with()
+        install.assert_not_called()
+        remove.assert_not_called()
+        self.assertEqual(self.app._autostart_state, tx.AUTOSTART_MANAGED)
+        self.app.notify_error.assert_not_called()
+
+    def test_packaged_toggle_reports_a_settings_launch_failure(self):
+        self.app._autostart_state = tx.AUTOSTART_MANAGED
+        with mock.patch.object(tx, "open_startup_settings", side_effect=OSError("no shell")):
+            self.app._apply_autostart_toggle()
+        self.app.notify_error.assert_called_once()
+        self.assertEqual(self.app._autostart_state, tx.AUTOSTART_MANAGED)
 
     def test_toggle_on_a_stale_entry_overwrites_instead_of_removing(self):
         self.app._autostart_state = tx.AUTOSTART_STALE

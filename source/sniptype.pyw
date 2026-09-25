@@ -102,6 +102,7 @@ from platform_support import (
     APP_NAME,
     AUTOSTART_ABSENT,
     AUTOSTART_CURRENT,
+    AUTOSTART_MANAGED,
     AUTOSTART_STALE,
     IS_MAC,
     IS_WINDOWS,
@@ -111,6 +112,8 @@ from platform_support import (
     install_autostart,
     insertion_timings,
     invalid_timing_overrides,
+    is_msix_packaged,
+    open_startup_settings,
     read_autostart_command,
     release_lockfile,
     remove_autostart,
@@ -5546,6 +5549,12 @@ class Sniptype:
         """Menu state for the autostart toggle: a cache read, never a disk read."""
         return self._autostart_state == AUTOSTART_CURRENT
 
+    def autostart_menu_label(self, item=None):
+        # The ellipsis says the click opens Windows Settings instead of toggling.
+        if self._autostart_state == AUTOSTART_MANAGED:
+            return "Iniciar com o sistema…"
+        return "Iniciar com o sistema"
+
     def resolve_autostart_state(self):
         """Classify the autostart entry once at startup and repair a dead one.
 
@@ -5562,6 +5571,12 @@ class Sniptype:
         if not self._autostart_lock.acquire(blocking=False):
             return
         try:
+            if is_msix_packaged():
+                # Never read or "repair" a Startup shortcut here: a packaged
+                # process's AppData writes are virtualized and its path moves on
+                # every Store update. The manifest's startup task owns autostart.
+                self._autostart_state = AUTOSTART_MANAGED
+                return
             existing = read_autostart_command(APP_NAME)
             state = classify_autostart(existing)
             if state == AUTOSTART_STALE and not autostart_target_exists(existing):
@@ -5832,6 +5847,9 @@ class Sniptype:
             )
             return
         try:
+            if self._autostart_state == AUTOSTART_MANAGED:
+                open_startup_settings()
+                return
             # Direction follows the cached state, so a stale entry (shown
             # unchecked) is overwritten by the install branch rather than removed.
             if self._autostart_state == AUTOSTART_CURRENT:
@@ -5996,7 +6014,7 @@ class Sniptype:
             pystray.MenuItem("Abrir pasta de dados", self.tray_open_data_folder),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(
-                "Iniciar com o sistema",
+                self.autostart_menu_label,
                 self.toggle_autostart,
                 checked=self.autostart_is_enabled,
             ),

@@ -372,6 +372,22 @@ class AutostartRoundTripTests(unittest.TestCase):
                 ps.install_autostart("Sniptype", [r"C:\App\Sniptype.exe"])
 
 
+class MsixPackageTests(unittest.TestCase):
+    def test_msix_detection_is_windows_only(self):
+        with mock.patch.object(ps.sys, "platform", "darwin"),                 mock.patch.object(ps.ctypes, "windll", create=True) as windll:
+            self.assertFalse(ps.is_msix_packaged())
+        windll.kernel32.GetCurrentPackageFullName.assert_not_called()
+
+    @unittest.skipUnless(sys.platform.startswith("win"), "Windows package identity API")
+    def test_unpackaged_test_process_has_no_package_identity(self):
+        self.assertFalse(ps.is_msix_packaged())
+
+    def test_startup_settings_opens_the_startup_apps_page(self):
+        with mock.patch.object(ps.os, "startfile", create=True) as startfile:
+            ps.open_startup_settings()
+        startfile.assert_called_once_with("ms-settings:startupapps")
+
+
 class AutostartStateTests(unittest.TestCase):
     """absent/current/stale classification: presence alone must not mean enabled."""
 

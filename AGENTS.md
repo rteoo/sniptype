@@ -61,6 +61,15 @@ build_installer.bat    # compile installer\Output\SniptypeSetup-<version>.exe
 
 `build_installer.bat` requires the Inno Setup 6 compiler (`ISCC.exe`) and compiles `installer\sniptype.iss`: a per-user install to `%LOCALAPPDATA%\Programs\Sniptype` (no admin), Start Menu/Desktop/Startup shortcuts, and a proper uninstaller that leaves `~/.sniptype` user data intact. Bump `MyAppVersion` and `MyAppChannel` in the `.iss` alongside the app release metadata.
 
+**Build the Microsoft Store package (MSIX):**
+
+```powershell
+build_release.bat                  # produce dist\Sniptype first
+python packaging\build_msix.py     # write dist\msix\Sniptype-<version>.0-x64.msix
+```
+
+`packaging\build_msix.py` needs `makeappx.exe` from the Windows SDK (or `SNIPTYPE_MAKEAPPX`). The upload is unsigned; the Store signs it on ingestion. The package identity (`Strateo.SnipType`, publisher `CN=95CECFD0-…`, display name `SnipType`) is the Partner Center reservation and is hardcoded; Partner Center rejects a package whose `DisplayName` differs. The package version is the docstring `Version:` plus a Store-reserved `.0`, and Store versions must strictly increase, so a beta and its stable release cannot share a version. The manifest declares `runFullTrust` (restricted; Partner Center asks for a justification) and an opt-in startup task: under package identity (`platform_support.is_msix_packaged()`) the tray's "Iniciar com o sistema…" opens Settings > Startup apps instead of writing a Startup `.lnk`, because packaged AppData writes are virtualized and the install path moves on every update. User data stays in `~/.sniptype`, which is outside the virtualized AppData and survives uninstall. The packer refuses a `dist` holding a top-level `snippets.json`, which would ship a user library to every install.
+
 Release channels are explicit. The published Windows stable channel is the latest
 plain `vMAJOR.MINOR.PATCH` tag (`v5.1.0`); current source is `5.2.0` on the
 `beta` channel for the Windows `v5.2.0-beta.1` prerelease. The macOS ARM64
