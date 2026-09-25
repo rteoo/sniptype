@@ -1,7 +1,7 @@
 """Per-OS palette, appearance preference and font resolution for Tk windows.
 
 The manager GUI was written Windows-first with a hardcoded light palette and
-``Segoe UI`` everywhere. On macOS that produced unreadable windows: Aqua themes
+Windows fonts everywhere. On macOS that produced unreadable windows: Aqua themes
 the widgets the app leaves uncolored according to the *system* appearance, so a
 dark-mode ``tk.Entry`` renders black-on-black inside a ``#F4F6FA`` frame, and
 ``Segoe UI`` silently substitutes to a different font with different metrics.
@@ -10,7 +10,7 @@ This module is the seam. Call sites ask for a semantic token
 (``theme().surface``, ``theme().text``) and a size (``ui_font(9, "bold")``)
 instead of naming a color or a font family:
 
-* **Windows** resolves to an opaque Fluent-inspired light or dark palette and
+* **Windows** resolves to the opaque Windows Design System 1.0.0 palette and
   follows the user's app-theme preference by default. The light palette keeps
   the native selection behavior of controls the app does not paint itself.
 * **macOS** resolves to Aqua's dynamic system colors (``systemTextColor`` and
@@ -42,10 +42,10 @@ from platform_support import current_os
 
 # The GUI's body size, in the Windows point scale every ``font=`` call uses.
 # Other platforms shift their sizes by the distance between this and their own
-# system default, so 9 stays "body text" rather than "unreadably small".
-BODY_FONT_SIZE = 9
+# system default, so the body role stays readable across native themes.
+BODY_FONT_SIZE = 10
 
-_WINDOWS_FAMILY = "Segoe UI"
+_WINDOWS_FAMILY = "Segoe UI Variable"
 _WINDOWS_EMOJI_FAMILY = "Segoe UI Emoji"
 # Not in ``font.families()`` -- it is the hidden system font Tk resolves
 # ``TkDefaultFont`` to -- but Tk accepts it by name in a font spec.
@@ -104,7 +104,7 @@ class Theme:
         self.space_md = 12
         self.space_lg = 16
         self.space_xl = 24
-        self.tree_row_height = 30
+        self.tree_row_height = 44
 
     def font(self, size=BODY_FONT_SIZE, weight=None):
         """Return a font spec tuple for the GUI's shared family."""
@@ -285,13 +285,12 @@ class Theme:
         """
         if self.system == "darwin":
             return ("1140x760", 980, 600)
-        # Minimum heights are where the editors stop clipping their bottom
-        # rows (Grupo/Favorito, Formulário/Prévia) and keep a content box:
-        # measured at 100% on Windows; X11 font metrics need ~24px more
-        # (CI, Ubuntu + Xvfb), plus margin.
+        # X11 font metrics need ~24px more than the previous Windows layout
+        # (CI, Ubuntu + Xvfb). The expanded Windows shell uses a wider default
+        # and minimum; physical desktop verification is still required.
         if self.system == "linux":
             return ("1080x780", 940, 740)
-        return ("1080x720", 940, 700)
+        return ("1180x800", 1020, 760)
 
     @property
     def stacked_toolbar_status(self):
@@ -309,8 +308,8 @@ class Theme:
         return {
             "relief": "flat",
             "bd": 0,
-            "padx": 8 if compact else 12,
-            "pady": 4 if compact else 6,
+            "padx": 12 if compact else 16,
+            "pady": 6 if compact else 9,
             "highlightthickness": 1,
             # ``control_border``, not the quiet card ``border``: the ring is
             # what separates a neutral button from the card it sits on.
@@ -368,77 +367,76 @@ def _spec(family, size, weight=None):
 # Palettes
 # ---------------------------------------------------------------------------
 
-# Fluent-inspired opaque surfaces. Tk cannot reproduce Mica or Acrylic
+# Windows Design System 1.0.0 opaque surfaces. Tk cannot reproduce Mica or Acrylic
 # reliably across platforms, so hierarchy comes from restrained contrast,
 # spacing and selection states instead.
 _LIGHT = {
     "surface": "#F3F3F3",
-    "surface_alt": "#FAFAFA",
-    "surface_alt_active": "#EDEDED",
-    "surface_hover": "#EBEBEB",
+    "surface_alt": "#FFFFFF",
+    "surface_alt_active": "#DEDEDE",
+    "surface_hover": "#EAEAEA",
     "card": "#FFFFFF",
     "field": "#FFFFFF",
-    "field_hover": "#F5F9FD",
-    # Neutral button fill and ring. Distinct from both ``surface`` and
-    # ``card`` so a secondary button is visible wherever it sits.
+    "field_hover": "#EAEAEA",
+    # Product adaptation: neutral button fill and ring stay distinct from
+    # both ``surface`` and ``card`` so secondary actions remain visible.
     "control": "#E6E6E6",
-    "control_active": "#D9D9D9",
-    "control_border": "#ABABAB",
-    "text": "#1B1B1B",
-    "text_strong": "#242424",
-    "text_muted": "#616161",
+    "control_active": "#DEDEDE",
+    "control_border": "#767676",
+    "text": "#1A1A1A",
+    "text_strong": "#1A1A1A",
+    "text_muted": "#5C5C5C",
     "text_on_accent": "#FFFFFF",
-    "border": "#E1E1E1",
+    "border": "#D6D6D6",
     "divider": "#D6D6D6",
-    "accent": "#0067C0",
-    "accent_active": "#005A9E",
-    "danger": "#C42B1C",
-    "danger_active": "#A4262C",
+    "accent": "#005FB8",
+    "accent_active": "#004A91",
+    "danger": "#A4262C",
+    "danger_active": "#8B1E24",
     "focus_ring": "#005FB8",
     "link": "#005FB8",
-    "warning": "#8A4B00",
-    "success": "#0F7B0F",
+    "warning": "#7A4D00",
+    "success": "#0F6B36",
     "select_bg": "#DCEEFF",
-    "select_fg": "#1B1B1B",
+    "select_fg": "#1A1A1A",
     # Foreground for widgets the pre-change GUI left uncolored. Resolved to
     # each platform's own default so filling it in changes nothing there.
-    "text_native": "#1B1B1B",
+    "text_native": "#1A1A1A",
     # Unselected notebook-tab label. The selected tab uses the accent token.
-    "tab_unselected_fg": "#4A4A4A",
+    "tab_unselected_fg": "#5C5C5C",
 }
 
-# Opaque near-black surfaces shared with Snipvoice keep classic Tk predictable
-# on Windows and Linux. The accent stays Sniptype's blue, lifted to the Win11
-# dark-mode tint so dark text on it stays legible.
+# Opaque Windows Design System dark surfaces keep classic Tk predictable on
+# Windows and Linux. The light-blue accent uses dark text for contrast.
 _DARK = {
-    "surface": "#111214",
-    "surface_alt": "#191A1D",
-    "surface_alt_active": "#25262A",
-    "surface_hover": "#24262A",
-    "card": "#1B1C20",
-    "field": "#222329",
-    "field_hover": "#292B31",
-    "control": "#2A2C32",
-    "control_active": "#35373E",
-    "control_border": "#565963",
-    "text": "#E9EAEC",
-    "text_strong": "#FFFFFF",
-    "text_muted": "#A4A7AE",
-    "text_on_accent": "#08131B",
-    "border": "#32343B",
-    "divider": "#292B31",
-    "accent": "#4CC2FF",
-    "accent_active": "#38A8E4",
-    "danger": "#FF6B6B",
-    "danger_active": "#E95555",
-    "focus_ring": "#99DDFF",
-    "link": "#6CCBFF",
-    "warning": "#FFB347",
-    "success": "#66D18F",
-    "select_bg": "#1E3A50",
-    "select_fg": "#FFFFFF",
-    "text_native": "#E9EAEC",
-    "tab_unselected_fg": "#B7BAC1",
+    "surface": "#202020",
+    "surface_alt": "#333333",
+    "surface_alt_active": "#414141",
+    "surface_hover": "#383838",
+    "card": "#2B2B2B",
+    "field": "#333333",
+    "field_hover": "#383838",
+    "control": "#383838",
+    "control_active": "#414141",
+    "control_border": "#A0A0A0",
+    "text": "#F5F5F5",
+    "text_strong": "#F5F5F5",
+    "text_muted": "#C4C4C4",
+    "text_on_accent": "#003047",
+    "border": "#494949",
+    "divider": "#494949",
+    "accent": "#60CDFF",
+    "accent_active": "#A1E2FF",
+    "danger": "#FFB4B8",
+    "danger_active": "#FFD0D2",
+    "focus_ring": "#75D5FF",
+    "link": "#75D5FF",
+    "warning": "#FFD479",
+    "success": "#8EDBA5",
+    "select_bg": "#153F54",
+    "select_fg": "#F5F5F5",
+    "text_native": "#F5F5F5",
+    "tab_unselected_fg": "#C4C4C4",
 }
 
 # Win32's defaults for the widgets this GUI leaves uncolored (tkWinDefault.h).
@@ -548,7 +546,7 @@ def size_delta(system=None, default_size=None):
     """Shift between the Windows point scale and this platform's system size.
 
     Windows is the reference (0). Elsewhere the GUI's body size is pinned to
-    the platform's own ``TkDefaultFont`` size so a 9 pt Windows label does not
+    the platform's own ``TkDefaultFont`` size so a 10 pt Windows label does not
     render two points below every native control around it.
     """
     if (system or current_os()) == "windows" or not default_size:

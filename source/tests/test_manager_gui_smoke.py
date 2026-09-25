@@ -169,6 +169,12 @@ class ManagerGuiSmokeTests(unittest.TestCase):
                     and is_descendant(widget, editor_pane)
                 }
                 self.assertTrue(expected_labels <= buttons.keys())
+                if tx.IS_WINDOWS and tab_id == tab_ids[0]:
+                    self.assertEqual(
+                        buttons["Novo"].winfo_rooty(),
+                        buttons["Salvar"].winfo_rooty(),
+                        "the text editor actions should fit on one row at minimum width",
+                    )
                 pane_right = editor_pane.winfo_rootx() + editor_pane.winfo_width()
                 pane_bottom = editor_pane.winfo_rooty() + editor_pane.winfo_height()
                 favorite = next(
@@ -219,6 +225,28 @@ class ManagerGuiSmokeTests(unittest.TestCase):
             )
 
         self._on_gui(build)
+
+    def test_manager_keyboard_shortcuts_switch_views_and_focus_search(self):
+        def exercise(shared_root):
+            self.app._build_manager_window(shared_root)
+            window = self.app.manager_window
+            window.deiconify()
+            window.focus_force()
+            window.update()
+            notebook = self.app._manager_notebook
+            tabs = notebook.tabs()
+
+            for index in (2, 1):
+                window.event_generate(f"<Control-Key-{index}>")
+                window.update()
+                self.assertEqual(notebook.select(), tabs[index - 1])
+                window.event_generate("<Control-f>")
+                window.update()
+                self.assertEqual(
+                    window.focus_get(), self.app._manager_search_entries[tabs[index - 1]]
+                )
+
+        self._on_gui(exercise)
 
     def test_dynamic_mappings_tab_lists_custom_types(self):
         self.app.snippets["_mail_codes"] = {"__prefix__": "mail", "team": "team@x.com"}
@@ -840,7 +868,7 @@ class ManagerGuiSmokeTests(unittest.TestCase):
         """Track/reuse logic does not require constructing the manager UI."""
         first = mock.Mock()
         first.winfo_exists.return_value = True
-        first.title.return_value = f"{tx.APP_DISPLAY_NAME} - Gerenciador de Snippets"
+        first.title.return_value = f"{tx.PRODUCT_NAME} — Biblioteca"
 
         def build_fake_manager(_root):
             self.app.manager_window = first
@@ -854,7 +882,7 @@ class ManagerGuiSmokeTests(unittest.TestCase):
             self.assertIs(self.app.manager_window, first)
             self.assertEqual(
                 first.title(),
-                f"{tx.APP_DISPLAY_NAME} - Gerenciador de Snippets",
+                f"{tx.PRODUCT_NAME} — Biblioteca",
             )
 
             self.app.gui.call(self.app._show_manager_window, timeout=30)

@@ -111,6 +111,26 @@ class ManagerRuntimeTests(unittest.TestCase):
         self.assertEqual({}, app._manager_tab_selectors)
         self.assertIsNone(app._manager_preview_controller)
 
+    def test_pause_command_updates_visible_state_on_the_gui_thread(self):
+        app = self._app()
+        app.enabled = True
+        app.icon = None
+        app.gui = mock.Mock()
+        app.notify_status = mock.Mock()
+        app._manager_status_var = mock.Mock()
+        app._manager_toggle_button = mock.Mock()
+
+        app.toggle_enabled(None, None)
+
+        self.assertFalse(app.enabled)
+        app.gui.submit.assert_called_once_with(app._refresh_manager_status)
+        app._manager_status_var.set.assert_not_called()
+        app._refresh_manager_status()
+        app._manager_status_var.set.assert_called_once_with("Expansão pausada")
+        app._manager_toggle_button.configure.assert_called_once_with(
+            text="Retomar expansão"
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

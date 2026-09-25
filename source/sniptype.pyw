@@ -1,5 +1,5 @@
 """
-Sniptype - Windows system tray snippet expander.
+SnipType - Windows system tray snippet expander.
 Version: 5.1.0
 Channel: stable
 
@@ -211,14 +211,15 @@ def _read_release_metadata():
 
 
 APP_VERSION, RELEASE_CHANNEL = _read_release_metadata()
+PRODUCT_NAME = APP_NAME
 
 
 def format_app_version(version, channel="stable"):
     """Return the user-visible app name, version and non-stable channel."""
     if version:
         channel_suffix = f" {channel}" if channel and channel != "stable" else ""
-        return f"{APP_NAME} v{version}{channel_suffix}"
-    return f"{APP_NAME} — versão desconhecida"
+        return f"{PRODUCT_NAME} v{version}{channel_suffix}"
+    return f"{PRODUCT_NAME} — versão desconhecida"
 
 
 APP_DISPLAY_NAME = format_app_version(APP_VERSION, RELEASE_CHANNEL)
@@ -282,9 +283,9 @@ def acquire_single_instance_mutex():
 
 
 def show_already_running_message():
-    message = "Sniptype já está em execução."
+    message = "SnipType já está em execução."
     if IS_WINDOWS:
-        ctypes.windll.user32.MessageBoxW(0, message, "Sniptype", MB_ICONINFORMATION)
+        ctypes.windll.user32.MessageBoxW(0, message, PRODUCT_NAME, MB_ICONINFORMATION)
     else:
         print(message)
 
@@ -307,6 +308,9 @@ class Sniptype:
         self._pending_manager_target = None
         self.macos_permission_window = None
         self._manager_notebook = None
+        self._manager_status_var = None
+        self._manager_toggle_button = None
+        self._manager_search_entries = {}
         self._manager_settings_tab = None
         self._manager_settings_sections = None
         self._manager_tab_selectors = {}
@@ -1709,7 +1713,7 @@ class Sniptype:
         self.refresh_runtime_indexes()
         return "ok"
 
-    def notify(self, message: str, title: str = "Sniptype", key: str = None, cooldown_seconds: float = 0, kind: str = "info"):
+    def notify(self, message: str, title: str = PRODUCT_NAME, key: str = None, cooldown_seconds: float = 0, kind: str = "info"):
         """Send a tray notification when the icon is available, with optional cooldown.
 
         The cooldown check and the history append are done under
@@ -1795,7 +1799,7 @@ class Sniptype:
             with self._notification_lock:
                 self.icon = icon
         time.sleep(0.75)
-        self.notify_status("Sniptype iniciado com sucesso.", key="startup")
+        self.notify_status("SnipType iniciado com sucesso.", key="startup")
         with self._notification_lock:
             pending, self.pending_notifications = self.pending_notifications, []
         for message, key, kind, cooldown in pending:
@@ -2410,7 +2414,7 @@ class Sniptype:
             # appearance the user changed while it was closed.
             ui = ui_theme.bind(tk_root)
             root = tk.Toplevel(tk_root)
-            root.title(f"{APP_DISPLAY_NAME} - Gerenciador de Snippets")
+            root.title(f"{PRODUCT_NAME} — Biblioteca")
             geometry, min_width, min_height = ui.manager_window_size
             root.geometry(geometry)
             root.minsize(min_width, min_height)
@@ -2421,7 +2425,7 @@ class Sniptype:
             ui_theme.apply_window_chrome(root, ui)
 
             root.grid_columnconfigure(0, weight=1)
-            root.grid_rowconfigure(2, weight=1)
+            root.grid_rowconfigure(3, weight=1)
 
             header = tk.Frame(
                 root,
@@ -2434,54 +2438,60 @@ class Sniptype:
 
             tk.Label(
                 header,
-                text=APP_DISPLAY_NAME,
-                font=ui.font(16, "bold"),
+                text=PRODUCT_NAME,
+                font=ui.font(18, "bold"),
                 bg=ui.surface,
                 fg=ui.text,
             ).grid(row=0, column=0, sticky="w")
             tk.Label(
                 header,
-                text="Sua biblioteca de textos, mapeamentos e ações rápidas.",
-                font=ui.font(9),
+                text="Sua biblioteca de textos e ações rápidas",
+                font=ui.font(10),
                 bg=ui.surface,
                 fg=ui.text_muted,
             ).grid(row=1, column=0, sticky="w", pady=(ui.space_xs, 0))
 
-            bell_button = tk.Button(
-                header,
-                text="🔔  Notificações",
-                font=ui.font(9),
-                width=ui.button_width(16),
-                **ui.button_chrome(compact=True),
-                **ui.button_colors(),
-                command=lambda: self._open_notification_history(root),
-            )
-            bell_button.grid(row=0, column=1, rowspan=2, sticky="e")
+            self._manager_status_var = tk.StringVar(root)
+            tk.Label(
+                header, textvariable=self._manager_status_var,
+                font=ui.font(10, "bold"), bg=ui.surface,
+                fg=ui.text,
+            ).grid(row=0, column=1, sticky="e")
+            tk.Label(
+                header, text=f"v{APP_VERSION}", font=ui.font(9),
+                bg=ui.surface, fg=ui.text_muted,
+            ).grid(row=1, column=1, sticky="e")
 
-            tk.Button(
-                header,
-                text="Editar último",
-                width=ui.button_width(13),
-                **ui.button_chrome(compact=True),
-                **ui.button_colors(),
-                command=self.edit_last_snippet,
-            ).grid(row=0, column=2, rowspan=2, sticky="e", padx=(ui.space_sm, 0))
-            tk.Button(
-                header,
-                text="Atalhos",
-                width=ui.button_width(9),
-                **ui.button_chrome(compact=True),
-                **ui.button_colors(),
-                command=lambda: self.configure_hotkeys(),
-            ).grid(row=0, column=3, rowspan=2, sticky="e", padx=(ui.space_sm, 0))
+            commands = tk.Frame(root, bg=ui.surface, padx=ui.space_xl,
+                                pady=ui.space_sm)
+            commands.grid(row=1, column=0, sticky="ew")
+            self._manager_toggle_button = tk.Button(
+                commands, command=lambda: self.toggle_enabled(self.icon, None),
+                **ui.button_chrome(compact=True), **ui.button_colors(),
+            )
+            self._manager_toggle_button.pack(side=tk.LEFT)
+            for label, action in (
+                ("Editar último", self.edit_last_snippet),
+                ("Notificações", lambda: self._open_notification_history(root)),
+                ("Atalhos", self.configure_hotkeys),
+            ):
+                tk.Button(
+                    commands, text=label, command=action,
+                    **ui.button_chrome(compact=True), **ui.button_colors(),
+                ).pack(side=tk.LEFT, padx=(ui.space_sm, 0))
+            tk.Label(
+                commands, text="Ctrl+1–5: seções   •   Ctrl+F: busca nas listas",
+                font=ui.font(9), bg=ui.surface, fg=ui.text_muted,
+            ).pack(side=tk.RIGHT)
+            self._refresh_manager_status()
 
             tk.Frame(root, bg=ui.divider, height=1).grid(
-                row=1, column=0, sticky="ew"
+                row=2, column=0, sticky="ew"
             )
 
             notebook = ttk.Notebook(root, style="Manager.TNotebook")
             notebook.grid(
-                row=2,
+                row=3,
                 column=0,
                 sticky="nsew",
                 padx=ui.space_lg,
@@ -2490,16 +2500,16 @@ class Sniptype:
             self._manager_notebook = notebook
 
             tab_static = tk.Frame(notebook, bg=ui.surface)
-            notebook.add(tab_static, text="Snippets")
+            notebook.add(tab_static, text="Textos")
 
             tab_dynamic = tk.Frame(notebook, bg=ui.surface)
             notebook.add(tab_dynamic, text="Mapeamentos")
 
             tab_builtin = tk.Frame(notebook, bg=ui.surface)
-            notebook.add(tab_builtin, text="Dinâmicos")
+            notebook.add(tab_builtin, text="Ações dinâmicas")
 
             tab_backups = tk.Frame(notebook, bg=ui.surface)
-            notebook.add(tab_backups, text="Backups")
+            notebook.add(tab_backups, text="Cópias de segurança")
 
             tab_settings = tk.Frame(notebook, bg=ui.surface)
             notebook.add(tab_settings, text="Configurações")
@@ -2512,13 +2522,30 @@ class Sniptype:
             # callbacks so they can't fire against destroyed widgets.
             self._manager_refreshers = []
             self._manager_tab_selectors = {}
+            self._manager_search_entries = {}
             self._create_static_snippets_tab(
-                tab_static, root, set_count=tab_counter(tab_static, "Snippets"))
+                tab_static, root, set_count=tab_counter(tab_static, "Textos"))
             self._create_dynamic_mappings_tab(
                 tab_dynamic, root, set_count=tab_counter(tab_dynamic, "Mapeamentos"))
             self._create_dynamic_snippets_tab(tab_builtin, root)
             self._create_backups_tab(tab_backups, root)
             self._create_settings_tab(tab_settings, root)
+
+            tabs = notebook.tabs()
+            for index, tab_id in enumerate(tabs, 1):
+                root.bind(
+                    f"<Control-Key-{index}>",
+                    lambda _event, selected=tab_id: (notebook.select(selected), "break")[1],
+                )
+
+            def focus_search(_event):
+                entry = self._manager_search_entries.get(notebook.select())
+                if entry is not None:
+                    entry.focus_set()
+                    entry.selection_range(0, tk.END)
+                return "break"
+
+            root.bind("<Control-f>", focus_search)
 
             def on_close():
                 self._release_manager_ui_refs()
@@ -2757,7 +2784,7 @@ class Sniptype:
         ).pack(anchor="w")
         tk.Label(
             main,
-            text="Ajuste a aparência, a expansão e os atalhos do Sniptype.",
+            text="Ajuste a aparência, a expansão e os atalhos do SnipType.",
             font=ui.font(9),
             bg=ui.surface,
             fg=ui.text_muted,
@@ -2810,7 +2837,7 @@ class Sniptype:
             parent,
             "Aparência",
             "Use o tema do sistema ou escolha uma aparência fixa. A mudança "
-            "recarrega o gerenciador sem reiniciar o Sniptype.",
+            "recarrega o gerenciador sem reiniciar o SnipType.",
         )
         current = ui_theme.preference()
         labels = ui_theme.APPEARANCE_LABELS
@@ -3142,6 +3169,9 @@ class Sniptype:
     def _release_manager_ui_refs(self):
         """Drop widget callbacks while still running on the GUI thread."""
         self._manager_notebook = None
+        self._manager_status_var = None
+        self._manager_toggle_button = None
+        self._manager_search_entries = {}
         self._manager_settings_tab = None
         self._manager_settings_sections = None
         self.manager_window = None
@@ -3523,6 +3553,7 @@ class Sniptype:
             pady=(ui.space_xs, ui.space_md),
             ipady=5,
         )
+        self._manager_search_entries[str(parent)] = search_entry
 
         filter_var = tk.StringVar(value=FILTER_ALL)
         group_var = tk.StringVar(value="")
@@ -3730,7 +3761,7 @@ class Sniptype:
             return tk.Button(
                 parent,
                 text=label,
-                width=ui.button_width(10),
+                width=ui.button_width(9),
                 **ui.button_chrome(),
                 **ui.button_colors(accent=accent, danger=danger),
             )
@@ -4452,7 +4483,7 @@ class Sniptype:
             bg=ui.card,
             fg=ui.text_strong,
         ).grid(row=1, column=0, sticky="w", pady=(ui.space_md, 0))
-        tk.Entry(
+        map_search_entry = tk.Entry(
             frame_left,
             textvariable=map_search_var,
             font=ui.font(10),
@@ -4461,13 +4492,15 @@ class Sniptype:
             highlightbackground=ui.border,
             highlightcolor=ui.focus_ring,
             **ui.entry_colors(),
-        ).grid(
+        )
+        map_search_entry.grid(
             row=2,
             column=0,
             sticky="ew",
             pady=(ui.space_xs, ui.space_md),
             ipady=5,
         )
+        self._manager_search_entries[str(parent)] = map_search_entry
 
         listbox_frame = tk.Frame(
             frame_left,
@@ -5471,6 +5504,16 @@ class Sniptype:
             icon.icon = self.load_tray_icon()
         status = "ativada" if self.enabled else "desativada"
         self.notify_status(f"Expansão de snippets {status}.", key="toggle-enabled")
+        self.gui.submit(self._refresh_manager_status)
+
+    def _refresh_manager_status(self, _root=None):
+        """Refresh the visible manager state on the GUI thread."""
+        status = self._manager_status_var
+        button = self._manager_toggle_button
+        if status is None or button is None:
+            return
+        status.set("Expansão ativa" if self.enabled else "Expansão pausada")
+        button.configure(text="Pausar expansão" if self.enabled else "Retomar expansão")
 
     def edit_last_snippet(self, icon=None, item=None):
         """Queue the manager at the most recently successful snippet."""

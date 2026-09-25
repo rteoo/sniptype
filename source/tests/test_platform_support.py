@@ -1096,7 +1096,7 @@ class ApplicationActivationBarrierTests(unittest.TestCase):
                 mock.patch.dict(sys.modules, {"AppKit": appkit}):
             cancel = ps.activate_application_when_ready(on_active, on_failed)
         on_active.assert_not_called()
-        on_failed.assert_called_once_with("macOS refused to activate Sniptype")
+        on_failed.assert_called_once_with("macOS refused to activate SnipType")
         center.removeObserver_.assert_called_once()
         cancel()
 
@@ -1109,7 +1109,7 @@ class ApplicationActivationBarrierTests(unittest.TestCase):
                 mock.patch.dict(sys.modules, {"AppKit": appkit}):
             cancel = ps.activate_application_when_ready(on_active, on_failed)
         on_active.assert_not_called()
-        on_failed.assert_called_once_with("Could not activate Sniptype: no app")
+        on_failed.assert_called_once_with("Could not activate SnipType: no app")
         cancel()
 
     def test_timeout_fails_without_revealing_the_dialog(self):

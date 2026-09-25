@@ -15,37 +15,53 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 import ui_theme
 
 
-# Fluent-inspired Windows tokens are copied here on purpose: the point is to
-# fail loudly if the visual contract drifts accidentally.
+# Windows Design System 1.0.0 roles are pinned here so a later palette change
+# requires an explicit review. ``control`` is the documented SnipType neutral
+# button adaptation, kept distinct from the design system's hover fill.
 FLUENT_WINDOWS_COLORS = {
     "surface": "#F3F3F3",
-    "surface_alt": "#FAFAFA",
-    "surface_alt_active": "#EDEDED",
-    "surface_hover": "#EBEBEB",
+    "surface_alt": "#FFFFFF",
+    "surface_alt_active": "#DEDEDE",
+    "surface_hover": "#EAEAEA",
     "card": "#FFFFFF",
     "field": "#FFFFFF",
-    "field_hover": "#F5F9FD",
+    "field_hover": "#EAEAEA",
     "control": "#E6E6E6",
-    "control_active": "#D9D9D9",
-    "control_border": "#ABABAB",
-    "text": "#1B1B1B",
-    "text_strong": "#242424",
-    "text_muted": "#616161",
+    "control_active": "#DEDEDE",
+    "control_border": "#767676",
+    "text": "#1A1A1A",
+    "text_strong": "#1A1A1A",
+    "text_muted": "#5C5C5C",
     "text_on_accent": "#FFFFFF",
-    "border": "#E1E1E1",
+    "border": "#D6D6D6",
     "divider": "#D6D6D6",
-    "accent": "#0067C0",
-    "accent_active": "#005A9E",
-    "danger": "#C42B1C",
-    "danger_active": "#A4262C",
+    "accent": "#005FB8",
+    "accent_active": "#004A91",
+    "danger": "#A4262C",
+    "danger_active": "#8B1E24",
     "focus_ring": "#005FB8",
     "link": "#005FB8",
-    "warning": "#8A4B00",
-    "success": "#0F7B0F",
+    "warning": "#7A4D00",
+    "success": "#0F6B36",
     "select_bg": "#DCEEFF",
-    "select_fg": "#1B1B1B",
-    "text_native": "#1B1B1B",
-    "tab_unselected_fg": "#4A4A4A",
+    "select_fg": "#1A1A1A",
+    "text_native": "#1A1A1A",
+    "tab_unselected_fg": "#5C5C5C",
+}
+
+WDS_DARK_COLORS = {
+    "surface": "#202020",
+    "card": "#2B2B2B",
+    "text": "#F5F5F5",
+    "text_muted": "#C4C4C4",
+    "border": "#494949",
+    "control_border": "#A0A0A0",
+    "accent": "#60CDFF",
+    "text_on_accent": "#003047",
+    "select_bg": "#153F54",
+    "focus_ring": "#75D5FF",
+    "warning": "#FFD479",
+    "danger": "#FFB4B8",
 }
 
 
@@ -57,10 +73,15 @@ class WindowsPaletteTests(unittest.TestCase):
         for token, expected in FLUENT_WINDOWS_COLORS.items():
             self.assertEqual(colors[token], expected, token)
 
-    def test_windows_fonts_are_segoe_ui_at_the_original_sizes(self):
+    def test_dark_semantic_roles_match_the_adopted_design_system(self):
+        colors = ui_theme.palette("dark", "windows")
+        for token, expected in WDS_DARK_COLORS.items():
+            self.assertEqual(colors[token], expected, token)
+
+    def test_windows_fonts_use_the_design_system_family(self):
         theme = ui_theme.build_theme("windows", system="windows")
-        self.assertEqual(theme.font(9), ("Segoe UI", 9))
-        self.assertEqual(theme.font(12, "bold"), ("Segoe UI", 12, "bold"))
+        self.assertEqual(theme.font(), ("Segoe UI Variable", 10))
+        self.assertEqual(theme.font(12, "bold"), ("Segoe UI Variable", 12, "bold"))
         self.assertEqual(theme.emoji_font(12), ("Segoe UI Emoji", 12))
         self.assertEqual(theme.mono_font(10, "bold"), ("Consolas", 10, "bold"))
         self.assertEqual(theme.symbol_family, "Segoe UI Symbol")
@@ -69,7 +90,7 @@ class WindowsPaletteTests(unittest.TestCase):
         # Windows is the reference scale; probing must not shift it.
         theme = ui_theme.build_theme("windows", system="windows", default_size=13)
         self.assertEqual(theme.size_delta, 0)
-        self.assertEqual(theme.font(9), ("Segoe UI", 9))
+        self.assertEqual(theme.font(9), ("Segoe UI Variable", 9))
 
     def test_windows_prefers_vista(self):
         self.assertEqual(ui_theme.ttk_theme_preference("windows")[0], "vista")
@@ -123,12 +144,12 @@ class MacPaletteTests(unittest.TestCase):
         self.assertNotIn("Segoe", theme.symbol_family)
 
     def test_mac_sizes_shift_onto_the_platform_scale(self):
-        # A 9 pt Windows label is body text; it must land on the platform's
-        # own default size rather than two points under every native control.
+        # The body role must land on the platform's own default size rather
+        # than below every native control.
         theme = ui_theme.build_theme("light", system="darwin", default_size=13)
-        self.assertEqual(theme.size_delta, 4)
-        self.assertEqual(theme.font(9), (".AppleSystemUIFont", 13))
-        self.assertEqual(theme.font(12, "bold"), (".AppleSystemUIFont", 16, "bold"))
+        self.assertEqual(theme.size_delta, 3)
+        self.assertEqual(theme.font(10), (".AppleSystemUIFont", 13))
+        self.assertEqual(theme.font(12, "bold"), (".AppleSystemUIFont", 15, "bold"))
 
     def test_an_unreadable_default_size_leaves_the_scale_alone(self):
         for probe in (None, 0):
@@ -237,13 +258,13 @@ class WidgetOptionTests(unittest.TestCase):
         )
         # X11 has neither name.
         self.assertEqual(
-            ui_theme.build_theme("windows", system="linux").text_native, "#1B1B1B"
+            ui_theme.build_theme("windows", system="linux").text_native, "#1A1A1A"
         )
 
     def test_windows_keeps_its_button_widths_and_window_size(self):
         theme = ui_theme.build_theme("windows", system="windows")
         self.assertEqual(theme.button_width(12), 12)
-        self.assertEqual(theme.manager_window_size, ("1080x720", 940, 700))
+        self.assertEqual(theme.manager_window_size, ("1180x800", 1020, 760))
         self.assertFalse(theme.stacked_toolbar_status)
 
     def test_linux_minimum_leaves_room_for_x11_font_metrics(self):
@@ -260,7 +281,7 @@ class WidgetOptionTests(unittest.TestCase):
              theme.space_lg, theme.space_xl),
             (4, 8, 12, 16, 24),
         )
-        self.assertEqual(theme.tree_row_height, 30)
+        self.assertEqual(theme.tree_row_height, 44)
 
     def test_macos_sizes_buttons_to_their_text_and_widens_the_window(self):
         # Aqua's bezel has a minimum width the flat Win32 button does not, so
@@ -314,14 +335,14 @@ class WidgetOptionTests(unittest.TestCase):
         self.assertEqual(
             theme.button_chrome(),
             {
-                "relief": "flat", "bd": 0, "padx": 12, "pady": 6,
+                "relief": "flat", "bd": 0, "padx": 16, "pady": 9,
                 "highlightthickness": 1, "highlightbackground": theme.control_border,
                 "highlightcolor": theme.focus_ring, "cursor": "hand2",
             },
         )
         compact = theme.button_chrome(compact=True)
-        self.assertEqual(compact["padx"], 8)
-        self.assertEqual(compact["pady"], 4)
+        self.assertEqual(compact["padx"], 12)
+        self.assertEqual(compact["pady"], 6)
 
     def test_danger_button_uses_distinct_semantic_tokens(self):
         theme = ui_theme.build_theme("windows", system="windows")
@@ -333,13 +354,13 @@ class WidgetOptionTests(unittest.TestCase):
     def test_toolbar_buttons_use_the_editor_surface_and_hover_token(self):
         colors = ui_theme.build_theme("windows", system="windows").toolbar_button_colors("#FFFFFF")
         self.assertEqual(colors["bg"], "#FFFFFF")
-        self.assertEqual(colors["activebackground"], "#EBEBEB")
+        self.assertEqual(colors["activebackground"], "#EAEAEA")
 
     def test_accent_button_uses_the_fluent_windows_tokens(self):
         colors = ui_theme.build_theme("windows", system="windows").button_colors(accent=True)
-        self.assertEqual(colors["bg"], "#0067C0")
+        self.assertEqual(colors["bg"], "#005FB8")
         self.assertEqual(colors["fg"], "#FFFFFF")
-        self.assertEqual(colors["activebackground"], "#005A9E")
+        self.assertEqual(colors["activebackground"], "#004A91")
 
     def test_toolbar_frame_uses_the_editor_card_surface(self):
         for system in ("windows", "linux"):
@@ -367,7 +388,7 @@ class WidgetOptionTests(unittest.TestCase):
         for system in ("windows", "linux"):
             self.assertEqual(
                 ui_theme.build_theme("windows", system=system).tab_unselected_fg,
-                "#4A4A4A",
+                "#5C5C5C",
             )
 
     def test_unselected_tab_foreground_follows_the_appearance_on_macos(self):

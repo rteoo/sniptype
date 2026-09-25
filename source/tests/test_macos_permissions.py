@@ -490,7 +490,7 @@ class SecureInputNotifyDeferralTests(unittest.TestCase):
 
         self.assertEqual([], app.pending_notifications)
         self.assertEqual(
-            ["Sniptype iniciado com sucesso.", "secure input"],
+            ["SnipType iniciado com sucesso.", "secure input"],
             [entry["message"] for entry in app.notification_history],
         )
         self.assertEqual(2, icon.notify.call_count)
@@ -524,7 +524,7 @@ class SecureInputNotifyDeferralTests(unittest.TestCase):
                 self.assertTrue(icon.visible)
                 self.assertEqual([], app.pending_notifications)
                 self.assertEqual(
-                    ["Sniptype iniciado com sucesso.", "secure input"],
+                    ["SnipType iniciado com sucesso.", "secure input"],
                     [entry["message"] for entry in app.notification_history],
                 )
                 self.assertEqual(2, icon.notify.call_count)
