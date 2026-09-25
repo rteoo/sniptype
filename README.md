@@ -185,6 +185,8 @@ The optional `mirror_dir` and `sync_export_dir` settings copy plaintext snippet
 data to a directory selected by the user. A cloud-synchronized destination can
 therefore expose sensitive library content to that provider.
 
+The full policy, in English and Portuguese, is in [PRIVACY.md](PRIVACY.md).
+
 ## Platform status and limitations
 
 SnipType is Windows-first. CI runs the unit suite on Windows with Python 3.12
