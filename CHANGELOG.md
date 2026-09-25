@@ -1,6 +1,27 @@
 # Changelog
 
-All notable changes to Sniptype are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
+All notable changes to SnipType are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
+
+## [5.2.0-beta.1] — 2026-09-25
+
+Windows prerelease of the SnipType manager refresh.
+
+### Changed
+
+- The manager's light and dark colors, typography, control states and spacing
+  follow Windows Design System 1.0.0.
+- The library opens with a clearer list/editor split, live expansion state and
+  direct commands for pausing expansion, editing the last item, notifications
+  and hotkeys. Its peer views are Textos, Mapeamentos, Ações dinâmicas,
+  Cópias de segurança and Configurações.
+- The product display name is SnipType. The executable, install identity and
+  per-user data path stay compatible with the stable release.
+
+### Added
+
+- Ctrl+1 through Ctrl+5 switch manager views; Ctrl+F focuses search in the
+  Textos and Mapeamentos lists.
+- Minimum-size and keyboard-navigation regression coverage for the manager.
 
 ## [5.1.0] — 2026-09-23
 
