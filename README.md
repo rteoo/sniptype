@@ -51,20 +51,18 @@ Use `pythonw sniptype.pyw` after setup when you do not need console output.
 ### Releases and installer
 
 The current stable release is
-[`v5.1.0`](https://github.com/rteoo/sniptype/releases/tag/v5.1.0) for Windows.
-It adds a dark theme and a Configurações tab, and makes secondary buttons
-readable in the light theme, on top of v5.0.x's more reliable typing and
-pasting and v5.0.0's local workflow features;
+[`v5.2.0`](https://github.com/rteoo/sniptype/releases/tag/v5.2.0) for Windows,
+also available from the Microsoft Store. It introduces the SnipType display
+name and the Windows Design System manager refresh, on top of v5.1.0's dark
+theme and Configurações tab and v5.0.x's more reliable typing and pasting;
 voice transcription now lives in the independent Snipvoice project. For macOS,
 the ARM64 build is available as the
 [`v5.0.4-beta.1` preview](https://github.com/rteoo/sniptype/releases/tag/v5.0.4-beta.1),
 at feature parity with v5.0.3.
 
-The [`v5.2.0-beta.1` Windows prerelease](https://github.com/rteoo/sniptype/releases/tag/v5.2.0-beta.1)
-introduces the SnipType display name and the Windows Design System manager
-refresh. The beta installer upgrades the same per-user installation as stable
-and uses the same snippet library; close the running app before switching
-channels. Reinstall v5.1.0 to return to stable.
+The installer and the Store version use the same snippet library in
+`%USERPROFILE%\.sniptype` and only one of them runs at a time; uninstall the
+installer version after switching to the Store.
 
 See the [development guide](source/docs/development.md) to build
 the Windows package and installer or the macOS app locally.

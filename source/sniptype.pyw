@@ -1,7 +1,7 @@
 """
 SnipType - Windows system tray snippet expander.
 Version: 5.2.0
-Channel: beta
+Channel: stable
 
 IMPORTANT: This program captures keyboard input only to expand text
 snippets (shortcuts). It does not store, transmit, or log keystrokes.
