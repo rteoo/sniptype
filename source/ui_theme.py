@@ -285,11 +285,11 @@ class Theme:
         """
         if self.system == "darwin":
             return ("1140x760", 980, 600)
-        # X11 font metrics need ~24px more than the previous Windows layout
-        # (CI, Ubuntu + Xvfb). The expanded Windows shell uses a wider default
-        # and minimum; physical desktop verification is still required.
+        # X11 font metrics and the taller shared controls need more vertical
+        # room (CI, Ubuntu + Xvfb). The expanded Windows shell uses a wider
+        # default and minimum; physical desktop verification is still required.
         if self.system == "linux":
-            return ("1080x780", 940, 740)
+            return ("1080x800", 940, 780)
         return ("1180x800", 1020, 760)
 
     @property
