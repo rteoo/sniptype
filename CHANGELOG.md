@@ -22,11 +22,14 @@ their original numbers.
 ## [1.0.0] — 2026-09-26
 
 First official release and Microsoft Store launch: the stable release of the
-manager refresh, with no app changes since 1.0.0-beta.1 beyond Microsoft Store
-packaging.
+manager refresh, plus an English interface and Microsoft Store packaging.
 
 ### Added
 
+- Interface language setting in Configurações > Geral: Português (Brasil), the
+  default, or English (US). Switching reloads the manager and the tray menu
+  without a restart. Snippet output, such as dates written out in words and the
+  Central Bank and stock summaries, stays in Portuguese.
 - Microsoft Store (MSIX) package. In the Store version, "Iniciar com o
   sistema…" opens Windows Settings > Startup apps, where Windows manages
   autostart.

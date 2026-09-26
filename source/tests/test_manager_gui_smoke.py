@@ -826,7 +826,8 @@ class ManagerGuiSmokeTests(unittest.TestCase):
         def run(shared_root):
             self.app._build_manager_window(shared_root)
             first = self.app.manager_window
-            combo, = self._settings_widgets(ttk.Combobox)
+            combo, = self._settings_widgets(
+                ttk.Combobox, lambda w: tx.ui_theme.APPEARANCE_LABELS["dark"] in w.cget("values"))
             combo.set(tx.ui_theme.APPEARANCE_LABELS["dark"])
             apply, = self._settings_widgets(
                 tk.Button, lambda w: w.cget("text") == "Aplicar aparência")
@@ -850,7 +851,8 @@ class ManagerGuiSmokeTests(unittest.TestCase):
         def run(shared_root):
             self.app._build_manager_window(shared_root)
             first = self.app.manager_window
-            combo, = self._settings_widgets(ttk.Combobox)
+            combo, = self._settings_widgets(
+                ttk.Combobox, lambda w: tx.ui_theme.APPEARANCE_LABELS["dark"] in w.cget("values"))
             combo.set(tx.ui_theme.APPEARANCE_LABELS["dark"])
             apply, = self._settings_widgets(
                 tk.Button, lambda w: w.cget("text") == "Aplicar aparência")
@@ -861,6 +863,119 @@ class ManagerGuiSmokeTests(unittest.TestCase):
             self.assertEqual(tx.ui_theme.preference(), "system")
             self.assertNotIn("appearance", tx.load_settings(self.app.settings_file))
             self.assertEqual(combo.get(), tx.ui_theme.APPEARANCE_LABELS["system"])
+
+        self._on_gui(run)
+
+    def _displayed_texts(self, window):
+        """Every piece of text the manager shows: widgets, headings, rows, tabs, titles."""
+        texts = [window.title()]
+        for widget in _descendants(window):
+            for option in ("text", "textvariable"):
+                try:
+                    value = widget.cget(option)
+                except tk.TclError:
+                    continue
+                if option == "textvariable" and str(value):
+                    value = widget.getvar(str(value))
+                texts.append(str(value))
+            if isinstance(widget, ttk.Combobox):
+                texts.extend(widget.cget("values"))
+            if isinstance(widget, ttk.Notebook):
+                texts.extend(widget.tab(tab, "text") for tab in widget.tabs())
+            if isinstance(widget, ttk.Treeview):
+                for column in ("#0",) + tuple(widget.cget("columns")):
+                    texts.append(widget.heading(column, "text"))
+                for item in widget.get_children(""):
+                    texts.extend(str(v) for v in widget.item(item, "values"))
+            if isinstance(widget, tk.Listbox):
+                texts.extend(widget.get(0, tk.END))
+            if isinstance(widget, tk.Toplevel):
+                texts.append(widget.title())
+        return [text for text in texts if text]
+
+    def test_english_manager_shows_no_portuguese(self):
+        import i18n
+        from i18n_en_us import EN_US
+        from test_i18n import PORTUGUESE
+
+        i18n.set_language("en-US")
+        self.addCleanup(i18n.set_language, i18n.DEFAULT_LANGUAGE)
+
+        def run(shared_root):
+            self.app._build_manager_window(shared_root)
+            window = self.app.manager_window
+            self.app._open_notification_history(window)
+            shared_root.update_idletasks()
+            texts = self._displayed_texts(window)
+            for child in window.winfo_children():
+                if isinstance(child, tk.Toplevel):
+                    texts += self._displayed_texts(child)
+            # Deliberate Portuguese: the language picker names each language in
+            # itself, and two action descriptions quote the Portuguese output.
+            expected = set(i18n.LANGUAGES.values()) | {
+                EN_US["Data e hora (DD/MM/AAAA às HH:MM)"],
+                EN_US["Data por extenso (ex: segunda-feira, 02 de março de 2026)"],
+            }
+            english = set(EN_US.values())
+            leftovers = sorted({
+                text for text in texts
+                if text not in expected and text not in english
+                and ((text in EN_US and EN_US[text] != text) or PORTUGUESE.search(text))
+            })
+            self.assertEqual(leftovers, [])
+            self.assertIn("Settings", texts)
+            self.assertIn("Language", texts)
+
+        self._on_gui(run)
+
+    def test_applying_english_persists_and_rebuilds_the_manager_in_english(self):
+        import i18n
+
+        self.addCleanup(i18n.set_language, i18n.DEFAULT_LANGUAGE)
+
+        def run(shared_root):
+            self.app._build_manager_window(shared_root)
+            first = self.app.manager_window
+            combo, = self._settings_widgets(
+                ttk.Combobox, lambda w: i18n.LANGUAGES["en-US"] in w.cget("values"))
+            combo.set(i18n.LANGUAGES["en-US"])
+            apply, = self._settings_widgets(
+                tk.Button, lambda w: w.cget("text") == "Aplicar idioma")
+            with mock.patch.object(tx.messagebox, "askyesno", return_value=True),                     mock.patch.object(self.app, "refresh_tray_menu") as refresh_tray:
+                apply.invoke()
+            first.update()
+            rebuilt = self.app.manager_window
+            self.assertIsNot(rebuilt, first)
+            self.assertEqual(i18n.language(), "en-US")
+            self.assertEqual(tx.load_settings(self.app.settings_file)["language"], "en-US")
+            refresh_tray.assert_called_once_with()
+            titles = _notebook_titles(rebuilt)
+            self.assertIn("Settings", titles)
+            self.assertEqual(
+                self.app._manager_notebook.select(), str(self.app._manager_settings_tab))
+
+        self._on_gui(run)
+
+    def test_declining_the_language_reload_changes_nothing(self):
+        import i18n
+
+        self.addCleanup(i18n.set_language, i18n.DEFAULT_LANGUAGE)
+
+        def run(shared_root):
+            self.app._build_manager_window(shared_root)
+            first = self.app.manager_window
+            combo, = self._settings_widgets(
+                ttk.Combobox, lambda w: i18n.LANGUAGES["en-US"] in w.cget("values"))
+            combo.set(i18n.LANGUAGES["en-US"])
+            apply, = self._settings_widgets(
+                tk.Button, lambda w: w.cget("text") == "Aplicar idioma")
+            with mock.patch.object(tx.messagebox, "askyesno", return_value=False):
+                apply.invoke()
+            first.update()
+            self.assertIs(self.app.manager_window, first)
+            self.assertEqual(i18n.language(), "pt-BR")
+            self.assertNotIn("language", tx.load_settings(self.app.settings_file))
+            self.assertEqual(combo.get(), i18n.LANGUAGES["pt-BR"])
 
         self._on_gui(run)
 

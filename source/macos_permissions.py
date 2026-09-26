@@ -29,6 +29,7 @@ import ctypes.util
 import subprocess
 
 from platform_support import IS_MAC
+from i18n import N_, _
 
 
 INPUT_MONITORING = "input_monitoring"
@@ -52,13 +53,13 @@ SETTINGS_PANE_URLS = {
 }
 
 PERMISSION_LABELS = {
-    INPUT_MONITORING: "Monitoramento de Entrada",
-    ACCESSIBILITY: "Acessibilidade",
+    INPUT_MONITORING: N_("Monitoramento de Entrada"),
+    ACCESSIBILITY: N_("Acessibilidade"),
 }
 
 PERMISSION_REASONS = {
-    INPUT_MONITORING: "detectar o atalho digitado",
-    ACCESSIBILITY: "colar o texto expandido",
+    INPUT_MONITORING: N_("detectar o atalho digitado"),
+    ACCESSIBILITY: N_("colar o texto expandido"),
 }
 
 # IOKit/hid/IOHIDLib.h: IOHIDRequestType and IOHIDAccessType.
@@ -162,7 +163,7 @@ def secure_input_enabled():
         return False
 
 
-SECURE_INPUT_MESSAGE = (
+SECURE_INPUT_MESSAGE = N_(
     "Entrada segura do macOS ativa (campo de senha ou Terminal com "
     "\"Secure Keyboard Entry\"). O snippet não foi expandido."
 )
@@ -208,37 +209,39 @@ def describe_status(status):
 
 
 def build_prompt_message(status):
-    """PT-BR body for the onboarding dialog, listing only what is missing."""
+    """Onboarding dialog body, listing only what is missing."""
     missing = denied_permissions(status)
     if not missing:
         return ""
 
     lines = [
-        "O SnipType precisa de permissões do macOS para funcionar.",
+        _("O SnipType precisa de permissões do macOS para funcionar."),
         "",
     ]
     for name in missing:
-        lines.append(f"• {PERMISSION_LABELS[name]} — para {PERMISSION_REASONS[name]}.")
+        lines.append(_("• {permission} — para {reason}.").format(
+            permission=_(PERMISSION_LABELS[name]), reason=_(PERMISSION_REASONS[name]),
+        ))
     lines += [
         "",
-        "Sem elas o app abre normalmente, mas nada é expandido:",
-        "o macOS bloqueia a captura do atalho em silêncio.",
+        _("Sem elas o app abre normalmente, mas nada é expandido:"),
+        _("o macOS bloqueia a captura do atalho em silêncio."),
         "",
-        "O SnipType não armazena nem envia o que você digita;",
-        "todo o processamento acontece no seu Mac.",
+        _("O SnipType não armazena nem envia o que você digita;"),
+        _("todo o processamento acontece no seu Mac."),
         "",
-        "Abra o painel, marque o SnipType na lista e reinicie o app.",
+        _("Abra o painel, marque o SnipType na lista e reinicie o app."),
     ]
     return "\n".join(lines)
 
 
 def build_tray_message(status):
-    """Short PT-BR tray/notification line for a denied state."""
+    """Short tray/notification line for a denied state."""
     missing = denied_permissions(status)
     if not missing:
         return ""
-    names = " e ".join(PERMISSION_LABELS[name] for name in missing)
-    return f"Permissão do macOS pendente: {names}. A expansão não vai funcionar."
+    names = _(" e ").join(_(PERMISSION_LABELS[name]) for name in missing)
+    return _("Permissão do macOS pendente: {names}. A expansão não vai funcionar.").format(names=names)
 
 
 RECHECK_RESOLVED = "resolved"
@@ -267,21 +270,21 @@ def recheck_outcome(previous, current):
     ]
 
     if not still_denied:
-        return RECHECK_RESOLVED, (
+        return RECHECK_RESOLVED, _(
             "Permissões concedidas. Reinicie o SnipType para que a captura "
             "de teclado passe a funcionar."
         )
 
-    names = " e ".join(PERMISSION_LABELS[name] for name in still_denied)
+    names = _(" e ").join(_(PERMISSION_LABELS[name]) for name in still_denied)
     if len(still_denied) < len(was_denied):
-        return RECHECK_PARTIAL, (
-            f"Ainda falta: {names}. Conceda a permissão restante e reinicie o "
-        "SnipType."
-        )
-    return RECHECK_PENDING, (
-        f"Nada mudou: {names} continua sem permissão. Marque o SnipType na "
+        return RECHECK_PARTIAL, _(
+            "Ainda falta: {names}. Conceda a permissão restante e reinicie o "
+            "SnipType."
+        ).format(names=names)
+    return RECHECK_PENDING, _(
+        "Nada mudou: {names} continua sem permissão. Marque o SnipType na "
         "lista do painel do macOS."
-    )
+    ).format(names=names)
 
 
 def open_settings_pane(permission, runner=None):

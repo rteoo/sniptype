@@ -12,6 +12,7 @@ import tkinter as tk
 from tkinter import ttk
 
 import ui_theme
+from i18n import N_, _
 from form_support import (
     DEFAULT_DATE_FORMAT,
     FIELD_TYPES,
@@ -23,11 +24,11 @@ from form_support import (
 
 
 _TYPE_LABELS = {
-    "text": "Texto",
-    "multiline": "Texto multilinha",
-    "choice": "Escolha",
-    "date": "Data",
-    "optional": "Opcional",
+    "text": N_("Texto"),
+    "multiline": N_("Texto multilinha"),
+    "choice": N_("Escolha"),
+    "date": N_("Data"),
+    "optional": N_("Opcional"),
 }
 
 
@@ -202,7 +203,7 @@ class FormEditor:
         snippets=None,
         *,
         template=None,
-        title="Editar formulário",
+        title=N_("Editar formulário"),
         theme=None,
     ):
         self._owner_thread = threading.current_thread()
@@ -214,7 +215,7 @@ class FormEditor:
         self.parent = parent
         self.theme = theme or ui_theme.bind(parent)
         self.window = tk.Toplevel(parent)
-        self.window.title(title)
+        self.window.title(_(title))
         self.window.transient(parent)
         self.window.configure(bg=self.theme.surface)
         ui_theme.prepare_window(self.window, self.theme)
@@ -250,7 +251,7 @@ class FormEditor:
         body.pack(fill="both", expand=True, padx=self.theme.space_lg, pady=self.theme.space_lg)
 
         heading = tk.Label(
-            body, text="Campos do formulário", anchor="w",
+            body, text=_("Campos do formulário"), anchor="w",
             bg=self.theme.surface, fg=self.theme.text_strong, font=self.theme.font(weight="bold"),
         )
         heading.pack(fill="x", pady=(0, self.theme.space_sm))
@@ -268,10 +269,10 @@ class FormEditor:
         self._field_list.bind("<<ListboxSelect>>", self._on_select)
         list_buttons = tk.Frame(left, **self.theme.toolbar_frame_colors())
         list_buttons.pack(fill="x", pady=(self.theme.space_sm, 0))
-        self._button(list_buttons, "Adicionar", self._add).pack(side="left")
+        self._button(list_buttons, _("Adicionar"), self._add).pack(side="left")
         self._button(list_buttons, "↑", self._move_up).pack(side="left", padx=(self.theme.space_xs, 0))
         self._button(list_buttons, "↓", self._move_down).pack(side="left", padx=(self.theme.space_xs, 0))
-        self._button(list_buttons, "Remover", self._remove, danger=True).pack(side="left", padx=(self.theme.space_xs, 0))
+        self._button(list_buttons, _("Remover"), self._remove, danger=True).pack(side="left", padx=(self.theme.space_xs, 0))
 
         right = tk.Frame(content, bg=self.theme.card)
         right.pack(side="left", fill="both", expand=True)
@@ -287,34 +288,34 @@ class FormEditor:
         self.format_var = tk.StringVar(self.window)
         self.optional_default_var = tk.BooleanVar(self.window, value=False)
 
-        self._label(editor, "Nome")
+        self._label(editor, _("Nome"))
         self.name_entry = tk.Entry(editor, textvariable=self.name_var, **self.theme.entry_colors(), **self.theme.field_chrome(), font=self.theme.font())
         self.name_entry.pack(fill="x")
-        self._label(editor, "Rótulo")
+        self._label(editor, _("Rótulo"))
         self.label_entry = tk.Entry(editor, textvariable=self.label_var, **self.theme.entry_colors(), **self.theme.field_chrome(), font=self.theme.font())
         self.label_entry.pack(fill="x")
-        self._label(editor, "Tipo")
+        self._label(editor, _("Tipo"))
         self.type_combo = ttk.Combobox(editor, textvariable=self.type_var, state="readonly", values=FIELD_TYPES)
         self.type_combo.pack(fill="x")
         self.type_combo.bind("<<ComboboxSelected>>", self._on_type_change)
-        self._label(editor, "Valor padrão")
+        self._label(editor, _("Valor padrão"))
         self.default_entry = tk.Entry(editor, textvariable=self.default_var, **self.theme.entry_colors(), **self.theme.field_chrome(), font=self.theme.font())
         self.default_entry.pack(fill="x")
         self.optional_default = tk.Checkbutton(
-            editor, text="Selecionado por padrão", variable=self.optional_default_var,
+            editor, text=_("Selecionado por padrão"), variable=self.optional_default_var,
             **self.theme.checkbutton_colors(self.theme.card), font=self.theme.font(),
         )
 
         self._choice_frame = tk.Frame(editor, bg=self.theme.card)
-        self._label(self._choice_frame, "Opções (uma por linha)")
+        self._label(self._choice_frame, _("Opções (uma por linha)"))
         self.options_text = tk.Text(self._choice_frame, height=5, wrap="word", **self.theme.text_colors(), **self.theme.field_chrome(), font=self.theme.font())
         self.options_text.pack(fill="x")
         self._optional_frame = tk.Frame(editor, bg=self.theme.card)
-        self._label(self._optional_frame, "Conteúdo quando selecionado")
+        self._label(self._optional_frame, _("Conteúdo quando selecionado"))
         self.content_entry = tk.Entry(self._optional_frame, textvariable=self.content_var, **self.theme.entry_colors(), **self.theme.field_chrome(), font=self.theme.font())
         self.content_entry.pack(fill="x")
         self._date_frame = tk.Frame(editor, bg=self.theme.card)
-        self._label(self._date_frame, "Formato da data")
+        self._label(self._date_frame, _("Formato da data"))
         self.format_entry = tk.Entry(self._date_frame, textvariable=self.format_var, **self.theme.entry_colors(), **self.theme.field_chrome(), font=self.theme.font())
         self.format_entry.pack(fill="x")
 
@@ -325,8 +326,8 @@ class FormEditor:
         self.error_label.pack(fill="x", pady=(self.theme.space_md, 0))
         actions = tk.Frame(body, bg=self.theme.surface)
         actions.pack(fill="x", pady=(self.theme.space_md, 0))
-        self._button(actions, "Cancelar", self.cancel).pack(side="right")
-        self._button(actions, "Salvar", self.submit, accent=True).pack(side="right", padx=(0, self.theme.space_sm))
+        self._button(actions, _("Cancelar"), self.cancel).pack(side="right")
+        self._button(actions, _("Salvar"), self.submit, accent=True).pack(side="right", padx=(0, self.theme.space_sm))
         self.window.bind("<Escape>", lambda _event: self.cancel())
 
     def _refresh_list(self):
@@ -336,7 +337,7 @@ class FormEditor:
             for field in self.controller.fields:
                 name = field.get("name") if isinstance(field, dict) else ""
                 field_type = field.get("type", "text") if isinstance(field, dict) else "text"
-                self._field_list.insert("end", f"{name or '(sem nome)'} — {_TYPE_LABELS.get(field_type, field_type)}")
+                self._field_list.insert("end", f"{name or _('(sem nome)')} — {_(_TYPE_LABELS.get(field_type, field_type))}")
             if self._selected is not None and self.controller.fields:
                 self._selected = max(0, min(self._selected, len(self.controller.fields) - 1))
                 self._field_list.selection_set(self._selected)
@@ -483,7 +484,7 @@ class FormEditor:
         try:
             result = self.controller.save()
         except FormValidationError:
-            self.error_label.configure(text=self.controller.error or "Campo inválido.")
+            self.error_label.configure(text=self.controller.error or _("Campo inválido."))
             self._focus_invalid()
             return False
         self._close()
@@ -517,7 +518,7 @@ def run_form_editor(
     snippets=None,
     *,
     template=None,
-    title="Editar formulário",
+    title=N_("Editar formulário"),
     theme=None,
 ):
     """Open the editor on the caller's GUI thread."""

@@ -12,6 +12,7 @@ import time
 
 from snippet_utils import get_dynamic_prefixes, load_json_file
 from validation_support import validate_trigger
+from i18n import _
 
 
 # registry 'method' -> BCBConsultor attribute
@@ -64,10 +65,10 @@ def load_registry(bundled_path, user_path=None, logger=None):
     to other fields still reach the user. A missing/invalid file yields an empty
     layer so one bad file never wipes the other.
     """
-    bundled = _safe_load(bundled_path, logger, "registro dinâmico")
+    bundled = _safe_load(bundled_path, logger, "registro dinâmico")  # i18n: not ui
     if not user_path:
         return dict(bundled)
-    user = _safe_load(user_path, logger, "registro dinâmico do usuário")
+    user = _safe_load(user_path, logger, "registro dinâmico do usuário")  # i18n: not ui
 
     merged = {trigger: dict(entry) if isinstance(entry, dict) else entry for trigger, entry in bundled.items()}
     for trigger, entry in user.items():
@@ -280,13 +281,13 @@ def validate_rename(registry, key, new_trigger, snippets=None, metadata=None):
 
     candidate = new_trigger.strip() if isinstance(new_trigger, str) else ""
     if not candidate:
-        return (["O trigger não pode ficar vazio."], [])
+        return ([_("O trigger não pode ficar vazio.")], [])
     if candidate.startswith("_"):
         errors.append(
-            "O trigger não pode começar com '_', pois esse prefixo é reservado para mapeamentos."
+            _("O trigger não pode começar com '_', pois esse prefixo é reservado para mapeamentos.")
         )
     if any(ch.isspace() for ch in candidate):
-        errors.append("O trigger não pode conter espaços em branco.")
+        errors.append(_("O trigger não pode conter espaços em branco."))
 
     other_dynamic = {
         effective_trigger(other_key, entry)
@@ -294,7 +295,7 @@ def validate_rename(registry, key, new_trigger, snippets=None, metadata=None):
         if other_key != key and isinstance(entry, dict)
     }
     if candidate in other_dynamic:
-        errors.append(f"Já existe um snippet dinâmico com o trigger '{candidate}'.")
+        errors.append(_("Já existe um snippet dinâmico com o trigger '{trigger}'.").format(trigger=candidate))
 
     from group_policy import (
         effective_trigger as static_effective_trigger,
@@ -311,13 +312,13 @@ def validate_rename(registry, key, new_trigger, snippets=None, metadata=None):
         and static_item_enabled(metadata, name)
     }
     if candidate in static_triggers:
-        errors.append(f"Já existe um snippet estático com o trigger '{candidate}'.")
+        errors.append(_("Já existe um snippet estático com o trigger '{trigger}'.").format(trigger=candidate))
 
     prefixes = get_dynamic_prefixes(snippets)
     if candidate in prefixes:
-        errors.append(f"'{candidate}' é um prefixo de mapeamento dinâmico.")
+        errors.append(_("'{trigger}' é um prefixo de mapeamento dinâmico.").format(trigger=candidate))
     if candidate in composed_mapping_triggers(snippets):
-        errors.append(f"Já existe um mapeamento dinâmico com o trigger '{candidate}'.")
+        errors.append(_("Já existe um mapeamento dinâmico com o trigger '{trigger}'.").format(trigger=candidate))
 
     if errors:
         return (errors, [])
@@ -326,6 +327,6 @@ def validate_rename(registry, key, new_trigger, snippets=None, metadata=None):
     for prefix in prefixes:
         if candidate.startswith(prefix) and candidate != prefix:
             warnings.append(
-                f"O trigger começa com o prefixo de mapeamento '{prefix}'."
+                _("O trigger começa com o prefixo de mapeamento '{prefix}'.").format(prefix=prefix)
             )
     return (errors, warnings)

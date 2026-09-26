@@ -11,6 +11,7 @@ from clipboard_support import Clipboard
 from platform_support import default_insertion_timings
 from rich_text_support import extract_plain_text
 from snippet_utils import write_json_atomic
+from i18n import _
 
 
 LOGGER_NAME = "sniptype"
@@ -159,16 +160,16 @@ def build_snippet_failure_notification(trigger, value):
     bracketed = text.startswith("[") and text.endswith("]")
     single_line = "\n" not in text
 
-    if lowered.startswith("[erro"):
+    if lowered.startswith("[erro"):  # i18n: not ui
         detail = text[1:-1].strip()
-        return truncate_notification_text(f"Falha no snippet {trigger}: {detail}")
+        return truncate_notification_text(_("Falha no snippet {trigger}: {detail}").format(trigger=trigger, detail=detail))
 
-    if bracketed and ("indispon" in lowered or "falha" in lowered or "n/a" in lowered):
+    if bracketed and ("indispon" in lowered or "falha" in lowered or "n/a" in lowered):  # i18n: not ui
         detail = text[1:-1].strip()
-        return truncate_notification_text(f"Falha no snippet {trigger}: {detail}")
+        return truncate_notification_text(_("Falha no snippet {trigger}: {detail}").format(trigger=trigger, detail=detail))
 
     if single_line and lowered.endswith(": n/a"):
-        return truncate_notification_text(f"Falha no snippet {trigger}: dado indisponível.")
+        return truncate_notification_text(_("Falha no snippet {trigger}: dado indisponível.").format(trigger=trigger))
 
     return None
 
@@ -219,11 +220,11 @@ class TextInserter:
             # line in a terminal. Leaving the payload for a manual Ctrl+V is the
             # only recovery that cannot fire something irreversible.
             if Clipboard.set_content(value):
-                message = ("Não foi possível colar o snippet automaticamente. "
-                           "Ele está na área de transferência: use Ctrl+V.")
+                message = _("Não foi possível colar o snippet automaticamente. "
+                            "Ele está na área de transferência: use Ctrl+V.")
             else:
-                message = ("Não foi possível colar o snippet nem copiá-lo "
-                           "para a área de transferência.")
+                message = _("Não foi possível colar o snippet nem copiá-lo "
+                            "para a área de transferência.")
             self.logger.warning(message)
             if self.notify:
                 self.notify(message, key="paste-failed")

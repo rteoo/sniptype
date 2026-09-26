@@ -38,6 +38,7 @@ from tkinter import font as tkfont
 from tkinter import ttk
 
 from platform_support import current_os
+from i18n import N_
 
 
 # The GUI's body size, in the Windows point scale every ``font=`` call uses.
@@ -767,14 +768,14 @@ APPEARANCE_CHOICES = ("system", "light", "dark")
 
 # PT-BR copy for the Configurações > Aparência card, shared with Snipvoice.
 APPEARANCE_LABELS = {
-    "system": "Sistema",
-    "light": "Claro",
-    "dark": "Escuro",
+    "system": N_("Sistema"),
+    "light": N_("Claro"),
+    "dark": N_("Escuro"),
 }
 APPEARANCE_STATUS = {
-    "system": "Segue o tema do sistema.",
-    "light": "Tema claro fixo.",
-    "dark": "Tema escuro fixo.",
+    "system": N_("Segue o tema do sistema."),
+    "light": N_("Tema claro fixo."),
+    "dark": N_("Tema escuro fixo."),
 }
 
 _preference = "system"

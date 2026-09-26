@@ -10,6 +10,7 @@ from dataclasses import dataclass
 import tkinter as tk
 
 import ui_theme
+from i18n import N_, _
 from preview_support import (
     CLIPBOARD_PLACEHOLDER,
     DYNAMIC_PLACEHOLDER_TEMPLATE,
@@ -40,7 +41,7 @@ class PreviewModel:
         if not self.unavailable:
             return ""
         names = ", ".join(self.unavailable)
-        return f"Indisponível na prévia: {names}"
+        return _("Indisponível na prévia: {names}").format(names=names)
 
 
 def build_preview_model(result):
@@ -227,7 +228,7 @@ class PreviewDialogController:
         status.pack(fill="x", pady=(self.theme.space_sm, 0))
         close = tk.Button(
             frame,
-            text="Fechar",
+            text=_("Fechar"),
             command=self.close,
             **self.theme.button_chrome(compact=True),
             **self.theme.button_colors(),
@@ -235,7 +236,7 @@ class PreviewDialogController:
         close.pack(anchor="e", pady=(self.theme.space_sm, 0))
         return text_widget, status
 
-    def show(self, result, *, title="Prévia"):
+    def show(self, result, *, title=N_("Prévia")):
         """Show or refresh the one preview window and return its Toplevel."""
         model = build_preview_model(result)
         if not self._window_exists():
@@ -251,7 +252,7 @@ class PreviewDialogController:
             configure_styles=self.configure_styles,
         )
         self._status_widget.configure(text=model.status_text)
-        self._window.title(title)
+        self._window.title(_(title))
         self._window.deiconify()
         self._window.lift()
         return self._window

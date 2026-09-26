@@ -43,6 +43,13 @@ class MsixManifestTests(unittest.TestCase):
         names = {element.get("DisplayName") for element in root.iter() if element.get("DisplayName")}
         self.assertEqual(names, {"SnipType"})
 
+    def test_manifest_declares_both_interface_languages_portuguese_first(self):
+        # The first resource is the package's default language; each declared
+        # language needs its own Store listing in Partner Center.
+        root = ET.fromstring(render())
+        languages = [r.get("Language") for r in root.iter(f"{FOUNDATION}Resource")]
+        self.assertEqual(languages, ["pt-BR", "en-US"])
+
     def test_manifest_declares_full_trust_and_opt_in_startup_task_only(self):
         root = ET.fromstring(render())
         self.assertEqual(list(root.iter(f"{FOUNDATION}DeviceCapability")), [])

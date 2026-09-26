@@ -10,15 +10,16 @@ import threading
 import tkinter as tk
 
 import ui_theme
+from i18n import N_, _
 from hotkey_support import ACTIONS, normalize_hotkeys
 
 
 ACTION_LABELS = {
-    "open_manager": "Abrir gerenciador",
-    "edit_last": "Editar último expandido",
-    "toggle_enabled": "Alternar expansão",
+    "open_manager": N_("Abrir gerenciador"),
+    "edit_last": N_("Editar último expandido"),
+    "toggle_enabled": N_("Alternar expansão"),
 }
-HINT_TEXT = "Use combinações como <ctrl>+<shift>+m. Deixe vazio para desativar."
+HINT_TEXT = N_("Use combinações como <ctrl>+<shift>+m. Deixe vazio para desativar.")
 
 
 class HotkeyDialogController:
@@ -47,7 +48,7 @@ class HotkeyDialogController:
         if invalid:
             self.result = None
             self.error = "; ".join(
-                f"{ACTION_LABELS.get(action, action)}: {reason}"
+                f"{_(ACTION_LABELS.get(action, action))}: {reason}"
                 for action, reason in invalid.items()
             )
             self.invalid_action = next(
@@ -71,12 +72,12 @@ class HotkeyDialogController:
 class HotkeyDialog:
     """Build and run the hotkey editor on its creating GUI thread."""
 
-    def __init__(self, parent, bindings=None, *, title="Atalhos", theme=None):
+    def __init__(self, parent, bindings=None, *, title=N_("Atalhos"), theme=None):
         self._owner_thread = threading.current_thread()
         self.parent = parent
         self.theme = theme or ui_theme.bind(parent)
         self.window = tk.Toplevel(parent)
-        self.window.title(title)
+        self.window.title(_(title))
         self.window.transient(parent)
         self.window.configure(bg=self.theme.surface)
         ui_theme.prepare_window(self.window, self.theme)
@@ -98,7 +99,7 @@ class HotkeyDialog:
         body.pack(fill="both", expand=True, padx=self.theme.space_lg, pady=self.theme.space_lg)
 
         tk.Label(
-            body, text=HINT_TEXT, anchor="w", justify="left",
+            body, text=_(HINT_TEXT), anchor="w", justify="left",
             bg=self.theme.surface, fg=self.theme.text_muted, font=self.theme.font(8),
         ).pack(fill="x", pady=(0, self.theme.space_md))
 
@@ -109,7 +110,7 @@ class HotkeyDialog:
             row = tk.Frame(card, bg=self.theme.card)
             row.pack(fill="x", padx=self.theme.space_md, pady=self.theme.space_sm)
             tk.Label(
-                row, text=ACTION_LABELS[action], anchor="w", width=24,
+                row, text=_(ACTION_LABELS[action]), anchor="w", width=24,
                 bg=self.theme.card, fg=self.theme.text, font=self.theme.font(),
             ).pack(side="left")
             control = tk.Entry(
@@ -130,11 +131,11 @@ class HotkeyDialog:
         buttons = tk.Frame(body, bg=self.theme.surface)
         buttons.pack(fill="x", pady=(self.theme.space_md, 0))
         tk.Button(
-            buttons, text="Cancelar", command=self.cancel,
+            buttons, text=_("Cancelar"), command=self.cancel,
             **self.theme.button_chrome(compact=True), **self.theme.button_colors(),
         ).pack(side="right")
         tk.Button(
-            buttons, text="Salvar", command=self.save,
+            buttons, text=_("Salvar"), command=self.save,
             **self.theme.button_chrome(compact=True), **self.theme.button_colors(accent=True),
         ).pack(side="right", padx=(0, self.theme.space_sm))
 
@@ -145,7 +146,7 @@ class HotkeyDialog:
     def save(self):
         self._assert_owner()
         if not self.controller.save():
-            self._error_label.configure(text=self.controller.error or "Atalho inválido.")
+            self._error_label.configure(text=self.controller.error or _("Atalho inválido."))
             return False
         self._close()
         return True
@@ -173,7 +174,7 @@ class HotkeyDialog:
         return self.controller.result
 
 
-def run_hotkey_dialog(parent, bindings=None, *, title="Atalhos", theme=None):
+def run_hotkey_dialog(parent, bindings=None, *, title=N_("Atalhos"), theme=None):
     """Show the editor on the caller's GUI thread and return save/cancel result."""
     return HotkeyDialog(parent, bindings, title=title, theme=theme).run()
 
