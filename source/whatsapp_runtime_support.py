@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 
 from whatsapp_support import build_whatsapp_url, normalize_phone_number
+from i18n import _
 
 
 class _ActionCompleted:
@@ -62,7 +63,7 @@ def execute_whatsapp_action(
         except Exception as exc:
             clipboard_text = None
             notify_error(
-                f"Falha ao ler a area de transferencia para o WhatsApp: {exc}",
+                _("Falha ao ler a area de transferencia para o WhatsApp: {error}").format(error=exc),
                 key=f"{trigger}-clipboard-read-error",
                 cooldown_seconds=5,
             )
@@ -77,7 +78,7 @@ def execute_whatsapp_action(
         url = build_whatsapp_url(normalized_phone, message_text)
     except Exception as exc:
         notify_error(
-            f"Falha ao gerar link do WhatsApp: {exc}",
+            _("Falha ao gerar link do WhatsApp: {error}").format(error=exc),
             key=f"{trigger}-build-error",
             cooldown_seconds=5,
         )
@@ -89,14 +90,14 @@ def execute_whatsapp_action(
         except Exception as exc:
             copied = False
             notify_error(
-                f"Nao foi possivel copiar o link do WhatsApp para a area de transferencia: {exc}",
+                _("Nao foi possivel copiar o link do WhatsApp para a area de transferencia: {error}").format(error=exc),
                 key=f"{trigger}-clipboard-write-error",
                 cooldown_seconds=5,
             )
         else:
             if not copied:
                 notify_error(
-                    "Nao foi possivel copiar o link do WhatsApp para a area de transferencia.",
+                    _("Nao foi possivel copiar o link do WhatsApp para a area de transferencia."),
                     key=f"{trigger}-clipboard-write-error",
                     cooldown_seconds=5,
                 )
@@ -110,7 +111,7 @@ def execute_whatsapp_action(
             open_error = str(exc)
         if not opened:
             notify_error(
-                f"Nao foi possivel abrir o link do WhatsApp: {open_error}",
+                _("Nao foi possivel abrir o link do WhatsApp: {error}").format(error=open_error),
                 key=f"{trigger}-open-error",
                 cooldown_seconds=5,
             )

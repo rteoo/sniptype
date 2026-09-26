@@ -107,11 +107,11 @@ def _provider_binds(entry):
     if provider not in PROVIDERS:
         return False, f"provider desconhecido '{provider}'"
     if provider == "bcb" and entry.get("method") not in BCB_METHODS:
-        return False, f"método inválido '{entry.get('method')}' (provider bcb)"
+        return False, f"método inválido '{entry.get('method')}' (provider bcb)"  # i18n: not ui
     if provider == "stock" and entry.get("method") not in STOCK_METHODS:
-        return False, f"método inválido '{entry.get('method')}' (provider stock)"
+        return False, f"método inválido '{entry.get('method')}' (provider stock)"  # i18n: not ui
     if provider == "whatsapp" and entry.get("mode") not in WHATSAPP_MODES:
-        return False, f"mode inválido '{entry.get('mode')}' (provider whatsapp)"
+        return False, f"mode inválido '{entry.get('mode')}' (provider whatsapp)"  # i18n: not ui
     return True, None
 
 

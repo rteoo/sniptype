@@ -21,6 +21,7 @@ import re
 from rich_text_support import extract_plain_text
 from snippet_utils import check_dynamic_pattern, get_dynamic_prefixes
 from whatsapp_runtime_support import ACTION_COMPLETED
+from i18n import _
 
 VARIABLE_RE = re.compile(r'%%([^%\s]+)%%')
 
@@ -97,15 +98,15 @@ def resolve_inline(text, snippets, get_clipboard, _seen=None, prefixes=None, not
                 value = get_clipboard()
             except Exception as exc:
                 raise VariableResolutionError(
-                    "Não foi possível ler a área de transferência."
+                    _("Não foi possível ler a área de transferência.")
                 ) from exc
             if value is None:
                 raise VariableResolutionError(
-                    "Não foi possível ler a área de transferência."
+                    _("Não foi possível ler a área de transferência.")
                 )
             if not isinstance(value, str):
                 raise VariableResolutionError(
-                    "A área de transferência não retornou texto válido."
+                    _("A área de transferência não retornou texto válido.")
                 )
             text = text.replace(f"%%{name}%%", value)
         elif name in _seen:
@@ -114,7 +115,7 @@ def resolve_inline(text, snippets, get_clipboard, _seen=None, prefixes=None, not
             # One level deep only: do not recursively resolve variables inside the ref.
             text = text.replace(f"%%{name}%%", extract_plain_text(snippets[name]))
         elif kind == "mapping_ref":
-            value, _ = check_dynamic_pattern(snippets, name, prefixes)
+            value, _prefix = check_dynamic_pattern(snippets, name, prefixes)
             text = text.replace(f"%%{name}%%", extract_plain_text(value))
         elif kind == "dynamic_ref":
             text = text.replace(f"%%{name}%%", _resolve_dynamic(name, snippets, notify_failure))
@@ -134,7 +135,7 @@ def _resolve_dynamic(name, snippets, notify_failure):
         result = snippets[name]()
     except Exception as e:
         if notify_failure:
-            notify_failure(name, f"[Erro: {e}]")
+            notify_failure(name, f"[Erro: {e}]")  # i18n: not ui
         return ""
     if result is ACTION_COMPLETED or not result:
         return ""

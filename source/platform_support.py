@@ -21,6 +21,8 @@ import threading
 import time
 from collections import OrderedDict
 
+from i18n import _
+
 try:
     import fcntl as _fcntl
 except ImportError:  # Windows uses the named mutex in the real app.
@@ -1228,7 +1230,7 @@ def _read_windows_shortcut(path):
     )
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or "").strip()
-        raise OSError(f"Falha ao ler o atalho de inicialização: {detail}")
+        raise OSError(_("Falha ao ler o atalho de inicialização: {detail}").format(detail=detail))
 
     lines = (result.stdout or "").splitlines()
     target = lines[0].strip() if lines else ""
@@ -1274,7 +1276,7 @@ def install_autostart(app_name=APP_NAME, command=None):
     """
     argv = list(command or default_autostart_command())
     if not argv:
-        raise OSError("Comando de inicialização automática vazio.")
+        raise OSError(_("Comando de inicialização automática vazio."))
 
     path = autostart_target_path(app_name)
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
@@ -1288,7 +1290,7 @@ def install_autostart(app_name=APP_NAME, command=None):
         _write_text_file(path, linux_desktop_entry(app_name, _join_command(argv)))
 
     if not os.path.exists(path):
-        raise OSError(f"Entrada de inicialização automática não foi criada: {path}")
+        raise OSError(_("Entrada de inicialização automática não foi criada: {path}").format(path=path))
     return path
 
 
@@ -1350,4 +1352,4 @@ def _write_windows_shortcut(path, argv):
     )
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or "").strip()
-        raise OSError(f"Falha ao criar o atalho de inicialização: {detail}")
+        raise OSError(_("Falha ao criar o atalho de inicialização: {detail}").format(detail=detail))

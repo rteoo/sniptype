@@ -13,6 +13,7 @@ import tkinter as tk
 from tkinter import ttk
 
 import ui_theme
+from i18n import N_, _
 from form_support import CompiledForm, FormValidationError, render_form
 
 
@@ -98,7 +99,7 @@ class _DatePicker:
             self.window.lift()
             return
         self.window = tk.Toplevel(self.parent)
-        self.window.title("Escolher data")
+        self.window.title(_("Escolher data"))
         self.window.transient(self.parent)
         self.window.resizable(False, False)
         self.window.configure(bg=self.theme.card)
@@ -176,7 +177,7 @@ class _DatePicker:
 class FormDialog:
     """Build and run controls for one compiled form on the GUI thread."""
 
-    def __init__(self, parent, compiled, *, title="Preencher campos", theme=None):
+    def __init__(self, parent, compiled, *, title=N_("Preencher campos"), theme=None):
         if not isinstance(compiled, CompiledForm):
             raise TypeError("FormDialog expects a CompiledForm")
         self._owner_thread = threading.current_thread()
@@ -184,7 +185,7 @@ class FormDialog:
         self.compiled = compiled
         self.theme = theme or ui_theme.bind(parent)
         self.window = tk.Toplevel(parent)
-        self.window.title(title)
+        self.window.title(_(title))
         self.window.transient(parent)
         self.window.configure(bg=self.theme.surface)
         ui_theme.prepare_window(self.window, self.theme)
@@ -214,11 +215,11 @@ class FormDialog:
         buttons = tk.Frame(body, bg=self.theme.surface)
         buttons.pack(fill="x", pady=(self.theme.space_md, 0))
         tk.Button(
-            buttons, text="Cancelar", command=self.cancel,
+            buttons, text=_("Cancelar"), command=self.cancel,
             **self.theme.button_chrome(compact=True), **self.theme.button_colors(),
         ).pack(side="right")
         tk.Button(
-            buttons, text="OK", command=self.submit,
+            buttons, text=_("OK"), command=self.submit,
             **self.theme.button_chrome(compact=True), **self.theme.button_colors(accent=True),
         ).pack(side="right", padx=(0, self.theme.space_sm))
         self.window.bind("<Escape>", lambda _event: self.cancel())
@@ -279,7 +280,7 @@ class FormDialog:
                 control = tk.Entry(control_frame, textvariable=variable, **self.theme.entry_colors(), **self.theme.field_chrome(), font=self.theme.font())
                 control.pack(side="left", fill="x", expand=True)
                 tk.Button(
-                    control_frame, text="Calendário", command=lambda name=field.name: self._date_pickers[name].open(),
+                    control_frame, text=_("Calendário"), command=lambda name=field.name: self._date_pickers[name].open(),
                     **self.theme.button_chrome(compact=True), **self.theme.button_colors(),
                 ).pack(side="right", padx=(self.theme.space_sm, 0))
                 self._variables[field.name] = variable
@@ -302,7 +303,7 @@ class FormDialog:
     def submit(self):
         self._assert_owner()
         if not self.controller.submit():
-            self._error_label.configure(text=self.controller.error or "Valor inválido.")
+            self._error_label.configure(text=self.controller.error or _("Valor inválido."))
             return False
         self._close()
         return True
@@ -345,7 +346,7 @@ class _VariableControl:
         self.widget.focus_set()
 
 
-def run_form_dialog(parent, compiled, *, title="Preencher campos", theme=None):
+def run_form_dialog(parent, compiled, *, title=N_("Preencher campos"), theme=None):
     """Show one form on the caller's GUI thread and return values or ``None``."""
     return FormDialog(parent, compiled, title=title, theme=theme).run()
 

@@ -1,9 +1,11 @@
 """Save-time validation for static snippet triggers.
 
-Pure functions returning human-readable warning strings (Portuguese, since they
-are shown to the user). These are warnings, not hard errors: the manager shows
+Pure functions returning human-readable warning strings in the interface
+language, since they are shown to the user. These are warnings, not hard errors: the manager shows
 them and lets the user confirm, so a deliberate edge case is never blocked.
 """
+
+from i18n import _
 
 # Characters that end a word; a trigger containing one can misfire mid-word.
 TERMINATOR_CHARS = frozenset(" \t\n\r.,;:!?)]}\"'")
@@ -19,24 +21,24 @@ def validate_trigger(trigger, existing_triggers, dynamic_trigger_names):
     warnings = []
 
     if any(ch.isspace() for ch in trigger):
-        warnings.append("O trigger contém espaços em branco.")
+        warnings.append(_("O trigger contém espaços em branco."))
     elif any(ch in TERMINATOR_CHARS for ch in trigger):
-        warnings.append("O trigger contém pontuação/terminador e pode disparar no meio de palavras.")
+        warnings.append(_("O trigger contém pontuação/terminador e pode disparar no meio de palavras."))
 
     if len(trigger) <= 2:
-        warnings.append("Trigger muito curto (1–2 caracteres) pode disparar por engano ao digitar.")
+        warnings.append(_("Trigger muito curto (1–2 caracteres) pode disparar por engano ao digitar."))
 
     if trigger in dynamic_trigger_names:
         warnings.append(
-            "Já existe um snippet dinâmico com esse nome; ele tem prioridade e este nunca seria acionado."
+            _("Já existe um snippet dinâmico com esse nome; ele tem prioridade e este nunca seria acionado.")
         )
 
     for other in existing_triggers:
         if other == trigger:
             continue
         if trigger.endswith(other):
-            warnings.append(f"O trigger termina com um trigger existente ('{other}').")
+            warnings.append(_("O trigger termina com um trigger existente ('{other}').").format(other=other))
         elif other.endswith(trigger):
-            warnings.append(f"Um trigger existente ('{other}') termina com este trigger.")
+            warnings.append(_("Um trigger existente ('{other}') termina com este trigger.").format(other=other))
 
     return warnings

@@ -105,6 +105,16 @@ class RuntimeSettingsNormalizationTests(unittest.TestCase):
             self.assertEqual(normalized["appearance"], "system")
             self.assertEqual(set(invalid), {"appearance"})
 
+    def test_language_accepts_only_known_choices(self):
+        for value in ("pt-BR", "en-US"):
+            normalized, invalid = normalize_runtime_settings({"language": value})
+            self.assertEqual(normalized["language"], value)
+            self.assertEqual(invalid, {})
+        for value in ("en", "EN-US", "", None, 1):
+            normalized, invalid = normalize_runtime_settings({"language": value})
+            self.assertEqual(normalized["language"], "pt-BR")
+            self.assertEqual(set(invalid), {"language"})
+
     def test_valid_runtime_values_are_preserved(self):
         settings = {
             "terminator_mode": True,

@@ -31,6 +31,8 @@ An optional terminator mode waits for a following space or punctuation mark.
   and an optional deterministic mobile sync bundle.
 - Schema-v1 metadata for groups, structured forms, favorites, and workflow
   navigation, kept inside the same backed-up library document.
+- Interface in Brazilian Portuguese (default) or English, chosen in
+  Configurações > Geral.
 - Per-user installation with no administrator rights required.
 - No telemetry or keystroke logging.
 

@@ -54,6 +54,7 @@ MANIFEST_TEMPLATE = """<?xml version="1.0" encoding="utf-8"?>
   </Dependencies>
   <Resources>
     <Resource Language="pt-BR" />
+    <Resource Language="en-US" />
   </Resources>
   <Applications>
     <Application Id="Sniptype" Executable="{executable}" EntryPoint="Windows.FullTrustApplication">
