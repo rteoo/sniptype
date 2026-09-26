@@ -1100,6 +1100,32 @@ def default_autostart_command():
 AUTOSTART_ABSENT = "absent"
 AUTOSTART_CURRENT = "current"
 AUTOSTART_STALE = "stale"
+# The MSIX manifest declares a startup task that Windows owns; the user toggles
+# it in Settings > Apps > Startup rather than through a shortcut we write.
+AUTOSTART_MANAGED = "managed"
+STARTUP_SETTINGS_URI = "ms-settings:startupapps"
+
+_APPMODEL_ERROR_NO_PACKAGE = 15700
+
+
+def is_msix_packaged():
+    """True when this process runs with MSIX package identity (Microsoft Store).
+
+    Packaged apps cannot own a Startup-folder shortcut: AppData writes are
+    virtualized per package and the install path changes on every update.
+    """
+    # Package identity belongs to this process, so check the real platform
+    # rather than current_os(), which tests substitute.
+    if not sys.platform.startswith("win"):
+        return False
+    length = ctypes.c_uint32(0)
+    result = ctypes.windll.kernel32.GetCurrentPackageFullName(ctypes.byref(length), None)
+    return result != _APPMODEL_ERROR_NO_PACKAGE
+
+
+def open_startup_settings():
+    """Open the Windows Startup apps page, where packaged startup tasks live."""
+    os.startfile(STARTUP_SETTINGS_URI)
 
 
 def read_autostart_command(app_name=APP_NAME):

@@ -2,6 +2,17 @@
 
 All notable changes to SnipType are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [5.2.0] — 2026-09-25
+
+Stable release of the 5.2.0 manager refresh; no app changes since
+5.2.0-beta.1 beyond Microsoft Store packaging.
+
+### Added
+
+- Microsoft Store (MSIX) package. In the Store version, "Iniciar com o
+  sistema…" opens Windows Settings > Startup apps, where Windows manages
+  autostart.
+
 ## [5.2.0-beta.1] — 2026-09-25
 
 Windows prerelease of the SnipType manager refresh.
