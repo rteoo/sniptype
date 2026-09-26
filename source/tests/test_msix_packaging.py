@@ -20,7 +20,7 @@ spec.loader.exec_module(build_msix)
 
 
 def render():
-    return build_msix.render_manifest("5.2.0.0")
+    return build_msix.render_manifest("1.0.0.0")
 
 
 class MsixManifestTests(unittest.TestCase):
@@ -32,7 +32,7 @@ class MsixManifestTests(unittest.TestCase):
         identity = root.find(f"{FOUNDATION}Identity")
         self.assertEqual(identity.get("Name"), "Strateo.SnipType")
         self.assertEqual(identity.get("Publisher"), "CN=95CECFD0-1222-4FC9-8C10-A17DEFD99C08")
-        self.assertEqual(identity.get("Version"), "5.2.0.0")
+        self.assertEqual(identity.get("Version"), "1.0.0.0")
         self.assertEqual(root.find(f"{FOUNDATION}Properties/{FOUNDATION}PublisherDisplayName").text,
                          "Strateo")
 

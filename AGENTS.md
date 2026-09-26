@@ -71,10 +71,13 @@ python packaging\build_msix.py     # write dist\msix\Sniptype-<version>.0-x64.ms
 `packaging\build_msix.py` needs `makeappx.exe` from the Windows SDK (or `SNIPTYPE_MAKEAPPX`). The upload is unsigned; the Store signs it on ingestion. The package identity (`Strateo.SnipType`, publisher `CN=95CECFD0-…`, display name `SnipType`) is the Partner Center reservation and is hardcoded; Partner Center rejects a package whose `DisplayName` differs. The package version is the docstring `Version:` plus a Store-reserved `.0`, and Store versions must strictly increase, so a beta and its stable release cannot share a version. The manifest declares `runFullTrust` (restricted; Partner Center asks for a justification) and an opt-in startup task: under package identity (`platform_support.is_msix_packaged()`) the tray's "Iniciar com o sistema…" opens Settings > Startup apps instead of writing a Startup `.lnk`, because packaged AppData writes are virtualized and the install path moves on every update. User data stays in `~/.sniptype`, which is outside the virtualized AppData and survives uninstall. The packer refuses a `dist` holding a top-level `snippets.json`, which would ship a user library to every install.
 
 Release channels are explicit. The published Windows stable channel is the latest
-plain `vMAJOR.MINOR.PATCH` tag (`v5.2.0`); current source is `5.2.0` on the
+plain `vMAJOR.MINOR.PATCH` tag (`v1.0.0`); current source is `1.0.0` on the
 `stable` channel, also shipped to the Microsoft Store. The macOS ARM64
-package is the `v5.0.4-beta.1` preview,
-built from `main` after v5.0.3; its bundle still reports 5.0.3 stable.
+package is the `v0.14.4-beta.1` preview,
+built from `main` after v0.14.3; its bundle still reports its pre-renumbering
+version, 5.0.3 stable. Releases before 1.0.0 were renumbered into `0.x` on
+2026-09-26; `CHANGELOG.md` maps each old number to its new one, and commit
+messages keep the old numbers.
 The app docstring owns `Version:` and
 `Channel:` for the running build, and `installer\sniptype.iss` mirrors both
 as `MyAppVersion` and `MyAppChannel`. Beta installers are named

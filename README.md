@@ -51,14 +51,15 @@ Use `pythonw sniptype.pyw` after setup when you do not need console output.
 ### Releases and installer
 
 The current stable release is
-[`v5.2.0`](https://github.com/rteoo/sniptype/releases/tag/v5.2.0) for Windows,
+[`v1.0.0`](https://github.com/rteoo/sniptype/releases/tag/v1.0.0) for Windows,
 also available from the Microsoft Store. It introduces the SnipType display
-name and the Windows Design System manager refresh, on top of v5.1.0's dark
-theme and Configurações tab and v5.0.x's more reliable typing and pasting;
+name and the Windows Design System manager refresh, on top of v0.15.0's dark
+theme and Configurações tab and v0.14.x's more reliable typing and pasting;
 voice transcription now lives in the independent Snipvoice project. For macOS,
 the ARM64 build is available as the
-[`v5.0.4-beta.1` preview](https://github.com/rteoo/sniptype/releases/tag/v5.0.4-beta.1),
-at feature parity with v5.0.3.
+[`v0.14.4-beta.1` preview](https://github.com/rteoo/sniptype/releases/tag/v0.14.4-beta.1),
+at feature parity with v0.14.3. Versions before 1.0.0 were renumbered into
+`0.x`; the [changelog](CHANGELOG.md) maps the old numbers.
 
 The installer and the Store version use the same snippet library in
 `%USERPROFILE%\.sniptype` and only one of them runs at a time; uninstall the
@@ -200,7 +201,7 @@ Windows.
   not expose one dependable, non-blocking detection path to the keyboard hook.
 - **macOS:** Input Monitoring and Accessibility permissions are required.
   Secure Keyboard Entry is detected before a trigger is erased. The available
-  `v5.0.4-beta.1` preview is ARM64-only and signed with a self-signed
+  `v0.14.4-beta.1` preview is ARM64-only and signed with a self-signed
   certificate, so Gatekeeper asks you to confirm its first launch.
 - **Linux:** plain-text clipboard insertion is supported through Wayland/X11
   clipboard tools; rich text is downgraded to plain text. Wayland may restrict
@@ -213,10 +214,10 @@ Windows.
 
 Voice input now lives in [Snipvoice](https://github.com/rteoo/snipvoice), an
 independent app for local voice capture and transcription. Snipvoice owns its
-model management, corrections, and recording history, while SnipType v4.0.0
+model management, corrections, and recording history, while SnipType v0.13.0
 and later remain focused on text and keyboard expansion.
 
-SnipType releases before v4.0.0 retain their original voice behavior. Existing
+SnipType releases before v0.13.0 retain their original voice behavior. Existing
 `~/.sniptype/voice-history` data, voice settings, and cached models are left
 untouched; Snipvoice uses separate data and cache folders without automatic
 migration.
