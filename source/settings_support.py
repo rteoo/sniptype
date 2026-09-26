@@ -7,13 +7,14 @@ dict so the app always has working defaults. Writes are atomic.
 import math
 
 from hotkey_support import ACTIONS, normalize_hotkeys
-from i18n import DEFAULT_LANGUAGE, LANGUAGES
+from i18n import LANGUAGES
 from snippet_utils import load_json_file, write_json_atomic
 
 
 RUNTIME_SETTING_DEFAULTS = {
     "appearance": "system",
-    "language": DEFAULT_LANGUAGE,
+    # None: no choice yet, so the interface follows the system language.
+    "language": None,
     "terminator_mode": False,
     "bcb_timeout": 3,
     "bcb_cache_seconds": 300,

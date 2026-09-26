@@ -8,12 +8,14 @@ literal outside those markers fails unless its line says ``# i18n: not ui``
 """
 
 import ast
+import importlib.util
 import json
 import os
 import re
 import string
 import sys
 import unittest
+from unittest import mock
 
 SOURCE = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, SOURCE)
@@ -181,9 +183,12 @@ class LanguageSwitchTests(unittest.TestCase):
         self.assertEqual(i18n._(msgid), english)
         self.assertEqual(i18n._("Texto sem entrada no catálogo"), "Texto sem entrada no catálogo")
 
-    def test_unknown_language_falls_back_to_portuguese(self):
-        i18n.set_language("fr-FR")
-        self.assertEqual(i18n.language(), "pt-BR")
+    def test_no_or_unknown_language_follows_the_system(self):
+        for code in (None, "fr-FR"):
+            with mock.patch.object(i18n, "system_language", return_value="en-US"):
+                i18n.set_language(code)
+            self.assertEqual(i18n.language(), "en-US")
+
 
     def test_lazy_label_follows_the_current_language(self):
         msgid, english = next(iter(EN_US.items()))
@@ -196,6 +201,36 @@ class LanguageSwitchTests(unittest.TestCase):
         i18n.set_language("en-US")
         msgid = next(iter(EN_US))
         self.assertEqual(i18n.N_(msgid), msgid)
+
+
+def _fresh_i18n():
+    """A private copy of i18n: app_module pins the shared one's system_language."""
+    spec = importlib.util.spec_from_file_location("i18n_fresh", os.path.join(SOURCE, "i18n.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class SystemLanguageTests(unittest.TestCase):
+    def _detect(self, platform, langid=None):
+        fresh = _fresh_i18n()
+        windll = mock.Mock()
+        windll.kernel32.GetUserDefaultUILanguage.return_value = langid
+        with mock.patch.object(fresh.sys, "platform", platform),                 mock.patch.object(fresh.ctypes, "windll", windll, create=True):
+            return fresh.system_language(), windll
+
+    def test_english_windows_starts_in_english(self):
+        for langid in (0x0409, 0x0809, 0x1009):  # en-US, en-GB, en-CA
+            self.assertEqual(self._detect("win32", langid)[0], "en-US")
+
+    def test_other_windows_languages_start_in_portuguese(self):
+        for langid in (0x0416, 0x0816, 0x0C0A, 0x0407):  # pt-BR, pt-PT, es-ES, de-DE
+            self.assertEqual(self._detect("win32", langid)[0], "pt-BR")
+
+    def test_other_systems_start_in_portuguese_without_asking_windows(self):
+        language, windll = self._detect("darwin")
+        self.assertEqual(language, "pt-BR")
+        windll.kernel32.GetUserDefaultUILanguage.assert_not_called()
 
 
 class CatalogCompletenessTests(unittest.TestCase):

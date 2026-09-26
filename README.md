@@ -31,8 +31,8 @@ An optional terminator mode waits for a following space or punctuation mark.
   and an optional deterministic mobile sync bundle.
 - Schema-v1 metadata for groups, structured forms, favorites, and workflow
   navigation, kept inside the same backed-up library document.
-- Interface in Brazilian Portuguese (default) or English, chosen in
-  Configurações > Geral.
+- Interface in English or Brazilian Portuguese: it follows the Windows display
+  language until you choose one in Settings > General.
 - Per-user installation with no administrator rights required.
 - No telemetry or keystroke logging.
 
@@ -83,9 +83,11 @@ The installer is currently unsigned, so Windows SmartScreen may show
 3. Add a trigger and its replacement text, then save.
 4. Type the trigger in another application.
 
-The interface starts in Brazilian Portuguese. To switch to English, open
-**Configurações > Geral**, choose **English (US)** under **Idioma** and click
-**Aplicar idioma**; the tray menu then reads **Manage Snippets**.
+The interface starts in English when Windows is in English and in Brazilian
+Portuguese otherwise. To change it, open **Settings > General** (**Configurações
+> Geral**), choose a language under **Language** (**Idioma**) and apply it; the
+choice is remembered from then on. The tray menu item above reads **Manage
+Snippets** in English.
 
 The bundled sample library includes examples such as:
 
