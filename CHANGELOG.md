@@ -2,10 +2,28 @@
 
 All notable changes to SnipType are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [5.2.0] — 2026-09-25
+1.0.0 is the first official release. Earlier releases were renumbered into
+`0.x` on 2026-09-26; commit messages and the binaries of those releases keep
+their original numbers.
 
-Stable release of the 5.2.0 manager refresh; no app changes since
-5.2.0-beta.1 beyond Microsoft Store packaging.
+| Original | Now | Original | Now |
+|---|---|---|---|
+| 2.0 | 0.1.0 | 3.4.0-beta.1–3 | 0.11.0-beta.1–3 |
+| 2.3 | 0.2.0 | 3.4.0 | 0.11.0 |
+| 2.4 (tags `v.1`, `v.2`) | 0.3.0-beta.1, 0.3.0 | 3.5.0-beta.1–2 | 0.12.0-beta.1–2 |
+| 2.5 (tag `v.2.1`) | 0.4.0 | 3.5.0 | 0.12.0 |
+| 2.6 (tag `v.2.2`) | 0.5.0 | 4.0.0 | 0.13.0 |
+| 2.7 | 0.6.0 | 5.0.0–5.0.3 | 0.14.0–0.14.3 |
+| 3.0.0 | 0.7.0 | 5.0.4-beta.1 | 0.14.4-beta.1 |
+| 3.1.0 | 0.8.0 | 5.1.0 | 0.15.0 |
+| 3.2.0, 3.2.1 | 0.9.0, 0.9.1 | 5.2.0-beta.1 | 1.0.0-beta.1 |
+| 3.3.0-beta, 3.3.0 | 0.10.0-beta.1, 0.10.0 | 5.2.0 | 1.0.0 |
+
+## [1.0.0] — 2026-09-26
+
+First official release and Microsoft Store launch: the stable release of the
+manager refresh, with no app changes since 1.0.0-beta.1 beyond Microsoft Store
+packaging.
 
 ### Added
 
@@ -13,7 +31,7 @@ Stable release of the 5.2.0 manager refresh; no app changes since
   sistema…" opens Windows Settings > Startup apps, where Windows manages
   autostart.
 
-## [5.2.0-beta.1] — 2026-09-25
+## [1.0.0-beta.1] — 2026-09-25
 
 Windows prerelease of the SnipType manager refresh.
 
@@ -34,7 +52,7 @@ Windows prerelease of the SnipType manager refresh.
   Textos and Mapeamentos lists.
 - Minimum-size and keyboard-navigation regression coverage for the manager.
 
-## [5.1.0] — 2026-09-23
+## [0.15.0] — 2026-09-23
 
 Sniptype gains a dark theme and a Configurações tab, matching Snipvoice.
 
@@ -51,21 +69,21 @@ Sniptype gains a dark theme and a Configurações tab, matching Snipvoice.
 
 - Secondary buttons such as Novo, Editar, Duplicar and Renomear no longer
   blend into the white panels in the light theme.
-## [5.0.3] — 2026-09-23
+## [0.14.3] — 2026-09-23
 
 ### Changed
 
 - The app icon now sits on a blue rounded tile, matching Snipvoice, so it
   reads at the same size as its neighbours in the tray and the Start menu.
   The icon also gains the 20 and 40px sizes Windows uses at 125% scaling.
-## [5.0.2] — 2026-09-23
+## [0.14.2] — 2026-09-23
 
 ### Fixed
 
 - The app icon no longer looks smaller than its neighbours in the tray, the
   Start menu and window title bars: it is regenerated from the original
   artwork with the surrounding padding trimmed.
-## [5.0.1] — 2026-09-23
+## [0.14.1] — 2026-09-23
 
 Typing and pasting are more responsive and reliable, the clipboard is always
 given back, and the manager no longer clips its controls.
@@ -91,7 +109,7 @@ given back, and the manager no longer clips its controls.
 ### Changed
 
 - The Windows manager window now has a minimum size of 940×700.
-## [5.0.0] — 2026-09-17
+## [0.14.0] — 2026-09-17
 
 Sniptype keeps its local, keyboard-first boundary and adds a complete workflow
 layer for organizing and safely using a larger snippet library.
@@ -131,7 +149,7 @@ layer for organizing and safely using a larger snippet library.
   hosted sync, telemetry, passive phrase harvesting, or persistent keystroke
   history is added.
 
-## [4.0.0] — 2026-09-14
+## [0.13.0] — 2026-09-14
 
 Sniptype returns to its original text and keyboard input scope. Voice capture,
 transcription, model management, corrections, and recording history now live in
@@ -153,11 +171,11 @@ the independent Snipvoice project.
 - Existing voice history and cached models are left untouched; Snipvoice does
   not migrate them automatically.
 
-## [3.5.0] — 2026-09-08
+## [0.12.0] — 2026-09-08
 
-Stable Windows release following the `3.5.0-beta.2` preview. Voice remains
+Stable Windows release following the `0.12.0-beta.2` preview. Voice remains
 optional and disabled by default. The macOS ARM64 package remains available
-as `v3.5.0-beta.2`; this release publishes a Windows installer.
+as `v0.12.0-beta.2`; this release publishes a Windows installer.
 
 ### Added
 
@@ -211,9 +229,9 @@ as `v3.5.0-beta.2`; this release publishes a Windows installer.
   rich-text spans, required backups, WhatsApp validation, POSIX locking and
   settings normalization.
 
-## [3.4.0] — 2026-08-24
+## [0.11.0] — 2026-08-24
 
-Promotes `3.4.0` from beta to the stable channel. Optional voice input ships
+Promotes `0.11.0` from beta to the stable channel. Optional voice input ships
 default-off; a missing backend or a failed controller leaves expansion
 unchanged.
 
@@ -255,7 +273,7 @@ unchanged.
 - Tk-dependent tests skip cleanly when the host Tcl/Tk installation is
   unusable rather than failing during collection.
 
-## [3.4.0-beta.3] — 2026-08-21
+## [0.11.0-beta.3] — 2026-08-21
 
 ### Added
 
@@ -282,7 +300,7 @@ unchanged.
 - Tk-dependent tests skip cleanly when the host Tcl/Tk installation is
   unusable rather than failing during collection.
 
-## [3.4.0-beta.2] — 2026-08-14
+## [0.11.0-beta.2] — 2026-08-14
 
 ### Added
 
@@ -298,13 +316,13 @@ unchanged.
 - When custom shortcuts overlap, the most-specific modifier chord wins no
   matter which action owns it.
 
-## [3.4.0-beta.1] — 2026-08-14
+## [0.11.0-beta.1] — 2026-08-14
 
 ### Added
 
 - **Optional voice input** (default off, beta): push-to-talk dictation,
   spoken triggers, and form-field fill. The module is implemented; live ASR
-  is not proven and is not in the stable `v3.3.0` build. Models download on
+  is not proven and is not in the stable `v0.10.0` build. Models download on
   demand into a non-roaming cache. Only the Balanced profile is
   user-selectable; Accuracy and Live streaming stay in the catalog until they
   pass adoption gates. Enabling voice without the optional `transcribe-cpp`
@@ -322,10 +340,10 @@ unchanged.
   `onnxruntime`, `cv2`, `torchvision`, `torchaudio`, and `scipy` so a dirty
   host environment cannot pull them into the packaged app.
 
-## [3.3.0-beta] — 2026-07-23
+## [0.10.0-beta.1] — 2026-07-23
 
 This is the beta channel for the next feature release. The stable channel
-remains `v3.2.1` until the full cross-platform test matrix and desktop smoke
+remains `v0.9.1` until the full cross-platform test matrix and desktop smoke
 tests pass.
 
 ### Added
@@ -360,7 +378,7 @@ tests pass.
 - The macOS startup-order test now mocks the Dock activation-policy call and asserts the complete startup sequence without reaching live AppKit from the unit runner.
 - Build, Gatekeeper, signing and permission steps — including that rebuilding under ad-hoc signing invalidates Input Monitoring/Accessibility grants — are documented in the README.
 
-## [3.2.1] — 2026-07-21
+## [0.9.1] — 2026-07-21
 
 ### Fixed
 
@@ -373,7 +391,7 @@ tests pass.
 - Multi-line snippets keep their existing behaviour of not restoring the previous clipboard, now as an explicit, documented branch rather than a side effect of the line-ending bug above.
 - 306 tests pass, up from 300.
 
-## [3.2.0] — 2026-07-20
+## [0.9.0] — 2026-07-20
 
 ### Added
 
@@ -400,7 +418,7 @@ tests pass.
 - New modules: `gui_thread.py`, `clipboard_support.py`; autostart adapters live in `platform_support.py`
 - Snippet file format is unchanged
 
-## [3.1.0] — 2026-07-20
+## [0.8.0] — 2026-07-20
 
 ### Added
 
@@ -422,7 +440,7 @@ tests pass.
 - All 210 tests pass (35 added for renaming, universal references, and slow-path routing)
 - Snippet file format is unchanged; the `dynamic_snippets.json` override gains an optional `trigger` field that older versions ignore
 
-## [3.0.0] — 2026-07-16
+## [0.7.0] — 2026-07-16
 
 Major release: user data now lives in a stable per-user directory, and Sniptype
 ships as a proper per-user Windows installer. The library is migrated automatically
@@ -467,7 +485,7 @@ behavioral change and warrants a major version bump.
 - New modules: `app_paths.py`, `backup_support.py`, `settings_support.py`, `dynamic_registry.py`, `validation_support.py`, `platform_support.py`
 - Snippet file format is unchanged; existing libraries load as-is after migration
 
-## [2.7] — 2026-03-30
+## [0.6.0] — 2026-03-30
 
 ### Added
 
@@ -516,7 +534,7 @@ behavioral change and warrants a major version bump.
 - No breaking changes to public API or snippet file format
 - Backward compatible: existing snippets without variables work unchanged
 
-## [2.6] — 2026-03-09
+## [0.5.0] — 2026-03-09
 
 ### Added
 
@@ -528,7 +546,7 @@ behavioral change and warrants a major version bump.
 
 - WhatsApp action modes now use a centralized helper for phone normalization, link generation, and error handling
 
-## [2.5] — 2026-03-07
+## [0.4.0] — 2026-03-07
 
 ### Added
 
@@ -540,7 +558,7 @@ behavioral change and warrants a major version bump.
   - Preserves the packaged app's existing `snippets.json` during distribution updates
   - Adds optional Windows Startup shortcut creation after successful build
 
-## [2.4] — 2026-03-06
+## [0.3.0] — 2026-03-06
 
 ### Added
 
@@ -571,7 +589,7 @@ behavioral change and warrants a major version bump.
 - Tray icon: fixed packaged app tray icon display and notifications
 - Snippet manager: improved scrollbar and resize behavior
 
-## [2.3] — 2026-02-XX
+## [0.2.0] — 2026-02-XX
 
 ### Added
 
@@ -584,7 +602,7 @@ behavioral change and warrants a major version bump.
 
 - Refactored core expansion logic into modular support files
 
-## [2.0] — 2026-01-XX
+## [0.1.0] — 2026-01-XX
 
 ### Added
 
@@ -612,7 +630,7 @@ behavioral change and warrants a major version bump.
 
 ## Versioning Strategy
 
-- **Stable channel**: the latest `vMAJOR.MINOR.PATCH` tag and non-prerelease artifact; currently `v5.0.0` for Windows.
-- **Beta channel**: a preview with an explicit `beta` channel label; the macOS package remains `v3.5.0-beta.2` pending its packaged desktop validation.
+- **Stable channel**: the latest `vMAJOR.MINOR.PATCH` tag and non-prerelease artifact; currently `v1.0.0` for Windows.
+- **Beta channel**: a preview with an explicit `beta` channel label; the macOS package remains `v0.14.4-beta.1` pending its packaged desktop validation.
 - **Beta tags**: use `vMAJOR.MINOR.PATCH-beta.N` and mark the corresponding GitHub Release as a prerelease.
 - **Promotion**: beta becomes stable only after the full supported-OS test matrix and packaged desktop smoke tests pass. Promotion removes the channel suffix without changing the tested product version.
