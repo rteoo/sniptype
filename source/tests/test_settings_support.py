@@ -110,9 +110,10 @@ class RuntimeSettingsNormalizationTests(unittest.TestCase):
             normalized, invalid = normalize_runtime_settings({"language": value})
             self.assertEqual(normalized["language"], value)
             self.assertEqual(invalid, {})
-        for value in ("en", "EN-US", "", None, 1):
+        for value in ("en", "EN-US", "", 1):
             normalized, invalid = normalize_runtime_settings({"language": value})
-            self.assertEqual(normalized["language"], "pt-BR")
+            # No choice rather than Portuguese: the app then follows the system.
+            self.assertIsNone(normalized["language"])
             self.assertEqual(set(invalid), {"language"})
 
     def test_valid_runtime_values_are_preserved(self):

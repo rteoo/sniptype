@@ -26,9 +26,10 @@ manager refresh, plus an English interface and Microsoft Store packaging.
 
 ### Added
 
-- Interface language setting in Configurações > Geral: Português (Brasil), the
-  default, or English (US). Switching reloads the manager and the tray menu
-  without a restart. Snippet output, such as dates written out in words and the
+- Interface language setting in Configurações > Geral: Português (Brasil) or
+  English (US). Until one is chosen, SnipType follows the Windows display
+  language: English on an English Windows, Portuguese otherwise. Switching
+  reloads the manager and the tray menu without a restart. Snippet output, such as dates written out in words and the
   Central Bank and stock summaries, stays in Portuguese.
 - Microsoft Store (MSIX) package. In the Store version, "Iniciar com o
   sistema…" opens Windows Settings > Startup apps, where Windows manages

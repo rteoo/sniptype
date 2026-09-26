@@ -11,9 +11,17 @@ id wrapped in the no-op marker ``N_()`` and callers pass them through ``_()``
 when they build a widget or message. ``tests/test_i18n.py`` scans the source for
 both markers and fails on an id without an English entry.
 
+Until the user picks a language in Configurações > Geral, the interface
+follows the Windows display language: English there means English here, any
+other language means Portuguese. The choice is only persisted once the user
+makes one, so a Windows language change is followed on the next launch.
+
 Snippet *output* (dates written out in words, Central Bank and stock
 summaries, WhatsApp text) is content, not interface, and stays in Portuguese.
 """
+
+import ctypes
+import sys
 
 from i18n_en_us import EN_US
 
@@ -26,13 +34,26 @@ LANGUAGES = {
 }
 _CATALOGS = {"pt-BR": {}, "en-US": EN_US}
 
+_LANG_ENGLISH = 0x09  # PRIMARYLANGID of a Windows LANGID
+
 _language = DEFAULT_LANGUAGE
 
 
+def system_language():
+    """The language to use when the user has not chosen one."""
+    # ceiling: Windows only; macOS/Linux start in Portuguese until someone
+    # needs their locale honored too.
+    if sys.platform.startswith("win"):
+        langid = ctypes.windll.kernel32.GetUserDefaultUILanguage()
+        if langid & 0x3FF == _LANG_ENGLISH:
+            return "en-US"
+    return DEFAULT_LANGUAGE
+
+
 def set_language(code):
-    """Make ``code`` the active language; an unknown code falls back to Portuguese."""
+    """Make ``code`` the active language; no or an unknown code follows the system."""
     global _language
-    _language = code if code in LANGUAGES else DEFAULT_LANGUAGE
+    _language = code if code in LANGUAGES else system_language()
 
 
 def language():

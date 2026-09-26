@@ -47,3 +47,9 @@ def _load():
 
 
 sniptype = _load()
+
+# Tests assert Portuguese interface text; pin it so an English Windows host (a
+# developer machine or the CI runner) does not switch the app to English.
+import i18n  # noqa: E402
+
+i18n.system_language = lambda: i18n.DEFAULT_LANGUAGE
