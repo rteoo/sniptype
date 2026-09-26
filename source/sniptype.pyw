@@ -35,7 +35,7 @@ platform_support.pin_tray_backend()
 from pynput import keyboard
 from pynput.keyboard import Controller, Key
 import pystray
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageTk
 
 from bcb_consultor import BCBConsultor
 from yf_stocks import B3FundamentosConsultor
@@ -2447,10 +2447,15 @@ class Sniptype:
             sidebar.grid(row=0, column=0, sticky="ns")
             tk.Frame(root, bg=ui.divider, width=1).grid(row=0, column=1, sticky="ns")
 
-            tk.Label(
+            brand_icon = self._manager_brand_icon(root)
+            brand = tk.Label(
                 sidebar, text=PRODUCT_NAME, font=ui.font(14, "bold"),
                 bg=sidebar_bg, fg=ui.text, anchor="w",
-            ).pack(fill=tk.X, padx=(ui.space_sm, 0))
+                image=brand_icon or "", compound=tk.LEFT, padx=ui.space_xs,
+            )
+            # Tk keeps no reference to a PhotoImage; the label must hold it.
+            brand.image = brand_icon
+            brand.pack(fill=tk.X, padx=(ui.space_xs, 0))
             tk.Label(
                 sidebar, text=_("Sua biblioteca de textos e ações rápidas"),
                 font=ui.font(9), bg=sidebar_bg, fg=ui.text_muted,
@@ -3102,6 +3107,21 @@ class Sniptype:
             **ui.button_chrome(compact=True),
             **ui.button_colors(),
         ).grid(row=3 + len(rows), column=0, sticky="w", pady=(ui.space_sm, 0))
+
+    def _manager_brand_icon(self, window):
+        """The app icon sized beside the sidebar title, or None if unavailable."""
+        icon_path = self.resolve_resource_path("sniptype.ico")
+        if not icon_path:
+            return None
+        # 18pt tracks the 14pt bold title across display scaling.
+        size = max(16, round(window.winfo_fpixels("18p")))
+        try:
+            with Image.open(icon_path) as image:
+                image = image.convert("RGBA").resize((size, size), Image.LANCZOS)
+            return ImageTk.PhotoImage(image, master=window)
+        except Exception as e:
+            self.logger.warning(f"Falha ao carregar ícone do gerenciador: {e}")  # i18n: not ui
+            return None
 
     def _set_window_icon(self, window):
         icon_path = self.resolve_resource_path("sniptype.ico")

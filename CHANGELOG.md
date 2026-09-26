@@ -29,7 +29,8 @@ window's full height.
 - The manager header, command bar, and tab strip are replaced by a left
   sidebar. It shows the expansion status with its pause/resume button, one
   entry per page with its item count, and Editar último, Notificações, and
-  Atalhos. Ctrl+1–5 and Ctrl+F work as before.
+  Atalhos. Ctrl+1–5 and Ctrl+F work as before. The SnipType icon sits beside
+  the name at the top of the sidebar.
 - Pages start at the top of the window, about 200px higher than before, so the
   library, editors, and dynamic actions show more rows without scrolling.
 - The manager window is wider to make room for the sidebar: it opens at
