@@ -55,7 +55,8 @@ Use `pythonw sniptype.pyw` after setup when you do not need console output.
 The current stable release is
 [`v1.0.0`](https://github.com/rteoo/sniptype/releases/tag/v1.0.0) for Windows,
 also available from the Microsoft Store. It introduces the SnipType display
-name and the Windows Design System manager refresh, on top of v0.15.0's dark
+name, an English interface option and the Windows Design System manager
+refresh, on top of v0.15.0's dark
 theme and Configurações tab and v0.14.x's more reliable typing and pasting;
 voice transcription now lives in the independent Snipvoice project. For macOS,
 the ARM64 build is available as the
@@ -82,6 +83,10 @@ The installer is currently unsigned, so Windows SmartScreen may show
 3. Add a trigger and its replacement text, then save.
 4. Type the trigger in another application.
 
+The interface starts in Brazilian Portuguese. To switch to English, open
+**Configurações > Geral**, choose **English (US)** under **Idioma** and click
+**Aplicar idioma**; the tray menu then reads **Manage Snippets**.
+
 The bundled sample library includes examples such as:
 
 | Trigger | Result |
@@ -97,12 +102,13 @@ data-folder actions when those features are available.
 
 The manager is organized around the work being done:
 
-| Tab | Purpose |
+| Tab (Portuguese / English) | Purpose |
 | --- | --- |
-| **Snippets** | Create and edit plain or rich-text expansions |
-| **Mapeamentos** | Maintain prefixed collections such as CPF/CNPJ mappings |
-| **Dinâmicos** | Enable, disable, rename, and inspect built-in actions |
-| **Backups** | Restore, import, or export the snippet library |
+| **Textos** / **Snippets** | Create and edit plain or rich-text expansions |
+| **Mapeamentos** / **Mappings** | Maintain prefixed collections such as CPF/CNPJ mappings |
+| **Ações dinâmicas** / **Dynamic actions** | Enable, disable, rename, and inspect built-in actions |
+| **Cópias de segurança** / **Backups** | Restore, import, or export the snippet library |
+| **Configurações** / **Settings** | Language, appearance, expansion mode, hotkeys, and data folder |
 
 ## Variables
 
