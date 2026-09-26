@@ -264,13 +264,13 @@ class WidgetOptionTests(unittest.TestCase):
     def test_windows_keeps_its_button_widths_and_window_size(self):
         theme = ui_theme.build_theme("windows", system="windows")
         self.assertEqual(theme.button_width(12), 12)
-        self.assertEqual(theme.manager_window_size, ("1180x800", 1020, 760))
+        self.assertEqual(theme.manager_window_size, ("1280x800", 1180, 760))
         self.assertFalse(theme.stacked_toolbar_status)
 
     def test_linux_minimum_leaves_room_for_x11_font_metrics(self):
         theme = ui_theme.build_theme("windows", system="linux")
         geometry, min_width, min_height = theme.manager_window_size
-        self.assertEqual((940, 780), (min_width, min_height))
+        self.assertEqual((1100, 780), (min_width, min_height))
         # The default must not start below the minimum.
         self.assertGreaterEqual(int(geometry.split("x")[1]), min_height)
 
@@ -290,7 +290,7 @@ class WidgetOptionTests(unittest.TestCase):
         theme = ui_theme.build_theme("dark", system="darwin")
         self.assertEqual(theme.button_width(12), 0)
         geometry, min_width, _ = theme.manager_window_size
-        self.assertEqual(geometry, "1140x760")
+        self.assertEqual(geometry, "1300x760")
         self.assertGreater(min_width, 820)
         self.assertTrue(theme.stacked_toolbar_status)
 
