@@ -282,16 +282,18 @@ class Theme:
 
         macOS needs a wider default: Aqua's native buttons have a minimum
         width the flat Win32 ones do not, so the editor pane that fits its
-        formatting toolbar in 433px on Windows needs ~490px here.
+        formatting toolbar in 433px on Windows needs ~490px here. Every size
+        includes the ~160px navigation sidebar, which took over the height the
+        header and tab strip used, so the pages keep their tuned widths.
         """
         if self.system == "darwin":
-            return ("1140x760", 980, 600)
+            return ("1300x760", 1140, 600)
         # X11 font metrics and the taller shared controls need more vertical
         # room (CI, Ubuntu + Xvfb). The expanded Windows shell uses a wider
         # default and minimum; physical desktop verification is still required.
         if self.system == "linux":
-            return ("1080x800", 940, 780)
-        return ("1180x800", 1020, 760)
+            return ("1240x800", 1100, 780)
+        return ("1280x800", 1180, 760)
 
     @property
     def stacked_toolbar_status(self):
@@ -602,6 +604,10 @@ def configure_clam_colors(style, resolved=None):
     style.configure(
         "Manager.TNotebook",
         bordercolor=ui.border, lightcolor=ui.surface, darkcolor=ui.surface,
+    )
+    style.configure(
+        "Pages.TNotebook",
+        bordercolor=ui.surface, lightcolor=ui.surface, darkcolor=ui.surface,
     )
     style.configure(
         "Manager.TNotebook.Tab",

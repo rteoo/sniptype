@@ -2437,79 +2437,64 @@ class Sniptype:
             self._configure_manager_styles(root)
             ui_theme.apply_window_chrome(root, ui)
 
-            root.grid_columnconfigure(0, weight=1)
-            root.grid_rowconfigure(3, weight=1)
-
-            header = tk.Frame(
-                root,
-                bg=ui.surface,
-                padx=ui.space_xl,
-                pady=ui.space_lg,
-            )
-            header.grid(row=0, column=0, sticky="ew")
-            header.grid_columnconfigure(0, weight=1)
+            # Identity, state, navigation, and the window-wide actions share a
+            # left sidebar so every page gets the window's full height; the
+            # notebook is only the page container and draws no tab strip.
+            root.grid_columnconfigure(2, weight=1)
+            root.grid_rowconfigure(0, weight=1)
+            sidebar_bg = ui.surface_alt
+            sidebar = tk.Frame(root, bg=sidebar_bg, padx=ui.space_md, pady=ui.space_lg)
+            sidebar.grid(row=0, column=0, sticky="ns")
+            tk.Frame(root, bg=ui.divider, width=1).grid(row=0, column=1, sticky="ns")
 
             tk.Label(
-                header,
-                text=PRODUCT_NAME,
-                font=ui.font(18, "bold"),
-                bg=ui.surface,
-                fg=ui.text,
-            ).grid(row=0, column=0, sticky="w")
+                sidebar, text=PRODUCT_NAME, font=ui.font(14, "bold"),
+                bg=sidebar_bg, fg=ui.text, anchor="w",
+            ).pack(fill=tk.X, padx=(ui.space_sm, 0))
             tk.Label(
-                header,
-                text=_("Sua biblioteca de textos e ações rápidas"),
-                font=ui.font(10),
-                bg=ui.surface,
-                fg=ui.text_muted,
-            ).grid(row=1, column=0, sticky="w", pady=(ui.space_xs, 0))
+                sidebar, text=_("Sua biblioteca de textos e ações rápidas"),
+                font=ui.font(9), bg=sidebar_bg, fg=ui.text_muted,
+                anchor="w", justify="left", wraplength=170,
+            ).pack(fill=tk.X, padx=(ui.space_sm, 0), pady=(ui.space_xs, ui.space_md))
 
             self._manager_status_var = tk.StringVar(root)
             tk.Label(
-                header, textvariable=self._manager_status_var,
-                font=ui.font(10, "bold"), bg=ui.surface,
-                fg=ui.text,
-            ).grid(row=0, column=1, sticky="e")
-            tk.Label(
-                header, text=f"v{APP_VERSION}", font=ui.font(9),  # i18n: not ui
-                bg=ui.surface, fg=ui.text_muted,
-            ).grid(row=1, column=1, sticky="e")
-
-            commands = tk.Frame(root, bg=ui.surface, padx=ui.space_xl,
-                                pady=ui.space_sm)
-            commands.grid(row=1, column=0, sticky="ew")
+                sidebar, textvariable=self._manager_status_var,
+                font=ui.font(10, "bold"), bg=sidebar_bg, fg=ui.text, anchor="w",
+            ).pack(fill=tk.X, padx=(ui.space_sm, 0))
             self._manager_toggle_button = tk.Button(
-                commands, command=lambda: self.toggle_enabled(self.icon, None),
+                sidebar, command=lambda: self.toggle_enabled(self.icon, None),
                 **ui.button_chrome(compact=True), **ui.button_colors(),
             )
-            self._manager_toggle_button.pack(side=tk.LEFT)
+            self._manager_toggle_button.pack(fill=tk.X, pady=(ui.space_xs, ui.space_lg))
+            self._refresh_manager_status()
+
+            nav = tk.Frame(sidebar, bg=sidebar_bg)
+            nav.pack(fill=tk.X)
+
+            footer = tk.Frame(sidebar, bg=sidebar_bg)
+            footer.pack(side=tk.BOTTOM, fill=tk.X)
             for label, action in (
                 (_("Editar último"), self.edit_last_snippet),
                 (_("Notificações"), lambda: self._open_notification_history(root)),
                 (_("Atalhos"), self.configure_hotkeys),
             ):
                 tk.Button(
-                    commands, text=label, command=action,
+                    footer, text=label, command=action, anchor="w",
                     **ui.button_chrome(compact=True), **ui.button_colors(),
-                ).pack(side=tk.LEFT, padx=(ui.space_sm, 0))
+                ).pack(fill=tk.X, pady=(0, ui.space_xs))
             tk.Label(
-                commands, text=_("Ctrl+1–5: seções   •   Ctrl+F: busca nas listas"),
-                font=ui.font(9), bg=ui.surface, fg=ui.text_muted,
-            ).pack(side=tk.RIGHT)
-            self._refresh_manager_status()
+                footer, text=_("Ctrl+1–5: seções   •   Ctrl+F: busca nas listas"),
+                font=ui.font(8), bg=sidebar_bg, fg=ui.text_muted,
+                anchor="w", justify="left", wraplength=170,
+            ).pack(fill=tk.X, padx=(ui.space_sm, 0), pady=(ui.space_md, 0))
+            tk.Label(
+                footer, text=f"v{APP_VERSION}", font=ui.font(8),  # i18n: not ui
+                bg=sidebar_bg, fg=ui.text_muted, anchor="w",
+            ).pack(fill=tk.X, padx=(ui.space_sm, 0), pady=(ui.space_xs, 0))
 
-            tk.Frame(root, bg=ui.divider, height=1).grid(
-                row=2, column=0, sticky="ew"
-            )
-
-            notebook = ttk.Notebook(root, style="Manager.TNotebook")
-            notebook.grid(
-                row=3,
-                column=0,
-                sticky="nsew",
-                padx=ui.space_lg,
-                pady=(ui.space_md, ui.space_lg),
-            )
+            notebook = ttk.Notebook(root, style="Pages.TNotebook")
+            notebook.grid(row=0, column=2, sticky="nsew")
             self._manager_notebook = notebook
 
             tab_static = tk.Frame(notebook, bg=ui.surface)
@@ -2528,8 +2513,14 @@ class Sniptype:
             notebook.add(tab_settings, text=_("Configurações"))
             self._manager_settings_tab = tab_settings
 
+            nav_items = self._build_manager_nav(ui, nav, notebook)
+
             def tab_counter(tab, label):
-                return lambda count: notebook.tab(tab, text=f"{label} ({count})")
+                def set_count(count):
+                    text = f"{label} ({count})"
+                    notebook.tab(tab, text=text)
+                    nav_items[str(tab)][0].configure(text=text)
+                return set_count
 
             # Tabs are rebuilt with the window; drop the previous window's
             # callbacks so they can't fire against destroyed widgets.
@@ -3124,6 +3115,45 @@ class Sniptype:
         except Exception:
             pass
 
+    @staticmethod
+    def _build_manager_nav(ui, nav, notebook):
+        """One sidebar button per notebook page, in tab order, tracking selection.
+
+        Returns ``{tab_id: (button, marker)}`` so page counts can relabel them.
+        """
+        bg = nav.cget("background")
+        items = {}
+        for tab_id in notebook.tabs():
+            item = tk.Frame(nav, bg=bg)
+            item.pack(fill=tk.X, pady=1)
+            marker = tk.Frame(item, bg=bg, width=3)
+            marker.pack(side=tk.LEFT, fill=tk.Y)
+            chrome = ui.button_chrome(compact=True)
+            if chrome:
+                # Keep the keyboard focus ring, but no idle border around each item.
+                chrome["highlightbackground"] = bg
+            button = tk.Button(
+                item, text=notebook.tab(tab_id, "text"), font=ui.font(10), anchor="w",
+                command=lambda target=tab_id: notebook.select(target),
+                **ui.nav_button_colors(bg), **chrome,
+            )
+            button.pack(side=tk.LEFT, fill=tk.X, expand=True)
+            items[str(tab_id)] = (button, marker)
+
+        def highlight(_event=None):
+            current = str(notebook.select())
+            for tab_id, (button, marker) in items.items():
+                selected = tab_id == current
+                button.configure(
+                    font=ui.font(10, "bold" if selected else None),
+                    **ui.nav_button_colors(bg, selected=selected),
+                )
+                marker.configure(bg=ui.accent if selected else bg)
+
+        notebook.bind("<<NotebookTabChanged>>", highlight, add="+")
+        highlight()
+        return items
+
     def _configure_manager_styles(self, root):
         ui = ui_theme.theme()
         style = ttk.Style(root)
@@ -3143,6 +3173,13 @@ class Sniptype:
             padding=(18, 10),
             font=ui.font(9, "bold"),
         )
+        # The manager navigates from its sidebar: same page container, with
+        # the tab strip removed so it costs no vertical space.
+        style.configure(
+            "Pages.TNotebook", background=ui.surface, borderwidth=0,
+            tabmargins=(0, 0, 0, 0),
+        )
+        style.layout("Pages.TNotebook.Tab", [])
         if theme_name != "aqua":
             # Aqua draws the tab strip natively and already follows the system
             # appearance; overriding its colors is what made the labels

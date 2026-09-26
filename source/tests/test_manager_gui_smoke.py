@@ -226,6 +226,29 @@ class ManagerGuiSmokeTests(unittest.TestCase):
 
         self._on_gui(build)
 
+    def test_manager_sidebar_navigates_pages_and_mirrors_counts(self):
+        def exercise(shared_root):
+            self.app._build_manager_window(shared_root)
+            window = self.app.manager_window
+            window.update()
+            notebook = self.app._manager_notebook
+            self.assertEqual(str(notebook.cget("style")), "Pages.TNotebook")
+            titles = [notebook.tab(tab_id, "text") for tab_id in notebook.tabs()]
+            nav = [
+                widget for widget in _descendants(window)
+                if isinstance(widget, tk.Button) and widget.cget("text") in titles
+            ]
+            # One button per page, in tab order, carrying the page counts.
+            self.assertEqual([button.cget("text") for button in nav], titles)
+            self.assertEqual(titles[0], "Textos (1)")
+            nav[1].invoke()
+            window.update()
+            self.assertEqual(notebook.select(), notebook.tabs()[1])
+            self.assertIn("bold", str(nav[1].cget("font")))
+            self.assertNotIn("bold", str(nav[0].cget("font")))
+
+        self._on_gui(exercise)
+
     def test_manager_keyboard_shortcuts_switch_views_and_focus_search(self):
         def exercise(shared_root):
             self.app._build_manager_window(shared_root)
