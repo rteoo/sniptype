@@ -19,6 +19,24 @@ their original numbers.
 | 3.2.0, 3.2.1 | 0.9.0, 0.9.1 | 5.2.0-beta.1 | 1.0.0-beta.1 |
 | 3.3.0-beta, 3.3.0 | 0.10.0-beta.1, 0.10.0 | 5.2.0 | 1.0.0 |
 
+## [1.1.0] — 2026-09-26
+
+Manager layout redesign: navigation moves into a sidebar so every page gets the
+window's full height.
+
+### Changed
+
+- The manager header, command bar, and tab strip are replaced by a left
+  sidebar. It shows the expansion status with its pause/resume button, one
+  entry per page with its item count, and Editar último, Notificações, and
+  Atalhos. Ctrl+1–5 and Ctrl+F work as before. The SnipType icon sits beside
+  the name at the top of the sidebar.
+- Pages start at the top of the window, about 200px higher than before, so the
+  library, editors, and dynamic actions show more rows without scrolling.
+- The manager window is wider to make room for the sidebar: it opens at
+  1280×800 on Windows with a 1180px minimum width (macOS 1300×760, minimum
+  1140px; Linux minimum 1100px).
+
 ## [1.0.0] — 2026-09-26
 
 First official release and Microsoft Store launch: the stable release of the

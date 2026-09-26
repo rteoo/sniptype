@@ -53,10 +53,11 @@ Use `pythonw sniptype.pyw` after setup when you do not need console output.
 ### Releases and installer
 
 The current stable release is
-[`v1.0.0`](https://github.com/rteoo/sniptype/releases/tag/v1.0.0) for Windows,
-also available from the Microsoft Store. It introduces the SnipType display
-name, an English interface option and the Windows Design System manager
-refresh, on top of v0.15.0's dark
+[`v1.1.0`](https://github.com/rteoo/sniptype/releases/tag/v1.1.0) for Windows;
+SnipType is also available from the Microsoft Store. v1.1.0 moves the manager's
+navigation into a left sidebar so every page gets the window's full height. It
+builds on v1.0.0's SnipType display name, English interface option and Windows
+Design System manager refresh, and on v0.15.0's dark
 theme and Configurações tab and v0.14.x's more reliable typing and pasting;
 voice transcription now lives in the independent Snipvoice project. For macOS,
 the ARM64 build is available as the

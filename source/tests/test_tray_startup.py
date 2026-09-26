@@ -378,10 +378,10 @@ class AppVersionFormattingTests(unittest.TestCase):
             "SnipType v3.3.0 beta",
         )
 
-    def test_running_build_is_the_1_0_0_stable_release(self):
-        self.assertEqual(tx.APP_VERSION, "1.0.0")
+    def test_running_build_is_the_1_1_0_stable_release(self):
+        self.assertEqual(tx.APP_VERSION, "1.1.0")
         self.assertEqual(tx.RELEASE_CHANNEL, "stable")
-        self.assertEqual(tx.APP_DISPLAY_NAME, "SnipType v1.0.0")
+        self.assertEqual(tx.APP_DISPLAY_NAME, "SnipType v1.1.0")
 
     def test_older_source_without_a_channel_is_treated_as_stable(self):
         with mock.patch.object(tx, "__doc__", "Version: 9.8.7"):
@@ -403,7 +403,7 @@ class AppVersionFormattingTests(unittest.TestCase):
         installer = (repo_root / "installer" / "sniptype.iss").read_text(
             encoding="utf-8-sig"
         )
-        self.assertIn('#define MyAppVersion "1.0.0"', installer)
+        self.assertIn('#define MyAppVersion "1.1.0"', installer)
         self.assertIn('#define MyAppChannel "stable"', installer)
         self.assertIn('#define MyAppName "SnipType"', installer)
         self.assertIn(

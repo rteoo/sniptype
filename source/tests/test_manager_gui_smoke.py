@@ -233,6 +233,13 @@ class ManagerGuiSmokeTests(unittest.TestCase):
             window.update()
             notebook = self.app._manager_notebook
             self.assertEqual(str(notebook.cget("style")), "Pages.TNotebook")
+            brand = next(
+                widget for widget in _descendants(window)
+                if isinstance(widget, tk.Label) and widget.cget("text") == tx.PRODUCT_NAME
+            )
+            # The app icon sits beside the title.
+            self.assertTrue(str(brand.cget("image")))
+            self.assertEqual(str(brand.cget("compound")), "left")
             titles = [notebook.tab(tab_id, "text") for tab_id in notebook.tabs()]
             nav = [
                 widget for widget in _descendants(window)
