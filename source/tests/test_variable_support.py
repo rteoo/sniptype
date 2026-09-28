@@ -394,14 +394,14 @@ class TestResolveInlineAdversarial(unittest.TestCase):
         result = resolve_inline("%%clipboard-paste%%", {}, lambda: "%%nome%%")
         self.assertEqual(result, "%%nome%%")
 
-    def test_clipboard_injection_hits_a_token_present_at_top_level(self):
-        # Characterization of the global str.replace: because 'xcity' is already
-        # in the name list, the token injected via clipboard is also substituted.
+    def test_clipboard_injection_stays_literal_beside_a_top_level_token(self):
+        # Clipboard text is substituted in the final single pass, after every
+        # reference, so even a token also present at top level stays literal.
         snippets = {"xcity": "SP"}
         result = resolve_inline(
             "%%clipboard-paste%% %%xcity%%", snippets, lambda: "%%xcity%%"
         )
-        self.assertEqual(result, "SP SP")
+        self.assertEqual(result, "%%xcity%% SP")
 
     def test_snippet_ref_is_one_level_deep(self):
         # An embedded token inside a referenced snippet is left unresolved when it
@@ -464,13 +464,12 @@ class TestResolveFormVariablesAdversarial(unittest.TestCase):
         result = resolve_form_variables("%%nome%%", {"nome": "%%evil%%"})
         self.assertEqual(result, "%%evil%%")
 
-    def test_form_values_can_chain_through_replace(self):
-        # Characterization: values are substituted in dict order; a value that is
-        # itself a later field's token gets resolved on the subsequent pass.
+    def test_form_values_do_not_chain(self):
+        # One regex pass: a value that is itself another field's token stays literal.
         result = resolve_form_variables(
             "%%nome%%", {"nome": "%%data%%", "data": "X"}
         )
-        self.assertEqual(result, "X")
+        self.assertEqual(result, "%%data%%")
 
     def test_unicode_form_value(self):
         result = resolve_form_variables("%%c%%", {"c": "café ☕"})

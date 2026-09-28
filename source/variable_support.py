@@ -82,9 +82,29 @@ def resolve_inline(text, snippets, get_clipboard, _seen=None, prefixes=None, not
     notify_failure: optional callback(name, value) so a marker result ("[Erro: ...]")
     notifies exactly as a directly-typed dynamic trigger does.
     """
+    template, inline_values = expand_inline(
+        text, snippets, get_clipboard, _seen, prefixes, notify_failure
+    )
+    return substitute_variables(template, inline_values)
+
+
+def expand_inline(text, snippets, get_clipboard, _seen=None, prefixes=None, notify_failure=None):
+    """Split inline resolution into ``(template, inline_values)``.
+
+    Snippet and mapping references are library content: their bodies are
+    spliced into ``template`` one level deep, so a form field a referenced
+    snippet carries is still found by a later scan. Clipboard text and dynamic
+    provider output are data: their tokens stay in ``template`` and the values
+    are returned by name, to be substituted by ``substitute_variables`` in the
+    same single pass as the form values, where they can never be re-read as
+    template syntax.
+
+    Same threading and argument contract as ``resolve_inline``.
+    """
     names = find_variable_names(text)
+    inline_values = {}
     if not names:
-        return text
+        return text, inline_values
 
     if _seen is None:
         _seen = set()
@@ -108,7 +128,7 @@ def resolve_inline(text, snippets, get_clipboard, _seen=None, prefixes=None, not
                 raise VariableResolutionError(
                     _("A área de transferência não retornou texto válido.")
                 )
-            text = text.replace(f"%%{name}%%", value)
+            inline_values[name] = value
         elif name in _seen:
             continue  # circular reference: leave unchanged
         elif kind == "snippet_ref":
@@ -118,10 +138,10 @@ def resolve_inline(text, snippets, get_clipboard, _seen=None, prefixes=None, not
             value, _prefix = check_dynamic_pattern(snippets, name, prefixes)
             text = text.replace(f"%%{name}%%", extract_plain_text(value))
         elif kind == "dynamic_ref":
-            text = text.replace(f"%%{name}%%", _resolve_dynamic(name, snippets, notify_failure))
+            inline_values[name] = _resolve_dynamic(name, snippets, notify_failure)
         # form_field: leave unchanged
 
-    return text
+    return text, inline_values
 
 
 def _resolve_dynamic(name, snippets, notify_failure):
@@ -144,8 +164,21 @@ def _resolve_dynamic(name, snippets, notify_failure):
     return extract_plain_text(result)
 
 
-def resolve_form_variables(text, form_data):
-    """Substitute form-field variables with values collected from the dialog."""
-    for name, value in form_data.items():
-        text = text.replace(f"%%{name}%%", value)
-    return text
+def substitute_variables(text, values):
+    """Replace each ``%%name%%`` whose name is in ``values``, in one regex pass.
+
+    Every token is chosen from ``text`` itself, so a value that contains a
+    ``%%token%%`` stays literal instead of being substituted in turn.
+    """
+    if not values:
+        return text
+    return VARIABLE_RE.sub(lambda match: values.get(match.group(1), match.group(0)), text)
+
+
+def resolve_form_variables(text, form_data, inline_values=None):
+    """Substitute form-field variables with values collected from the dialog.
+
+    ``inline_values`` (from ``expand_inline``) are substituted in the same pass,
+    so neither they nor the typed values are ever re-read as template syntax.
+    """
+    return substitute_variables(text, {**(inline_values or {}), **form_data})

@@ -146,6 +146,7 @@ from rich_text_support import (
 )
 from variable_support import (
     classify_variable,
+    expand_inline,
     find_variable_names,
     resolve_form_variables,
     resolve_inline,
@@ -1416,7 +1417,10 @@ class Sniptype:
                 raw = func
                 plain = extract_plain_text(raw)
                 prefixes = self.trigger_index["dynamic_prefixes"]
-                plain = resolve_inline(
+                # Clipboard text and dynamic output stay out of ``plain`` until
+                # the final render, so a %%token%% inside them is never
+                # mistaken for a form field.
+                plain, inline_values = expand_inline(
                     plain,
                     self.snippets,
                     Clipboard.get_text,
@@ -1446,9 +1450,9 @@ class Sniptype:
                     if form_data is None:
                         return False  # user cancelled — nothing inserted
                 result = (
-                    render_form(compiled_form, form_data)
+                    render_form(compiled_form, form_data, inline_values)
                     if compiled_form is not None
-                    else resolve_form_variables(plain, form_data)
+                    else resolve_form_variables(plain, form_data, inline_values)
                 )
                 if is_rich_text_payload(raw):
                     result = rebuild_rich_text(raw, result)

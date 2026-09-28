@@ -268,9 +268,14 @@ def render_form_values(compiled, values):
     }
 
 
-def render_form(compiled, values):
-    """Render a compiled form in one pass using submitted values/defaults."""
-    rendered = render_form_values(compiled, values)
+def render_form(compiled, values, inline_values=None):
+    """Render a compiled form in one pass using submitted values/defaults.
+
+    ``inline_values`` maps already-resolved non-field tokens (clipboard text,
+    dynamic output) to their text; they join the same pass so that data is
+    never re-read as template syntax either.
+    """
+    rendered = {**(inline_values or {}), **render_form_values(compiled, values)}
     return VARIABLE_RE.sub(
         lambda match: rendered.get(match.group(1), match.group(0)),
         compiled.template,
