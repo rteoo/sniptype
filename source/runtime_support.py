@@ -191,8 +191,13 @@ class TextInserter:
     # waits up to ~1 s for a target app that is still reading our payload.
     RESTORE_READ_ATTEMPTS = 5
 
+    # _paste_value outcome: the payload is on the clipboard but was not pasted
+    # because the text target changed while the snippet resolved.
+    STALE_TARGET = "stale-target"
+
     def __init__(self, keyboard_controller, logger=None, restore_delay=None,
-                 settle_delay=None, notify=None, batch_keyboard=None):
+                 settle_delay=None, notify=None, batch_keyboard=None,
+                 still_current=None):
         timings = default_insertion_timings()
         self.keyboard_controller = keyboard_controller
         # win_input.BatchKeyboard on Windows: the paste chord as one atomic
@@ -208,10 +213,26 @@ class TextInserter:
             timings["paste_restore_delay"] if restore_delay is None else restore_delay
         )
         self.notify = notify
+        # Called right before any keystroke is sent: False means the user typed
+        # or switched windows since the trigger, so inserting now would land
+        # the text somewhere else or out of order. None disables the check.
+        self.still_current = still_current
+
+    def _target_is_current(self):
+        return self.still_current is None or self.still_current()
 
     def insert_text(self, value):
         plain_text = extract_plain_text(value)
-        if self._paste_value(value):
+        pasted = self._paste_value(value)
+        if pasted == self.STALE_TARGET:
+            message = _("Você continuou digitando ou trocou de janela antes da "
+                        "expansão terminar. O snippet está na área de "
+                        "transferência: use Ctrl+V.")
+            self.logger.warning(message)
+            if self.notify:
+                self.notify(message, key="paste-stale")
+            return False
+        if pasted:
             return True
 
         if "\n" in plain_text or "\r" in plain_text:
@@ -225,6 +246,14 @@ class TextInserter:
             else:
                 message = _("Não foi possível colar o snippet nem copiá-lo "
                             "para a área de transferência.")
+            self.logger.warning(message)
+            if self.notify:
+                self.notify(message, key="paste-failed")
+            return False
+
+        if not self._target_is_current():
+            message = _("Não foi possível colar o snippet nem copiá-lo "
+                        "para a área de transferência.")
             self.logger.warning(message)
             if self.notify:
                 self.notify(message, key="paste-failed")
@@ -251,6 +280,12 @@ class TextInserter:
                 return False
 
             time.sleep(self.settle_delay)
+            # Checked as late as possible and under the lock, so a result that
+            # was overtaken while it resolved (or while it waited for another
+            # paste) is never sent. The payload stays on the clipboard and the
+            # snapshot is not restored: that is the user's manual recovery.
+            if not self._target_is_current():
+                return self.STALE_TARGET
             self._send_paste_shortcut()
             time.sleep(self.restore_delay)
 

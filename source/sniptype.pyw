@@ -318,6 +318,11 @@ class Sniptype:
         self.typed_text = ""
         # Foreground window the buffered text was typed into (None off Windows).
         self._buffer_window = None
+        # Bumped by the listener on every user keystroke; a slow-route expansion
+        # whose dispatch-time value is no longer current must not be pasted.
+        self._input_generation = 0
+        # (generation, foreground HWND) of the expansion running on this worker.
+        self._expansion_context = threading.local()
         self.expansion_failed = False
         self.last_expansion_time = 0
         self.enabled = True
@@ -404,6 +409,7 @@ class Sniptype:
             restore_delay=timings["paste_restore_delay"],
             notify=self.notify_error,
             batch_keyboard=self.batch_keyboard,
+            still_current=self._expansion_target_is_current,
         )
         configure_logging(self.logs_dir)
         for key, default in invalid_runtime_settings.items():
@@ -1042,6 +1048,7 @@ class Sniptype:
             # thread. Cmd+V cannot race ahead of the target application's native
             # activation notification.
             wait_for_focus_restore()
+            self._rebaseline_expansion_context()
             return result
         finally:
             self._dialog_lock.release()
@@ -1884,14 +1891,20 @@ class Sniptype:
             return SnippetRef("static", trigger)
         return None
 
-    def on_press(self, key):
+    def on_press(self, key, injected=False):
         """Detect a trigger on the listener thread; expand on a worker thread.
 
         The listener must stay fast and unkillable: it only appends the keystroke,
         matches a trigger, erases the typed trigger, and hands all real work
         (callables, network, dialogs, clipboard, paste) to a background thread.
+
+        ``injected`` comes from pynput >= 1.8 (older versions omit it). Our own
+        untagged synthesized keys (macOS erase and paste, a re-emitted
+        terminator) arrive here flagged, and must not look like user typing.
         """
         try:
+            if not injected:
+                self._input_generation += 1
             if self.hotkey_router.press(key):
                 self.typed_text = ""
                 return
@@ -2119,11 +2132,22 @@ class Sniptype:
             effective in trigger_index.get("slow_triggers", ())
             or effective in trigger_index.get("form_triggers", ())
         )
+        # The text target this trigger was typed into: an int read plus one
+        # user32 call, cheap enough for the listener. The worker compares it
+        # right before pasting (_expansion_target_is_current). Only a slow
+        # route (network, dialog) compares keystrokes: a fast expansion pastes
+        # within ~0.1 s, and a fast typist's next key must not turn it into a
+        # clipboard notice.
+        context = (
+            getattr(self, "_input_generation", 0) if slow_route else None,
+            platform_support.foreground_window_handle(),
+        )
         self.task_runner.start(
             self._run_expansion,
             worker_target,
             append_text,
             slow_route,
+            context=context,
             name="expand",
         )
 
@@ -2175,14 +2199,17 @@ class Sniptype:
             self.keyboard_controller.release(Key.backspace)
             time.sleep(self.erase_key_delay)
 
-    def _run_expansion(self, trigger, append_text="", slow_route=None):
+    def _run_expansion(self, trigger, append_text="", slow_route=None, context=None):
         """Worker entry point: produce and insert the expansion for a trigger.
 
         The trigger text is already erased. This is wrapped so no expansion error
         (including a raising callable) can ever propagate to the listener thread.
+        ``context`` is the dispatch-time text target; without it nothing is
+        checked before pasting.
         """
         if not self.enabled:
             return
+        self._expansion_context.value = context
         try:
             effective = trigger.effective_trigger if isinstance(trigger, ExpansionTarget) else trigger
             lookup = (
@@ -2216,6 +2243,34 @@ class Sniptype:
                 key=f"expand-error:{getattr(trigger, 'effective_trigger', trigger)}",
                 cooldown_seconds=5,
             )
+        finally:
+            self._expansion_context.value = None
+
+    def _expansion_target_is_current(self):
+        """True when this worker's expansion may still be pasted.
+
+        Stale when a slow-route expansion saw any user key since its trigger
+        (the text would land after it, or after a later trigger's text) or, on
+        Windows, when another window is in the foreground. Workers not running
+        an expansion have no context and are never blocked.
+        """
+        context = getattr(self._expansion_context, "value", None)
+        if context is None:
+            return True
+        generation, window = context
+        if generation is not None and generation != self._input_generation:
+            return False
+        return window is None or platform_support.foreground_window_handle() == window
+
+    def _rebaseline_expansion_context(self):
+        """Accept the keystrokes typed into an expansion dialog that just closed.
+
+        The global hook sees what the user types into Sniptype's own dialog;
+        only keys pressed after focus is back on the original target count.
+        """
+        context = getattr(self._expansion_context, "value", None)
+        if context is not None and context[0] is not None:
+            self._expansion_context.value = (self._input_generation, context[1])
 
 
 
