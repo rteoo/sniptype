@@ -166,6 +166,7 @@ EN_US = {
     "SnipType iniciado com sucesso.": "SnipType started.",
     "Erro ao detectar snippet: {e}": "Could not detect the snippet: {e}",
     "Falha ao expandir {trigger}: {e}": "Could not expand {trigger}: {e}",
+    "O Windows bloqueou a expansão nesta janela, provavelmente porque ela está em execução como administrador.": "Windows blocked the expansion in this window, probably because it is running as administrator.",
     "Atalhos salvos.": "Hotkeys saved.",
     "Não foi possível salvar os atalhos.": "Could not save the hotkeys.",
     # sniptype: manager shell and backups

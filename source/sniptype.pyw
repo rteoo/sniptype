@@ -2090,7 +2090,21 @@ class Sniptype:
         if self._secure_input_blocks_expansion():
             self.typed_text = ""
             return
-        self._erase_chars(erase_length)
+        if not self._erase_chars(erase_length):
+            # The trigger text (or part of it) is still in the window, and a
+            # paste into a window that rejects input would be rejected too.
+            # Notify from a worker: the listener must not touch the tray or
+            # write history, and notify() applies the cooldown under its lock.
+            self.typed_text = ""
+            self.task_runner.start(
+                self.notify_error,
+                _("O Windows bloqueou a expansão nesta janela, provavelmente "
+                  "porque ela está em execução como administrador."),
+                key="injection-blocked",
+                cooldown_seconds=60,
+                name="injection-blocked-notify",
+            )
+            return
         self.typed_text = ""
         worker_target = trigger
         if isinstance(trigger, ExpansionTarget):
@@ -2173,6 +2187,10 @@ class Sniptype:
         This thread also pumps the Windows keyboard hook, so any sleep here
         stalls keyboard input system-wide. With no per-key delay configured,
         Windows sends the whole erase as one uninterruptible batch.
+
+        Returns False only when Windows rejected the batch, wholly or in part
+        (``send_key_events`` does not tell the two apart); pynput reports no
+        delivery result, so the paced erase returns True.
         """
         batch_keyboard = getattr(self, "batch_keyboard", None)
         if batch_keyboard is not None and not self.erase_key_delay:
@@ -2181,13 +2199,15 @@ class Sniptype:
                     "Windows bloqueou o apagamento do gatilho "
                     "(janela em execução como administrador?)."
                 )
-            return
+                return False
+            return True
         # A configured per-key delay keeps the legacy paced erase, which does
         # hold the listener for count * erase_key_delay.
         for _index in range(count):
             self.keyboard_controller.press(Key.backspace)
             self.keyboard_controller.release(Key.backspace)
             time.sleep(self.erase_key_delay)
+        return True
 
     def _run_expansion(self, trigger, append_text="", slow_route=None, context=None):
         """Worker entry point: produce and insert the expansion for a trigger.
