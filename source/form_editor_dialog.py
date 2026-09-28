@@ -9,9 +9,9 @@ definition only after :mod:`form_support` accepts every field.
 from copy import deepcopy
 import threading
 import tkinter as tk
-from tkinter import ttk
 
 import ui_theme
+import ui_widgets
 from i18n import N_, _
 from form_support import (
     DEFAULT_DATE_FORMAT,
@@ -238,11 +238,9 @@ class FormEditor:
             fg=self.theme.text, font=self.theme.font(),
         ).pack(fill="x", pady=(self.theme.space_sm, self.theme.space_xs))
 
-    def _button(self, parent, text, command, *, accent=False, danger=False):
-        return tk.Button(
-            parent, text=text, command=command,
-            **self.theme.button_chrome(compact=True),
-            **self.theme.button_colors(accent=accent, danger=danger),
+    def _button(self, parent, text, command, *, variant="standard", icon=None):
+        return ui_widgets.button(
+            parent, text=text, command=command, variant=variant, icon=icon, ui=self.theme,
         )
 
     def _build(self):
@@ -252,32 +250,38 @@ class FormEditor:
 
         heading = tk.Label(
             body, text=_("Campos do formulário"), anchor="w",
-            bg=self.theme.surface, fg=self.theme.text_strong, font=self.theme.font(weight="bold"),
+            bg=self.theme.surface, fg=self.theme.text_strong, font=self.theme.subtitle_font(),
         )
         heading.pack(fill="x", pady=(0, self.theme.space_sm))
         content = tk.Frame(body, bg=self.theme.surface)
         content.pack(fill="both", expand=True)
 
-        left = tk.Frame(content, bg=self.theme.card)
+        left = ui_widgets.card(content, padding=self.theme.space_md, ui=self.theme)
         left.pack(side="left", fill="y", padx=(0, self.theme.space_md))
+        field_list_frame = ui_widgets.field_frame(left, ui=self.theme)
+        field_list_frame.pack(fill="both", expand=True)
         self._field_list = tk.Listbox(
-            left, width=27, height=16, exportselection=False,
-            **self.theme.listbox_colors(), **self.theme.field_chrome(),
+            field_list_frame, width=27, height=16, exportselection=False,
+            activestyle="none", relief="flat", borderwidth=0,
+            **ui_widgets.listbox_colors(self.theme),
             font=self.theme.font(),
         )
         self._field_list.pack(fill="both", expand=True)
+        ui_widgets.track_focus(field_list_frame, self._field_list)
         self._field_list.bind("<<ListboxSelect>>", self._on_select)
         list_buttons = tk.Frame(left, **self.theme.toolbar_frame_colors())
         list_buttons.pack(fill="x", pady=(self.theme.space_sm, 0))
-        self._button(list_buttons, _("Adicionar"), self._add).pack(side="left")
-        self._button(list_buttons, "↑", self._move_up).pack(side="left", padx=(self.theme.space_xs, 0))
-        self._button(list_buttons, "↓", self._move_down).pack(side="left", padx=(self.theme.space_xs, 0))
-        self._button(list_buttons, _("Remover"), self._remove, danger=True).pack(side="left", padx=(self.theme.space_xs, 0))
+        self._button(list_buttons, _("Adicionar"), self._add, icon="add").pack(side="left")
+        # Icon-only where the icon font exists; the arrows are the fallback.
+        glyphs = ui_widgets.has_icons(list_buttons, self.theme)
+        self._button(list_buttons, "" if glyphs else "↑", self._move_up, variant="subtle", icon="up").pack(side="left", padx=(self.theme.space_xs, 0))
+        self._button(list_buttons, "" if glyphs else "↓", self._move_down, variant="subtle", icon="down").pack(side="left", padx=(self.theme.space_xs, 0))
+        self._button(list_buttons, _("Remover"), self._remove, variant="danger", icon="delete").pack(side="left", padx=(self.theme.space_xs, 0))
 
-        right = tk.Frame(content, bg=self.theme.card)
+        right = ui_widgets.card(content, padding=self.theme.space_lg, ui=self.theme)
         right.pack(side="left", fill="both", expand=True)
         editor = tk.Frame(right, bg=self.theme.card)
-        editor.pack(fill="both", expand=True, padx=self.theme.space_lg, pady=self.theme.space_lg)
+        editor.pack(fill="both", expand=True)
 
         self.name_var = tk.StringVar(self.window)
         self.label_var = tk.StringVar(self.window)
@@ -289,45 +293,48 @@ class FormEditor:
         self.optional_default_var = tk.BooleanVar(self.window, value=False)
 
         self._label(editor, _("Nome"))
-        self.name_entry = tk.Entry(editor, textvariable=self.name_var, **self.theme.entry_colors(), **self.theme.field_chrome(), font=self.theme.font())
+        self.name_entry = ui_widgets.entry(editor, textvariable=self.name_var, ui=self.theme)
         self.name_entry.pack(fill="x")
         self._label(editor, _("Rótulo"))
-        self.label_entry = tk.Entry(editor, textvariable=self.label_var, **self.theme.entry_colors(), **self.theme.field_chrome(), font=self.theme.font())
+        self.label_entry = ui_widgets.entry(editor, textvariable=self.label_var, ui=self.theme)
         self.label_entry.pack(fill="x")
         self._label(editor, _("Tipo"))
-        self.type_combo = ttk.Combobox(editor, textvariable=self.type_var, state="readonly", values=FIELD_TYPES)
+        self.type_combo = ui_widgets.combobox(editor, textvariable=self.type_var, values=FIELD_TYPES, ui=self.theme)
         self.type_combo.pack(fill="x")
         self.type_combo.bind("<<ComboboxSelected>>", self._on_type_change)
         self._label(editor, _("Valor padrão"))
-        self.default_entry = tk.Entry(editor, textvariable=self.default_var, **self.theme.entry_colors(), **self.theme.field_chrome(), font=self.theme.font())
+        self.default_entry = ui_widgets.entry(editor, textvariable=self.default_var, ui=self.theme)
         self.default_entry.pack(fill="x")
-        self.optional_default = tk.Checkbutton(
+        self.optional_default = ui_widgets.checkbox(
             editor, text=_("Selecionado por padrão"), variable=self.optional_default_var,
-            **self.theme.checkbutton_colors(self.theme.card), font=self.theme.font(),
+            ui=self.theme,
         )
 
         self._choice_frame = tk.Frame(editor, bg=self.theme.card)
         self._label(self._choice_frame, _("Opções (uma por linha)"))
-        self.options_text = tk.Text(self._choice_frame, height=5, wrap="word", **self.theme.text_colors(), **self.theme.field_chrome(), font=self.theme.font())
-        self.options_text.pack(fill="x")
+        options_field, self.options_text = ui_widgets.text_area(
+            self._choice_frame, height=5, wrap="word",
+            padx=self.theme.space_sm, pady=self.theme.space_xs, ui=self.theme,
+        )
+        options_field.pack(fill="x")
         self._optional_frame = tk.Frame(editor, bg=self.theme.card)
         self._label(self._optional_frame, _("Conteúdo quando selecionado"))
-        self.content_entry = tk.Entry(self._optional_frame, textvariable=self.content_var, **self.theme.entry_colors(), **self.theme.field_chrome(), font=self.theme.font())
+        self.content_entry = ui_widgets.entry(self._optional_frame, textvariable=self.content_var, ui=self.theme)
         self.content_entry.pack(fill="x")
         self._date_frame = tk.Frame(editor, bg=self.theme.card)
         self._label(self._date_frame, _("Formato da data"))
-        self.format_entry = tk.Entry(self._date_frame, textvariable=self.format_var, **self.theme.entry_colors(), **self.theme.field_chrome(), font=self.theme.font())
+        self.format_entry = ui_widgets.entry(self._date_frame, textvariable=self.format_var, ui=self.theme)
         self.format_entry.pack(fill="x")
 
         self.error_label = tk.Label(
             editor, text="", anchor="w", justify="left",
-            bg=self.theme.card, fg=self.theme.danger, font=self.theme.font(8),
+            bg=self.theme.card, fg=self.theme.danger, font=self.theme.caption_font(),
         )
         self.error_label.pack(fill="x", pady=(self.theme.space_md, 0))
         actions = tk.Frame(body, bg=self.theme.surface)
         actions.pack(fill="x", pady=(self.theme.space_md, 0))
         self._button(actions, _("Cancelar"), self.cancel).pack(side="right")
-        self._button(actions, _("Salvar"), self.submit, accent=True).pack(side="right", padx=(0, self.theme.space_sm))
+        self._button(actions, _("Salvar"), self.submit, variant="accent", icon="save").pack(side="right", padx=(0, self.theme.space_sm))
         self.window.bind("<Escape>", lambda _event: self.cancel())
 
     def _refresh_list(self):

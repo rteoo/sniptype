@@ -10,6 +10,7 @@ import threading
 import tkinter as tk
 
 import ui_theme
+import ui_widgets
 from i18n import N_, _
 from hotkey_support import ACTIONS, normalize_hotkeys
 
@@ -100,10 +101,10 @@ class HotkeyDialog:
 
         tk.Label(
             body, text=_(HINT_TEXT), anchor="w", justify="left",
-            bg=self.theme.surface, fg=self.theme.text_muted, font=self.theme.font(8),
+            bg=self.theme.surface, fg=self.theme.text_muted, font=self.theme.caption_font(),
         ).pack(fill="x", pady=(0, self.theme.space_md))
 
-        card = tk.Frame(body, bg=self.theme.card)
+        card = ui_widgets.card(body, padding=(0, self.theme.space_xs), ui=self.theme)
         card.pack(fill="both", expand=True)
         normalized, _invalid = normalize_hotkeys(self._bindings)
         for action in ACTIONS:
@@ -113,10 +114,7 @@ class HotkeyDialog:
                 row, text=_(ACTION_LABELS[action]), anchor="w", width=24,
                 bg=self.theme.card, fg=self.theme.text, font=self.theme.font(),
             ).pack(side="left")
-            control = tk.Entry(
-                row, **self.theme.entry_colors(), **self.theme.field_chrome(),
-                font=self.theme.font(),
-            )
+            control = ui_widgets.entry(row, ui=self.theme)
             if normalized.get(action):
                 control.insert(0, normalized[action])
             control.pack(side="left", fill="x", expand=True)
@@ -124,19 +122,18 @@ class HotkeyDialog:
 
         self._error_label = tk.Label(
             body, text="", anchor="w", justify="left",
-            bg=self.theme.surface, fg=self.theme.danger, font=self.theme.font(8),
+            bg=self.theme.surface, fg=self.theme.danger, font=self.theme.caption_font(),
         )
         self._error_label.pack(fill="x", pady=(self.theme.space_sm, 0))
 
         buttons = tk.Frame(body, bg=self.theme.surface)
         buttons.pack(fill="x", pady=(self.theme.space_md, 0))
-        tk.Button(
-            buttons, text=_("Cancelar"), command=self.cancel,
-            **self.theme.button_chrome(compact=True), **self.theme.button_colors(),
+        ui_widgets.button(
+            buttons, text=_("Cancelar"), command=self.cancel, width=10, ui=self.theme,
         ).pack(side="right")
-        tk.Button(
-            buttons, text=_("Salvar"), command=self.save,
-            **self.theme.button_chrome(compact=True), **self.theme.button_colors(accent=True),
+        ui_widgets.button(
+            buttons, text=_("Salvar"), command=self.save, width=10, variant="accent",
+            icon="save", ui=self.theme,
         ).pack(side="right", padx=(0, self.theme.space_sm))
 
         self.controller = HotkeyDialogController(self._bindings, self._controls)

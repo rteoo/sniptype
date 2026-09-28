@@ -16,19 +16,22 @@ import ui_theme
 
 
 # Windows Design System 1.0.0 roles are pinned here so a later palette change
-# requires an explicit review. ``control`` is the documented SnipType neutral
-# button adaptation, kept distinct from the design system's hover fill.
+# requires an explicit review. The control roles are the Windows 11 (WinUI)
+# fills and strokes flattened over a white card.
 FLUENT_WINDOWS_COLORS = {
     "surface": "#F3F3F3",
     "surface_alt": "#FFFFFF",
     "surface_alt_active": "#DEDEDE",
-    "surface_hover": "#EAEAEA",
     "card": "#FFFFFF",
     "field": "#FFFFFF",
-    "field_hover": "#EAEAEA",
-    "control": "#E6E6E6",
-    "control_active": "#DEDEDE",
-    "control_border": "#767676",
+    "control": "#FBFBFB",
+    "control_hover": "#F6F6F6",
+    "control_active": "#F5F5F5",
+    "control_stroke": "#E5E5E5",
+    "control_stroke_bottom": "#C4C4C4",
+    "stroke_strong": "#8A8A8A",
+    "card_border": "#E5E5E5",
+    "scrollbar_thumb": "#8A8A8A",
     "text": "#1A1A1A",
     "text_strong": "#1A1A1A",
     "text_muted": "#5C5C5C",
@@ -36,9 +39,9 @@ FLUENT_WINDOWS_COLORS = {
     "border": "#D6D6D6",
     "divider": "#D6D6D6",
     "accent": "#005FB8",
+    "accent_hover": "#1A6FBF",
     "accent_active": "#004A91",
     "danger": "#A4262C",
-    "danger_active": "#8B1E24",
     "focus_ring": "#005FB8",
     "link": "#005FB8",
     "warning": "#7A4D00",
@@ -55,7 +58,8 @@ WDS_DARK_COLORS = {
     "text": "#F5F5F5",
     "text_muted": "#C4C4C4",
     "border": "#494949",
-    "control_border": "#A0A0A0",
+    "control_stroke": "#454545",
+    "stroke_strong": "#9E9E9E",
     "accent": "#60CDFF",
     "text_on_accent": "#003047",
     "select_bg": "#153F54",
@@ -112,6 +116,13 @@ class WindowsPaletteTests(unittest.TestCase):
             self.assertEqual(theme.font(12, "bold"), ("Segoe UI Semibold", 12))
             self.assertEqual(theme.font(16), ("Segoe UI", 16))
 
+    def test_type_ramp_follows_windows_11(self):
+        theme = ui_theme.build_theme(
+            "windows", system="windows", font_families=self.WINDOWS_11_FAMILIES)
+        self.assertEqual(theme.caption_font(), ("Segoe UI Variable Text", 9))
+        self.assertEqual(theme.subtitle_font(), ("Segoe UI Variable Text Semibold", 12))
+        self.assertEqual(theme.title_font(), ("Segoe UI Variable Display Semib", 16))
+
     def test_other_platforms_keep_bold_as_a_weight(self):
         theme = ui_theme.build_theme("windows", system="linux")
         self.assertEqual(theme.font(12, "bold"), ("TkDefaultFont", 12, "bold"))
@@ -124,9 +135,6 @@ class WindowsPaletteTests(unittest.TestCase):
             font_families=self.WINDOWS_11_FAMILIES)
         self.assertEqual(theme.size_delta, 0)
         self.assertEqual(theme.font(9), ("Segoe UI Variable Text", 9))
-
-    def test_windows_prefers_vista(self):
-        self.assertEqual(ui_theme.ttk_theme_preference("windows")[0], "vista")
 
 
 class MacPaletteTests(unittest.TestCase):
@@ -167,7 +175,7 @@ class MacPaletteTests(unittest.TestCase):
         dark = ui_theme.palette("dark")
         # The brand accent is deliberately shared; everything else must differ.
         shared = {token for token, value in dark.items() if value in windows}
-        self.assertEqual(shared, {"accent", "accent_active", "text_on_accent"})
+        self.assertEqual(shared, {"accent", "accent_hover", "accent_active", "text_on_accent"})
 
     def test_mac_fonts_use_the_system_families(self):
         theme = ui_theme.build_theme("dark", system="darwin")
@@ -275,8 +283,6 @@ class WidgetOptionTests(unittest.TestCase):
             self.assertEqual(theme.entry_colors(), {})
             self.assertEqual(theme.text_colors(), {})
             self.assertEqual(theme.listbox_colors(), {})
-            self.assertEqual(theme.checkbutton_colors("#FFFFFF")["bg"], "#FFFFFF")
-            self.assertEqual(theme.button_colors()["bg"], "#E6E6E6")
 
     def test_added_foregrounds_resolve_to_each_platform_default(self):
         # `text_native` is for widgets the pre-change GUI left uncolored, so it
@@ -294,9 +300,8 @@ class WidgetOptionTests(unittest.TestCase):
             ui_theme.build_theme("windows", system="linux").text_native, "#1A1A1A"
         )
 
-    def test_windows_keeps_its_button_widths_and_window_size(self):
+    def test_windows_keeps_its_window_size(self):
         theme = ui_theme.build_theme("windows", system="windows")
-        self.assertEqual(theme.button_width(12), 12)
         self.assertEqual(theme.manager_window_size, ("1280x800", 1180, 760))
         self.assertFalse(theme.stacked_toolbar_status)
 
@@ -316,27 +321,13 @@ class WidgetOptionTests(unittest.TestCase):
         )
         self.assertEqual(theme.tree_row_height, 44)
 
-    def test_macos_sizes_buttons_to_their_text_and_widens_the_window(self):
-        # Aqua's bezel has a minimum width the flat Win32 button does not, so
-        # the tuned character widths overflow their pane and clip the last
-        # button in the row.
+    def test_macos_widens_the_window_for_its_native_buttons(self):
+        # Aqua's bezel has a minimum width, so the editor pane needs more room.
         theme = ui_theme.build_theme("dark", system="darwin")
-        self.assertEqual(theme.button_width(12), 0)
         geometry, min_width, _ = theme.manager_window_size
         self.assertEqual(geometry, "1300x760")
         self.assertGreater(min_width, 820)
         self.assertTrue(theme.stacked_toolbar_status)
-
-    def test_macos_never_paints_a_natively_drawn_control(self):
-        # Aqua ignores -background on buttons and checkboxes but honours
-        # -foreground, so any color the app supplies can only turn the title
-        # invisible against the bezel Aqua draws anyway (macOS 15 / Tk 9.0).
-        theme = ui_theme.build_theme("dark", system="darwin")
-        self.assertEqual(theme.button_colors(), {})
-        self.assertEqual(theme.button_colors(accent=True), {})
-        self.assertEqual(theme.checkbutton_colors("#222"), {})
-        self.assertEqual(theme.toolbar_button_colors("#222"), {})
-        self.assertEqual(theme.glyph_button_colors("#222"), {})
 
     def test_entry_colors_pin_every_channel_aqua_would_theme(self):
         theme = ui_theme.build_theme("dark", system="darwin")
@@ -353,48 +344,6 @@ class WidgetOptionTests(unittest.TestCase):
         self.assertNotIn("disabledforeground", colors)
         self.assertIn("inactiveselectbackground", colors)
 
-    def test_button_colors_always_pair_a_foreground_with_a_background(self):
-        for kind in ("windows", "light", "dark"):
-            theme = ui_theme.build_theme(kind, system="windows")
-            for accent in (False, True):
-                colors = theme.button_colors(accent=accent)
-                self.assertEqual(
-                    set(colors),
-                    {"bg", "fg", "activebackground", "activeforeground"},
-                )
-
-    def test_fluent_button_chrome_has_consistent_geometry_and_focus(self):
-        theme = ui_theme.build_theme("windows", system="windows")
-        self.assertEqual(
-            theme.button_chrome(),
-            {
-                "relief": "flat", "bd": 0, "padx": 16, "pady": 9,
-                "highlightthickness": 1, "highlightbackground": theme.control_border,
-                "highlightcolor": theme.focus_ring, "cursor": "hand2",
-            },
-        )
-        compact = theme.button_chrome(compact=True)
-        self.assertEqual(compact["padx"], 12)
-        self.assertEqual(compact["pady"], 6)
-
-    def test_danger_button_uses_distinct_semantic_tokens(self):
-        theme = ui_theme.build_theme("windows", system="windows")
-        colors = theme.button_colors(danger=True)
-        self.assertEqual(colors["bg"], theme.danger)
-        self.assertEqual(colors["activebackground"], theme.danger_active)
-        self.assertEqual(colors["fg"], theme.text_on_accent)
-
-    def test_toolbar_buttons_use_the_editor_surface_and_hover_token(self):
-        colors = ui_theme.build_theme("windows", system="windows").toolbar_button_colors("#FFFFFF")
-        self.assertEqual(colors["bg"], "#FFFFFF")
-        self.assertEqual(colors["activebackground"], "#EAEAEA")
-
-    def test_accent_button_uses_the_fluent_windows_tokens(self):
-        colors = ui_theme.build_theme("windows", system="windows").button_colors(accent=True)
-        self.assertEqual(colors["bg"], "#005FB8")
-        self.assertEqual(colors["fg"], "#FFFFFF")
-        self.assertEqual(colors["activebackground"], "#004A91")
-
     def test_toolbar_frame_uses_the_editor_card_surface(self):
         for system in ("windows", "linux"):
             theme = ui_theme.build_theme("windows", system=system)
@@ -408,13 +357,13 @@ class WidgetOptionTests(unittest.TestCase):
         for system in ("windows", "linux"):
             options = ui_theme.build_theme("windows", system=system).status_label_options()
             theme = ui_theme.build_theme("windows", system=system)
-            self.assertEqual(options["font"], theme.font(8))
+            self.assertEqual(options["font"], theme.caption_font())
             self.assertEqual(options["fg"], theme.text_muted)
 
     def test_status_label_uses_the_body_face_and_muted_grey_on_macos(self):
         theme = ui_theme.build_theme("dark", system="darwin")
         options = theme.status_label_options()
-        self.assertEqual(options["font"], theme.font(8))
+        self.assertEqual(options["font"], theme.caption_font())
         self.assertEqual(options["fg"], theme.text_muted)
 
     def test_unselected_tab_foreground_uses_the_fluent_neutral(self):
@@ -459,11 +408,11 @@ class TtkThemeSelectionTests(unittest.TestCase):
         self.assertEqual(style.used, ["aqua"])
 
     def test_skips_a_theme_this_platform_lacks(self):
-        # This is the actual bug: "vista" does not exist off Windows, and the
-        # old bare try/except left whatever theme was already active.
-        style = self.FakeStyle(("aqua", "clam", "default"))
-        self.assertEqual(ui_theme.apply_ttk_theme(style, "windows"), "default")
-        self.assertEqual(style.used, ["default"])
+        # The old bare try/except left whatever theme was already active when
+        # the preferred one did not exist.
+        style = self.FakeStyle(("clam", "default"))
+        self.assertEqual(ui_theme.apply_ttk_theme(style, "darwin"), "clam")
+        self.assertEqual(style.used, ["clam"])
 
     def test_never_raises_when_ttk_misbehaves(self):
         class Broken:
@@ -521,6 +470,17 @@ class GuiSourceTests(unittest.TestCase):
     def test_the_windows_only_ttk_theme_is_no_longer_forced(self):
         self.assertNotIn('theme_use("vista")', self._source())
 
+    def test_no_text_below_the_caption_size(self):
+        # 8 pt captions were hard to read; the type ramp starts at Caption.
+        import re
+        source_dir = os.path.dirname(self.SOURCE)
+        for name in ("sniptype.pyw", "form_dialog.py", "form_editor_dialog.py",
+                     "group_dialog.py", "hotkey_dialog.py", "preview_dialog.py"):
+            with open(os.path.join(source_dir, name), encoding="utf-8") as handle:
+                sizes = re.findall(r"font\((\d+)", handle.read())
+            small = [size for size in sizes if int(size) < ui_theme.CAPTION_FONT_SIZE]
+            self.assertEqual(small, [], name)
+
 
 
 def _contrast(first, second):
@@ -552,11 +512,18 @@ class ContrastTests(unittest.TestCase):
                 self.assertGreaterEqual(
                     _contrast(colors["text_muted"], colors[surface]), 4.5, (name, surface))
 
-    def test_tinted_buttons_keep_their_labels_readable(self):
+    def test_accent_buttons_keep_their_labels_readable(self):
         for name, colors in self._palettes().items():
-            for fill in ("accent", "accent_active", "danger", "danger_active"):
+            for fill in ("accent", "accent_hover", "accent_active"):
                 self.assertGreaterEqual(
                     _contrast(colors["text_on_accent"], colors[fill]), 4.5, (name, fill))
+
+    def test_destructive_labels_are_readable_on_a_neutral_button(self):
+        # Delete buttons carry the danger color as text, not as a fill.
+        for name, colors in self._palettes().items():
+            for surface in ("control", "control_hover", "control_active", "card"):
+                self.assertGreaterEqual(
+                    _contrast(colors["danger"], colors[surface]), 4.5, (name, surface))
 
     def test_selected_rows_stay_readable(self):
         for name, colors in self._palettes().items():
@@ -564,12 +531,24 @@ class ContrastTests(unittest.TestCase):
                 _contrast(colors["select_fg"], colors["select_bg"]), 4.5, name)
 
     def test_neutral_buttons_stand_out_from_what_they_sit_on(self):
-        # Regression: the fill used to be #FAFAFA, ~1.04:1 against the white
-        # cards, so Novo/Editar/Duplicar read as plain text.
+        # Regression: a #FAFAFA fill with no outline measured ~1.04:1 against
+        # the white cards, so Novo/Editar/Duplicar read as plain text. Windows
+        # 11 separates a near-white button by its elevation stroke instead.
         for name, colors in self._palettes().items():
             for surface in ("card", "surface"):
+                outline = max(
+                    _contrast(colors[stroke], colors[surface])
+                    for stroke in ("control_stroke", "control_stroke_bottom")
+                )
+                self.assertGreaterEqual(outline, 1.2, (name, surface))
+
+    def test_input_boundaries_meet_the_non_text_contrast_floor(self):
+        # WCAG 1.4.11: the field underline and the checkbox/switch outline are
+        # what identify those controls.
+        for name, colors in self._palettes().items():
+            for surface in ("field", "card"):
                 self.assertGreaterEqual(
-                    _contrast(colors["control"], colors[surface]), 1.1, (name, surface))
+                    _contrast(colors["stroke_strong"], colors[surface]), 3, (name, surface))
 
     def test_the_dark_palette_defines_every_light_token(self):
         self.assertEqual(
@@ -644,26 +623,6 @@ class DarkWidgetOptionTests(unittest.TestCase):
             theme = ui_theme.build_theme(kind, system="windows")
             self.assertFalse(set(theme.listbox_colors()) & set(theme.field_chrome()))
             self.assertFalse(set(theme.entry_colors()) & set(theme.field_chrome()))
-
-    def test_dark_checkboxes_keep_a_visible_mark(self):
-        colors = self.dark.checkbutton_colors(self.dark.card)
-        self.assertEqual(colors["selectcolor"], self.dark.field)
-        light = ui_theme.build_theme("windows", system="windows")
-        self.assertNotIn("selectcolor", light.checkbutton_colors("#FFFFFF"))
-
-    def test_dark_selects_clam_off_macos_only(self):
-        self.assertEqual(ui_theme.ttk_theme_preference("windows", dark=True)[0], "clam")
-        self.assertEqual(ui_theme.ttk_theme_preference("linux", dark=True)[0], "clam")
-        self.assertEqual(ui_theme.ttk_theme_preference("darwin", dark=True)[0], "aqua")
-
-    def test_apply_ttk_theme_uses_the_resolved_appearance(self):
-        style = TtkThemeSelectionTests.FakeStyle(("vista", "clam", "default"))
-        self.assertEqual(ui_theme.apply_ttk_theme(style, "windows", resolved=self.dark), "clam")
-
-    def test_nav_buttons_mark_the_selected_section_with_the_accent(self):
-        self.assertEqual(self.dark.nav_button_colors("#000000", selected=True)["fg"], self.dark.accent)
-        self.assertEqual(self.dark.nav_button_colors("#000000")["fg"], self.dark.text_native)
-        self.assertEqual(ui_theme.build_theme("dark", system="darwin").nav_button_colors("#000"), {})
 
     def test_window_chrome_is_a_no_op_off_windows(self):
         mac = ui_theme.build_theme("light", system="darwin")

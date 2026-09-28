@@ -264,6 +264,19 @@ class SnippetRowValuesTests(unittest.TestCase):
 
         self.assertEqual(snapshot, value)
 
+
+class SnippetTreeValuesTests(unittest.TestCase):
+    def test_plain_snippet_shows_only_its_preview(self):
+        self.assertEqual(("xname", "Alex"), gui_support.snippet_tree_values("xname", "Alex"))
+
+    def test_markers_lead_the_value_cell(self):
+        value = {"__kind__": "rich_text", "text": "Olá %%nome%%", "spans": []}
+        self.assertEqual(
+            ("xboth", "RT %%  ·  Olá %%nome%%"),
+            gui_support.snippet_tree_values("xboth", value),
+        )
+
+
 class TreeColumnSplitTests(unittest.TestCase):
     def test_columns_exactly_fill_the_visible_width(self):
         for width in (120, 213, 307, 993):
