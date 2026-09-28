@@ -935,11 +935,11 @@ class OnPressSpecialKeyTests(unittest.TestCase):
         self.app.on_press(Key.shift)
         self.assertEqual("ab", self.app.typed_text)
 
-    def test_escape_does_not_dispatch_or_clear_buffer(self):
+    def test_escape_clears_buffer_without_dispatch(self):
         self._press("ab")
         self.app.task_runner.reset_mock()
         self.app.on_press(Key.esc)
-        self.assertEqual("ab", self.app.typed_text)
+        self.assertEqual("", self.app.typed_text)
         self.app.task_runner.start.assert_not_called()
 
 
