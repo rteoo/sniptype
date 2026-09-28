@@ -1,6 +1,7 @@
 import tkinter as tk
 
 import platform_support
+import ui_widgets
 
 from rich_text_support import extract_plain_text, is_rich_text_payload
 from variable_support import find_variable_names
@@ -24,6 +25,16 @@ def snippet_row_values(key, value, preview_chars=PREVIEW_CHARS):
     if find_variable_names(plain):
         markers.append("%%")
     return key, preview, " ".join(markers)
+
+
+def snippet_tree_values(key, value, preview_chars=PREVIEW_CHARS):
+    """``(trigger, value cell)`` for the two-column snippet lists.
+
+    The markers lead the value cell instead of filling a column of their own,
+    which stood empty for every plain-text snippet.
+    """
+    key, preview, markers = snippet_row_values(key, value, preview_chars)
+    return key, f"{markers}  ·  {preview}" if markers else preview
 
 
 def filter_static_snippets(snippets, query):
@@ -207,44 +218,27 @@ class SectionSwitcher:
         self.container = container
         self.frames = {}
         self.buttons = {}
-        self.markers = {}
         self.current = None
 
-    def add(self, key, title):
-        bg = self.nav.cget("background")
-        item = tk.Frame(self.nav, bg=bg)
-        marker = tk.Frame(item, bg=bg, width=3)
-        chrome = self.ui.button_chrome(compact=True)
-        if chrome:
-            # Keep the keyboard focus ring, but no idle border around each item.
-            chrome["highlightbackground"] = bg
-        button = tk.Button(
-            item, text=title, font=self.ui.font(9), anchor="w",
-            command=lambda: self.select(key),
-            **self.ui.nav_button_colors(bg), **chrome,
+    def add(self, key, title, icon=None):
+        button = ui_widgets.nav_item(
+            self.nav, title, lambda: self.select(key), icon=icon, ui=self.ui,
         )
-        item.pack(side="top", fill="x", pady=1)
-        marker.pack(side="left", fill="y")
-        button.pack(side="left", fill="x", expand=True)
         frame = tk.Frame(self.container, bg=self.ui.surface)
         self.frames[key] = frame
         self.buttons[key] = button
-        self.markers[key] = marker
         if self.current is None:
             self.select(key)
+        else:
+            ui_widgets.set_selected(button, False, self.ui)
         return frame
 
     def select(self, key):
         if key == self.current:
             return
-        bg = self.nav.cget("background")
         if self.current is not None:
             self.frames[self.current].pack_forget()
-            self.buttons[self.current].configure(
-                font=self.ui.font(9), **self.ui.nav_button_colors(bg))
-            self.markers[self.current].configure(bg=bg)
+            ui_widgets.set_selected(self.buttons[self.current], False, self.ui)
         self.current = key
         self.frames[key].pack(fill="both", expand=True)
-        self.buttons[key].configure(
-            font=self.ui.font(9, "bold"), **self.ui.nav_button_colors(bg, selected=True))
-        self.markers[key].configure(bg=self.ui.accent)
+        ui_widgets.set_selected(self.buttons[key], True, self.ui)

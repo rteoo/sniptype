@@ -7,9 +7,9 @@ callers own the surrounding library save and group identity.
 
 import threading
 import tkinter as tk
-from tkinter import ttk
 
 import ui_theme
+import ui_widgets
 from i18n import N_, _
 from group_policy import (
     VALID_APPLICATION_MODES,
@@ -226,49 +226,54 @@ class GroupDialog:
         self._assert_owner()
         body = tk.Frame(self.window, bg=self.theme.surface)
         body.pack(fill="both", expand=True, padx=self.theme.space_lg, pady=self.theme.space_lg)
-        card = tk.Frame(body, bg=self.theme.card, pady=self.theme.space_sm)
+        card = ui_widgets.card(body, padding=(0, self.theme.space_sm), ui=self.theme)
         card.pack(fill="both", expand=True)
 
         self._label(card, _("Nome do grupo *"))
-        label = tk.Entry(card, **self.theme.entry_colors(), **self.theme.field_chrome(), font=self.theme.font())
+        label = ui_widgets.entry(card, ui=self.theme)
         label.pack(fill="x", padx=self.theme.space_md)
 
         self._label(card, _("Notas"))
-        notes = tk.Text(card, height=3, wrap="word", **self.theme.text_colors(), **self.theme.field_chrome(), font=self.theme.font())
-        notes.pack(fill="x", padx=self.theme.space_md)
+        notes_field, notes = ui_widgets.text_area(
+            card, height=3, wrap="word",
+            padx=self.theme.space_sm, pady=self.theme.space_xs, ui=self.theme,
+        )
+        notes_field.pack(fill="x", padx=self.theme.space_md)
 
         self._label(card, _("Prefixo de runtime"))
-        prefix = tk.Entry(card, **self.theme.entry_colors(), **self.theme.field_chrome(), font=self.theme.font())
+        prefix = ui_widgets.entry(card, ui=self.theme)
         prefix.pack(fill="x", padx=self.theme.space_md)
 
         enabled_var = tk.BooleanVar(self.window)
-        enabled = tk.Checkbutton(
-            card, text=_("Grupo ativo"), variable=enabled_var,
-            **self.theme.checkbutton_colors(self.theme.card), font=self.theme.font(),
+        enabled = ui_widgets.checkbox(
+            card, text=_("Grupo ativo"), variable=enabled_var, ui=self.theme,
         )
         enabled.pack(anchor="w", padx=self.theme.space_md, pady=(self.theme.space_sm, 0))
 
         self._label(card, _("Terminador"))
-        terminator = ttk.Combobox(
-            card, state="readonly", values=tuple(_(label) for label in TERMINATOR_LABELS.values())
+        terminator = ui_widgets.combobox(
+            card, values=tuple(_(label) for label in TERMINATOR_LABELS.values()), ui=self.theme,
         )
         terminator.pack(fill="x", padx=self.theme.space_md)
 
         self._label(card, _("Modo de aplicativo"))
-        application_mode = ttk.Combobox(
-            card, state="readonly", values=tuple(_(label) for label in APPLICATION_LABELS.values())
+        application_mode = ui_widgets.combobox(
+            card, values=tuple(_(label) for label in APPLICATION_LABELS.values()), ui=self.theme,
         )
         application_mode.pack(fill="x", padx=self.theme.space_md)
 
         tk.Label(
             card, text=_(WINDOWS_POLICY_NOTE), anchor="w", justify="left",
             wraplength=470, bg=self.theme.card, fg=self.theme.text_muted,
-            font=self.theme.font(8),
+            font=self.theme.caption_font(),
         ).pack(fill="x", padx=self.theme.space_md, pady=(self.theme.space_sm, 0))
 
         self._label(card, _("Executáveis (um por linha)"))
-        executables = tk.Text(card, height=4, wrap="none", **self.theme.text_colors(), **self.theme.field_chrome(), font=self.theme.mono_font(8))
-        executables.pack(fill="both", expand=True, padx=self.theme.space_md)
+        executables_field, executables = ui_widgets.text_area(
+            card, height=4, wrap="none", font=self.theme.mono_font(9),
+            padx=self.theme.space_sm, pady=self.theme.space_xs, ui=self.theme,
+        )
+        executables_field.pack(fill="both", expand=True, padx=self.theme.space_md)
 
         normalized = normalize_group(None, self._group)
         label.insert(0, normalized.label if self._group else "")
@@ -292,18 +297,17 @@ class GroupDialog:
 
         self._error_label = tk.Label(
             body, text="", anchor="w", justify="left",
-            bg=self.theme.surface, fg=self.theme.danger, font=self.theme.font(8),
+            bg=self.theme.surface, fg=self.theme.danger, font=self.theme.caption_font(),
         )
         self._error_label.pack(fill="x", pady=(self.theme.space_sm, 0))
         buttons = tk.Frame(body, bg=self.theme.surface)
         buttons.pack(fill="x", pady=(self.theme.space_md, 0))
-        tk.Button(
-            buttons, text=_("Cancelar"), command=self.cancel,
-            **self.theme.button_chrome(compact=True), **self.theme.button_colors(),
+        ui_widgets.button(
+            buttons, text=_("Cancelar"), command=self.cancel, width=10, ui=self.theme,
         ).pack(side="right")
-        tk.Button(
-            buttons, text=_("Salvar"), command=self.save,
-            **self.theme.button_chrome(compact=True), **self.theme.button_colors(accent=True),
+        ui_widgets.button(
+            buttons, text=_("Salvar"), command=self.save, width=10, variant="accent",
+            icon="save", ui=self.theme,
         ).pack(side="right", padx=(0, self.theme.space_sm))
         self.window.bind("<Escape>", lambda _event: self.cancel())
         self.window.bind("<Return>", self._save_from_key)

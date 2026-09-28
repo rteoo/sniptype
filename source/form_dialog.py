@@ -10,9 +10,9 @@ import calendar
 from datetime import date
 import threading
 import tkinter as tk
-from tkinter import ttk
 
 import ui_theme
+import ui_widgets
 from i18n import N_, _
 from form_support import CompiledForm, FormValidationError, render_form
 
@@ -110,10 +110,9 @@ class _DatePicker:
     def _build(self):
         header = tk.Frame(self.window, **self.theme.toolbar_frame_colors())
         header.pack(fill="x", padx=self.theme.space_md, pady=(self.theme.space_md, self.theme.space_sm))
-        previous = tk.Button(
-            header, text="‹", command=lambda: self._move(-1),
-            **self.theme.button_chrome(compact=True),
-            **self.theme.button_colors(),
+        previous = ui_widgets.button(
+            header, text="‹", command=lambda: self._move(-1), variant="subtle",
+            ui=self.theme,
         )
         previous.pack(side="left")
         self._month_label = tk.Label(
@@ -121,10 +120,9 @@ class _DatePicker:
             bg=self.theme.card,
         )
         self._month_label.pack(side="left", expand=True)
-        following = tk.Button(
-            header, text="›", command=lambda: self._move(1),
-            **self.theme.button_chrome(compact=True),
-            **self.theme.button_colors(),
+        following = ui_widgets.button(
+            header, text="›", command=lambda: self._move(1), variant="subtle",
+            ui=self.theme,
         )
         following.pack(side="right")
         self._grid = tk.Frame(self.window, **self.theme.toolbar_frame_colors())
@@ -160,11 +158,10 @@ class _DatePicker:
                         row=row, column=column, padx=1, pady=1
                     )
                     continue
-                tk.Button(
-                    self._grid, text=str(day), width=3,
+                ui_widgets.button(
+                    self._grid, text=str(day), width=3, variant="subtle",
                     command=lambda selected=day: self._select(selected),
-                    **self.theme.button_chrome(compact=True),
-                    **self.theme.button_colors(),
+                    ui=self.theme,
                 ).grid(row=row, column=column, padx=1, pady=1)
 
     def _select(self, day):
@@ -209,18 +206,17 @@ class FormDialog:
         self._build_fields(body)
         self._error_label = tk.Label(
             body, text="", anchor="w", justify="left",
-            bg=self.theme.surface, fg=self.theme.danger, font=self.theme.font(8),
+            bg=self.theme.surface, fg=self.theme.danger, font=self.theme.caption_font(),
         )
         self._error_label.pack(fill="x", pady=(self.theme.space_sm, 0))
         buttons = tk.Frame(body, bg=self.theme.surface)
         buttons.pack(fill="x", pady=(self.theme.space_md, 0))
-        tk.Button(
-            buttons, text=_("Cancelar"), command=self.cancel,
-            **self.theme.button_chrome(compact=True), **self.theme.button_colors(),
+        ui_widgets.button(
+            buttons, text=_("Cancelar"), command=self.cancel, width=10, ui=self.theme,
         ).pack(side="right")
-        tk.Button(
-            buttons, text=_("OK"), command=self.submit,
-            **self.theme.button_chrome(compact=True), **self.theme.button_colors(accent=True),
+        ui_widgets.button(
+            buttons, text=_("OK"), command=self.submit, width=10, variant="accent",
+            ui=self.theme,
         ).pack(side="right", padx=(0, self.theme.space_sm))
         self.window.bind("<Escape>", lambda _event: self.cancel())
         self.window.bind("<Return>", self._submit_from_key)
@@ -244,32 +240,25 @@ class FormDialog:
         # A vertical frame is intentionally used instead of a second Tk root;
         # multiline fields own their own scrollbar and all controls share the
         # process-wide GUI thread.
-        fields = tk.Frame(parent, bg=self.theme.card, bd=0)
+        fields = ui_widgets.card(parent, padding=self.theme.space_md, ui=self.theme)
         fields.pack(fill="both", expand=True)
         for field in self.compiled.fields:
             self._label(fields, field)
             if field.type == "multiline":
-                control_frame = tk.Frame(fields, bg=self.theme.card)
-                control_frame.pack(fill="both", expand=True)
-                control = tk.Text(
-                    control_frame, height=5, wrap="word",
-                    **self.theme.text_colors(), **self.theme.field_chrome(), font=self.theme.font(),
+                control_frame, control = ui_widgets.text_area(
+                    fields, height=5, wrap="word", scroll=True,
+                    padx=self.theme.space_sm, pady=self.theme.space_xs, ui=self.theme,
                 )
-                scrollbar = ttk.Scrollbar(control_frame, orient="vertical", command=control.yview)
-                control.configure(yscrollcommand=scrollbar.set)
-                control.pack(side="left", fill="both", expand=True)
-                scrollbar.pack(side="right", fill="y")
+                control_frame.pack(fill="both", expand=True)
                 control.insert("1.0", field.default)
             elif field.type == "choice":
-                control = ttk.Combobox(fields, state="readonly", values=field.options)
+                control = ui_widgets.combobox(fields, values=field.options, ui=self.theme)
                 control.set(field.default)
                 control.pack(fill="x")
             elif field.type == "optional":
                 variable = tk.BooleanVar(self.window, value=field.default)
-                control = tk.Checkbutton(
-                    fields, text=field.content, variable=variable,
-                    **self.theme.checkbutton_colors(self.theme.card),
-                    font=self.theme.font(),
+                control = ui_widgets.checkbox(
+                    fields, text=field.content, variable=variable, ui=self.theme,
                 )
                 control.pack(anchor="w")
                 self._variables[field.name] = variable
@@ -277,17 +266,17 @@ class FormDialog:
                 control_frame = tk.Frame(fields, bg=self.theme.card)
                 control_frame.pack(fill="x")
                 variable = tk.StringVar(self.window, value=_date_default(field))
-                control = tk.Entry(control_frame, textvariable=variable, **self.theme.entry_colors(), **self.theme.field_chrome(), font=self.theme.font())
+                control = ui_widgets.entry(control_frame, textvariable=variable, ui=self.theme)
                 control.pack(side="left", fill="x", expand=True)
-                tk.Button(
+                ui_widgets.button(
                     control_frame, text=_("Calendário"), command=lambda name=field.name: self._date_pickers[name].open(),
-                    **self.theme.button_chrome(compact=True), **self.theme.button_colors(),
+                    ui=self.theme,
                 ).pack(side="right", padx=(self.theme.space_sm, 0))
                 self._variables[field.name] = variable
                 self._date_pickers[field.name] = _DatePicker(self.window, variable, self.theme)
             else:
                 variable = tk.StringVar(self.window, value=field.default)
-                control = tk.Entry(fields, textvariable=variable, **self.theme.entry_colors(), **self.theme.field_chrome(), font=self.theme.font())
+                control = ui_widgets.entry(fields, textvariable=variable, ui=self.theme)
                 control.pack(fill="x")
                 self._variables[field.name] = variable
             self._controls[field.name] = control

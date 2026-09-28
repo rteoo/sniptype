@@ -51,6 +51,9 @@ else:
         _SHARED_GUI = GuiThread(main_thread=False)
         _SHARED_GUI.ensure_started()
         TK_AVAILABLE = True
+        # The Fluent theme builds ttk controls; macOS keeps the classic ones.
+        BUTTONS = (tk.Button, ttk.Button)
+        CHECKBOXES = (tk.Checkbutton, ttk.Checkbutton)
     except Exception:
         pass
 
@@ -101,6 +104,11 @@ def _descendants(widget):
         yield from _descendants(child)
 
 
+def _is_text_entry(widget):
+    # ttk.Combobox subclasses tk.Entry; only typed fields count here.
+    return isinstance(widget, tk.Entry) and not isinstance(widget, ttk.Combobox)
+
+
 @unittest.skipUnless(TK_AVAILABLE, TK_SKIP_REASON)
 class ManagerGuiSmokeTests(unittest.TestCase):
     def setUp(self):
@@ -113,6 +121,19 @@ class ManagerGuiSmokeTests(unittest.TestCase):
     def _on_gui(self, func):
         """Run func(root) on the GUI thread, propagating assertion failures."""
         return self.app.gui.call(func, timeout=30)
+
+    @unittest.skipUnless(tx.IS_WINDOWS, "the Segoe faces are Windows-only")
+    def test_every_windows_text_face_is_the_face_tk_renders(self):
+        # Regression: Tk silently substitutes Arial for a family it does not
+        # know, so the requested spec proves nothing; ask Tk what it used.
+        def probe(shared_root):
+            ui = tx.ui_theme.bind(shared_root)
+            for size, weight in ((10, None), (10, "bold"), (16, None), (16, "bold")):
+                spec = ui.font(size, weight)
+                rendered = tkfont.Font(root=shared_root, font=spec).actual("family")
+                self.assertEqual(rendered, spec[0], spec)
+
+        self._on_gui(probe)
 
     def test_all_tabs_build(self):
         def build(shared_root):
@@ -165,7 +186,7 @@ class ManagerGuiSmokeTests(unittest.TestCase):
                 buttons = {
                     str(widget.cget("text")): widget
                     for widget in _descendants(editor_pane)
-                    if isinstance(widget, tk.Button)
+                    if isinstance(widget, BUTTONS)
                     and is_descendant(widget, editor_pane)
                 }
                 self.assertTrue(expected_labels <= buttons.keys())
@@ -179,7 +200,7 @@ class ManagerGuiSmokeTests(unittest.TestCase):
                 pane_bottom = editor_pane.winfo_rooty() + editor_pane.winfo_height()
                 favorite = next(
                     widget for widget in _descendants(editor_pane)
-                    if isinstance(widget, tk.Checkbutton)
+                    if isinstance(widget, CHECKBOXES)
                     and widget.cget("text") == "Favorito"
                 )
                 for label, widget in [*((l, buttons[l]) for l in expected_labels),
@@ -201,16 +222,6 @@ class ManagerGuiSmokeTests(unittest.TestCase):
                 )
                 self.assertGreaterEqual(
                     content.winfo_height(), 60, "the content box collapsed"
-                )
-                tree = next(
-                    widget for widget in _descendants(tab)
-                    if isinstance(widget, ttk.Treeview)
-                )
-                heading = tkfont.Font(font=tx.ui_theme.theme().font(9, "bold"))
-                self.assertGreater(
-                    tree.column("markers", "width"),
-                    heading.measure("Tipo"),
-                    "the Tipo heading is clipped",
                 )
 
             notebook.select(tab_ids[1])
@@ -243,7 +254,7 @@ class ManagerGuiSmokeTests(unittest.TestCase):
             titles = [notebook.tab(tab_id, "text") for tab_id in notebook.tabs()]
             nav = [
                 widget for widget in _descendants(window)
-                if isinstance(widget, tk.Button) and widget.cget("text") in titles
+                if isinstance(widget, BUTTONS) and widget.cget("text") in titles
             ]
             # One button per page, in tab order, carrying the page counts.
             self.assertEqual([button.cget("text") for button in nav], titles)
@@ -251,8 +262,8 @@ class ManagerGuiSmokeTests(unittest.TestCase):
             nav[1].invoke()
             window.update()
             self.assertEqual(notebook.select(), notebook.tabs()[1])
-            self.assertIn("bold", str(nav[1].cget("font")))
-            self.assertNotIn("bold", str(nav[0].cget("font")))
+            self.assertTrue(nav[1].instate(["selected"]))
+            self.assertFalse(nav[0].instate(["selected"]))
 
         self._on_gui(exercise)
 
@@ -296,7 +307,7 @@ class ManagerGuiSmokeTests(unittest.TestCase):
         self.assertIn("CPF", labels)
 
     def _static_rows(self, frame):
-        """{trigger: (preview, markers)} from the static tab's Treeview."""
+        """{trigger: (value cell,)} from the static tab's Treeview."""
         trees = [w for w in _descendants(frame) if isinstance(w, ttk.Treeview)]
         self.assertTrue(trees, "expected a snippet Treeview")
         tree = trees[0]
@@ -319,9 +330,9 @@ class ManagerGuiSmokeTests(unittest.TestCase):
             return self._static_rows(frame)
 
         rows = self._on_gui(build)
-        self.assertEqual(("Assinatura principal", "RT"), rows["xsig"])
-        self.assertEqual(("Olá %%nome%%, tudo bem?", "%%"), rows["xgreet"])
-        self.assertEqual(("hello", ""), rows["xhi"])
+        self.assertEqual(("RT  ·  Assinatura principal",), rows["xsig"])
+        self.assertEqual(("%%  ·  Olá %%nome%%, tudo bem?",), rows["xgreet"])
+        self.assertEqual(("hello",), rows["xhi"])
 
     def test_selecting_a_tree_row_loads_the_editor(self):
         self.app.snippets["xsig"] = {
@@ -340,7 +351,7 @@ class ManagerGuiSmokeTests(unittest.TestCase):
             root.update()
 
             # Entry order follows widget creation: search box, then trigger.
-            entries = [w for w in _descendants(frame) if isinstance(w, tk.Entry)]
+            entries = [w for w in _descendants(frame) if _is_text_entry(w)]
             text = [w for w in _descendants(frame) if isinstance(w, tk.Text)][0]
             return entries[1].get(), text.get("1.0", "end-1c")
 
@@ -358,12 +369,12 @@ class ManagerGuiSmokeTests(unittest.TestCase):
             self.app._create_static_snippets_tab(frame, root)
             root.update_idletasks()
 
-            entries = [w for w in _descendants(frame) if isinstance(w, tk.Entry)]
+            entries = [w for w in _descendants(frame) if _is_text_entry(w)]
             text = [w for w in _descendants(frame) if isinstance(w, tk.Text)][0]
             entries[1].insert(0, trigger)
             text.insert("1.0", value)
             button = [w for w in _descendants(frame)
-                      if isinstance(w, tk.Button) and w.cget("text") == "Salvar"][0]
+                      if isinstance(w, BUTTONS) and w.cget("text") == "Salvar"][0]
             button.invoke()
 
         self._on_gui(build)
@@ -445,7 +456,7 @@ class ManagerGuiSmokeTests(unittest.TestCase):
             return self._static_rows(frame)
 
         rows = self._on_gui(refresh)
-        self.assertEqual({"ximported": ("from backup", "")}, rows)
+        self.assertEqual({"ximported": ("from backup",)}, rows)
 
     def _build_mappings_tab(self, shared_root, set_count=None):
         root = tk.Toplevel(shared_root)
@@ -456,7 +467,7 @@ class ManagerGuiSmokeTests(unittest.TestCase):
         return frame
 
     def _tree_rows(self, frame):
-        """{key: (preview, markers)} from the only Treeview in a tab."""
+        """{key: (value cell,)} from the only Treeview in a tab."""
         trees = [w for w in _descendants(frame) if isinstance(w, ttk.Treeview)]
         self.assertTrue(trees, "expected a snippet Treeview")
         tree = trees[0]
@@ -482,9 +493,9 @@ class ManagerGuiSmokeTests(unittest.TestCase):
         rows = self._on_gui(lambda r: self._tree_rows(self._build_mappings_tab(r)))
 
         self.assertNotIn("__prefix__", rows, "prefix metadata is not an item")
-        self.assertEqual(("123.456.789-00", ""), rows["alice"])
-        self.assertEqual(("CPF oficial", "RT"), rows["assinada"])
-        self.assertEqual(("CPF de %%titular%%", "%%"), rows["modelo"])
+        self.assertEqual(("123.456.789-00",), rows["alice"])
+        self.assertEqual(("RT  ·  CPF oficial",), rows["assinada"])
+        self.assertEqual(("%%  ·  CPF de %%titular%%",), rows["modelo"])
 
     def test_mapping_tree_shows_stored_and_effective_triggers(self):
         self.app.snippets["_cpf_numbers"] = {
@@ -582,17 +593,18 @@ class ManagerGuiSmokeTests(unittest.TestCase):
 
         def refresh_and_states(_root):
             self.app._refresh_manager_lists()
-            group_menu = next(
+            group_filter = next(
                 widget for widget in _descendants(static_frame)
-                if isinstance(widget, tk.OptionMenu)
+                if isinstance(widget, ttk.Combobox)
             )
             group_buttons = [
-                widget for widget in group_menu.master.winfo_children()
-                if isinstance(widget, tk.Button)
+                widget for widget in group_filter.master.winfo_children()
+                if isinstance(widget, BUTTONS)
             ]
+            self.assertEqual(1, len(group_buttons), "one group-actions menu button")
             static_controls = group_buttons + [
                 widget for widget in _descendants(static_frame)
-                if isinstance(widget, (tk.Button, tk.Checkbutton))
+                if isinstance(widget, BUTTONS + CHECKBOXES)
                 and str(widget.cget("text")) in {
                     "Favorito", "Formulário", "Duplicar", "Renomear",
                 }
@@ -600,7 +612,7 @@ class ManagerGuiSmokeTests(unittest.TestCase):
             mapping_controls = [
                 widget
                 for widget in _descendants(mapping_frame)
-                if isinstance(widget, (tk.Button, tk.Checkbutton))
+                if isinstance(widget, BUTTONS + CHECKBOXES)
                 and str(widget.cget("text")) in {"Favorito", "Formulário"}
             ]
             combos = [
@@ -611,13 +623,19 @@ class ManagerGuiSmokeTests(unittest.TestCase):
                 [str(widget.cget("state")) for widget in static_controls],
                 [str(widget.cget("state")) for widget in mapping_controls],
                 tuple(combos[0].cget("values")),
+                tuple(combos[1].cget("values")),
+                str(combos[0].cget("state")),
             )
 
-        static_controls, mapping_controls, group_values = self._on_gui(refresh_and_states)
+        (static_controls, mapping_controls, filter_values, group_values,
+         filter_state) = self._on_gui(refresh_and_states)
         self.assertTrue(static_controls)
         self.assertTrue(mapping_controls)
         self.assertEqual({"disabled"}, set(static_controls))
         self.assertEqual({"disabled"}, set(mapping_controls))
+        # Filtering only reads, so it stays usable with read-only metadata.
+        self.assertEqual("readonly", filter_state)
+        self.assertEqual(("Todos os grupos", "Sem grupo", "Work"), filter_values)
         self.assertIn("work", group_values)
 
     def test_mapping_tab_counts_every_type_not_just_the_selected_one(self):
@@ -636,7 +654,7 @@ class ManagerGuiSmokeTests(unittest.TestCase):
 
         def build_and_search(shared_root):
             frame = self._build_mappings_tab(shared_root, set_count=counts.append)
-            entries = [w for w in _descendants(frame) if isinstance(w, tk.Entry)]
+            entries = [w for w in _descendants(frame) if _is_text_entry(w)]
             entries[0].insert(0, "alice")
             frame.winfo_toplevel().update()
             return self._tree_rows(frame)
@@ -666,13 +684,13 @@ class ManagerGuiSmokeTests(unittest.TestCase):
 
         def build(shared_root):
             frame = self._build_mappings_tab(shared_root)
-            entries = [w for w in _descendants(frame) if isinstance(w, tk.Entry)]
+            entries = [w for w in _descendants(frame) if _is_text_entry(w)]
             text = [w for w in _descendants(frame) if isinstance(w, tk.Text)][0]
             entries[1].insert(0, "__prefix__")
             text.insert("1.0", "must not replace metadata")
             button = next(
                 widget for widget in _descendants(frame)
-                if isinstance(widget, tk.Button) and str(widget.cget("text")) == "Salvar"
+                if isinstance(widget, BUTTONS) and str(widget.cget("text")) == "Salvar"
             )
             button.invoke()
 
@@ -696,19 +714,19 @@ class ManagerGuiSmokeTests(unittest.TestCase):
             frame = self._build_mappings_tab(shared_root)
             new_button = next(
                 widget for widget in _descendants(frame)
-                if isinstance(widget, tk.Button) and str(widget.cget("text")) == "Novo tipo"
+                if isinstance(widget, BUTTONS) and str(widget.cget("text")) == "Novo tipo"
             )
             new_button.invoke()
             dialog = next(
                 child for child in _descendants(shared_root)
                 if isinstance(child, tk.Toplevel) and child.title() == "Novo Tipo de Mapeamento"
             )
-            entries = [w for w in _descendants(dialog) if isinstance(w, tk.Entry)]
+            entries = [w for w in _descendants(dialog) if _is_text_entry(w)]
             entries[0].insert(0, "outro")
             entries[1].insert(0, "mail")
             create = next(
                 widget for widget in _descendants(dialog)
-                if isinstance(widget, tk.Button) and str(widget.cget("text")) == "Criar tipo"
+                if isinstance(widget, BUTTONS) and str(widget.cget("text")) == "Criar tipo"
             )
             create.invoke()
             dialog.destroy()
@@ -729,13 +747,13 @@ class ManagerGuiSmokeTests(unittest.TestCase):
 
         def build(shared_root):
             frame = self._build_mappings_tab(shared_root)
-            entries = [w for w in _descendants(frame) if isinstance(w, tk.Entry)]
+            entries = [w for w in _descendants(frame) if _is_text_entry(w)]
             text = [w for w in _descendants(frame) if isinstance(w, tk.Text)][0]
             entries[1].insert(0, "alice")
             text.insert("1.0", "new")
             button = next(
                 widget for widget in _descendants(frame)
-                if isinstance(widget, tk.Button) and str(widget.cget("text")) == "Salvar"
+                if isinstance(widget, BUTTONS) and str(widget.cget("text")) == "Salvar"
             )
             button.invoke()
 
@@ -752,19 +770,19 @@ class ManagerGuiSmokeTests(unittest.TestCase):
             frame = self._build_mappings_tab(shared_root)
             new_button = next(
                 widget for widget in _descendants(frame)
-                if isinstance(widget, tk.Button) and str(widget.cget("text")) == "Novo tipo"
+                if isinstance(widget, BUTTONS) and str(widget.cget("text")) == "Novo tipo"
             )
             new_button.invoke()
             dialog = next(
                 child for child in _descendants(shared_root)
                 if isinstance(child, tk.Toplevel) and child.title() == "Novo Tipo de Mapeamento"
             )
-            entries = [w for w in _descendants(dialog) if isinstance(w, tk.Entry)]
+            entries = [w for w in _descendants(dialog) if _is_text_entry(w)]
             entries[0].insert(0, "outro")
             entries[1].insert(0, "mail")
             create = next(
                 widget for widget in _descendants(dialog)
-                if isinstance(widget, tk.Button) and str(widget.cget("text")) == "Criar tipo"
+                if isinstance(widget, BUTTONS) and str(widget.cget("text")) == "Criar tipo"
             )
             create.invoke()
             dialog.destroy()
@@ -827,7 +845,7 @@ class ManagerGuiSmokeTests(unittest.TestCase):
             sections = self.app._manager_settings_sections
             self.assertEqual(list(sections.frames), ["general", "hotkeys", "data"])
             check, = self._settings_widgets(
-                tk.Checkbutton, lambda w: "modo terminador" in w.cget("text"))
+                CHECKBOXES, lambda w: "modo terminador" in w.cget("text"))
             self.assertFalse(self.app.terminator_mode)
             check.invoke()
             self.assertTrue(self.app.terminator_mode)
@@ -842,7 +860,7 @@ class ManagerGuiSmokeTests(unittest.TestCase):
         def run(shared_root):
             self.app._build_manager_window(shared_root)
             check, = self._settings_widgets(
-                tk.Checkbutton, lambda w: "modo terminador" in w.cget("text"))
+                CHECKBOXES, lambda w: "modo terminador" in w.cget("text"))
             with mock.patch.object(tx, "save_settings", return_value=False):
                 check.invoke()
             self.assertFalse(self.app.terminator_mode)
@@ -860,7 +878,7 @@ class ManagerGuiSmokeTests(unittest.TestCase):
                 ttk.Combobox, lambda w: tx.ui_theme.APPEARANCE_LABELS["dark"] in w.cget("values"))
             combo.set(tx.ui_theme.APPEARANCE_LABELS["dark"])
             apply, = self._settings_widgets(
-                tk.Button, lambda w: w.cget("text") == "Aplicar aparência")
+                BUTTONS, lambda w: w.cget("text") == "Aplicar aparência")
             with mock.patch.object(tx.messagebox, "askyesno", return_value=True):
                 apply.invoke()
             first.update()
@@ -871,7 +889,7 @@ class ManagerGuiSmokeTests(unittest.TestCase):
             self.assertEqual(tx.load_settings(self.app.settings_file)["appearance"], "dark")
             self.assertEqual(
                 self.app._manager_notebook.select(), str(self.app._manager_settings_tab))
-            self.assertEqual(ttk.Style(rebuilt).theme_use(), "clam")
+            self.assertEqual(ttk.Style(rebuilt).theme_use(), "sniptype-fluent-dark")
 
         self._on_gui(run)
 
@@ -885,7 +903,7 @@ class ManagerGuiSmokeTests(unittest.TestCase):
                 ttk.Combobox, lambda w: tx.ui_theme.APPEARANCE_LABELS["dark"] in w.cget("values"))
             combo.set(tx.ui_theme.APPEARANCE_LABELS["dark"])
             apply, = self._settings_widgets(
-                tk.Button, lambda w: w.cget("text") == "Aplicar aparência")
+                BUTTONS, lambda w: w.cget("text") == "Aplicar aparência")
             with mock.patch.object(tx.messagebox, "askyesno", return_value=False):
                 apply.invoke()
             first.update()
@@ -970,7 +988,7 @@ class ManagerGuiSmokeTests(unittest.TestCase):
                 ttk.Combobox, lambda w: i18n.LANGUAGES["en-US"] in w.cget("values"))
             combo.set(i18n.LANGUAGES["en-US"])
             apply, = self._settings_widgets(
-                tk.Button, lambda w: w.cget("text") == "Aplicar idioma")
+                BUTTONS, lambda w: w.cget("text") == "Aplicar idioma")
             with mock.patch.object(tx.messagebox, "askyesno", return_value=True),                     mock.patch.object(self.app, "refresh_tray_menu") as refresh_tray:
                 apply.invoke()
             first.update()
@@ -998,7 +1016,7 @@ class ManagerGuiSmokeTests(unittest.TestCase):
                 ttk.Combobox, lambda w: i18n.LANGUAGES["en-US"] in w.cget("values"))
             combo.set(i18n.LANGUAGES["en-US"])
             apply, = self._settings_widgets(
-                tk.Button, lambda w: w.cget("text") == "Aplicar idioma")
+                BUTTONS, lambda w: w.cget("text") == "Aplicar idioma")
             with mock.patch.object(tx.messagebox, "askyesno", return_value=False):
                 apply.invoke()
             first.update()
@@ -1125,7 +1143,7 @@ class ModalDialogSerializationTests(unittest.TestCase):
             window = _find_form(root, label)
             if window is None:
                 return False
-            entry = [w for w in _descendants(window) if isinstance(w, tk.Entry)][0]
+            entry = [w for w in _descendants(window) if _is_text_entry(w)][0]
             entry.insert(0, value)
             window.event_generate("<Return>")
             return True

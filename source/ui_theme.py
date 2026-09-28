@@ -45,8 +45,33 @@ from i18n import N_
 # Other platforms shift their sizes by the distance between this and their own
 # system default, so the body role stays readable across native themes.
 BODY_FONT_SIZE = 10
+# The rest of the Windows 11 type ramp in the same scale: Caption (12 px),
+# Subtitle (for panes and cards) and Title (for pages), the last two
+# semibold. Nothing in the GUI goes below the caption size.
+CAPTION_FONT_SIZE = 9
+SUBTITLE_FONT_SIZE = 12
+TITLE_FONT_SIZE = 16
+# From here up, Windows switches to the variable font's display optical size.
+DISPLAY_FONT_SIZE = 14
 
-_WINDOWS_FAMILY = "Segoe UI Variable"
+# Tk names the Windows 11 variable font per optical size and weight; plain
+# "Segoe UI Variable" is not a family at all and silently resolves to Arial.
+# Windows 10 has no variable font, so it gets the static Segoe UI faces.
+# Semibold is a separate family in both: asking Tk for "bold" would synthesize
+# a heavier weight than Windows itself uses for headings.
+_WINDOWS_11_FAMILIES = {
+    "text": "Segoe UI Variable Text",
+    "text_strong": "Segoe UI Variable Text Semibold",
+    "display": "Segoe UI Variable Display",
+    # GDI truncates family names to 31 characters; this is the real name.
+    "display_strong": "Segoe UI Variable Display Semib",
+}
+_WINDOWS_10_FAMILIES = {
+    "text": "Segoe UI",
+    "text_strong": "Segoe UI Semibold",
+    "display": "Segoe UI",
+    "display_strong": "Segoe UI Semibold",
+}
 _WINDOWS_EMOJI_FAMILY = "Segoe UI Emoji"
 # Not in ``font.families()`` -- it is the hidden system font Tk resolves
 # ``TkDefaultFont`` to -- but Tk accepts it by name in a font spec.
@@ -74,14 +99,17 @@ class Theme:
     """A resolved palette plus the font family/size shift for this platform."""
 
     __slots__ = (
-        "kind", "system", "preference", "family", "emoji_family", "mono_family",
+        "kind", "system", "preference", "family", "strong_family",
+        "display_family", "display_strong_family", "emoji_family", "mono_family",
         "symbol_family", "size_delta",
-        "surface", "surface_alt", "surface_alt_active", "surface_hover",
-        "card", "field", "field_hover",
-        "control", "control_active", "control_border",
+        "surface", "surface_alt", "surface_alt_active",
+        "card", "field",
+        "control", "control_hover", "control_active",
+        "control_stroke", "control_stroke_bottom", "stroke_strong",
+        "card_border", "scrollbar_thumb",
         "text", "text_strong", "text_muted", "text_on_accent",
         "border", "divider",
-        "accent", "accent_active", "danger", "danger_active", "focus_ring",
+        "accent", "accent_hover", "accent_active", "danger", "focus_ring",
         "link", "warning", "success",
         "select_bg", "select_fg", "text_native", "tab_unselected_fg",
         "space_xs", "space_sm", "space_md", "space_lg", "space_xl",
@@ -89,11 +117,17 @@ class Theme:
     )
 
     def __init__(self, kind, system, family, emoji_family, mono_family,
-                 symbol_family, size_delta, colors, preference="system"):
+                 symbol_family, size_delta, colors, preference="system",
+                 strong_family=None, display_family=None, display_strong_family=None):
         self.kind = kind
         self.system = system
         self.preference = preference
         self.family = family
+        # Optional per-role faces (Windows). None means the role reuses
+        # ``family``, with "bold" as a weight.
+        self.strong_family = strong_family
+        self.display_family = display_family or family
+        self.display_strong_family = display_strong_family or strong_family
         self.emoji_family = emoji_family
         self.mono_family = mono_family
         self.symbol_family = symbol_family
@@ -109,7 +143,21 @@ class Theme:
 
     def font(self, size=BODY_FONT_SIZE, weight=None):
         """Return a font spec tuple for the GUI's shared family."""
-        return _spec(self.family, size + self.size_delta, weight)
+        display = size >= DISPLAY_FONT_SIZE
+        if weight == "bold" and self.strong_family:
+            family = self.display_strong_family if display else self.strong_family
+            return _spec(family, size + self.size_delta)
+        family = self.display_family if display else self.family
+        return _spec(family, size + self.size_delta, weight)
+
+    def caption_font(self):
+        return self.font(CAPTION_FONT_SIZE)
+
+    def subtitle_font(self):
+        return self.font(SUBTITLE_FONT_SIZE, "bold")
+
+    def title_font(self):
+        return self.font(TITLE_FONT_SIZE, "bold")
 
     def emoji_font(self, size=BODY_FONT_SIZE, weight=None):
         return _spec(self.emoji_family, size + self.size_delta, weight)
@@ -171,39 +219,10 @@ class Theme:
             "selectforeground": self.select_fg,
         }
 
-    # Buttons and checkboxes are the widgets Aqua draws *itself*, and it draws
-    # them from the appearance rather than from what the app asks for. It
-    # ignores ``-background`` outright and keeps its own light bezel, but it
-    # does honour ``-foreground`` -- so a well-meant `fg=systemTextColor` puts
-    # white text on that light bezel and the button renders as a blank box
-    # (seen on macOS 15 / Tk 9.0). Every button color helper therefore answers
-    # nothing on macOS: the native control is already correct in both
-    # appearances, and the only way to break it is to paint on it.
-
-    def checkbutton_colors(self, bg):
-        """Colors for a checkbox sitting on ``bg``. Native on macOS."""
-        if self.system == "darwin":
-            return {}
-        colors = {
-            "bg": bg,
-            "fg": self.text_native,
-            "activebackground": bg,
-            "activeforeground": self.text_native,
-        }
-        if self.is_dark:
-            # Win32 paints ``selectcolor`` behind the indicator in *both*
-            # states and draws the check mark in ``fg``; the default white
-            # box would hide the light mark.
-            colors["selectcolor"] = self.field
-            colors["disabledforeground"] = self.text_muted
-        return colors
-
     def toolbar_frame_colors(self):
         """``bg`` for the formatting-toolbar frame (and its stacked status row).
 
         The toolbar belongs to the editor surface, so it always uses ``card``.
-        Toolbar buttons receive their own foreground and interaction colors,
-        avoiding the old Win32 white-on-white regression.
         """
         return {"bg": self.card}
 
@@ -214,67 +233,7 @@ class Theme:
         muted semantic color on every platform. The label's ``bg`` is passed
         by the caller (the toolbar's own background).
         """
-        return {"font": self.font(8), "fg": self.text_muted}
-
-    def toolbar_button_colors(self, bg):
-        """Colors for the flat glyph buttons in the formatting toolbar."""
-        if self.system == "darwin":
-            return {}
-        return {
-            "bg": bg,
-            "fg": self.text_native,
-            "activebackground": self.surface_hover,
-            "activeforeground": self.text_native,
-        }
-
-    def glyph_button_colors(self, bg):
-        """Colors for a small icon button sitting on ``bg`` (the ✎ rename)."""
-        if self.system == "darwin":
-            return {}
-        # No activeforeground: the shipped button did not set one, and adding
-        # it would change the pressed state on Windows.
-        return {
-            "bg": bg,
-            "fg": self.text_muted,
-            "activebackground": self.field_hover,
-        }
-
-    def nav_button_colors(self, bg, selected=False):
-        """Colors for a section-navigation button sitting on ``bg``. Native on macOS."""
-        if self.system == "darwin":
-            return {}
-        fg = self.accent if selected else self.text_native
-        return {
-            "bg": bg,
-            "fg": fg,
-            "activebackground": self.surface_hover,
-            "activeforeground": fg,
-        }
-
-    def card_options(self):
-        """Tk frame options for a settings card: card surface, quiet border.
-
-        Tk has no reliable cross-platform rounded-corner primitive; a one-pixel
-        border preserves the hierarchy without faux rounded controls.
-        """
-        return {
-            "bg": self.card,
-            "highlightbackground": self.border,
-            "highlightthickness": 1,
-            "bd": 0,
-        }
-
-    def button_width(self, chars):
-        """Fixed button width in characters, or 0 to let the button size itself.
-
-        The widths in the GUI were picked against flat Win32 buttons. Aqua's
-        native bezel is wider than the text it wraps, so the same numbers
-        overflow their pane there and clip the last button in a row (measured:
-        the five-button editor row needs 630px in a 433px pane). Natural
-        sizing costs Aqua nothing -- its minimum width is already generous --
-        and Windows keeps the tuned numbers.
-        """
-        return 0 if self.system == "darwin" else chars
+        return {"font": self.caption_font(), "fg": self.text_muted}
 
     @property
     def manager_window_size(self):
@@ -304,23 +263,6 @@ class Theme:
         """
         return self.system == "darwin"
 
-    def button_chrome(self, compact=False):
-        """Platform-safe geometry and focus treatment for manager buttons."""
-        if self.system == "darwin":
-            return {}
-        return {
-            "relief": "flat",
-            "bd": 0,
-            "padx": 12 if compact else 16,
-            "pady": 6 if compact else 9,
-            "highlightthickness": 1,
-            # ``control_border``, not the quiet card ``border``: the ring is
-            # what separates a neutral button from the card it sits on.
-            "highlightbackground": self.control_border,
-            "highlightcolor": self.focus_ring,
-            "cursor": "hand2",
-        }
-
     def field_chrome(self):
         """Flat one-pixel border for ``tk.Entry``/``tk.Text``, as the manager uses.
 
@@ -334,32 +276,6 @@ class Theme:
             "highlightcolor": self.focus_ring,
         }
 
-    def button_colors(self, accent=False, danger=False):
-        """Colors for the app's tinted buttons. Native on macOS."""
-        if self.system == "darwin":
-            return {}
-        if danger:
-            return {
-                "bg": self.danger,
-                "fg": self.text_on_accent,
-                "activebackground": self.danger_active,
-                "activeforeground": self.text_on_accent,
-            }
-        if accent:
-            return {
-                "bg": self.accent,
-                "fg": self.text_on_accent,
-                "activebackground": self.accent_active,
-                "activeforeground": self.text_on_accent,
-            }
-        # Neutral buttons used to paint ``surface_alt`` (#FAFAFA), ~1.04:1
-        # against the white cards they sit on, so they read as plain text.
-        return {
-            "bg": self.control,
-            "fg": self.text_native,
-            "activebackground": self.control_active,
-            "activeforeground": self.text_native,
-        }
 
 
 def _spec(family, size, weight=None):
@@ -377,15 +293,20 @@ _LIGHT = {
     "surface": "#F3F3F3",
     "surface_alt": "#FFFFFF",
     "surface_alt_active": "#DEDEDE",
-    "surface_hover": "#EAEAEA",
     "card": "#FFFFFF",
     "field": "#FFFFFF",
-    "field_hover": "#EAEAEA",
-    # Product adaptation: neutral button fill and ring stay distinct from
-    # both ``surface`` and ``card`` so secondary actions remain visible.
-    "control": "#E6E6E6",
-    "control_active": "#DEDEDE",
-    "control_border": "#767676",
+    # Windows 11 control fills, flattened over a white card. A neutral
+    # button is near-white and separated from its surface by the elevation
+    # stroke (lighter sides, darker bottom edge), not by a grey fill.
+    "control": "#FBFBFB",
+    "control_hover": "#F6F6F6",
+    "control_active": "#F5F5F5",
+    "control_stroke": "#E5E5E5",
+    "control_stroke_bottom": "#C4C4C4",
+    # Field underline, checkbox/switch outline and off-state knob.
+    "stroke_strong": "#8A8A8A",
+    "card_border": "#E5E5E5",
+    "scrollbar_thumb": "#8A8A8A",
     "text": "#1A1A1A",
     "text_strong": "#1A1A1A",
     "text_muted": "#5C5C5C",
@@ -393,9 +314,9 @@ _LIGHT = {
     "border": "#D6D6D6",
     "divider": "#D6D6D6",
     "accent": "#005FB8",
+    "accent_hover": "#1A6FBF",
     "accent_active": "#004A91",
     "danger": "#A4262C",
-    "danger_active": "#8B1E24",
     "focus_ring": "#005FB8",
     "link": "#005FB8",
     "warning": "#7A4D00",
@@ -415,13 +336,16 @@ _DARK = {
     "surface": "#202020",
     "surface_alt": "#333333",
     "surface_alt_active": "#414141",
-    "surface_hover": "#383838",
     "card": "#2B2B2B",
     "field": "#333333",
-    "field_hover": "#383838",
     "control": "#383838",
-    "control_active": "#414141",
-    "control_border": "#A0A0A0",
+    "control_hover": "#3D3D3D",
+    "control_active": "#323232",
+    "control_stroke": "#454545",
+    "control_stroke_bottom": "#3B3B3B",
+    "stroke_strong": "#9E9E9E",
+    "card_border": "#1C1C1C",
+    "scrollbar_thumb": "#9F9F9F",
     "text": "#F5F5F5",
     "text_strong": "#F5F5F5",
     "text_muted": "#C4C4C4",
@@ -429,9 +353,9 @@ _DARK = {
     "border": "#494949",
     "divider": "#494949",
     "accent": "#60CDFF",
+    "accent_hover": "#5BBBE9",
     "accent_active": "#A1E2FF",
     "danger": "#FFB4B8",
-    "danger_active": "#FFD0D2",
     "focus_ring": "#75D5FF",
     "link": "#75D5FF",
     "warning": "#FFD479",
@@ -476,11 +400,8 @@ _MAC_LIGHT_OVERRIDES = {
 _MAC_DARK_OVERRIDES = {
     "surface_alt": "#2C2C2E",
     "surface_alt_active": "#3A3A3C",
-    "surface_hover": "#3A3A3C",
-    "field_hover": "#2C2C2E",
     "control": "#3A3A3C",
     "control_active": "#48484A",
-    "control_border": "#636366",
     "text_muted": "#98989D",
     "border": "#48484A",
     "divider": "#48484A",
@@ -489,8 +410,13 @@ _MAC_DARK_OVERRIDES = {
     "warning": "#E0A458",
     "success": "#4ADE80",
     "danger": "#FF6961",
-    "danger_active": "#FF453A",
     "focus_ring": "#6BA0FF",
+    # Only the Fluent controls (Windows/Linux) read these; keep the map
+    # coherent anyway so no light literal leaks into a dark palette.
+    **{token: _DARK[token] for token in (
+        "control_hover", "control_stroke", "control_stroke_bottom",
+        "stroke_strong", "card_border", "scrollbar_thumb",
+    )},
 }
 
 
@@ -519,10 +445,21 @@ def palette(kind, system=None):
     return colors
 
 
-def font_family(system=None):
+def windows_font_families(available=None):
+    """The Segoe faces for each text role, picked from the installed families.
+
+    ``available`` is ``font.families()`` from a live interpreter. Without it
+    the answer is the Windows 10 set, which every supported Windows has.
+    """
+    if available is not None and _WINDOWS_11_FAMILIES["text"] in available:
+        return dict(_WINDOWS_11_FAMILIES)
+    return dict(_WINDOWS_10_FAMILIES)
+
+
+def font_family(system=None, available=None):
     system = system or current_os()
     if system == "windows":
-        return _WINDOWS_FAMILY
+        return windows_font_families(available)["text"]
     if system == "darwin":
         return _MAC_FAMILY
     return _LINUX_FAMILY
@@ -557,28 +494,24 @@ def size_delta(system=None, default_size=None):
     return int(default_size) - BODY_FONT_SIZE
 
 
-def ttk_theme_preference(system=None, dark=False):
-    """ttk themes to try, best first. The last is Tk's built-in fallback."""
-    system = system or current_os()
-    if dark and system != "darwin":
-        # Win32's native Vista theme paints light controls whatever colors Tk
-        # supplies. Clam is the portable theme that honors them.
-        return ("clam", "default")
-    if system == "windows":
-        return ("vista", "winnative", "default")
-    if system == "darwin":
+def ttk_theme_preference(system=None):
+    """ttk themes to try on macOS, best first. The last is Tk's built-in fallback.
+
+    Windows and Linux do not choose from Tk's themes: they get the Fluent
+    theme built by :mod:`ui_widgets`.
+    """
+    if (system or current_os()) == "darwin":
         return ("aqua", "clam", "default")
     return ("clam", "default")
 
 
-def apply_ttk_theme(style, system=None, resolved=None):
+def apply_ttk_theme(style, system=None):
     """Select the best available ttk theme. Returns the theme actually in use."""
     try:
         available = set(style.theme_names())
     except Exception:
         return None
-    dark = (resolved or theme()).is_dark
-    for name in ttk_theme_preference(system, dark=dark):
+    for name in ttk_theme_preference(system):
         if name not in available:
             continue
         try:
@@ -592,116 +525,21 @@ def apply_ttk_theme(style, system=None, resolved=None):
         return None
 
 
-def configure_clam_colors(style, resolved=None):
-    """Paint the ttk widgets the manager uses when running under ``clam``.
-
-    Only the dark palette selects clam off macOS, and clam's defaults are
-    near-white bevels, troughs and popdowns that would glare out of every dark
-    window. Vista and Aqua ignore these options, so the light and native
-    paths are untouched either way.
-    """
-    ui = resolved or theme()
-    style.configure(
-        "Manager.TNotebook",
-        bordercolor=ui.border, lightcolor=ui.surface, darkcolor=ui.surface,
-    )
-    style.configure(
-        "Pages.TNotebook",
-        bordercolor=ui.surface, lightcolor=ui.surface, darkcolor=ui.surface,
-    )
-    style.configure(
-        "Manager.TNotebook.Tab",
-        bordercolor=ui.border, lightcolor=ui.surface, darkcolor=ui.surface,
-    )
-    style.map(
-        "Manager.TNotebook.Tab",
-        lightcolor=[("selected", ui.card)],
-        # Clam shrinks and shifts the selected tab (narrower padding plus an
-        # ``expand`` inset); keep its geometry identical to its neighbors.
-        padding=[("selected", (18, 10))],
-        expand=[("selected", (0, 0, 0, 0))],
-    )
-    style.configure(
-        "TCombobox",
-        fieldbackground=ui.field,
-        background=ui.control,
-        foreground=ui.text,
-        arrowcolor=ui.text_muted,
-        bordercolor=ui.border,
-        lightcolor=ui.border,
-        darkcolor=ui.border,
-        selectbackground=ui.select_bg,
-        selectforeground=ui.select_fg,
-    )
-    style.map(
-        "TCombobox",
-        fieldbackground=[("readonly", ui.field), ("disabled", ui.surface_alt)],
-        foreground=[("readonly", ui.text), ("disabled", ui.text_muted)],
-        background=[("active", ui.control_active)],
-        selectbackground=[("readonly", ui.field)],
-        selectforeground=[("readonly", ui.text)],
-    )
-    for orientation in ("Vertical", "Horizontal"):
-        name = f"{orientation}.TScrollbar"
-        style.configure(
-            name,
-            background=ui.control,
-            troughcolor=ui.surface,
-            bordercolor=ui.surface,
-            arrowcolor=ui.text_muted,
-            lightcolor=ui.control,
-            darkcolor=ui.control,
-        )
-        # Clam maps a near-white face onto idle states (e.g. an empty list's
-        # full-length thumb), overriding the configured background.
-        style.map(
-            name,
-            background=[("pressed", ui.control_active), ("active", ui.control_active),
-                        ("!active", ui.control)],
-        )
-    style.configure(
-        "Manager.Treeview", bordercolor=ui.border, lightcolor=ui.card, darkcolor=ui.card,
-    )
-    style.configure(
-        "Manager.Treeview.Heading",
-        bordercolor=ui.border, lightcolor=ui.surface_alt, darkcolor=ui.surface_alt,
-        relief="flat",
-    )
-    style.map("Manager.Treeview.Heading", background=[("active", ui.surface_hover)])
-    # Unstyled trees (the notification history) use the base style.
-    style.configure(
-        "Treeview",
-        background=ui.card, fieldbackground=ui.card, foreground=ui.text,
-        bordercolor=ui.border, lightcolor=ui.card, darkcolor=ui.card,
-    )
-    style.map(
-        "Treeview",
-        background=[("selected", ui.select_bg)],
-        foreground=[("selected", ui.select_fg)],
-    )
-    style.configure(
-        "Treeview.Heading",
-        background=ui.surface_alt, foreground=ui.text_strong,
-        bordercolor=ui.border, lightcolor=ui.surface_alt, darkcolor=ui.surface_alt,
-        relief="flat",
-    )
-    style.map("Treeview.Heading", background=[("active", ui.surface_hover)])
-    return style
-
-
 def prepare_window(window, resolved=None):
-    """Theme a new Toplevel: ttk theme, clam colors, popdown defaults, title bar.
+    """Theme a new Toplevel: ttk theme, popdown defaults, title bar.
 
     ttk styles and the option database belong to the shared interpreter, not
     to a window, so a dialog opened before the manager (a form at expansion
-    time) would otherwise get Vista's light controls inside a dark window.
+    time) would otherwise get another palette's controls inside its window.
     Returns the ttk theme in use.
     """
     ui = resolved or theme()
-    style = ttk.Style(window)
-    name = apply_ttk_theme(style, resolved=ui)
-    if name == "clam":
-        configure_clam_colors(style, ui)
+    if ui.system == "darwin":
+        name = apply_ttk_theme(ttk.Style(window), ui.system)
+    else:
+        import ui_widgets  # builds on this module's tokens
+
+        name = ui_widgets.install(window, ui)
     apply_option_defaults(window, ui)
     if ui.system == "windows":
         # A withdrawn Toplevel has no Win32 frame yet; ask again once mapped.
@@ -857,12 +695,29 @@ def _probe_default_size(widget):
         return None
 
 
-def build_theme(kind, system=None, default_size=None, preference="system"):
+# Installed font families, probed once: enumerating them costs a few
+# milliseconds and fonts do not appear mid-session in practice.
+_font_families = None
+
+
+def _probe_font_families(widget):
+    global _font_families
+    if _font_families is None:
+        try:
+            _font_families = frozenset(tkfont.families(widget))
+        except Exception:
+            return None
+    return _font_families
+
+
+def build_theme(kind, system=None, default_size=None, preference="system",
+                font_families=None):
     """Assemble a :class:`Theme`. Pure given its arguments.
 
     macOS "system" mode keeps Aqua's dynamic color names. A fixed light/dark
     choice there must use the opaque palette instead; otherwise Aqua resolves
     those names from the OS appearance and silently overrides the user.
+    ``font_families`` is the installed set, which picks the Windows faces.
     """
     system = system or current_os()
     preference = normalize_preference(preference)
@@ -870,16 +725,20 @@ def build_theme(kind, system=None, default_size=None, preference="system"):
     if system == "darwin" and preference != "system":
         colors = dict(_DARK if kind == "dark" else _LIGHT)
         colors.update(_MAC_NATIVE)
+    faces = windows_font_families(font_families) if system == "windows" else {}
     return Theme(
         kind=kind,
         system=system,
-        family=font_family(system),
+        family=font_family(system, font_families),
         emoji_family=emoji_family(system),
         mono_family=mono_family(system),
         symbol_family=symbol_family(system),
         size_delta=size_delta(system, default_size),
         colors=colors,
         preference=preference,
+        strong_family=faces.get("text_strong"),
+        display_family=faces.get("display"),
+        display_strong_family=faces.get("display_strong"),
     )
 
 
@@ -906,7 +765,13 @@ def bind(widget=None, system=None):
     else:
         kind = _probe_kind(widget, system)
     default_size = _probe_default_size(widget) if widget is not None else None
-    _current = build_theme(kind, system, default_size, preference=chosen)
+    families = (
+        _probe_font_families(widget)
+        if widget is not None and system == "windows" else None
+    )
+    _current = build_theme(
+        kind, system, default_size, preference=chosen, font_families=families,
+    )
     return _current
 
 

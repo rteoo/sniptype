@@ -10,6 +10,7 @@ from dataclasses import dataclass
 import tkinter as tk
 
 import ui_theme
+import ui_widgets
 from i18n import N_, _
 from preview_support import (
     CLIPBOARD_PLACEHOLDER,
@@ -203,35 +204,31 @@ class PreviewDialogController:
             return False
 
     def _build_widgets(self, window, _controller):
-        frame = tk.Frame(window, bg=self.theme.card)
+        window.configure(bg=self.theme.surface)
+        ui_theme.prepare_window(window, self.theme)
+        frame = ui_widgets.card(window, padding=self.theme.space_md, ui=self.theme)
         frame.pack(fill="both", expand=True, padx=self.theme.space_lg, pady=self.theme.space_lg)
-        text_widget = tk.Text(
+        text_field, text_widget = ui_widgets.text_area(
             frame,
             wrap="word",
             width=80,
             height=20,
-            font=self.theme.font(10),
             padx=self.theme.space_sm,
             pady=self.theme.space_sm,
-            **self.theme.text_colors(),
-            **self.theme.field_chrome(),
+            ui=self.theme,
         )
-        text_widget.pack(fill="both", expand=True)
+        text_field.pack(fill="both", expand=True)
         status = tk.Label(
             frame,
             text="",
             anchor="w",
             bg=self.theme.card,
             fg=self.theme.warning,
-            font=self.theme.font(8),
+            font=self.theme.caption_font(),
         )
         status.pack(fill="x", pady=(self.theme.space_sm, 0))
-        close = tk.Button(
-            frame,
-            text=_("Fechar"),
-            command=self.close,
-            **self.theme.button_chrome(compact=True),
-            **self.theme.button_colors(),
+        close = ui_widgets.button(
+            frame, text=_("Fechar"), command=self.close, width=10, ui=self.theme,
         )
         close.pack(anchor="e", pady=(self.theme.space_sm, 0))
         return text_widget, status
