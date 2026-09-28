@@ -1879,6 +1879,10 @@ class Sniptype:
                 return
             if hasattr(key, 'char') and key.char:
                 self._handle_char(key.char)
+            elif key == Key.space:
+                # Every pynput backend delivers Space as this enum member, which
+                # has no .char, so it would otherwise never reach the matcher.
+                self._handle_char(" ")
             elif key == Key.enter:
                 # ceiling: terminator mode does not gate on Enter (re-typing it could
                 # double-submit); Enter always just resets the buffer. Extend to Enter
