@@ -245,6 +245,22 @@ TRIGGER_BUFFER_MARGIN = 8
 # Characters that end a word for opt-in terminator-gated expansion.
 TERMINATOR_CHARS = frozenset(" \t\n\r.,;:!?)]}\"'")
 
+# Keys that move the caret or change the text before it without typing a
+# character, so the buffer no longer describes what precedes the caret. Delete
+# is absent on purpose: it removes text after the caret. Insert covers
+# Shift+Insert (paste) and Menu opens a context menu that can paste or undo;
+# the macOS pynput backend has neither.
+BUFFER_RESET_KEYS = frozenset(
+    key
+    for key in (
+        Key.left, Key.right, Key.up, Key.down,
+        Key.home, Key.end, Key.page_up, Key.page_down,
+        Key.tab, Key.esc,
+        getattr(Key, "insert", None), getattr(Key, "menu", None),
+    )
+    if key is not None
+)
+
 # Pixels kept for an editor's formatting toolbar plus its content box.
 EDITOR_CONTENT_MIN_HEIGHT = 140
 
@@ -300,6 +316,8 @@ class Sniptype:
     def __init__(self, snippets_file: str = 'snippets.json'):
         self.keyboard_controller = Controller()
         self.typed_text = ""
+        # Foreground window the buffered text was typed into (None off Windows).
+        self._buffer_window = None
         self.expansion_failed = False
         self.last_expansion_time = 0
         self.enabled = True
@@ -1896,6 +1914,14 @@ class Sniptype:
                 self.typed_text = ""
             elif key == Key.backspace and self.typed_text:
                 self.typed_text = self.typed_text[:-1]
+            elif key in BUFFER_RESET_KEYS:
+                # ceiling: a mouse click moves the caret without a key event, so
+                # "x", click elsewhere, "hi" still completes "xhi". A pynput mouse
+                # listener would put Python on the synchronous WH_MOUSE_LL path for
+                # every mouse move. Add click resets when an asynchronous source
+                # exists (e.g. Raw Input on a message-only window) or users report
+                # wrong erasures after clicking.
+                self.typed_text = ""
         except Exception as e:
             # A detection error must never stop the global keyboard listener.
             self.typed_text = ""
@@ -1920,6 +1946,14 @@ class Sniptype:
             # direct in-memory toggles backward compatible with one rebuild,
             # rather than scanning policy on every keypress.
             self.rebuild_trigger_index()
+        window = platform_support.foreground_window_handle()
+        if window != self._buffer_window:
+            # Text typed in another window cannot complete a trigger here.
+            # ceiling: macOS and Linux report no window, so their buffer still
+            # spans app switches; add the CGEvent target PID (darwin_intercept)
+            # or X11 active window when that platform's users hit it.
+            self.typed_text = ""
+            self._buffer_window = window
         self.typed_text += char
         if len(self.typed_text) > self.max_trigger_length:
             self.typed_text = self.typed_text[-self.max_trigger_length:]
