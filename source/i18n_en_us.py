@@ -90,6 +90,7 @@ EN_US = {
     "Falha no snippet {trigger}: dado indisponível.": "Snippet {trigger} failed: data unavailable.",
     "Não foi possível colar o snippet automaticamente. Ele está na área de transferência: use Ctrl+V.": "Could not paste the snippet automatically. It is on the clipboard: press Ctrl+V.",
     "Não foi possível colar o snippet nem copiá-lo para a área de transferência.": "Could not paste the snippet or copy it to the clipboard.",
+    "Você continuou digitando ou trocou de janela antes da expansão terminar. O snippet está na área de transferência: use Ctrl+V.": "You kept typing or switched windows before the expansion finished. The snippet is on the clipboard: press Ctrl+V.",
     "Falha ao ler a area de transferencia para o WhatsApp: {error}": "Could not read the clipboard for WhatsApp: {error}",
     "Falha ao gerar link do WhatsApp: {error}": "Could not create the WhatsApp link: {error}",
     "Nao foi possivel copiar o link do WhatsApp para a area de transferencia: {error}": "Could not copy the WhatsApp link to the clipboard: {error}",
@@ -165,6 +166,7 @@ EN_US = {
     "SnipType iniciado com sucesso.": "SnipType started.",
     "Erro ao detectar snippet: {e}": "Could not detect the snippet: {e}",
     "Falha ao expandir {trigger}: {e}": "Could not expand {trigger}: {e}",
+    "O Windows bloqueou a expansão nesta janela, provavelmente porque ela está em execução como administrador.": "Windows blocked the expansion in this window, probably because it is running as administrator.",
     "Atalhos salvos.": "Hotkeys saved.",
     "Não foi possível salvar os atalhos.": "Could not save the hotkeys.",
     # sniptype: manager shell and backups

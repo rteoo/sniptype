@@ -246,6 +246,22 @@ TRIGGER_BUFFER_MARGIN = 8
 # Characters that end a word for opt-in terminator-gated expansion.
 TERMINATOR_CHARS = frozenset(" \t\n\r.,;:!?)]}\"'")
 
+# Keys that move the caret or change the text before it without typing a
+# character, so the buffer no longer describes what precedes the caret. Delete
+# is absent on purpose: it removes text after the caret. Insert covers
+# Shift+Insert (paste) and Menu opens a context menu that can paste or undo;
+# the macOS pynput backend has neither.
+BUFFER_RESET_KEYS = frozenset(
+    key
+    for key in (
+        Key.left, Key.right, Key.up, Key.down,
+        Key.home, Key.end, Key.page_up, Key.page_down,
+        Key.tab, Key.esc,
+        getattr(Key, "insert", None), getattr(Key, "menu", None),
+    )
+    if key is not None
+)
+
 # Pixels kept for an editor's formatting toolbar plus its content box.
 EDITOR_CONTENT_MIN_HEIGHT = 140
 
@@ -301,6 +317,13 @@ class Sniptype:
     def __init__(self, snippets_file: str = 'snippets.json'):
         self.keyboard_controller = Controller()
         self.typed_text = ""
+        # Foreground window the buffered text was typed into (None off Windows).
+        self._buffer_window = None
+        # Bumped by the listener on every user keystroke; a slow-route expansion
+        # whose dispatch-time value is no longer current must not be pasted.
+        self._input_generation = 0
+        # (generation, foreground HWND) of the expansion running on this worker.
+        self._expansion_context = threading.local()
         self.expansion_failed = False
         self.last_expansion_time = 0
         self.enabled = True
@@ -387,6 +410,7 @@ class Sniptype:
             restore_delay=timings["paste_restore_delay"],
             notify=self.notify_error,
             batch_keyboard=self.batch_keyboard,
+            still_current=self._expansion_target_is_current,
         )
         configure_logging(self.logs_dir)
         for key, default in invalid_runtime_settings.items():
@@ -1025,6 +1049,7 @@ class Sniptype:
             # thread. Cmd+V cannot race ahead of the target application's native
             # activation notification.
             wait_for_focus_restore()
+            self._rebaseline_expansion_context()
             return result
         finally:
             self._dialog_lock.release()
@@ -1870,19 +1895,35 @@ class Sniptype:
             return SnippetRef("static", trigger)
         return None
 
-    def on_press(self, key):
+    def on_press(self, key, injected=False):
         """Detect a trigger on the listener thread; expand on a worker thread.
 
         The listener must stay fast and unkillable: it only appends the keystroke,
         matches a trigger, erases the typed trigger, and hands all real work
         (callables, network, dialogs, clipboard, paste) to a background thread.
+
+        ``injected`` comes from pynput >= 1.8 (older versions omit it). Our own
+        untagged synthesized keys (macOS erase and paste, a re-emitted
+        terminator) arrive here flagged, and must not look like user typing.
         """
         try:
+            if not injected:
+                self._input_generation += 1
             if self.hotkey_router.press(key):
+                self.typed_text = ""
+                return
+            if not self.enabled:
+                # Paused: no matching, so nothing is erased, and nothing typed
+                # now can complete a trigger after resuming. The hotkey router
+                # above stays live so the toggle hotkey can resume expansion.
                 self.typed_text = ""
                 return
             if hasattr(key, 'char') and key.char:
                 self._handle_char(key.char)
+            elif key == Key.space:
+                # Every pynput backend delivers Space as this enum member, which
+                # has no .char, so it would otherwise never reach the matcher.
+                self._handle_char(" ")
             elif key == Key.enter:
                 # ceiling: terminator mode does not gate on Enter (re-typing it could
                 # double-submit); Enter always just resets the buffer. Extend to Enter
@@ -1890,6 +1931,14 @@ class Sniptype:
                 self.typed_text = ""
             elif key == Key.backspace and self.typed_text:
                 self.typed_text = self.typed_text[:-1]
+            elif key in BUFFER_RESET_KEYS:
+                # ceiling: a mouse click moves the caret without a key event, so
+                # "x", click elsewhere, "hi" still completes "xhi". A pynput mouse
+                # listener would put Python on the synchronous WH_MOUSE_LL path for
+                # every mouse move. Add click resets when an asynchronous source
+                # exists (e.g. Raw Input on a message-only window) or users report
+                # wrong erasures after clicking.
+                self.typed_text = ""
         except Exception as e:
             # A detection error must never stop the global keyboard listener.
             self.typed_text = ""
@@ -1914,6 +1963,14 @@ class Sniptype:
             # direct in-memory toggles backward compatible with one rebuild,
             # rather than scanning policy on every keypress.
             self.rebuild_trigger_index()
+        window = platform_support.foreground_window_handle()
+        if window != self._buffer_window:
+            # Text typed in another window cannot complete a trigger here.
+            # ceiling: macOS and Linux report no window, so their buffer still
+            # spans app switches; add the CGEvent target PID (darwin_intercept)
+            # or X11 active window when that platform's users hit it.
+            self.typed_text = ""
+            self._buffer_window = window
         self.typed_text += char
         if len(self.typed_text) > self.max_trigger_length:
             self.typed_text = self.typed_text[-self.max_trigger_length:]
@@ -2047,7 +2104,21 @@ class Sniptype:
         if self._secure_input_blocks_expansion():
             self.typed_text = ""
             return
-        self._erase_chars(erase_length)
+        if not self._erase_chars(erase_length):
+            # The trigger text (or part of it) is still in the window, and a
+            # paste into a window that rejects input would be rejected too.
+            # Notify from a worker: the listener must not touch the tray or
+            # write history, and notify() applies the cooldown under its lock.
+            self.typed_text = ""
+            self.task_runner.start(
+                self.notify_error,
+                _("O Windows bloqueou a expansão nesta janela, provavelmente "
+                  "porque ela está em execução como administrador."),
+                key="injection-blocked",
+                cooldown_seconds=60,
+                name="injection-blocked-notify",
+            )
+            return
         self.typed_text = ""
         worker_target = trigger
         if isinstance(trigger, ExpansionTarget):
@@ -2079,11 +2150,22 @@ class Sniptype:
             effective in trigger_index.get("slow_triggers", ())
             or effective in trigger_index.get("form_triggers", ())
         )
+        # The text target this trigger was typed into: an int read plus one
+        # user32 call, cheap enough for the listener. The worker compares it
+        # right before pasting (_expansion_target_is_current). Only a slow
+        # route (network, dialog) compares keystrokes: a fast expansion pastes
+        # within ~0.1 s, and a fast typist's next key must not turn it into a
+        # clipboard notice.
+        context = (
+            getattr(self, "_input_generation", 0) if slow_route else None,
+            platform_support.foreground_window_handle(),
+        )
         self.task_runner.start(
             self._run_expansion,
             worker_target,
             append_text,
             slow_route,
+            context=context,
             name="expand",
         )
 
@@ -2119,6 +2201,10 @@ class Sniptype:
         This thread also pumps the Windows keyboard hook, so any sleep here
         stalls keyboard input system-wide. With no per-key delay configured,
         Windows sends the whole erase as one uninterruptible batch.
+
+        Returns False only when Windows rejected the batch, wholly or in part
+        (``send_key_events`` does not tell the two apart); pynput reports no
+        delivery result, so the paced erase returns True.
         """
         batch_keyboard = getattr(self, "batch_keyboard", None)
         if batch_keyboard is not None and not self.erase_key_delay:
@@ -2127,22 +2213,27 @@ class Sniptype:
                     "Windows bloqueou o apagamento do gatilho "
                     "(janela em execução como administrador?)."
                 )
-            return
+                return False
+            return True
         # A configured per-key delay keeps the legacy paced erase, which does
         # hold the listener for count * erase_key_delay.
         for _index in range(count):
             self.keyboard_controller.press(Key.backspace)
             self.keyboard_controller.release(Key.backspace)
             time.sleep(self.erase_key_delay)
+        return True
 
-    def _run_expansion(self, trigger, append_text="", slow_route=None):
+    def _run_expansion(self, trigger, append_text="", slow_route=None, context=None):
         """Worker entry point: produce and insert the expansion for a trigger.
 
         The trigger text is already erased. This is wrapped so no expansion error
         (including a raising callable) can ever propagate to the listener thread.
+        ``context`` is the dispatch-time text target; without it nothing is
+        checked before pasting.
         """
         if not self.enabled:
             return
+        self._expansion_context.value = context
         try:
             effective = trigger.effective_trigger if isinstance(trigger, ExpansionTarget) else trigger
             lookup = (
@@ -2176,6 +2267,34 @@ class Sniptype:
                 key=f"expand-error:{getattr(trigger, 'effective_trigger', trigger)}",
                 cooldown_seconds=5,
             )
+        finally:
+            self._expansion_context.value = None
+
+    def _expansion_target_is_current(self):
+        """True when this worker's expansion may still be pasted.
+
+        Stale when a slow-route expansion saw any user key since its trigger
+        (the text would land after it, or after a later trigger's text) or, on
+        Windows, when another window is in the foreground. Workers not running
+        an expansion have no context and are never blocked.
+        """
+        context = getattr(self._expansion_context, "value", None)
+        if context is None:
+            return True
+        generation, window = context
+        if generation is not None and generation != self._input_generation:
+            return False
+        return window is None or platform_support.foreground_window_handle() == window
+
+    def _rebaseline_expansion_context(self):
+        """Accept the keystrokes typed into an expansion dialog that just closed.
+
+        The global hook sees what the user types into Sniptype's own dialog;
+        only keys pressed after focus is back on the original target count.
+        """
+        context = getattr(self._expansion_context, "value", None)
+        if context is not None and context[0] is not None:
+            self._expansion_context.value = (self._input_generation, context[1])
 
 
 
@@ -5371,6 +5490,8 @@ class Sniptype:
 
     def toggle_enabled(self, icon, item):
         """Enable/disable snippet expansion."""
+        # A partial trigger typed before the toggle must not complete after it.
+        self.typed_text = ""
         self.enabled = not self.enabled
         if icon is not None:
             icon.icon = self.load_tray_icon()
