@@ -339,6 +339,20 @@ def foreground_executable_name():
     return result
 
 
+def foreground_window_handle():
+    """Return the raw foreground HWND on Windows, or None.
+
+    One user32 call with no process query, so the keyboard listener can take
+    it at every dispatch. None off Windows or when Windows reports no window.
+    """
+    if not IS_WINDOWS:
+        return None
+    try:
+        return int(_win32_user32().GetForegroundWindow()) or None
+    except Exception:
+        return None
+
+
 def capture_text_target():
     """Foreground app/window that should receive text after a modal dialog.
 
