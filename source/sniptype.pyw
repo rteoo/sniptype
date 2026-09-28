@@ -1877,6 +1877,12 @@ class Sniptype:
             if self.hotkey_router.press(key):
                 self.typed_text = ""
                 return
+            if not self.enabled:
+                # Paused: no matching, so nothing is erased, and nothing typed
+                # now can complete a trigger after resuming. The hotkey router
+                # above stays live so the toggle hotkey can resume expansion.
+                self.typed_text = ""
+                return
             if hasattr(key, 'char') and key.char:
                 self._handle_char(key.char)
             elif key == Key.space:
@@ -5371,6 +5377,8 @@ class Sniptype:
 
     def toggle_enabled(self, icon, item):
         """Enable/disable snippet expansion."""
+        # A partial trigger typed before the toggle must not complete after it.
+        self.typed_text = ""
         self.enabled = not self.enabled
         if icon is not None:
             icon.icon = self.load_tray_icon()
