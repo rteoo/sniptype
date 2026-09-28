@@ -1918,8 +1918,12 @@ class Sniptype:
                 # above stays live so the toggle hotkey can resume expansion.
                 self.typed_text = ""
                 return
-            if hasattr(key, 'char') and key.char:
-                self._handle_char(key.char)
+            char = getattr(key, 'char', None)
+            if IS_WINDOWS:
+                # pynput mistranslates numpad digits, '/' and the decimal key.
+                char = win_input.typed_char(getattr(key, 'vk', None), char)
+            if char:
+                self._handle_char(char)
             elif key == Key.space:
                 # Every pynput backend delivers Space as this enum member, which
                 # has no .char, so it would otherwise never reach the matcher.

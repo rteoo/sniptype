@@ -27,6 +27,19 @@ INJECTION_TAG = 0x534E4950
 
 VK_BACK = 0x08
 VK_CONTROL = 0x11
+VK_MENU = 0x12
+VK_NUMPAD0 = 0x60
+VK_DECIMAL = 0x6E
+VK_DIVIDE = 0x6F
+MAPVK_VK_TO_CHAR = 2
+
+# Numpad keys whose character does not depend on the layout. pynput derives a
+# key's char from its scan code; with NumLock on the numpad digits share scan
+# codes with the navigation keys (so they arrive with no char), and the numpad
+# '/' loses its extended flag and reads as whatever key owns scan 0x35 (';' on
+# ABNT2). '*', '+' and '-' already arrive correctly.
+NUMPAD_CHARS = {VK_NUMPAD0 + digit: str(digit) for digit in range(10)}
+NUMPAD_CHARS[VK_DIVIDE] = "/"
 
 IS_WINDOWS = sys.platform == "win32"
 
@@ -73,6 +86,16 @@ if IS_WINDOWS:
     _USER32.MapVirtualKeyW.restype = wintypes.UINT
     _USER32.VkKeyScanW.argtypes = (wintypes.WCHAR,)
     _USER32.VkKeyScanW.restype = ctypes.c_short
+    _USER32.GetAsyncKeyState.argtypes = (ctypes.c_int,)
+    _USER32.GetAsyncKeyState.restype = ctypes.c_short
+    _USER32.GetForegroundWindow.argtypes = ()
+    _USER32.GetForegroundWindow.restype = wintypes.HWND
+    _USER32.GetWindowThreadProcessId.argtypes = (wintypes.HWND, ctypes.POINTER(wintypes.DWORD))
+    _USER32.GetWindowThreadProcessId.restype = wintypes.DWORD
+    _USER32.GetKeyboardLayout.argtypes = (wintypes.DWORD,)
+    _USER32.GetKeyboardLayout.restype = wintypes.HKL
+    _USER32.MapVirtualKeyExW.argtypes = (wintypes.UINT, wintypes.UINT, wintypes.HKL)
+    _USER32.MapVirtualKeyExW.restype = wintypes.UINT
 
 
 def backspace_events(count):
@@ -131,6 +154,45 @@ class BatchKeyboard:
 
     def paste(self):
         return send_key_events(paste_chord_events(paste_vk()))
+
+
+def ctrl_or_alt_held():
+    """True while Ctrl or Alt (AltGr included) is down, as pynput reads it."""
+    state = _USER32.GetAsyncKeyState(VK_CONTROL) | _USER32.GetAsyncKeyState(VK_MENU)
+    return bool(state & 0x8000)
+
+
+def layout_decimal_char():
+    """The character VK_DECIMAL types in the foreground window's layout.
+
+    ',' on ABNT2, '.' on US. The layout is per thread and follows the user's
+    input-language switch, so it is read on each press from the thread that
+    receives the key. These are non-blocking user32 reads (no message is
+    sent), and only a numpad decimal press pays for them, so no cache.
+    """
+    thread = _USER32.GetWindowThreadProcessId(_USER32.GetForegroundWindow(), None)
+    code = _USER32.MapVirtualKeyExW(VK_DECIMAL, MAPVK_VK_TO_CHAR, _USER32.GetKeyboardLayout(thread))
+    if not code or code & 0x80000000:  # unmapped, or a dead key
+        return None
+    return chr(code & 0xFFFF)
+
+
+def typed_char(vk, char):
+    """The character a key types, correcting pynput for Windows numpad keys.
+
+    ``char`` is pynput's translation and is returned unchanged for every key
+    outside the numpad table, before touching user32: this runs on the
+    listener thread for every press. With Ctrl or Alt held a numpad key types
+    nothing (Alt+digits compose an Alt code), matching how pynput reports
+    Ctrl+digit on the top row.
+    """
+    if vk not in NUMPAD_CHARS and vk != VK_DECIMAL:
+        return char
+    if ctrl_or_alt_held():
+        return None
+    if vk == VK_DECIMAL:
+        return layout_decimal_char()
+    return NUMPAD_CHARS[vk]
 
 
 def is_own_event(data):
