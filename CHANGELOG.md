@@ -19,6 +19,43 @@ their original numbers.
 | 3.2.0, 3.2.1 | 0.9.0, 0.9.1 | 5.2.0-beta.1 | 1.0.0-beta.1 |
 | 3.3.0-beta, 3.3.0 | 0.10.0-beta.1, 0.10.0 | 5.2.0 | 1.0.0 |
 
+## [1.2.0] — 2026-09-28
+
+Windows 11 controls for the manager, and more reliable trigger detection and
+insertion.
+
+### Changed
+
+- The Windows manager is rebuilt on Windows 11 (Fluent) controls: rounded
+  buttons with hover and pressed states, text fields with a focus underline,
+  drop-downs, check boxes, toggle switches for settings that apply at once,
+  slim scrollbars and Segoe Fluent Icons. Delete buttons use red text instead
+  of a red fill, text follows the Windows 11 type ramp, and nothing is smaller
+  than 9 pt. macOS keeps its native controls.
+- Textos has one group drop-down with a group-actions menu instead of a second
+  row of Novo/Editar/Excluir buttons, and the mostly empty Tipo column is gone.
+- A slow snippet (Central Bank, stocks, forms) that finishes after you kept
+  typing or switched windows is no longer pasted wherever the cursor happens to
+  be: it stays on the clipboard and a notification asks you to press Ctrl+V.
+
+### Fixed
+
+- The Windows interface rendered in Arial instead of Segoe UI Variable.
+- Space was ignored by trigger detection: a trigger could fire across two words
+  and erase the space between them, and in terminator mode Space never
+  expanded a trigger.
+- Pausing expansion still erased triggers as you typed them.
+- Text typed before moving the cursor (arrows, Home/End, Page Up/Down, Tab,
+  Esc) or switching windows no longer completes a trigger and erases unrelated
+  text. Mouse clicks still do not reset a half-typed trigger.
+- Numpad digits and the numpad decimal key now match triggers like the top-row
+  keys, and numpad `/` is no longer read as `;` on ABNT2 keyboards.
+- When Windows blocks SnipType from typing into a window running as
+  administrator, the trigger is no longer erased for nothing and the snippet is
+  no longer silently lost: it stays on the clipboard with an explanation.
+- Clipboard text containing `%%name%%` no longer becomes a form field when it
+  fills `%%clipboard-paste%%` inside a form snippet.
+
 ## [1.1.0] — 2026-09-26
 
 Manager layout redesign: navigation moves into a sidebar so every page gets the
