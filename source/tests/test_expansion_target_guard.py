@@ -50,7 +50,10 @@ class _GuardFixture(unittest.TestCase):
         self.clipboard = FakeClipboard("ORIGINAL")
         self.pasted = []
         # Record what the paste chord would have pasted; nothing is injected.
-        inserter._send_paste_shortcut = lambda: self.pasted.append(self.clipboard.value)
+        # True: the chord was accepted (False would mean Windows rejected it).
+        inserter._send_paste_shortcut = (
+            lambda: self.pasted.append(self.clipboard.value) or True
+        )
         for patcher in (
             mock.patch.object(runtime_support, "Clipboard", self.clipboard),
             mock.patch.object(tx.time, "sleep"),

@@ -184,6 +184,12 @@ def normalize_clipboard_text(value):
     return extract_plain_text(value).replace("\r\n", "\n").replace("\r", "\n")
 
 
+# _paste_value outcome: the payload reached the clipboard but Windows rejected
+# the paste chord. Distinct from False (payload never reached the clipboard),
+# which still allows the typed fallback.
+PASTE_BLOCKED = "paste-blocked"
+
+
 class TextInserter:
     """Insert snippets through the clipboard, with typed fallback."""
 
@@ -223,8 +229,8 @@ class TextInserter:
 
     def insert_text(self, value):
         plain_text = extract_plain_text(value)
-        pasted = self._paste_value(value)
-        if pasted == self.STALE_TARGET:
+        outcome = self._paste_value(value)
+        if outcome == self.STALE_TARGET:
             message = _("Você continuou digitando ou trocou de janela antes da "
                         "expansão terminar. O snippet está na área de "
                         "transferência: use Ctrl+V.")
@@ -232,15 +238,20 @@ class TextInserter:
             if self.notify:
                 self.notify(message, key="paste-stale")
             return False
-        if pasted:
+        blocked = outcome is PASTE_BLOCKED
+        if outcome and not blocked:
             return True
 
-        if "\n" in plain_text or "\r" in plain_text:
+        if blocked or "\n" in plain_text or "\r" in plain_text:
             # Never type a multi-line snippet: pynput sends a real Enter for each
             # newline, which submits the message in a chat app and executes the
             # line in a terminal. Leaving the payload for a manual Ctrl+V is the
             # only recovery that cannot fire something irreversible.
-            if Clipboard.set_content(value):
+            # A blocked paste lands here too: Windows rejects typed input the
+            # same way (UIPI, elevated target), and repeating input into a
+            # window that may have taken part of it is never safe. Its payload
+            # is already on the clipboard.
+            if blocked or Clipboard.set_content(value):
                 message = _("Não foi possível colar o snippet automaticamente. "
                             "Ele está na área de transferência: use Ctrl+V.")
             else:
@@ -286,7 +297,11 @@ class TextInserter:
             # snapshot is not restored: that is the user's manual recovery.
             if not self._target_is_current():
                 return self.STALE_TARGET
-            self._send_paste_shortcut()
+            if not self._send_paste_shortcut():
+                # The chord was rejected (wholly or in part; SendInput's count
+                # does not say which keys landed), so the clipboard may hold
+                # the only copy of the expansion: restoring over it loses it.
+                return PASTE_BLOCKED
             time.sleep(self.restore_delay)
 
             if previous_text is not None:
@@ -338,6 +353,12 @@ class TextInserter:
             )
 
     def _send_paste_shortcut(self):
+        """Send the paste chord; False when Windows rejected the batch.
+
+        Rejected covers a partial insert too: ``win_input`` only reports whether
+        every event went in. pynput reports no delivery result, so the
+        key-by-key path is always True.
+        """
         from pynput.keyboard import Key
         from platform_support import paste_modifier_is_cmd
 
@@ -349,12 +370,14 @@ class TextInserter:
                     "Windows bloqueou o atalho de colar "
                     "(janela em execução como administrador?)."
                 )
-            return
+                return False
+            return True
 
         modifier = Key.cmd if paste_modifier_is_cmd() else Key.ctrl
         self.keyboard_controller.press(modifier)
         self.keyboard_controller.press('v')
         self.keyboard_controller.release('v')
         self.keyboard_controller.release(modifier)
+        return True
 
 
