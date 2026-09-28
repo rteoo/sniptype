@@ -114,6 +114,19 @@ class ManagerGuiSmokeTests(unittest.TestCase):
         """Run func(root) on the GUI thread, propagating assertion failures."""
         return self.app.gui.call(func, timeout=30)
 
+    @unittest.skipUnless(tx.IS_WINDOWS, "the Segoe faces are Windows-only")
+    def test_every_windows_text_face_is_the_face_tk_renders(self):
+        # Regression: Tk silently substitutes Arial for a family it does not
+        # know, so the requested spec proves nothing; ask Tk what it used.
+        def probe(shared_root):
+            ui = tx.ui_theme.bind(shared_root)
+            for size, weight in ((10, None), (10, "bold"), (16, None), (16, "bold")):
+                spec = ui.font(size, weight)
+                rendered = tkfont.Font(root=shared_root, font=spec).actual("family")
+                self.assertEqual(rendered, spec[0], spec)
+
+        self._on_gui(probe)
+
     def test_all_tabs_build(self):
         def build(shared_root):
             root = tk.Toplevel(shared_root)

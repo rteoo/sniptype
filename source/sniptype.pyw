@@ -3888,7 +3888,7 @@ class Sniptype:
             return tk.Button(
                 parent,
                 text=label,
-                width=ui.button_width(9),
+                width=ui.button_width(8),
                 **ui.button_chrome(),
                 **ui.button_colors(accent=accent, danger=danger),
             )

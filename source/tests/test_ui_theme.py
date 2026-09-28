@@ -78,19 +78,52 @@ class WindowsPaletteTests(unittest.TestCase):
         for token, expected in WDS_DARK_COLORS.items():
             self.assertEqual(colors[token], expected, token)
 
-    def test_windows_fonts_use_the_design_system_family(self):
-        theme = ui_theme.build_theme("windows", system="windows")
-        self.assertEqual(theme.font(), ("Segoe UI Variable", 10))
-        self.assertEqual(theme.font(12, "bold"), ("Segoe UI Variable", 12, "bold"))
+    WINDOWS_11_FAMILIES = frozenset({
+        "Arial", "Segoe UI", "Segoe UI Semibold",
+        "Segoe UI Variable Text", "Segoe UI Variable Text Semibold",
+        "Segoe UI Variable Display", "Segoe UI Variable Display Semib",
+    })
+
+    def test_windows_11_fonts_use_the_variable_optical_sizes(self):
+        # Regression: "Segoe UI Variable" is not a Tk family and silently
+        # rendered the whole GUI in Arial.
+        theme = ui_theme.build_theme(
+            "windows", system="windows", font_families=self.WINDOWS_11_FAMILIES)
+        self.assertEqual(theme.font(), ("Segoe UI Variable Text", 10))
+        self.assertEqual(theme.font(12, "bold"), ("Segoe UI Variable Text Semibold", 12))
+        self.assertEqual(theme.font(16), ("Segoe UI Variable Display", 16))
+        self.assertEqual(theme.font(16, "bold"), ("Segoe UI Variable Display Semib", 16))
         self.assertEqual(theme.emoji_font(12), ("Segoe UI Emoji", 12))
         self.assertEqual(theme.mono_font(10, "bold"), ("Consolas", 10, "bold"))
         self.assertEqual(theme.symbol_family, "Segoe UI Symbol")
 
+    def test_every_windows_family_is_one_tk_can_resolve(self):
+        for families in (self.WINDOWS_11_FAMILIES, None):
+            faces = ui_theme.windows_font_families(families)
+            for face in faces.values():
+                self.assertNotEqual(face, "Segoe UI Variable")
+                if families is not None:
+                    self.assertIn(face, families)
+
+    def test_windows_10_falls_back_to_the_static_segoe_faces(self):
+        for families in ({"Arial", "Segoe UI", "Segoe UI Semibold"}, None):
+            theme = ui_theme.build_theme("windows", system="windows", font_families=families)
+            self.assertEqual(theme.font(), ("Segoe UI", 10))
+            self.assertEqual(theme.font(12, "bold"), ("Segoe UI Semibold", 12))
+            self.assertEqual(theme.font(16), ("Segoe UI", 16))
+
+    def test_other_platforms_keep_bold_as_a_weight(self):
+        theme = ui_theme.build_theme("windows", system="linux")
+        self.assertEqual(theme.font(12, "bold"), ("TkDefaultFont", 12, "bold"))
+        self.assertEqual(theme.font(16, "bold"), ("TkDefaultFont", 16, "bold"))
+
     def test_windows_ignores_a_system_default_size(self):
         # Windows is the reference scale; probing must not shift it.
-        theme = ui_theme.build_theme("windows", system="windows", default_size=13)
+        theme = ui_theme.build_theme(
+            "windows", system="windows", default_size=13,
+            font_families=self.WINDOWS_11_FAMILIES)
         self.assertEqual(theme.size_delta, 0)
-        self.assertEqual(theme.font(9), ("Segoe UI Variable", 9))
+        self.assertEqual(theme.font(9), ("Segoe UI Variable Text", 9))
 
     def test_windows_prefers_vista(self):
         self.assertEqual(ui_theme.ttk_theme_preference("windows")[0], "vista")

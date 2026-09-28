@@ -45,8 +45,27 @@ from i18n import N_
 # Other platforms shift their sizes by the distance between this and their own
 # system default, so the body role stays readable across native themes.
 BODY_FONT_SIZE = 10
+# From here up, Windows switches to the variable font's display optical size.
+DISPLAY_FONT_SIZE = 14
 
-_WINDOWS_FAMILY = "Segoe UI Variable"
+# Tk names the Windows 11 variable font per optical size and weight; plain
+# "Segoe UI Variable" is not a family at all and silently resolves to Arial.
+# Windows 10 has no variable font, so it gets the static Segoe UI faces.
+# Semibold is a separate family in both: asking Tk for "bold" would synthesize
+# a heavier weight than Windows itself uses for headings.
+_WINDOWS_11_FAMILIES = {
+    "text": "Segoe UI Variable Text",
+    "text_strong": "Segoe UI Variable Text Semibold",
+    "display": "Segoe UI Variable Display",
+    # GDI truncates family names to 31 characters; this is the real name.
+    "display_strong": "Segoe UI Variable Display Semib",
+}
+_WINDOWS_10_FAMILIES = {
+    "text": "Segoe UI",
+    "text_strong": "Segoe UI Semibold",
+    "display": "Segoe UI",
+    "display_strong": "Segoe UI Semibold",
+}
 _WINDOWS_EMOJI_FAMILY = "Segoe UI Emoji"
 # Not in ``font.families()`` -- it is the hidden system font Tk resolves
 # ``TkDefaultFont`` to -- but Tk accepts it by name in a font spec.
@@ -74,7 +93,8 @@ class Theme:
     """A resolved palette plus the font family/size shift for this platform."""
 
     __slots__ = (
-        "kind", "system", "preference", "family", "emoji_family", "mono_family",
+        "kind", "system", "preference", "family", "strong_family",
+        "display_family", "display_strong_family", "emoji_family", "mono_family",
         "symbol_family", "size_delta",
         "surface", "surface_alt", "surface_alt_active", "surface_hover",
         "card", "field", "field_hover",
@@ -89,11 +109,17 @@ class Theme:
     )
 
     def __init__(self, kind, system, family, emoji_family, mono_family,
-                 symbol_family, size_delta, colors, preference="system"):
+                 symbol_family, size_delta, colors, preference="system",
+                 strong_family=None, display_family=None, display_strong_family=None):
         self.kind = kind
         self.system = system
         self.preference = preference
         self.family = family
+        # Optional per-role faces (Windows). None means the role reuses
+        # ``family``, with "bold" as a weight.
+        self.strong_family = strong_family
+        self.display_family = display_family or family
+        self.display_strong_family = display_strong_family or strong_family
         self.emoji_family = emoji_family
         self.mono_family = mono_family
         self.symbol_family = symbol_family
@@ -109,7 +135,12 @@ class Theme:
 
     def font(self, size=BODY_FONT_SIZE, weight=None):
         """Return a font spec tuple for the GUI's shared family."""
-        return _spec(self.family, size + self.size_delta, weight)
+        display = size >= DISPLAY_FONT_SIZE
+        if weight == "bold" and self.strong_family:
+            family = self.display_strong_family if display else self.strong_family
+            return _spec(family, size + self.size_delta)
+        family = self.display_family if display else self.family
+        return _spec(family, size + self.size_delta, weight)
 
     def emoji_font(self, size=BODY_FONT_SIZE, weight=None):
         return _spec(self.emoji_family, size + self.size_delta, weight)
@@ -519,10 +550,21 @@ def palette(kind, system=None):
     return colors
 
 
-def font_family(system=None):
+def windows_font_families(available=None):
+    """The Segoe faces for each text role, picked from the installed families.
+
+    ``available`` is ``font.families()`` from a live interpreter. Without it
+    the answer is the Windows 10 set, which every supported Windows has.
+    """
+    if available is not None and _WINDOWS_11_FAMILIES["text"] in available:
+        return dict(_WINDOWS_11_FAMILIES)
+    return dict(_WINDOWS_10_FAMILIES)
+
+
+def font_family(system=None, available=None):
     system = system or current_os()
     if system == "windows":
-        return _WINDOWS_FAMILY
+        return windows_font_families(available)["text"]
     if system == "darwin":
         return _MAC_FAMILY
     return _LINUX_FAMILY
@@ -857,12 +899,29 @@ def _probe_default_size(widget):
         return None
 
 
-def build_theme(kind, system=None, default_size=None, preference="system"):
+# Installed font families, probed once: enumerating them costs a few
+# milliseconds and fonts do not appear mid-session in practice.
+_font_families = None
+
+
+def _probe_font_families(widget):
+    global _font_families
+    if _font_families is None:
+        try:
+            _font_families = frozenset(tkfont.families(widget))
+        except Exception:
+            return None
+    return _font_families
+
+
+def build_theme(kind, system=None, default_size=None, preference="system",
+                font_families=None):
     """Assemble a :class:`Theme`. Pure given its arguments.
 
     macOS "system" mode keeps Aqua's dynamic color names. A fixed light/dark
     choice there must use the opaque palette instead; otherwise Aqua resolves
     those names from the OS appearance and silently overrides the user.
+    ``font_families`` is the installed set, which picks the Windows faces.
     """
     system = system or current_os()
     preference = normalize_preference(preference)
@@ -870,16 +929,20 @@ def build_theme(kind, system=None, default_size=None, preference="system"):
     if system == "darwin" and preference != "system":
         colors = dict(_DARK if kind == "dark" else _LIGHT)
         colors.update(_MAC_NATIVE)
+    faces = windows_font_families(font_families) if system == "windows" else {}
     return Theme(
         kind=kind,
         system=system,
-        family=font_family(system),
+        family=font_family(system, font_families),
         emoji_family=emoji_family(system),
         mono_family=mono_family(system),
         symbol_family=symbol_family(system),
         size_delta=size_delta(system, default_size),
         colors=colors,
         preference=preference,
+        strong_family=faces.get("text_strong"),
+        display_family=faces.get("display"),
+        display_strong_family=faces.get("display_strong"),
     )
 
 
@@ -906,7 +969,13 @@ def bind(widget=None, system=None):
     else:
         kind = _probe_kind(widget, system)
     default_size = _probe_default_size(widget) if widget is not None else None
-    _current = build_theme(kind, system, default_size, preference=chosen)
+    families = (
+        _probe_font_families(widget)
+        if widget is not None and system == "windows" else None
+    )
+    _current = build_theme(
+        kind, system, default_size, preference=chosen, font_families=families,
+    )
     return _current
 
 
