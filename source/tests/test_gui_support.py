@@ -139,122 +139,104 @@ class GuiSupportTests(unittest.TestCase):
             cancel()
 
     def test_filter_static_snippets_without_query_keeps_only_persisted_static_entries(self):
-        snippets = {
-            "xname": "Alex",
-            "_cpf_numbers": {"fulano": "123"},
-            "xdyn": lambda: "value",
+        for old_test, snippets, query, expected in (
+            ("test_filter_static_snippets_without_query_keeps_only_persisted_static_entries",
+             {"xname": "Alex", "_cpf_numbers": {"fulano": "123"}, "xdyn": lambda: "value"},
+             "", {"xname": "Alex"}),
+            ("test_whitespace_only_query_behaves_like_an_empty_query",
+             {"xname": "Alex", "xemail": "a@b.com"},
+             "   \t ", {"xname": "Alex", "xemail": "a@b.com"}),
+        ):
+            with self.subTest(old_test):
+                self.assertEqual(expected, filter_static_snippets(snippets, query))
+
+    def test_filter_static_snippets_query_matching(self):
+        rich_signature = {
+            "__kind__": "rich_text",
+            "text": "Assinatura principal",
+            "spans": [],
         }
+        for old_test, snippets, query, expected in (
+            ("test_filter_static_snippets_matches_key_and_value",
+             {"xname": "Alex", "xemail": "contato@example.com"},
+             "example", {"xemail": "contato@example.com"}),
+            ("test_filter_static_snippets_matches_key_and_value",
+             {"xname": "Alex", "xemail": "contato@example.com"},
+             "name", {"xname": "Alex"}),
+            ("test_filter_static_snippets_matches_rich_text_plain_value",
+             {"xsig": rich_signature}, "assinatura", {"xsig": rich_signature}),
+            # A blind re.search would treat "(net)" as a group and ".*" as
+            # match-all; the filter must compare literally.
+            ("test_query_is_a_literal_substring_not_a_regex",
+             {"xa": "Total (net) due", "xb": "plain text"},
+             "(net)", {"xa": "Total (net) due"}),
+            ("test_query_is_a_literal_substring_not_a_regex",
+             {"xa": "Total (net) due", "xb": "plain text"}, ".*", {}),
+            # An unbalanced bracket would blow up re.compile; str.__contains__ is safe.
+            ("test_regex_metacharacter_query_does_not_raise",
+             {"xa": "array[0] value"}, "[", {"xa": "array[0] value"}),
+            # Case folds: an all-caps accented query still matches.
+            ("test_matching_is_case_insensitive_but_accent_sensitive",
+             {"xinsc": "Inscrição estadual", "xother": "Cadastro"},
+             "INSCRIÇÃO", {"xinsc": "Inscrição estadual"}),
+            # Accents are not folded: the de-accented spelling does not match.
+            ("test_matching_is_case_insensitive_but_accent_sensitive",
+             {"xinsc": "Inscrição estadual", "xother": "Cadastro"}, "inscricao", {}),
+            ("test_unicode_key_match_is_case_insensitive",
+             {"xcafé": "espresso"}, "CAFÉ", {"xcafé": "espresso"}),
+        ):
+            with self.subTest(old_test, query=query):
+                self.assertEqual(expected, filter_static_snippets(snippets, query))
 
-        self.assertEqual({"xname": "Alex"}, filter_static_snippets(snippets, ""))
-
-    def test_filter_static_snippets_matches_key_and_value(self):
-        snippets = {
-            "xname": "Alex",
-            "xemail": "contato@example.com",
-        }
-
-        self.assertEqual({"xemail": "contato@example.com"}, filter_static_snippets(snippets, "example"))
-        self.assertEqual({"xname": "Alex"}, filter_static_snippets(snippets, "name"))
-
-    def test_filter_static_snippets_matches_rich_text_plain_value(self):
-        snippets = {
-            "xsig": {
-                "__kind__": "rich_text",
-                "text": "Assinatura principal",
-                "spans": [],
-            }
-        }
-
-        self.assertEqual({"xsig": snippets["xsig"]}, filter_static_snippets(snippets, "assinatura"))
-
-    def test_iter_filtered_mapping_items_ignores_prefix_metadata(self):
-        mapping = {
-            "__prefix__": "clw",
-            "gtw": "gateway",
-            "api": "api server",
-        }
-
-        self.assertEqual(["api", "gtw"], iter_filtered_mapping_items(mapping, ""))
-        self.assertEqual(["gtw"], iter_filtered_mapping_items(mapping, "gate"))
-
-
-class FilterEdgeCaseTests(unittest.TestCase):
-    """Adversarial queries: whitespace, unicode/accents, regex metacharacters."""
-
-    def test_whitespace_only_query_behaves_like_an_empty_query(self):
-        snippets = {"xname": "Alex", "xemail": "a@b.com"}
-        self.assertEqual(snippets, filter_static_snippets(snippets, "   \t "))
-
-    def test_query_is_a_literal_substring_not_a_regex(self):
-        # A blind re.search would treat "(net)" as a group and ".*" as match-all;
-        # the filter must compare literally.
-        snippets = {"xa": "Total (net) due", "xb": "plain text"}
-        self.assertEqual({"xa": snippets["xa"]}, filter_static_snippets(snippets, "(net)"))
-        self.assertEqual({}, filter_static_snippets(snippets, ".*"))
-
-    def test_regex_metacharacter_query_does_not_raise(self):
-        # An unbalanced bracket would blow up re.compile; str.__contains__ is safe.
-        snippets = {"xa": "array[0] value"}
-        self.assertEqual({"xa": snippets["xa"]}, filter_static_snippets(snippets, "["))
-
-    def test_matching_is_case_insensitive_but_accent_sensitive(self):
-        snippets = {"xinsc": "Inscrição estadual", "xother": "Cadastro"}
-        # Case folds: an all-caps accented query still matches.
-        self.assertEqual({"xinsc": snippets["xinsc"]}, filter_static_snippets(snippets, "INSCRIÇÃO"))
-        # Accents are not folded: the de-accented spelling does not match.
-        self.assertEqual({}, filter_static_snippets(snippets, "inscricao"))
-
-    def test_unicode_key_match_is_case_insensitive(self):
-        snippets = {"xcafé": "espresso"}
-        self.assertEqual(snippets, filter_static_snippets(snippets, "CAFÉ"))
-
-    def test_mapping_filter_on_non_dict_returns_empty(self):
-        self.assertEqual([], iter_filtered_mapping_items(None, ""))
-        self.assertEqual([], iter_filtered_mapping_items("not a mapping", "x"))
-
-    def test_mapping_filter_matches_rich_text_plain_value(self):
-        mapping = {
+    def test_iter_filtered_mapping_items_query_matching(self):
+        prefixed = {"__prefix__": "clw", "gtw": "gateway", "api": "api server"}
+        rich_mapping = {
             "__prefix__": "c",
             "a": {"__kind__": "rich_text", "text": "Contrato assinado", "spans": []},
             "b": "outro",
         }
-        self.assertEqual(["a"], iter_filtered_mapping_items(mapping, "assinado"))
-
-    def test_mapping_filter_query_is_literal_and_accent_sensitive(self):
-        mapping = {"__prefix__": "c", "opcao": "Opção válida", "outro": "texto"}
-        self.assertEqual(["opcao"], iter_filtered_mapping_items(mapping, "OPÇÃO"))
-        self.assertEqual([], iter_filtered_mapping_items(mapping, "opcao válida"))
+        accented = {"__prefix__": "c", "opcao": "Opção válida", "outro": "texto"}
+        for old_test, mapping, query, expected in (
+            ("test_iter_filtered_mapping_items_ignores_prefix_metadata",
+             prefixed, "", ["api", "gtw"]),
+            ("test_iter_filtered_mapping_items_ignores_prefix_metadata",
+             prefixed, "gate", ["gtw"]),
+            ("test_mapping_filter_on_non_dict_returns_empty", None, "", []),
+            ("test_mapping_filter_on_non_dict_returns_empty", "not a mapping", "x", []),
+            ("test_mapping_filter_matches_rich_text_plain_value",
+             rich_mapping, "assinado", ["a"]),
+            ("test_mapping_filter_query_is_literal_and_accent_sensitive",
+             accented, "OPÇÃO", ["opcao"]),
+            ("test_mapping_filter_query_is_literal_and_accent_sensitive",
+             accented, "opcao válida", []),
+        ):
+            with self.subTest(old_test, query=query):
+                self.assertEqual(expected, iter_filtered_mapping_items(mapping, query))
 
 
 class SnippetRowValuesTests(unittest.TestCase):
-    def test_plain_snippet_has_no_markers(self):
-        self.assertEqual(("xname", "Alex", ""), snippet_row_values("xname", "Alex"))
-
-    def test_newlines_and_runs_of_space_collapse(self):
-        _, preview, _ = snippet_row_values("xsig", "linha um\n\nlinha  dois\tfim")
-
-        self.assertEqual("linha um linha dois fim", preview)
+    def test_row_values_preview_and_markers(self):
+        for old_test, key, value, expected in (
+            ("test_plain_snippet_has_no_markers", "xname", "Alex", ("xname", "Alex", "")),
+            ("test_newlines_and_runs_of_space_collapse",
+             "xsig", "linha um\n\nlinha  dois\tfim", ("xsig", "linha um linha dois fim", "")),
+            ("test_rich_text_payload_is_marked",
+             "xsig", {"__kind__": "rich_text", "text": "Assinatura", "spans": []},
+             ("xsig", "Assinatura", "RT")),
+            ("test_variable_bearing_snippet_is_marked",
+             "xhello", "Olá %%nome%%, tudo bem?", ("xhello", "Olá %%nome%%, tudo bem?", "%%")),
+            ("test_rich_text_with_variables_gets_both_markers",
+             "xboth", {"__kind__": "rich_text", "text": "Olá %%nome%%", "spans": []},
+             ("xboth", "Olá %%nome%%", "RT %%")),
+        ):
+            with self.subTest(old_test):
+                self.assertEqual(expected, snippet_row_values(key, value))
 
     def test_long_preview_is_truncated_with_ellipsis(self):
         _, preview, _ = snippet_row_values("xlong", "a" * 200, preview_chars=10)
 
         self.assertEqual(10, len(preview))
         self.assertTrue(preview.endswith("…"))
-
-    def test_rich_text_payload_is_marked(self):
-        value = {"__kind__": "rich_text", "text": "Assinatura", "spans": []}
-
-        self.assertEqual(("xsig", "Assinatura", "RT"), snippet_row_values("xsig", value))
-
-    def test_variable_bearing_snippet_is_marked(self):
-        _, _, markers = snippet_row_values("xhello", "Olá %%nome%%, tudo bem?")
-
-        self.assertEqual("%%", markers)
-
-    def test_rich_text_with_variables_gets_both_markers(self):
-        value = {"__kind__": "rich_text", "text": "Olá %%nome%%", "spans": []}
-
-        self.assertEqual("RT %%", snippet_row_values("xboth", value)[2])
 
     def test_value_is_not_mutated(self):
         value = {"__kind__": "rich_text", "text": "Assinatura", "spans": []}
@@ -266,15 +248,15 @@ class SnippetRowValuesTests(unittest.TestCase):
 
 
 class SnippetTreeValuesTests(unittest.TestCase):
-    def test_plain_snippet_shows_only_its_preview(self):
-        self.assertEqual(("xname", "Alex"), gui_support.snippet_tree_values("xname", "Alex"))
-
     def test_markers_lead_the_value_cell(self):
-        value = {"__kind__": "rich_text", "text": "Olá %%nome%%", "spans": []}
-        self.assertEqual(
-            ("xboth", "RT %%  ·  Olá %%nome%%"),
-            gui_support.snippet_tree_values("xboth", value),
-        )
+        for old_test, key, value, expected in (
+            ("test_markers_lead_the_value_cell",
+             "xboth", {"__kind__": "rich_text", "text": "Olá %%nome%%", "spans": []},
+             ("xboth", "RT %%  ·  Olá %%nome%%")),
+            ("test_plain_snippet_shows_only_its_preview", "xname", "Alex", ("xname", "Alex")),
+        ):
+            with self.subTest(old_test):
+                self.assertEqual(expected, gui_support.snippet_tree_values(key, value))
 
 
 class TreeColumnSplitTests(unittest.TestCase):
@@ -284,16 +266,17 @@ class TreeColumnSplitTests(unittest.TestCase):
                 trigger, preview = gui_support.split_tree_columns(width, 48, 0.36, 76, 60)
                 self.assertEqual(width - 48, trigger + preview)
 
-    def test_trigger_takes_its_share_when_there_is_room(self):
-        self.assertEqual(
-            (180, 320), gui_support.split_tree_columns(548, 48, 0.36, 76, 60)
-        )
-
     def test_trigger_minimum_holds_until_the_preview_would_starve(self):
-        self.assertEqual((76, 76), gui_support.split_tree_columns(200, 48, 0.36, 76, 60))
-        # Too narrow for both minimums: never a negative or overflowing width.
-        self.assertEqual((52, 0), gui_support.split_tree_columns(100, 48, 0.36, 76, 60))
-        self.assertEqual((0, 0), gui_support.split_tree_columns(30, 48, 0.36, 76, 60))
+        for old_test, width, expected in (
+            ("test_trigger_takes_its_share_when_there_is_room", 548, (180, 320)),
+            ("test_trigger_minimum_holds_until_the_preview_would_starve", 200, (76, 76)),
+            # Too narrow for both minimums: never a negative or overflowing width.
+            ("test_trigger_minimum_holds_until_the_preview_would_starve", 100, (52, 0)),
+            ("test_trigger_minimum_holds_until_the_preview_would_starve", 30, (0, 0)),
+        ):
+            with self.subTest(old_test, width=width):
+                self.assertEqual(
+                    expected, gui_support.split_tree_columns(width, 48, 0.36, 76, 60))
 
 
 class WrappingRowTests(unittest.TestCase):

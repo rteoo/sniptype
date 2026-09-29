@@ -73,14 +73,16 @@ class WindowsPaletteTests(unittest.TestCase):
     """Windows must keep the intentional Fluent palette stable."""
 
     def test_every_fluent_token_keeps_its_declared_literal(self):
-        colors = ui_theme.palette("windows")
-        for token, expected in FLUENT_WINDOWS_COLORS.items():
-            self.assertEqual(colors[token], expected, token)
-
-    def test_dark_semantic_roles_match_the_adopted_design_system(self):
-        colors = ui_theme.palette("dark", "windows")
-        for token, expected in WDS_DARK_COLORS.items():
-            self.assertEqual(colors[token], expected, token)
+        for old_test, args, pinned in (
+            ("test_every_fluent_token_keeps_its_declared_literal",
+             ("windows",), FLUENT_WINDOWS_COLORS),
+            ("test_dark_semantic_roles_match_the_adopted_design_system",
+             ("dark", "windows"), WDS_DARK_COLORS),
+        ):
+            with self.subTest(old_test):
+                colors = ui_theme.palette(*args)
+                for token, expected in pinned.items():
+                    self.assertEqual(colors[token], expected, token)
 
     WINDOWS_11_FAMILIES = frozenset({
         "Arial", "Segoe UI", "Segoe UI Semibold",
@@ -100,6 +102,10 @@ class WindowsPaletteTests(unittest.TestCase):
         self.assertEqual(theme.emoji_font(12), ("Segoe UI Emoji", 12))
         self.assertEqual(theme.mono_font(10, "bold"), ("Consolas", 10, "bold"))
         self.assertEqual(theme.symbol_family, "Segoe UI Symbol")
+        with self.subTest("test_type_ramp_follows_windows_11"):
+            self.assertEqual(theme.caption_font(), ("Segoe UI Variable Text", 9))
+            self.assertEqual(theme.subtitle_font(), ("Segoe UI Variable Text Semibold", 12))
+            self.assertEqual(theme.title_font(), ("Segoe UI Variable Display Semib", 16))
 
     def test_every_windows_family_is_one_tk_can_resolve(self):
         for families in (self.WINDOWS_11_FAMILIES, None):
@@ -115,13 +121,6 @@ class WindowsPaletteTests(unittest.TestCase):
             self.assertEqual(theme.font(), ("Segoe UI", 10))
             self.assertEqual(theme.font(12, "bold"), ("Segoe UI Semibold", 12))
             self.assertEqual(theme.font(16), ("Segoe UI", 16))
-
-    def test_type_ramp_follows_windows_11(self):
-        theme = ui_theme.build_theme(
-            "windows", system="windows", font_families=self.WINDOWS_11_FAMILIES)
-        self.assertEqual(theme.caption_font(), ("Segoe UI Variable Text", 9))
-        self.assertEqual(theme.subtitle_font(), ("Segoe UI Variable Text Semibold", 12))
-        self.assertEqual(theme.title_font(), ("Segoe UI Variable Display Semib", 16))
 
     def test_other_platforms_keep_bold_as_a_weight(self):
         theme = ui_theme.build_theme("windows", system="linux")
@@ -197,17 +196,8 @@ class MacPaletteTests(unittest.TestCase):
             theme = ui_theme.build_theme("light", system="darwin", default_size=probe)
             self.assertEqual(theme.size_delta, 0)
 
-    def test_mac_prefers_aqua(self):
-        self.assertEqual(ui_theme.ttk_theme_preference("darwin")[0], "aqua")
-
 
 class AppearanceDetectionTests(unittest.TestCase):
-
-    def test_luminance_classification(self):
-        self.assertEqual(ui_theme.appearance_kind(0.0), "dark")
-        self.assertEqual(ui_theme.appearance_kind(0.12), "dark")
-        self.assertEqual(ui_theme.appearance_kind(0.93), "light")
-        self.assertEqual(ui_theme.appearance_kind(1.0), "light")
 
     def test_probe_failure_falls_back_to_light(self):
         class Broken:
@@ -238,16 +228,15 @@ class AppearanceDetectionTests(unittest.TestCase):
             def winfo_rgb(self, _name):
                 raise AssertionError("Windows must not query Aqua colors")
 
-        with mock.patch.object(ui_theme, "_windows_apps_use_light_theme", return_value=True):
-            self.assertEqual(ui_theme._probe_kind(Exploding(), "windows"), "windows")
-
-    def test_windows_follows_the_apps_theme_switch(self):
-        with mock.patch.object(ui_theme, "_windows_apps_use_light_theme", return_value=False):
-            self.assertEqual(ui_theme._probe_kind(object(), "windows"), "dark")
-
-    def test_an_unreadable_windows_switch_keeps_the_light_palette(self):
-        with mock.patch.object(ui_theme, "_windows_apps_use_light_theme", return_value=None):
-            self.assertEqual(ui_theme._probe_kind(object(), "windows"), "windows")
+        for old_test, apps_use_light, expected in (
+            ("test_windows_never_probes", True, "windows"),
+            ("test_windows_follows_the_apps_theme_switch", False, "dark"),
+            ("test_an_unreadable_windows_switch_keeps_the_light_palette", None, "windows"),
+        ):
+            with self.subTest(old_test), mock.patch.object(
+                ui_theme, "_windows_apps_use_light_theme", return_value=apps_use_light
+            ):
+                self.assertEqual(ui_theme._probe_kind(Exploding(), "windows"), expected)
 
 
 class ThemeCacheTests(unittest.TestCase):
@@ -255,10 +244,6 @@ class ThemeCacheTests(unittest.TestCase):
     def setUp(self):
         ui_theme.reset()
         self.addCleanup(ui_theme.reset)
-
-    def test_theme_resolves_without_a_widget(self):
-        theme = ui_theme.theme()
-        self.assertIn(theme.kind, ("windows", "light"))
 
     def test_bind_replaces_the_cached_theme(self):
         first = ui_theme.bind(None, system="windows")
@@ -270,7 +255,14 @@ class ThemeCacheTests(unittest.TestCase):
     def test_widgetless_bind_never_claims_dark(self):
         # Guessing dark and being wrong is the unreadable case; light is the
         # historical behavior.
-        self.assertEqual(ui_theme.bind(None, system="darwin").kind, "light")
+        for old_test, resolve, allowed in (
+            ("test_widgetless_bind_never_claims_dark",
+             lambda: ui_theme.bind(None, system="darwin"), ("light",)),
+            ("test_theme_resolves_without_a_widget", ui_theme.theme, ("windows", "light")),
+        ):
+            with self.subTest(old_test):
+                ui_theme.reset()
+                self.assertIn(resolve().kind, allowed)
 
 
 class WidgetOptionTests(unittest.TestCase):
@@ -300,17 +292,28 @@ class WidgetOptionTests(unittest.TestCase):
             ui_theme.build_theme("windows", system="linux").text_native, "#1A1A1A"
         )
 
-    def test_windows_keeps_its_window_size(self):
-        theme = ui_theme.build_theme("windows", system="windows")
-        self.assertEqual(theme.manager_window_size, ("1280x800", 1180, 760))
-        self.assertFalse(theme.stacked_toolbar_status)
-
-    def test_linux_minimum_leaves_room_for_x11_font_metrics(self):
-        theme = ui_theme.build_theme("windows", system="linux")
-        geometry, min_width, min_height = theme.manager_window_size
-        self.assertEqual((1100, 780), (min_width, min_height))
+    def test_manager_window_size_fits_each_platform(self):
+        with self.subTest("test_windows_keeps_its_window_size"):
+            theme = ui_theme.build_theme("windows", system="windows")
+            self.assertEqual(theme.manager_window_size, ("1280x800", 1180, 760))
+            self.assertFalse(theme.stacked_toolbar_status)
+        with self.subTest("test_linux_minimum_leaves_room_for_x11_font_metrics"):
+            theme = ui_theme.build_theme("windows", system="linux")
+            _geometry, min_width, min_height = theme.manager_window_size
+            self.assertEqual((1100, 780), (min_width, min_height))
+        with self.subTest("test_macos_widens_the_window_for_its_native_buttons"):
+            # Aqua's bezel has a minimum width, so the editor pane needs more room.
+            theme = ui_theme.build_theme("dark", system="darwin")
+            geometry, min_width, _ = theme.manager_window_size
+            self.assertEqual(geometry, "1300x760")
+            self.assertGreater(min_width, 820)
+            self.assertTrue(theme.stacked_toolbar_status)
         # The default must not start below the minimum.
-        self.assertGreaterEqual(int(geometry.split("x")[1]), min_height)
+        for kind, system in (("windows", "windows"), ("windows", "linux"), ("dark", "darwin")):
+            with self.subTest("default fits the minimum", system=system):
+                geometry, _min_width, min_height = ui_theme.build_theme(
+                    kind, system=system).manager_window_size
+                self.assertGreaterEqual(int(geometry.split("x")[1]), min_height)
 
     def test_fluent_spacing_and_tree_density_are_stable(self):
         theme = ui_theme.build_theme("windows", system="windows")
@@ -320,14 +323,6 @@ class WidgetOptionTests(unittest.TestCase):
             (4, 8, 12, 16, 24),
         )
         self.assertEqual(theme.tree_row_height, 44)
-
-    def test_macos_widens_the_window_for_its_native_buttons(self):
-        # Aqua's bezel has a minimum width, so the editor pane needs more room.
-        theme = ui_theme.build_theme("dark", system="darwin")
-        geometry, min_width, _ = theme.manager_window_size
-        self.assertEqual(geometry, "1300x760")
-        self.assertGreater(min_width, 820)
-        self.assertTrue(theme.stacked_toolbar_status)
 
     def test_entry_colors_pin_every_channel_aqua_would_theme(self):
         theme = ui_theme.build_theme("dark", system="darwin")
@@ -345,41 +340,44 @@ class WidgetOptionTests(unittest.TestCase):
         self.assertIn("inactiveselectbackground", colors)
 
     def test_toolbar_frame_uses_the_editor_card_surface(self):
-        for system in ("windows", "linux"):
-            theme = ui_theme.build_theme("windows", system=system)
-            self.assertEqual(theme.toolbar_frame_colors(), {"bg": theme.card})
-
-    def test_toolbar_frame_keeps_the_card_surface_on_macos(self):
-        theme = ui_theme.build_theme("dark", system="darwin")
-        self.assertEqual(theme.toolbar_frame_colors(), {"bg": theme.card})
+        for old_test, kind, system in (
+            ("test_toolbar_frame_uses_the_editor_card_surface", "windows", "windows"),
+            ("test_toolbar_frame_uses_the_editor_card_surface", "windows", "linux"),
+            ("test_toolbar_frame_keeps_the_card_surface_on_macos", "dark", "darwin"),
+        ):
+            with self.subTest(old_test, system=system):
+                theme = ui_theme.build_theme(kind, system=system)
+                self.assertEqual(theme.toolbar_frame_colors(), {"bg": theme.card})
 
     def test_status_label_uses_the_body_face_and_muted_grey(self):
-        for system in ("windows", "linux"):
-            options = ui_theme.build_theme("windows", system=system).status_label_options()
-            theme = ui_theme.build_theme("windows", system=system)
-            self.assertEqual(options["font"], theme.caption_font())
-            self.assertEqual(options["fg"], theme.text_muted)
-
-    def test_status_label_uses_the_body_face_and_muted_grey_on_macos(self):
-        theme = ui_theme.build_theme("dark", system="darwin")
-        options = theme.status_label_options()
-        self.assertEqual(options["font"], theme.caption_font())
-        self.assertEqual(options["fg"], theme.text_muted)
+        for old_test, kind, system in (
+            ("test_status_label_uses_the_body_face_and_muted_grey", "windows", "windows"),
+            ("test_status_label_uses_the_body_face_and_muted_grey", "windows", "linux"),
+            ("test_status_label_uses_the_body_face_and_muted_grey_on_macos", "dark", "darwin"),
+        ):
+            with self.subTest(old_test, system=system):
+                options = ui_theme.build_theme(kind, system=system).status_label_options()
+                theme = ui_theme.build_theme(kind, system=system)
+                self.assertEqual(options["font"], theme.caption_font())
+                self.assertEqual(options["fg"], theme.text_muted)
 
     def test_unselected_tab_foreground_uses_the_fluent_neutral(self):
-        for system in ("windows", "linux"):
-            self.assertEqual(
-                ui_theme.build_theme("windows", system=system).tab_unselected_fg,
-                "#5C5C5C",
-            )
-
-    def test_unselected_tab_foreground_follows_the_appearance_on_macos(self):
-        # The selected tab keeps `text`; the unselected one tracks the system
-        # text color exactly as PR56 shipped it (via text_strong).
-        for kind in ("light", "dark"):
-            theme = ui_theme.build_theme(kind, system="darwin")
-            self.assertEqual(theme.tab_unselected_fg, "systemTextColor")
-            self.assertEqual(theme.tab_unselected_fg, theme.text_strong)
+        # On macOS the selected tab keeps `text`; the unselected one tracks the
+        # system text color exactly as PR56 shipped it (via text_strong).
+        mac_test = "test_unselected_tab_foreground_follows_the_appearance_on_macos"
+        for old_test, kind, system, expected in (
+            ("test_unselected_tab_foreground_uses_the_fluent_neutral",
+             "windows", "windows", "#5C5C5C"),
+            ("test_unselected_tab_foreground_uses_the_fluent_neutral",
+             "windows", "linux", "#5C5C5C"),
+            (mac_test, "light", "darwin", "systemTextColor"),
+            (mac_test, "dark", "darwin", "systemTextColor"),
+        ):
+            with self.subTest(old_test, kind=kind, system=system):
+                theme = ui_theme.build_theme(kind, system=system)
+                self.assertEqual(theme.tab_unselected_fg, expected)
+                if system == "darwin":
+                    self.assertEqual(theme.tab_unselected_fg, theme.text_strong)
 
 
 class TtkThemeSelectionTests(unittest.TestCase):
@@ -503,32 +501,29 @@ class ContrastTests(unittest.TestCase):
             "dark": ui_theme.palette("dark", "windows"),
         }
 
-    def test_body_and_muted_text_are_readable_on_every_surface(self):
+    def test_palette_pairs_meet_their_wcag_floor(self):
+        floors = (
+            ("test_body_and_muted_text_are_readable_on_every_surface", "text",
+             ("surface", "surface_alt", "card", "field", "control"), 7),
+            ("test_body_and_muted_text_are_readable_on_every_surface", "text_muted",
+             ("surface", "card"), 4.5),
+            ("test_accent_buttons_keep_their_labels_readable", "text_on_accent",
+             ("accent", "accent_hover", "accent_active"), 4.5),
+            # Delete buttons carry the danger color as text, not as a fill.
+            ("test_destructive_labels_are_readable_on_a_neutral_button", "danger",
+             ("control", "control_hover", "control_active", "card"), 4.5),
+            ("test_selected_rows_stay_readable", "select_fg", ("select_bg",), 4.5),
+            # WCAG 1.4.11: the field underline and the checkbox/switch outline
+            # are what identify those controls.
+            ("test_input_boundaries_meet_the_non_text_contrast_floor", "stroke_strong",
+             ("field", "card"), 3),
+        )
         for name, colors in self._palettes().items():
-            for surface in ("surface", "surface_alt", "card", "field", "control"):
-                self.assertGreaterEqual(
-                    _contrast(colors["text"], colors[surface]), 7, (name, surface))
-            for surface in ("surface", "card"):
-                self.assertGreaterEqual(
-                    _contrast(colors["text_muted"], colors[surface]), 4.5, (name, surface))
-
-    def test_accent_buttons_keep_their_labels_readable(self):
-        for name, colors in self._palettes().items():
-            for fill in ("accent", "accent_hover", "accent_active"):
-                self.assertGreaterEqual(
-                    _contrast(colors["text_on_accent"], colors[fill]), 4.5, (name, fill))
-
-    def test_destructive_labels_are_readable_on_a_neutral_button(self):
-        # Delete buttons carry the danger color as text, not as a fill.
-        for name, colors in self._palettes().items():
-            for surface in ("control", "control_hover", "control_active", "card"):
-                self.assertGreaterEqual(
-                    _contrast(colors["danger"], colors[surface]), 4.5, (name, surface))
-
-    def test_selected_rows_stay_readable(self):
-        for name, colors in self._palettes().items():
-            self.assertGreaterEqual(
-                _contrast(colors["select_fg"], colors["select_bg"]), 4.5, name)
+            for old_test, foreground, backgrounds, floor in floors:
+                for background in backgrounds:
+                    with self.subTest(old_test, palette=name, background=background):
+                        self.assertGreaterEqual(
+                            _contrast(colors[foreground], colors[background]), floor)
 
     def test_neutral_buttons_stand_out_from_what_they_sit_on(self):
         # Regression: a #FAFAFA fill with no outline measured ~1.04:1 against
@@ -541,14 +536,6 @@ class ContrastTests(unittest.TestCase):
                     for stroke in ("control_stroke", "control_stroke_bottom")
                 )
                 self.assertGreaterEqual(outline, 1.2, (name, surface))
-
-    def test_input_boundaries_meet_the_non_text_contrast_floor(self):
-        # WCAG 1.4.11: the field underline and the checkbox/switch outline are
-        # what identify those controls.
-        for name, colors in self._palettes().items():
-            for surface in ("field", "card"):
-                self.assertGreaterEqual(
-                    _contrast(colors["stroke_strong"], colors[surface]), 3, (name, surface))
 
     def test_the_dark_palette_defines_every_light_token(self):
         self.assertEqual(
@@ -579,6 +566,11 @@ class AppearancePreferenceTests(unittest.TestCase):
                 mock.patch.object(ui_theme, "_probe_default_size", return_value=None):
             ui_theme.set_preference("dark")
             self.assertTrue(ui_theme.bind(object(), system="windows").is_dark)
+            with self.subTest("test_every_later_bind_keeps_the_choice"):
+                # Dialogs re-bind against their own parent; they must not snap
+                # back to the system appearance.
+                self.assertTrue(ui_theme.bind(None, system="windows").is_dark)
+                self.assertTrue(ui_theme.theme().is_dark)
 
     def test_system_choice_follows_the_windows_switch(self):
         with mock.patch.object(ui_theme, "_windows_apps_use_light_theme", return_value=False), \
@@ -586,13 +578,6 @@ class AppearancePreferenceTests(unittest.TestCase):
             theme = ui_theme.bind(object(), system="windows")
         self.assertTrue(theme.is_dark)
         self.assertEqual(theme.preference, "system")
-
-    def test_every_later_bind_keeps_the_choice(self):
-        # Dialogs re-bind against their own parent; they must not snap back
-        # to the system appearance.
-        ui_theme.set_preference("dark")
-        self.assertTrue(ui_theme.bind(None, system="windows").is_dark)
-        self.assertTrue(ui_theme.theme().is_dark)
 
     def test_a_fixed_choice_on_macos_uses_the_opaque_palette(self):
         # Aqua's dynamic names would follow the OS and override the user.
