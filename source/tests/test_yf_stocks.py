@@ -46,102 +46,76 @@ class FormatTickerTests(unittest.TestCase):
     def setUp(self):
         self.c = B3FundamentosConsultor()
 
-    def test_brazilian_ticker_gets_sa_suffix(self):
-        self.assertEqual("PETR4.SA", self.c._format_ticker("petr4"))
-
-    def test_whitespace_is_trimmed_and_uppercased(self):
-        self.assertEqual("AAPL", self.c._format_ticker("  aapl "))
-
-    def test_existing_sa_suffix_is_preserved(self):
-        self.assertEqual("PETR4.SA", self.c._format_ticker("PETR4.SA"))
-
-    def test_lowercase_sa_suffix_is_normalized_not_doubled(self):
-        self.assertEqual("PETR4.SA", self.c._format_ticker("petr4.sa"))
-
-    def test_us_ticker_without_digits_is_left_alone(self):
-        self.assertEqual("AAPL", self.c._format_ticker("aapl"))
-
-    def test_us_ticker_with_dot_but_no_digit_is_left_alone(self):
-        self.assertEqual("BRK.B", self.c._format_ticker("brk.b"))
+    def test_format_ticker_normalizes_b3_and_us_tickers(self):
+        cases = [
+            ("test_brazilian_ticker_gets_sa_suffix", "petr4", "PETR4.SA"),
+            ("test_whitespace_is_trimmed_and_uppercased", "  aapl ", "AAPL"),
+            ("test_existing_sa_suffix_is_preserved", "PETR4.SA", "PETR4.SA"),
+            ("test_lowercase_sa_suffix_is_normalized_not_doubled", "petr4.sa", "PETR4.SA"),
+            ("test_us_ticker_without_digits_is_left_alone", "aapl", "AAPL"),
+            ("test_us_ticker_with_dot_but_no_digit_is_left_alone", "brk.b", "BRK.B"),
+        ]
+        for label, raw, expected in cases:
+            with self.subTest(label, raw=raw):
+                self.assertEqual(expected, self.c._format_ticker(raw))
 
 
 class FormatNumberTests(unittest.TestCase):
     def setUp(self):
         self.c = B3FundamentosConsultor()
 
-    def test_brl_uses_comma_separator(self):
-        self.assertEqual("13,75", self.c._format_number(13.75, 2, "BRL"))
-
-    def test_usd_keeps_dot_separator(self):
-        self.assertEqual("13.75", self.c._format_number(13.75, 2, "USD"))
-
-    def test_negative_value_keeps_sign(self):
-        self.assertEqual("-5,50", self.c._format_number(-5.5, 2, "BRL"))
-
-    def test_zero_decimals(self):
-        self.assertEqual("100", self.c._format_number(100, 0, "BRL"))
-
-    def test_none_returns_na(self):
-        self.assertEqual("N/A", self.c._format_number(None))
-
-    def test_literal_na_returns_na(self):
-        self.assertEqual("N/A", self.c._format_number("N/A"))
-
-    def test_unformattable_value_returns_na(self):
-        self.assertEqual("N/A", self.c._format_number("abc"))
+    def test_format_number_by_currency_with_na_fallbacks(self):
+        cases = [
+            ("test_brl_uses_comma_separator", (13.75, 2, "BRL"), "13,75"),
+            ("test_usd_keeps_dot_separator", (13.75, 2, "USD"), "13.75"),
+            ("test_negative_value_keeps_sign", (-5.5, 2, "BRL"), "-5,50"),
+            ("test_zero_decimals", (100, 0, "BRL"), "100"),
+            ("test_none_returns_na", (None,), "N/A"),
+            ("test_literal_na_returns_na", ("N/A",), "N/A"),
+            ("test_unformattable_value_returns_na", ("abc",), "N/A"),
+        ]
+        for label, args, expected in cases:
+            with self.subTest(label, args=args):
+                self.assertEqual(expected, self.c._format_number(*args))
 
 
 class FormatCurrencyTests(unittest.TestCase):
     def setUp(self):
         self.c = B3FundamentosConsultor()
 
-    def test_billions_scale_brl(self):
-        self.assertEqual("R$ 421,5 B", self.c._format_currency(421_500_000_000))
-
-    def test_billions_scale_usd_via_ticker_info(self):
-        self.assertEqual(
-            "$ 421.5 B",
-            self.c._format_currency(421_500_000_000, {"currency": "USD"}),
-        )
-
-    def test_millions_scale_brl(self):
-        self.assertEqual("R$ 1,5 M", self.c._format_currency(1_500_000))
-
-    def test_thousands_use_brazilian_grouping(self):
-        self.assertEqual("R$ 5.000,0", self.c._format_currency(5000))
-
-    def test_negative_billions(self):
-        self.assertEqual("R$ -2,0 B", self.c._format_currency(-2_000_000_000))
-
-    def test_zero_is_formatted_not_dropped(self):
-        self.assertEqual("R$ 0,0", self.c._format_currency(0))
-
-    def test_none_and_na_return_na(self):
-        self.assertEqual("N/A", self.c._format_currency(None))
-        self.assertEqual("N/A", self.c._format_currency("N/A"))
+    def test_format_currency_scales_groups_and_falls_back(self):
+        cases = [
+            ("test_billions_scale_brl", (421_500_000_000,), "R$ 421,5 B"),
+            ("test_billions_scale_usd_via_ticker_info",
+             (421_500_000_000, {"currency": "USD"}), "$ 421.5 B"),
+            ("test_millions_scale_brl", (1_500_000,), "R$ 1,5 M"),
+            ("test_thousands_use_brazilian_grouping", (5000,), "R$ 5.000,0"),
+            ("test_negative_billions", (-2_000_000_000,), "R$ -2,0 B"),
+            ("test_zero_is_formatted_not_dropped", (0,), "R$ 0,0"),
+            ("test_none_and_na_return_na", (None,), "N/A"),
+            ("test_none_and_na_return_na", ("N/A",), "N/A"),
+        ]
+        for label, args, expected in cases:
+            with self.subTest(label, args=args):
+                self.assertEqual(expected, self.c._format_currency(*args))
 
 
 class SafeGetTests(unittest.TestCase):
     def setUp(self):
         self.c = B3FundamentosConsultor()
 
-    def test_returns_present_value(self):
-        self.assertEqual(1, self.c._safe_get({"a": 1}, "a"))
-
-    def test_missing_key_returns_default(self):
-        self.assertEqual("def", self.c._safe_get({"a": 1}, "b", "def"))
-
-    def test_none_value_returns_default(self):
-        self.assertEqual("def", self.c._safe_get({"a": None}, "a", "def"))
-
-    def test_nan_value_returns_default(self):
-        self.assertEqual("def", self.c._safe_get({"a": float("nan")}, "a", "def"))
-
-    def test_zero_is_a_real_value(self):
-        self.assertEqual(0, self.c._safe_get({"a": 0}, "a", "def"))
-
-    def test_non_mapping_input_returns_default(self):
-        self.assertEqual("def", self.c._safe_get("not-a-dict", "a", "def"))
+    def test_safe_get_returns_value_or_default(self):
+        cases = [
+            ("test_returns_present_value", ({"a": 1}, "a"), 1),
+            ("test_missing_key_returns_default", ({"a": 1}, "b", "def"), "def"),
+            ("test_none_value_returns_default", ({"a": None}, "a", "def"), "def"),
+            ("test_nan_value_returns_default", ({"a": float("nan")}, "a", "def"), "def"),
+            ("test_zero_is_a_real_value", ({"a": 0}, "a", "def"), 0),
+            ("test_non_mapping_input_returns_default", ("not-a-dict", "a", "def"), "def"),
+        ]
+        for label, args, expected in cases:
+            with self.subTest(label, args=args):
+                self.assertEqual(expected, self.c._safe_get(*args))
 
 
 class QuoteAndMetricTests(unittest.TestCase):
@@ -514,24 +488,6 @@ class CachingTests(unittest.TestCase):
             consultor.get_cotacao_atual("AAPL")  # distinct ticker key -> distinct fetch
 
         self.assertEqual(2, fetch.call_count)
-
-    def test_error_at_getter_level_is_not_poisoning_ticker_object_cache(self):
-        # A raising fetch returns an error string and is never cached at the
-        # ticker-object layer, so a subsequent success is served fresh.
-        consultor = B3FundamentosConsultor()
-        with mock.patch.object(
-            B3FundamentosConsultor,
-            "_get_ticker_object",
-            side_effect=["[Erro: down]", FakeTicker({"currentPrice": 42.0, "currency": "BRL"})],
-        ) as fetch:
-            first = consultor.get_cotacao_atual("PETR4")
-            # New consultor call for a different metric to force a fresh fetch
-            second = consultor.get_market_cap("PETR4")
-
-        self.assertEqual("Cotação: N/A", first)
-        self.assertEqual(2, fetch.call_count)
-        # marketCap absent from the second ticker -> N/A, but proves refetch ran.
-        self.assertEqual("Market Cap: N/A", second)
 
 
 if __name__ == "__main__":

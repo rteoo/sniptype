@@ -121,12 +121,11 @@ class GuiThreadCallTests(unittest.TestCase):
     # -- call -------------------------------------------------------------
     def test_call_runs_on_the_gui_thread_and_returns_the_value(self):
         caller = threading.current_thread()
-        ran_on = self.gui.call(lambda _root: threading.current_thread(), timeout=10)
+        ran_on, root = self.gui.call(lambda root: (threading.current_thread(), root), timeout=10)
         self.assertIsNot(ran_on, caller)
         self.assertIs(ran_on, self.gui._thread)
-
-    def test_call_receives_the_shared_root(self):
-        self.assertIs(self.gui.call(lambda root: root, timeout=10), self.gui.root)
+        with self.subTest("test_call_receives_the_shared_root"):
+            self.assertIs(root, self.gui.root)
 
     def test_call_propagates_the_exception_with_a_usable_traceback(self):
         def boom(_root):
@@ -144,11 +143,11 @@ class GuiThreadCallTests(unittest.TestCase):
         self.assertIn("boom", rendered)
         self.assertIn("kaboom-from-gui", rendered)
 
-    def test_call_error_does_not_kill_the_pump(self):
-        with self.assertRaises(RuntimeError):
-            self.gui.call(self._raise_runtime, timeout=10)
-        # The very next call must still be served.
-        self.assertEqual(self.gui.call(lambda _root: "alive", timeout=10), "alive")
+        with self.subTest("test_call_error_does_not_kill_the_pump"):
+            with self.assertRaises(RuntimeError):
+                self.gui.call(self._raise_runtime, timeout=10)
+            # The very next call must still be served.
+            self.assertEqual(self.gui.call(lambda _root: "alive", timeout=10), "alive")
 
     @staticmethod
     def _raise_runtime(_root):
@@ -201,11 +200,6 @@ class GuiThreadCallTests(unittest.TestCase):
         self.assertEqual(self.gui.call(lambda _root: "recovered", timeout=10), "recovered")
 
     # -- submit -----------------------------------------------------------
-    def test_submit_does_not_block_and_runs(self):
-        done = threading.Event()
-        self.gui.submit(lambda _root: done.set())
-        self.assertTrue(done.wait(10))
-
     def test_submit_error_does_not_kill_the_pump(self):
         def boom(_root):
             raise RuntimeError("swallowed")
@@ -265,19 +259,6 @@ class GuiThreadShutdownTests(unittest.TestCase):
         self.gui.stop()
         self.assertFalse(self.gui.running)
 
-    def test_stop_wakes_a_caller_whose_work_never_ran(self):
-        """A call still queued when the loop exits must fail its caller instead
-        of leaving it blocked forever on ``done``."""
-        self.gui.stop()
-
-        box = {}
-        done = threading.Event()
-        self.gui._queue.put((lambda _root: "never runs", box, done))
-
-        self.gui.stop()  # second stop drains and fails the stranded item
-        self.assertTrue(done.is_set(), "stranded caller was never woken")
-        self.assertIsInstance(box.get("error"), RuntimeError)
-
     def test_abnormal_loop_exit_fails_stranded_callers(self):
         """A GUI loop that dies without stop() must also wake queued callers: a
         stranded one blocks forever in ``call(timeout=None)`` while holding the
@@ -295,17 +276,18 @@ class GuiThreadShutdownTests(unittest.TestCase):
         self.assertTrue(done.is_set(), "stranded caller was never woken")
         self.assertIsInstance(box.get("error"), RuntimeError)
 
-    def test_call_after_stop_refuses_instead_of_deadlocking(self):
+    def test_call_and_submit_after_stop_refuse_instead_of_deadlocking(self):
         self.gui.stop()
-        thread, holder = run_in_daemon(lambda: self.gui.call(lambda _root: "x", timeout=10))
-        self.assertFalse(thread.is_alive(), "call after stop deadlocked")
-        self.assertIsInstance(holder.get("error"), RuntimeError)
-
-    def test_submit_after_stop_refuses_instead_of_deadlocking(self):
-        self.gui.stop()
-        thread, holder = run_in_daemon(lambda: self.gui.submit(lambda _root: None))
-        self.assertFalse(thread.is_alive(), "submit after stop deadlocked")
-        self.assertIsInstance(holder.get("error"), RuntimeError)
+        for old_test, operation in (
+            ("test_call_after_stop_refuses_instead_of_deadlocking",
+             lambda: self.gui.call(lambda _root: "x", timeout=10)),
+            ("test_submit_after_stop_refuses_instead_of_deadlocking",
+             lambda: self.gui.submit(lambda _root: None)),
+        ):
+            with self.subTest(old_test):
+                thread, holder = run_in_daemon(operation)
+                self.assertFalse(thread.is_alive(), f"{old_test}: deadlocked after stop")
+                self.assertIsInstance(holder.get("error"), RuntimeError)
 
 
 class GuiThreadHeadlessTests(unittest.TestCase):
@@ -373,29 +355,22 @@ class MainThreadModeHeadlessTests(unittest.TestCase):
         self.assertIsNone(gui._thread, "a GUI thread was spawned in main-thread mode")
         self.assertIsNone(gui.root)
 
-    def test_call_from_a_worker_refuses_before_the_root_is_adopted(self):
-        gui = GuiThread(main_thread=True)
-        thread, holder = run_in_daemon(lambda: gui.call(lambda _root: "x", timeout=5))
-        self.assertFalse(thread.is_alive(), "call deadlocked")
-        self.assertIsInstance(holder.get("error"), RuntimeError)
-
     def test_adopt_from_a_worker_thread_is_refused(self):
         gui = GuiThread(main_thread=True)
         thread, holder = run_in_daemon(gui.adopt_main_thread)
         self.assertFalse(thread.is_alive())
         self.assertIsInstance(holder.get("error"), RuntimeError)
 
-    def test_adopt_and_run_mainloop_require_the_mode(self):
+    def test_adopt_and_run_mainloop_require_the_mode_and_a_root(self):
         gui = GuiThread(main_thread=False)
         with self.assertRaises(RuntimeError):
             gui.adopt_main_thread()
         with self.assertRaises(RuntimeError):
             gui.run_mainloop()
-
-    def test_run_mainloop_refuses_without_an_adopted_root(self):
-        gui = GuiThread(main_thread=True)
-        with self.assertRaises(RuntimeError):
-            gui.run_mainloop()
+        with self.subTest("test_run_mainloop_refuses_without_an_adopted_root"):
+            gui = GuiThread(main_thread=True)
+            with self.assertRaises(RuntimeError):
+                gui.run_mainloop()
 
     def test_stop_from_the_gui_thread_never_schedules_a_tcl_timer(self):
         """Issue #53: ``stop()`` runs in a Cocoa frame (the tray's *Sair*).

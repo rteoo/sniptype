@@ -83,20 +83,21 @@ class ManagerActionTests(unittest.TestCase):
         )
 
     def test_set_form_rejects_invalid_field_definition_without_mutating_inputs(self):
-        snippets = {"x": "%%field%%"}
-        metadata = {}
+        for old_test, template, form in (
+            ("test_set_form_rejects_invalid_field_definition_without_mutating_inputs",
+             "%%field%%", {"fields": [{"name": "bad", "type": "unknown"}]}),
+            ("test_set_form_definition_must_match_template_fields",
+             "Hello %%name%%", {"fields": [{"name": "unused"}]}),
+        ):
+            with self.subTest(old_test):
+                snippets = {"x": template}
+                metadata = {}
 
-        with self.assertRaises(ValueError):
-            set_form(snippets, metadata, "x", {"fields": [{"name": "bad", "type": "unknown"}]})
+                with self.assertRaises(ValueError):
+                    set_form(snippets, metadata, "x", form)
 
-        self.assertEqual({"x": "%%field%%"}, snippets)
-        self.assertEqual({}, metadata)
-
-    def test_set_form_definition_must_match_template_fields(self):
-        snippets = {"x": "Hello %%name%%"}
-
-        with self.assertRaises(ValueError):
-            set_form(snippets, {}, "x", {"fields": [{"name": "unused"}]})
+                self.assertEqual({"x": template}, snippets)
+                self.assertEqual({}, metadata)
 
     def test_create_group_is_copy_on_write_and_accepts_injected_id(self):
         snippets = {"x": "value"}

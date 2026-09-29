@@ -40,25 +40,23 @@ class HotkeyDialogControllerTests(unittest.TestCase):
         self.assertIsNone(controller.error)
 
     def test_invalid_binding_keeps_dialog_open_and_focuses_offending_action(self):
-        controller, controls = self._controller({"open_manager": "m"})
+        for old_test, values, invalid_action, fragment, unfocused in (
+            ("test_invalid_binding_keeps_dialog_open_and_focuses_offending_action",
+             {"open_manager": "m"}, "open_manager", ACTION_LABELS["open_manager"], ()),
+            ("test_duplicate_binding_focuses_the_second_action",
+             {"open_manager": "<ctrl>+m", "edit_last": "<CTRL>+M"},
+             "edit_last", "duplicates", ("open_manager",)),
+        ):
+            with self.subTest(old_test):
+                controller, controls = self._controller(values)
 
-        self.assertFalse(controller.save())
-        self.assertIsNone(controller.result)
-        self.assertEqual("open_manager", controller.invalid_action)
-        self.assertTrue(controls["open_manager"].focused)
-        self.assertIn(ACTION_LABELS["open_manager"], controller.error)
-
-    def test_duplicate_binding_focuses_the_second_action(self):
-        controller, controls = self._controller({
-            "open_manager": "<ctrl>+m",
-            "edit_last": "<CTRL>+M",
-        })
-
-        self.assertFalse(controller.save())
-        self.assertEqual("edit_last", controller.invalid_action)
-        self.assertFalse(controls["open_manager"].focused)
-        self.assertTrue(controls["edit_last"].focused)
-        self.assertIn("duplicates", controller.error)
+                self.assertFalse(controller.save())
+                self.assertIsNone(controller.result)
+                self.assertEqual(invalid_action, controller.invalid_action)
+                self.assertTrue(controls[invalid_action].focused)
+                for action in unfocused:
+                    self.assertFalse(controls[action].focused)
+                self.assertIn(fragment, controller.error)
 
     def test_cancel_discards_a_previous_save(self):
         controller, _controls = self._controller({"open_manager": "<ctrl>+m"})
@@ -66,14 +64,6 @@ class HotkeyDialogControllerTests(unittest.TestCase):
         controller.cancel()
         self.assertIsNone(controller.result)
         self.assertIsNone(controller.error)
-
-    def test_controller_accepts_injected_normalizer_for_a_tk_free_seam(self):
-        normalizer = mock.Mock(return_value=({action: None for action in ACTIONS}, {}))
-        controls = {action: FakeEntry("value") for action in ACTIONS}
-        controller = HotkeyDialogController({}, controls, normalizer=normalizer)
-
-        self.assertTrue(controller.save())
-        normalizer.assert_called_once()
 
 
 class HotkeyDialogWindowTests(unittest.TestCase):

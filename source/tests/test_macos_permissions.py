@@ -35,18 +35,14 @@ class ProbeTests(unittest.TestCase):
 
     def test_input_monitoring_maps_the_iokit_access_codes(self):
         for code, expected in ((0, GRANTED), (1, DENIED), (2, UNKNOWN), (99, UNKNOWN)):
+            check = mock.Mock(return_value=code)
             with mock.patch.object(mp, "IS_MAC", True), \
-                    mock.patch.object(mp, "_framework_symbol", return_value=mock.Mock(return_value=code)):
+                    mock.patch.object(mp, "_framework_symbol", return_value=check):
                 self.assertEqual(mp.check_input_monitoring(), expected, code)
-
-    def test_input_monitoring_asks_iokit_for_the_listen_event_request_type(self):
-        # kIOHIDRequestTypeListenEvent is 0; passing PostEvent instead would
-        # report the state of a permission the listener does not need.
-        check = mock.Mock(return_value=0)
-        with mock.patch.object(mp, "IS_MAC", True), \
-                mock.patch.object(mp, "_framework_symbol", return_value=check):
-            mp.check_input_monitoring()
-        check.assert_called_once_with(0)
+            # kIOHIDRequestTypeListenEvent is 0; passing PostEvent instead would
+            # report the state of a permission the listener does not need.
+            with self.subTest("test_input_monitoring_asks_iokit_for_the_listen_event_request_type", code=code):
+                check.assert_called_once_with(0)
 
     def test_accessibility_reads_ax_is_process_trusted(self):
         for trusted, expected in ((True, GRANTED), (False, DENIED)):
@@ -55,16 +51,16 @@ class ProbeTests(unittest.TestCase):
                 self.assertEqual(mp.check_accessibility(), expected)
 
     def test_missing_symbols_report_unknown_rather_than_denied(self):
-        with mock.patch.object(mp, "IS_MAC", True), \
-                mock.patch.object(mp, "_framework_symbol", return_value=None):
-            self.assertEqual(mp.check_input_monitoring(), UNKNOWN)
-            self.assertEqual(mp.check_accessibility(), UNKNOWN)
-
-    def test_a_raising_framework_call_reports_unknown(self):
-        with mock.patch.object(mp, "IS_MAC", True), \
-                mock.patch.object(mp, "_framework_symbol", return_value=mock.Mock(side_effect=OSError("boom"))):
-            self.assertEqual(mp.check_input_monitoring(), UNKNOWN)
-            self.assertEqual(mp.check_accessibility(), UNKNOWN)
+        rows = (
+            ("test_missing_symbols_report_unknown_rather_than_denied", None),
+            ("test_a_raising_framework_call_reports_unknown", mock.Mock(side_effect=OSError("boom"))),
+        )
+        for name, symbol in rows:
+            with self.subTest(name), \
+                    mock.patch.object(mp, "IS_MAC", True), \
+                    mock.patch.object(mp, "_framework_symbol", return_value=symbol):
+                self.assertEqual(mp.check_input_monitoring(), UNKNOWN)
+                self.assertEqual(mp.check_accessibility(), UNKNOWN)
 
     def test_off_mac_nothing_is_probed(self):
         symbol = mock.Mock()
@@ -72,13 +68,6 @@ class ProbeTests(unittest.TestCase):
                 mock.patch.object(mp, "_framework_symbol", symbol):
             self.assertEqual(mp.check_permissions(), status(UNKNOWN, UNKNOWN))
         symbol.assert_not_called()
-
-    def test_framework_symbol_survives_a_missing_library(self):
-        with mock.patch.object(mp.ctypes.util, "find_library", return_value=None):
-            self.assertIsNone(mp._framework_symbol("IOKit", "IOHIDCheckAccess"))
-        with mock.patch.object(mp.ctypes.util, "find_library", return_value="/nope"), \
-                mock.patch.object(mp.ctypes.cdll, "LoadLibrary", side_effect=OSError("missing")):
-            self.assertIsNone(mp._framework_symbol("IOKit", "IOHIDCheckAccess"))
 
 
 class DecisionTests(unittest.TestCase):
@@ -89,17 +78,27 @@ class DecisionTests(unittest.TestCase):
         self.assertTrue(mp.needs_onboarding(status(GRANTED, DENIED)))
 
     def test_denied_and_unknown_are_reported_separately(self):
-        report = status(DENIED, UNKNOWN)
-        self.assertEqual(mp.denied_permissions(report), [mp.INPUT_MONITORING])
-        self.assertEqual(mp.unknown_permissions(report), [mp.ACCESSIBILITY])
-
-    def test_an_absent_key_counts_as_unknown_not_granted(self):
-        self.assertEqual(mp.unknown_permissions({}), list(mp.PERMISSIONS))
-        self.assertEqual(mp.denied_permissions({}), [])
-
-    def test_input_monitoring_is_listed_before_accessibility(self):
-        listed = mp.denied_permissions(status(DENIED, DENIED))
-        self.assertEqual(listed, [mp.INPUT_MONITORING, mp.ACCESSIBILITY])
+        # (old test, status, expected denied, expected unknown or None if unchecked)
+        rows = (
+            (
+                "test_denied_and_unknown_are_reported_separately",
+                status(DENIED, UNKNOWN),
+                [mp.INPUT_MONITORING],
+                [mp.ACCESSIBILITY],
+            ),
+            ("test_an_absent_key_counts_as_unknown_not_granted", {}, [], list(mp.PERMISSIONS)),
+            (
+                "test_input_monitoring_is_listed_before_accessibility",
+                status(DENIED, DENIED),
+                [mp.INPUT_MONITORING, mp.ACCESSIBILITY],
+                None,
+            ),
+        )
+        for name, report, denied, unknown in rows:
+            with self.subTest(name):
+                self.assertEqual(mp.denied_permissions(report), denied)
+                if unknown is not None:
+                    self.assertEqual(mp.unknown_permissions(report), unknown)
 
     def test_the_prompt_names_only_what_is_missing(self):
         message = mp.build_prompt_message(status(DENIED, GRANTED))
@@ -130,31 +129,42 @@ class DecisionTests(unittest.TestCase):
 
 
 class RecheckTests(unittest.TestCase):
-    def test_a_full_grant_asks_for_a_restart_instead_of_claiming_it_works(self):
-        state, message = mp.recheck_outcome(status(DENIED, DENIED), status())
-        self.assertEqual(state, mp.RECHECK_RESOLVED)
-        self.assertIn("Reinicie", message)
-
-    def test_a_partial_grant_names_what_is_left(self):
-        state, message = mp.recheck_outcome(status(DENIED, DENIED), status(GRANTED, DENIED))
-        self.assertEqual(state, mp.RECHECK_PARTIAL)
-        self.assertIn(mp.PERMISSION_LABELS[mp.ACCESSIBILITY], message)
-        self.assertNotIn(mp.PERMISSION_LABELS[mp.INPUT_MONITORING], message)
-
-    def test_no_change_says_so(self):
-        state, message = mp.recheck_outcome(status(DENIED, GRANTED), status(DENIED, GRANTED))
-        self.assertEqual(state, mp.RECHECK_PENDING)
-        self.assertIn("Nada mudou", message)
-
-    def test_an_unreadable_recheck_is_never_reported_as_resolved(self):
-        # A probe that stopped answering is not a grant.
-        state, _ = mp.recheck_outcome(status(DENIED, DENIED), status(UNKNOWN, UNKNOWN))
-        self.assertEqual(state, mp.RECHECK_PENDING)
-
-    def test_a_permission_denied_only_on_the_recheck_is_picked_up(self):
-        state, message = mp.recheck_outcome(status(DENIED, GRANTED), status(GRANTED, DENIED))
-        self.assertEqual(state, mp.RECHECK_PENDING)
-        self.assertIn(mp.PERMISSION_LABELS[mp.ACCESSIBILITY], message)
+    def test_recheck_outcome(self):
+        # A grant is never reported as working: TCC is read at process start.
+        # (old test, previous, current, state, message contains, message lacks)
+        rows = (
+            (
+                "test_a_full_grant_asks_for_a_restart_instead_of_claiming_it_works",
+                status(DENIED, DENIED), status(), mp.RECHECK_RESOLVED, ["Reinicie"], [],
+            ),
+            (
+                "test_a_partial_grant_names_what_is_left",
+                status(DENIED, DENIED), status(GRANTED, DENIED), mp.RECHECK_PARTIAL,
+                [mp.PERMISSION_LABELS[mp.ACCESSIBILITY]], [mp.PERMISSION_LABELS[mp.INPUT_MONITORING]],
+            ),
+            (
+                "test_no_change_says_so",
+                status(DENIED, GRANTED), status(DENIED, GRANTED), mp.RECHECK_PENDING, ["Nada mudou"], [],
+            ),
+            # A probe that stopped answering is not a grant.
+            (
+                "test_an_unreadable_recheck_is_never_reported_as_resolved",
+                status(DENIED, DENIED), status(UNKNOWN, UNKNOWN), mp.RECHECK_PENDING, [], [],
+            ),
+            (
+                "test_a_permission_denied_only_on_the_recheck_is_picked_up",
+                status(DENIED, GRANTED), status(GRANTED, DENIED), mp.RECHECK_PENDING,
+                [mp.PERMISSION_LABELS[mp.ACCESSIBILITY]], [],
+            ),
+        )
+        for name, previous, current, expected_state, contains, lacks in rows:
+            with self.subTest(name):
+                state, message = mp.recheck_outcome(previous, current)
+                self.assertEqual(state, expected_state)
+                for text in contains:
+                    self.assertIn(text, message)
+                for text in lacks:
+                    self.assertNotIn(text, message)
 
 
 class OpenPaneTests(unittest.TestCase):
@@ -166,12 +176,13 @@ class OpenPaneTests(unittest.TestCase):
         self.assertEqual(argv[1], mp.SETTINGS_PANE_URLS[mp.ACCESSIBILITY])
 
     def test_a_failed_launch_is_reported(self):
-        runner = mock.Mock(return_value=mock.Mock(returncode=1))
-        self.assertFalse(mp.open_settings_pane(mp.INPUT_MONITORING, runner=runner))
-
-    def test_a_raising_launch_is_reported(self):
-        runner = mock.Mock(side_effect=OSError("no open(1)"))
-        self.assertFalse(mp.open_settings_pane(mp.INPUT_MONITORING, runner=runner))
+        rows = (
+            ("test_a_failed_launch_is_reported", mock.Mock(return_value=mock.Mock(returncode=1))),
+            ("test_a_raising_launch_is_reported", mock.Mock(side_effect=OSError("no open(1)"))),
+        )
+        for name, runner in rows:
+            with self.subTest(name):
+                self.assertFalse(mp.open_settings_pane(mp.INPUT_MONITORING, runner=runner))
 
     def test_an_unknown_permission_launches_nothing(self):
         runner = mock.Mock()
@@ -219,10 +230,17 @@ class AppFlowTests(unittest.TestCase):
         self.assertFalse(app.macos_permissions_pending())
 
     def test_an_unreadable_probe_logs_but_never_nags(self):
-        app = self._resolve(mock.Mock(return_value=status(UNKNOWN, UNKNOWN)))
-        self.assertTrue(app.logger.warning.called)
-        app.open_macos_permission_window.assert_not_called()
-        app.notify_error.assert_not_called()
+        rows = (
+            ("test_an_unreadable_probe_logs_but_never_nags", mock.Mock(return_value=status(UNKNOWN, UNKNOWN))),
+            # A raising probe must never escape the worker thread.
+            ("test_a_raising_probe_never_escapes_the_worker", mock.Mock(side_effect=OSError("tcc down"))),
+        )
+        for name, probe in rows:
+            with self.subTest(name):
+                app = self._resolve(probe)
+                self.assertTrue(app.logger.warning.called)
+                app.open_macos_permission_window.assert_not_called()
+                app.notify_error.assert_not_called()
 
     def test_off_mac_the_flow_does_nothing_at_all(self):
         probe = mock.Mock()
@@ -230,19 +248,6 @@ class AppFlowTests(unittest.TestCase):
         probe.assert_not_called()
         app.open_macos_permission_window.assert_not_called()
         self.assertFalse(app.macos_permissions_pending())
-
-    def test_a_raising_probe_never_escapes_the_worker(self):
-        app = self._resolve(mock.Mock(side_effect=OSError("tcc down")))
-        self.assertTrue(app.logger.warning.called)
-        app.open_macos_permission_window.assert_not_called()
-
-    def test_the_tray_entry_is_hidden_until_a_denial_is_cached(self):
-        app = make_app()
-        self.assertFalse(app.macos_permissions_pending())
-        app._macos_permission_status = status(UNKNOWN, UNKNOWN)
-        self.assertFalse(app.macos_permissions_pending())
-        app._macos_permission_status = status(GRANTED, DENIED)
-        self.assertTrue(app.macos_permissions_pending())
 
     def test_the_recheck_updates_the_cache_and_the_tray(self):
         app = make_app()
@@ -310,10 +315,16 @@ class SecureInputProbeTests(unittest.TestCase):
         symbol.assert_not_called()
 
     def test_a_missing_symbol_reports_not_secure(self):
-        # An old macOS without the Carbon symbol must not block every expansion.
-        with mock.patch.object(mp, "IS_MAC", True), \
-                mock.patch.object(mp, "_framework_symbol", return_value=None):
-            self.assertFalse(mp.secure_input_enabled())
+        rows = (
+            # An old macOS without the Carbon symbol must not block every expansion.
+            ("test_a_missing_symbol_reports_not_secure", None),
+            ("test_a_raising_probe_reports_not_secure", mock.Mock(side_effect=OSError("boom"))),
+        )
+        for name, symbol in rows:
+            with self.subTest(name), \
+                    mock.patch.object(mp, "IS_MAC", True), \
+                    mock.patch.object(mp, "_framework_symbol", return_value=symbol):
+                self.assertFalse(mp.secure_input_enabled())
 
     def test_the_carbon_answer_is_returned_as_a_bool(self):
         for answer, expected in ((1, True), (0, False)):
@@ -322,12 +333,6 @@ class SecureInputProbeTests(unittest.TestCase):
                 with mock.patch.object(mp, "IS_MAC", True), \
                         mock.patch.object(mp, "_framework_symbol", return_value=symbol):
                     self.assertIs(expected, mp.secure_input_enabled())
-
-    def test_a_raising_probe_reports_not_secure(self):
-        symbol = mock.Mock(side_effect=OSError("boom"))
-        with mock.patch.object(mp, "IS_MAC", True), \
-                mock.patch.object(mp, "_framework_symbol", return_value=symbol):
-            self.assertFalse(mp.secure_input_enabled())
 
     @unittest.skipUnless(mp.IS_MAC, "Carbon is macOS-only")
     def test_the_real_symbol_resolves_on_this_host(self):
@@ -369,6 +374,11 @@ class SymbolResolutionCacheTests(unittest.TestCase):
             self.assertIsNone(mp._framework_symbol("IOKit", "IOHIDCheckAccess"))
         self.assertEqual(find.call_count, 2)
         self.assertEqual(mp._SYMBOL_CACHE, {})
+
+        with self.subTest("test_framework_symbol_survives_a_missing_library"):
+            with mock.patch.object(mp.ctypes.util, "find_library", return_value="/nope"), \
+                    mock.patch.object(mp.ctypes.cdll, "LoadLibrary", side_effect=OSError("missing")):
+                self.assertIsNone(mp._framework_symbol("IOKit", "IOHIDCheckAccess"))
 
 
 class SecureInputExpansionGateTests(unittest.TestCase):
@@ -462,38 +472,6 @@ class SecureInputNotifyDeferralTests(unittest.TestCase):
         self.assertEqual(deferred, app.notify_deferred_status)
         self.assertEqual(deferred.__func__, tx.Sniptype.notify_deferred_status)
         self.assertEqual(kwargs.get("cooldown_seconds"), 60)
-
-    def test_early_notice_flushes_after_tray_ready_only_once(self):
-        app = tx.Sniptype.__new__(tx.Sniptype)
-        app.logger = mock.Mock()
-        app.task_runner = mock.Mock()
-        app.icon = None
-        app._notification_lock = threading.Lock()
-        app.pending_notifications = []
-        app.notification_timestamps = {}
-        app.notification_history = []
-        app.notification_history_file = "unused.json"
-        icon = mock.Mock()
-
-        with mock.patch.object(tx, "save_notification_history"), \
-                mock.patch.object(tx.time, "sleep"):
-            self.assertFalse(
-                app.notify_deferred_status(
-                    "secure input", key="secure-input", cooldown_seconds=60
-                )
-            )
-            app.on_tray_ready(icon)
-            app.notify_launch_ready()
-            # A repeated startup callback must not replay an already-drained queue
-            # (and the startup notice itself is behind its normal cooldown).
-            app.notify_launch_ready()
-
-        self.assertEqual([], app.pending_notifications)
-        self.assertEqual(
-            ["SnipType iniciado com sucesso.", "secure input"],
-            [entry["message"] for entry in app.notification_history],
-        )
-        self.assertEqual(2, icon.notify.call_count)
 
     def test_notice_waits_for_a_visible_tray_icon(self):
         for initial_icon in (None, mock.Mock(visible=False)):

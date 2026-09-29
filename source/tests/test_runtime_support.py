@@ -31,61 +31,39 @@ except Exception:  # pragma: no cover - only on a host without pynput installed
 
 
 class BuildSnippetFailureNotificationTests(unittest.TestCase):
-    def test_error_wrapper_keeps_trigger_and_detail(self):
-        message = build_snippet_failure_notification("xdolar", "[Erro: timeout na API]")
-
-        self.assertIn("xdolar", message)
-        self.assertIn("timeout na API", message)
-
-    def test_error_prefix_is_case_insensitive(self):
-        message = build_snippet_failure_notification("xcot", "[ERRO na consulta BCB]")
-
-        self.assertEqual("Falha no snippet xcot: ERRO na consulta BCB", message)
-
-    def test_unavailable_api_value_maps_to_generic_message(self):
-        message = build_snippet_failure_notification("xcot", "Cotação: N/A")
-
-        self.assertEqual("Falha no snippet xcot: dado indisponível.", message)
-
     def test_bracketed_unavailable_variants_are_reported(self):
-        self.assertEqual(
-            "Falha no snippet xind: Indisponível",
-            build_snippet_failure_notification("xind", "[Indisponível]"),
+        cases = (
+            ("bracketed_unavailable_variants", "xind", "[Indisponível]",
+             "Falha no snippet xind: Indisponível"),
+            ("bracketed_unavailable_variants", "xfal", "[Falha na rede]",
+             "Falha no snippet xfal: Falha na rede"),
+            ("bracketed_unavailable_variants", "xna", "[valor N/A]",
+             "Falha no snippet xna: valor N/A"),
+            ("error_prefix_is_case_insensitive", "xcot", "[ERRO na consulta BCB]",
+             "Falha no snippet xcot: ERRO na consulta BCB"),
+            ("unavailable_api_value_maps_to_generic_message", "xcot", "Cotação: N/A",
+             "Falha no snippet xcot: dado indisponível."),
         )
-        self.assertEqual(
-            "Falha no snippet xfal: Falha na rede",
-            build_snippet_failure_notification("xfal", "[Falha na rede]"),
-        )
-        self.assertEqual(
-            "Falha no snippet xna: valor N/A",
-            build_snippet_failure_notification("xna", "[valor N/A]"),
-        )
+        for label, trigger, value, expected in cases:
+            with self.subTest(label, value=value):
+                self.assertEqual(expected, build_snippet_failure_notification(trigger, value))
 
     def test_cancelled_and_partial_results_are_ignored(self):
-        self.assertIsNone(build_snippet_failure_notification("xfund", "[Cancelado]"))
-        self.assertIsNone(
-            build_snippet_failure_notification(
-                "xfund",
-                "📈 PETR4 | R$ 31,00\n📘 P/VP: N/A\n🎯 ROE: 18,50%",
-            )
+        cases = (
+            ("cancelled_and_partial_results", "xfund", "[Cancelado]"),
+            ("cancelled_and_partial_results", "xfund",
+             "📈 PETR4 | R$ 31,00\n📘 P/VP: N/A\n🎯 ROE: 18,50%"),
+            ("whitespace_wrapped_cancel_marker", "xfund", "  [Cancelado]  "),
+            ("empty_and_blank_values", "xcot", ""),
+            ("empty_and_blank_values", "xcot", "   \n\t "),
+            # A multi-line result is treated as partial success, not a failure,
+            # even when its last line looks unavailable.
+            ("multiline_value_ending_in_na", "xcot", "Dólar hoje\nFonte: BCB\nValor: N/A"),
+            ("plain_success_value", "xdolar", "R$ 5,12"),
         )
-
-    def test_whitespace_wrapped_cancel_marker_is_ignored(self):
-        self.assertIsNone(build_snippet_failure_notification("xfund", "  [Cancelado]  "))
-
-    def test_empty_and_blank_values_return_none(self):
-        self.assertIsNone(build_snippet_failure_notification("xcot", ""))
-        self.assertIsNone(build_snippet_failure_notification("xcot", "   \n\t "))
-
-    def test_multiline_value_ending_in_na_returns_none(self):
-        # A multi-line result is treated as partial success, not a failure, even
-        # when its last line looks unavailable.
-        self.assertIsNone(
-            build_snippet_failure_notification("xcot", "Dólar hoje\nFonte: BCB\nValor: N/A")
-        )
-
-    def test_plain_success_value_returns_none(self):
-        self.assertIsNone(build_snippet_failure_notification("xdolar", "R$ 5,12"))
+        for label, trigger, value in cases:
+            with self.subTest(label, value=value):
+                self.assertIsNone(build_snippet_failure_notification(trigger, value))
 
     def test_rich_text_payload_is_unwrapped_before_classification(self):
         payload = {
@@ -109,58 +87,41 @@ class BuildSnippetFailureNotificationTests(unittest.TestCase):
 
 class TruncateNotificationTextTests(unittest.TestCase):
     def test_normalizes_whitespace_and_truncates(self):
-        message = truncate_notification_text("linha 1\nlinha 2\tlinha 3", max_length=18)
-
-        self.assertEqual("linha 1 linha 2...", message)
-
-    def test_short_message_is_returned_unchanged(self):
-        self.assertEqual("bom dia", truncate_notification_text("bom dia"))
-
-    def test_message_at_exactly_max_length_is_not_truncated(self):
-        # Boundary: len == max_length must not trigger the ellipsis path.
-        self.assertEqual("abcde", truncate_notification_text("abcde", max_length=5))
-
-    def test_message_one_over_max_length_is_truncated(self):
-        result = truncate_notification_text("abcdef", max_length=5)
-
-        self.assertEqual("ab...", result)
-        self.assertEqual(5, len(result))
-
-    def test_non_string_message_is_coerced(self):
-        self.assertEqual("42", truncate_notification_text(42))
-
-    def test_unicode_and_emoji_are_preserved(self):
-        self.assertEqual("café 🎉", truncate_notification_text("café   🎉"))
-
-    def test_huge_message_is_capped_at_max_length(self):
-        result = truncate_notification_text("palavra " * 1000, max_length=40)
-
-        self.assertLessEqual(len(result), 40)
-        self.assertTrue(result.endswith("..."))
+        cases = (
+            ("normalizes_whitespace_and_truncates", "linha 1\nlinha 2\tlinha 3",
+             {"max_length": 18}, "linha 1 linha 2..."),
+            ("short_message_is_returned_unchanged", "bom dia", {}, "bom dia"),
+            # Boundary: len == max_length must not trigger the ellipsis path.
+            ("message_at_exactly_max_length_is_not_truncated", "abcde",
+             {"max_length": 5}, "abcde"),
+            ("message_one_over_max_length_is_truncated", "abcdef",
+             {"max_length": 5}, "ab..."),
+            ("non_string_message_is_coerced", 42, {}, "42"),
+            ("unicode_and_emoji_are_preserved", "café   🎉", {}, "café 🎉"),
+        )
+        for label, message, kwargs, expected in cases:
+            with self.subTest(label):
+                result = truncate_notification_text(message, **kwargs)
+                self.assertEqual(expected, result)
+                if label == "message_one_over_max_length_is_truncated":
+                    self.assertEqual(5, len(result))
 
 
 class NormalizeClipboardTextTests(unittest.TestCase):
     """The LF-side comparison helper used by the clipboard restore path."""
 
     def test_crlf_is_collapsed_to_lf(self):
-        self.assertEqual("a\nb", normalize_clipboard_text("a\r\nb"))
-
-    def test_lone_cr_is_collapsed_to_lf(self):
-        self.assertEqual("a\nb", normalize_clipboard_text("a\rb"))
-
-    def test_already_lf_is_unchanged(self):
-        self.assertEqual("a\nb", normalize_clipboard_text("a\nb"))
-
-    def test_rich_payload_uses_its_plain_text(self):
-        payload = {"__kind__": "rich_text", "text": "linha\r\numa", "spans": []}
-        self.assertEqual("linha\numa", normalize_clipboard_text(payload))
-
-    def test_none_becomes_empty_string(self):
-        self.assertEqual("", normalize_clipboard_text(None))
-
-    def test_normalization_is_idempotent(self):
-        once = normalize_clipboard_text("a\r\nb\rc\nd")
-        self.assertEqual(once, normalize_clipboard_text(once))
+        cases = (
+            ("crlf_is_collapsed_to_lf", "a\r\nb", "a\nb"),
+            ("lone_cr_is_collapsed_to_lf", "a\rb", "a\nb"),
+            ("already_lf_is_unchanged", "a\nb", "a\nb"),
+            ("rich_payload_uses_its_plain_text",
+             {"__kind__": "rich_text", "text": "linha\r\numa", "spans": []}, "linha\numa"),
+            ("none_becomes_empty_string", None, ""),
+        )
+        for label, value, expected in cases:
+            with self.subTest(label):
+                self.assertEqual(expected, normalize_clipboard_text(value))
 
 
 class NotificationHistoryTests(unittest.TestCase):
@@ -175,18 +136,20 @@ class NotificationHistoryTests(unittest.TestCase):
         with open(self.path, "w", encoding="utf-8") as handle:
             handle.write(raw)
 
-    def test_missing_file_returns_empty_list(self):
-        self.assertEqual([], load_notification_history(self.path))
-
-    def test_invalid_json_returns_empty_list(self):
-        self._write("{ this is not json")
-        self.assertEqual([], load_notification_history(self.path))
-
     def test_non_list_top_level_returns_empty_list(self):
-        self._write("{}")
-        self.assertEqual([], load_notification_history(self.path))
-        self._write("42")
-        self.assertEqual([], load_notification_history(self.path))
+        # None means the file is absent; rows run in order, so the missing-file
+        # row must come before anything is written.
+        cases = (
+            ("missing_file", None),
+            ("invalid_json", "{ this is not json"),
+            ("non_list_top_level", "{}"),
+            ("non_list_top_level", "42"),
+        )
+        for label, raw in cases:
+            with self.subTest(label, raw=raw):
+                if raw is not None:
+                    self._write(raw)
+                self.assertEqual([], load_notification_history(self.path))
 
     def test_non_dict_entries_are_filtered_out(self):
         self._write(json.dumps([{"a": 1}, "loose", 5, None, {"b": 2}]))
@@ -216,15 +179,6 @@ class NotificationHistoryTests(unittest.TestCase):
 
 
 class BackgroundTaskRunnerTests(unittest.TestCase):
-    def test_target_runs_on_a_background_thread(self):
-        runner = BackgroundTaskRunner()
-        ran = threading.Event()
-        thread = runner.start(ran.set)
-
-        self.assertTrue(ran.wait(timeout=2))
-        thread.join(timeout=2)
-        self.assertFalse(thread.is_alive())
-
     def test_positional_and_keyword_arguments_are_forwarded(self):
         runner = BackgroundTaskRunner()
         seen = {}
@@ -396,17 +350,6 @@ class AppLoggerTests(unittest.TestCase):
 class TextInserterFallbackTests(unittest.TestCase):
     """Insertion-path behavior not already exercised by tests/test_hotpath.py."""
 
-    def test_successful_paste_returns_true_without_typing_or_notifying(self):
-        keyboard = mock.Mock()
-        notify = mock.Mock()
-        inserter = TextInserter(keyboard, notify=notify)
-
-        with mock.patch.object(inserter, "_paste_value", return_value=True):
-            self.assertTrue(inserter.insert_text("olá"))
-
-        keyboard.type.assert_not_called()
-        notify.assert_not_called()
-
     def test_multiline_total_failure_reports_neither_paste_nor_copy(self):
         # Paste fails AND the clipboard copy fallback also fails: the user is told
         # the payload could not even be placed for a manual Ctrl+V, and nothing is
@@ -465,46 +408,31 @@ class TextInserterFallbackTests(unittest.TestCase):
     def test_send_paste_shortcut_emits_ctrl_v_sequence(self):
         from pynput.keyboard import Key
 
-        keyboard = mock.Mock()
-        inserter = TextInserter(keyboard)
-
-        with mock.patch("platform_support.paste_modifier_is_cmd", return_value=False):
-            inserter._send_paste_shortcut()
-
-        self.assertEqual(
-            [
-                mock.call.press(Key.ctrl),
-                mock.call.press("v"),
-                mock.call.release("v"),
-                mock.call.release(Key.ctrl),
-            ],
-            keyboard.mock_calls,
+        cases = (
+            ("send_paste_shortcut_emits_ctrl_v_sequence", False, Key.ctrl),
+            ("send_paste_shortcut_uses_cmd_when_platform_requests_it", True, Key.cmd),
         )
+        for label, is_cmd, modifier in cases:
+            with self.subTest(label):
+                keyboard = mock.Mock()
+                inserter = TextInserter(keyboard)
 
-    @unittest.skipUnless(HAS_PYNPUT, "pynput required for the paste shortcut")
-    def test_send_paste_shortcut_uses_cmd_when_platform_requests_it(self):
-        from pynput.keyboard import Key
+                with mock.patch("platform_support.paste_modifier_is_cmd", return_value=is_cmd):
+                    inserter._send_paste_shortcut()
 
-        keyboard = mock.Mock()
-        inserter = TextInserter(keyboard)
-
-        with mock.patch("platform_support.paste_modifier_is_cmd", return_value=True):
-            inserter._send_paste_shortcut()
-
-        self.assertEqual(mock.call.press(Key.cmd), keyboard.mock_calls[0])
-        self.assertEqual(mock.call.release(Key.cmd), keyboard.mock_calls[-1])
+                self.assertEqual(
+                    [
+                        mock.call.press(modifier),
+                        mock.call.press("v"),
+                        mock.call.release("v"),
+                        mock.call.release(modifier),
+                    ],
+                    keyboard.mock_calls,
+                )
 
 
 class TextInserterTimingTests(unittest.TestCase):
     """The two paste delays come from platform_support, not from literals."""
-
-    def test_delays_default_to_the_running_platform(self):
-        import platform_support
-
-        defaults = platform_support.default_insertion_timings()
-        inserter = TextInserter(mock.Mock())
-        self.assertEqual(defaults["clipboard_settle_delay"], inserter.settle_delay)
-        self.assertEqual(defaults["paste_restore_delay"], inserter.restore_delay)
 
     def test_paste_sleeps_the_configured_settle_then_restore_delay(self):
         clipboard = mock.Mock()

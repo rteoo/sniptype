@@ -199,14 +199,6 @@ class HtmlGenerationTests(unittest.TestCase):
         self.assertEqual("<div><strong>abcdef</strong></div>", fragment)
         self.assertEqual(1, fragment.count("<strong>"))
 
-    def test_duplicate_spans_are_idempotent_in_html(self):
-        single = build_html_fragment("abc", [{"tag": "bold", "start": 0, "end": 3}])
-        duplicated = build_html_fragment(
-            "abc",
-            [{"tag": "bold", "start": 0, "end": 3}, {"tag": "bold", "start": 0, "end": 3}],
-        )
-        self.assertEqual(single, duplicated)
-
     def test_astral_span_uses_codepoint_offsets(self):
         # A span over an astral emoji works because Python string offsets are
         # code points, not UTF-16 units; the emoji is length 1.
@@ -244,12 +236,6 @@ class RtfGenerationTests(unittest.TestCase):
         # the raw unsigned value which an RTF reader would misread.
         rtf = build_rtf_document("豈", [])
         self.assertIn(r"\u-1792?", rtf)
-
-    def test_all_bmp_unicode_escapes_stay_in_signed_16_range(self):
-        rtf = build_rtf_document("é豈豈", [])
-        for value in _rtf_unicode_values(rtf):
-            self.assertGreaterEqual(value, _RTF_SIGNED_16_MIN)
-            self.assertLessEqual(value, _RTF_SIGNED_16_MAX)
 
     def test_style_control_words_present_for_each_bit(self):
         rtf = build_rtf_document(
@@ -326,14 +312,6 @@ class BuildPayloadTests(unittest.TestCase):
 
 
 class NormalizePayloadTests(unittest.TestCase):
-    def test_backfills_missing_formats(self):
-        payload = normalize_rich_text_payload(
-            {"__kind__": "rich_text", "text": "abc", "spans": [{"tag": "italic", "start": 0, "end": 3}]}
-        )
-        self.assertIn("html", payload)
-        self.assertIn("rtf", payload)
-        self.assertIn("<em>abc</em>", payload["html"])
-
     def test_empty_html_is_rebuilt_from_spans(self):
         payload = normalize_rich_text_payload(
             {

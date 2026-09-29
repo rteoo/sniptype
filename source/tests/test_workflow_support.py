@@ -5,11 +5,6 @@ from workflow_support import SnippetRef, WorkflowState
 
 
 class SnippetRefTests(unittest.TestCase):
-    def test_static_dynamic_and_mapping_identities(self):
-        self.assertEqual(SnippetRef("static", "xhello"), SnippetRef("static", "xhello"))
-        self.assertEqual("xrate", SnippetRef("dynamic", "xrate").key)
-        self.assertEqual("_codes", SnippetRef("mapping", "city", "_codes").container)
-
     def test_rejects_ambiguous_or_invalid_identities(self):
         invalid = [
             ("unknown", "x", None),

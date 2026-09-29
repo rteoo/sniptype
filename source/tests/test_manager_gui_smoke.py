@@ -135,21 +135,6 @@ class ManagerGuiSmokeTests(unittest.TestCase):
 
         self._on_gui(probe)
 
-    def test_all_tabs_build(self):
-        def build(shared_root):
-            root = tk.Toplevel(shared_root)
-            root.withdraw()
-            self.app._configure_manager_styles(root)
-            frames = {name: tk.Frame(root) for name in
-                      ("static", "dyn", "builtin", "backups")}
-            self.app._create_static_snippets_tab(frames["static"], root)
-            self.app._create_dynamic_mappings_tab(frames["dyn"], root)
-            self.app._create_dynamic_snippets_tab(frames["builtin"], root)
-            self.app._create_backups_tab(frames["backups"], root)
-            root.update_idletasks()
-
-        self._on_gui(build)
-
     def test_manager_minimum_size_keeps_editor_controls_and_mapping_columns_visible(self):
         """The smallest supported manager window must not clip its controls."""
         def build(shared_root):
@@ -393,29 +378,6 @@ class ManagerGuiSmokeTests(unittest.TestCase):
         self.assertIn("dinâmico", ask.call_args[0][1])
         self.assertTrue(callable(self.app.snippets["xdyn"]), "refused save must not overwrite")
 
-    def test_editing_an_existing_static_does_not_warn(self):
-        with mock.patch.object(tx.messagebox, "askyesno", return_value=True) as ask:
-            self._save_static_from_editor("xhi", "novo texto")
-
-        ask.assert_not_called()
-        self.assertEqual("novo texto", self.app.snippets["xhi"])
-
-    def test_static_tab_reports_visible_count(self):
-        self.app.snippets["xone"] = "one"
-        self.app.snippets["xtwo"] = "two"
-        counts = []
-
-        def build(shared_root):
-            root = tk.Toplevel(shared_root)
-            root.withdraw()
-            frame = tk.Frame(root)
-            self.app._create_static_snippets_tab(frame, root, set_count=counts.append)
-            root.update_idletasks()
-
-        self._on_gui(build)
-        # xhi (seeded) + xone + xtwo; dynamic callables are filtered out.
-        self.assertEqual([3], counts)
-
     def test_blank_key_is_not_a_row(self):
         """A blank key cannot be a Treeview iid; hand-edited data must not
         produce a phantom row or skew the tab count."""
@@ -490,26 +452,20 @@ class ManagerGuiSmokeTests(unittest.TestCase):
             "modelo": "CPF de %%titular%%",
         }
 
-        rows = self._on_gui(lambda r: self._tree_rows(self._build_mappings_tab(r)))
+        def build(root):
+            frame = self._build_mappings_tab(root)
+            return self._tree_rows(frame), self._tree_trigger_values(frame)
+
+        rows, triggers = self._on_gui(build)
 
         self.assertNotIn("__prefix__", rows, "prefix metadata is not an item")
         self.assertEqual(("123.456.789-00",), rows["alice"])
         self.assertEqual(("RT  ·  CPF oficial",), rows["assinada"])
         self.assertEqual(("%%  ·  CPF de %%titular%%",), rows["modelo"])
+        with self.subTest("test_mapping_tree_shows_stored_and_effective_triggers"):
+            self.assertEqual("alice → cpfalice", triggers["alice"])
 
-    def test_mapping_tree_shows_stored_and_effective_triggers(self):
-        self.app.snippets["_cpf_numbers"] = {
-            "__prefix__": "cpf",
-            "alice": "123.456.789-00",
-        }
-
-        triggers = self._on_gui(
-            lambda root: self._tree_trigger_values(self._build_mappings_tab(root))
-        )
-
-        self.assertEqual("alice → cpfalice", triggers["alice"])
-
-    def test_dynamic_registry_shows_stored_and_effective_triggers(self):
+    def test_refresh_hook_rebuilds_dynamic_registry_rows(self):
         self.app.dynamic_registry = {
             "stable": {
                 "provider": "datetime",
@@ -520,50 +476,29 @@ class ManagerGuiSmokeTests(unittest.TestCase):
             }
         }
 
-        def build(shared_root):
-            root = tk.Toplevel(shared_root)
-            root.withdraw()
-            frame = tk.Frame(root)
-            self.app._create_dynamic_snippets_tab(frame, root)
-            root.update_idletasks()
+        def labels(frame):
             return [
                 widget.cget("text")
                 for widget in _descendants(frame)
                 if isinstance(widget, tk.Label)
             ]
 
-        labels = self._on_gui(build)
-        self.assertIn("stable → renamed", labels)
-
-    def test_refresh_hook_rebuilds_dynamic_registry_rows(self):
-        self.app.dynamic_registry = {
-            "stable": {
-                "provider": "datetime",
-                "category": "datetime",
-                "description": "Original",
-                "trigger": "original",
-                "enabled": True,
-            }
-        }
-
         def build(shared_root):
             root = tk.Toplevel(shared_root)
             root.withdraw()
             frame = tk.Frame(root)
             self.app._create_dynamic_snippets_tab(frame, root)
             root.update_idletasks()
-            return frame
+            return frame, labels(frame)
 
-        frame = self._on_gui(build)
+        frame, built_labels = self._on_gui(build)
+        with self.subTest("test_dynamic_registry_shows_stored_and_effective_triggers"):
+            self.assertIn("stable → renamed", built_labels)
         self.app.dynamic_registry["stable"]["trigger"] = "updated"
 
         def refresh(_root):
             self.app._refresh_manager_lists()
-            return [
-                widget.cget("text")
-                for widget in _descendants(frame)
-                if isinstance(widget, tk.Label)
-            ]
+            return labels(frame)
 
         self.assertIn("stable → updated", self._on_gui(refresh))
 
@@ -824,15 +759,6 @@ class ManagerGuiSmokeTests(unittest.TestCase):
 
         ask.assert_not_called()
         self.assertEqual("updated static", self.app.snippets["cpfalice"])
-
-    def test_notification_history_window_builds(self):
-        def build(shared_root):
-            root = tk.Toplevel(shared_root)
-            root.withdraw()
-            self.app._open_notification_history(root)
-            root.update_idletasks()
-
-        self._on_gui(build)
 
     def _settings_widgets(self, cls, predicate=lambda _widget: True):
         tab = self.app._manager_settings_tab

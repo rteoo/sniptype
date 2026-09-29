@@ -44,15 +44,16 @@ class EventShapeTests(unittest.TestCase):
 class ListenerFilterTests(unittest.TestCase):
     """Only our tagged events are hidden; everyone else's still reach on_press."""
 
-    def test_own_event_is_hidden_from_the_listener(self):
-        data = SimpleNamespace(dwExtraInfo=win_input.INJECTION_TAG)
-        self.assertFalse(win_input.listener_event_filter(0x100, data))
-
-    def test_physical_and_foreign_injected_events_pass(self):
-        for extra in (None, 0, 1, win_input.INJECTION_TAG + 1):
-            with self.subTest(extra=extra):
+    def test_only_our_tagged_events_are_hidden(self):
+        rows = [("test_own_event_is_hidden_from_the_listener", win_input.INJECTION_TAG, False)]
+        rows += [
+            ("test_physical_and_foreign_injected_events_pass", extra, True)
+            for extra in (None, 0, 1, win_input.INJECTION_TAG + 1)
+        ]
+        for name, extra, passes in rows:
+            with self.subTest(name, extra=extra):
                 data = SimpleNamespace(dwExtraInfo=extra)
-                self.assertTrue(win_input.listener_event_filter(0x100, data))
+                self.assertEqual(passes, bool(win_input.listener_event_filter(0x100, data)))
 
 
 @unittest.skipUnless(win_input.IS_WINDOWS, "SendInput structures are Windows-only")

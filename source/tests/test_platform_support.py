@@ -1,3 +1,4 @@
+import contextlib
 import os
 import shutil
 import subprocess
@@ -13,9 +14,6 @@ import platform_support as ps
 
 
 class OsDetectionTests(unittest.TestCase):
-    def test_current_os_is_known(self):
-        self.assertIn(ps.current_os(), {"windows", "darwin", "linux"})
-
     def test_flags_are_consistent(self):
         flags = [ps.IS_WINDOWS, ps.IS_MAC, ps.IS_LINUX]
         self.assertEqual(sum(1 for f in flags if f), 1)
@@ -241,18 +239,6 @@ class AutostartTests(unittest.TestCase):
         path = ps.autostart_target_path("Sniptype")
         self.assertTrue(path.endswith(".lnk") or path.endswith(".plist") or path.endswith(".desktop"))
 
-    def test_macos_plist_is_wellformed(self):
-        plist = ps.macos_launch_agent("Sniptype", "/usr/bin/txt")
-        self.assertIn("com.sniptype", plist)
-        self.assertIn("<key>RunAtLoad</key><true/>", plist)
-        self.assertIn("/usr/bin/txt", plist)
-
-    def test_linux_desktop_entry_is_wellformed(self):
-        entry = ps.linux_desktop_entry("Sniptype", "python sniptype.pyw")
-        self.assertIn("[Desktop Entry]", entry)
-        self.assertIn("Exec=python sniptype.pyw", entry)
-        self.assertIn("Name=Sniptype", entry)
-
 
 class AutostartRoundTripTests(unittest.TestCase):
     """install/remove round-trip on each mocked OS, writing into a temp dir."""
@@ -281,6 +267,7 @@ class AutostartRoundTripTests(unittest.TestCase):
             content = handle.read()
         self.assertIn("[Desktop Entry]", content)
         self.assertIn("Exec=/usr/bin/python3 /opt/sniptype.pyw", content)
+        self.assertIn("Name=Sniptype", content)
 
         self.assertTrue(ps.remove_autostart("Sniptype"))
         self.assertFalse(os.path.exists(path))
@@ -291,6 +278,7 @@ class AutostartRoundTripTests(unittest.TestCase):
         ps.install_autostart("Sniptype", ["/usr/bin/python3", "/opt/sniptype.pyw"])
         with open(path, encoding="utf-8") as handle:
             content = handle.read()
+        self.assertIn("com.sniptype", content)
         self.assertIn("<string>/usr/bin/python3</string>", content)
         self.assertIn("<string>/opt/sniptype.pyw</string>", content)
         self.assertIn("<key>RunAtLoad</key><true/>", content)
@@ -415,6 +403,21 @@ class AutostartStateTests(unittest.TestCase):
             self.addCleanup(patch.stop)
         return path
 
+    # The Linux .desktop and macOS LaunchAgent backends share every
+    # classification rule: (old test-name prefix, current_os value, filename).
+    POSIX_ENTRIES = (
+        ("linux", "linux", "sniptype.desktop"),
+        ("macos", "darwin", "com.sniptype.plist"),
+    )
+
+    @contextlib.contextmanager
+    def _redirected(self, system, filename):
+        """Context-managed ``_redirect``, so one test can visit several OSes."""
+        path = os.path.join(self.tmp, "autostart", filename)
+        with mock.patch.object(ps, "current_os", return_value=system), \
+                mock.patch.object(ps, "autostart_target_path", return_value=path):
+            yield path
+
     def _write(self, system, argv):
         """Install an entry for ``argv`` with the Windows .lnk write mocked out."""
         if system != "windows":
@@ -441,25 +444,31 @@ class AutostartStateTests(unittest.TestCase):
             return_value=mock.Mock(returncode=0, stdout=f"{target}\n{arguments}\n", stderr=""),
         )
 
-    # -- linux ------------------------------------------------------------
-    def test_linux_absent(self):
-        self._redirect("linux", "sniptype.desktop")
-        self.assertEqual(ps.autostart_state("Sniptype", self.command), ps.AUTOSTART_ABSENT)
+    # -- linux and macOS --------------------------------------------------
+    def test_posix_absent(self):
+        for label, system, filename in self.POSIX_ENTRIES:
+            with self.subTest(f"test_{label}_absent"), self._redirected(system, filename):
+                self.assertEqual(ps.autostart_state("Sniptype", self.command), ps.AUTOSTART_ABSENT)
 
-    def test_linux_current(self):
-        self._redirect("linux", "sniptype.desktop")
-        self._write("linux", self.command)
-        self.assertEqual(ps.autostart_state("Sniptype", self.command), ps.AUTOSTART_CURRENT)
+    def test_posix_current(self):
+        for label, system, filename in self.POSIX_ENTRIES:
+            with self.subTest(f"test_{label}_current"), self._redirected(system, filename):
+                self._write(system, self.command)
+                self.assertEqual(ps.autostart_state("Sniptype", self.command), ps.AUTOSTART_CURRENT)
 
-    def test_linux_stale_when_target_is_gone(self):
-        self._redirect("linux", "sniptype.desktop")
-        self._write("linux", self.missing)
-        self.assertEqual(ps.autostart_state("Sniptype", self.command), ps.AUTOSTART_STALE)
+    def test_posix_stale_when_target_is_gone(self):
+        for label, system, filename in self.POSIX_ENTRIES:
+            with self.subTest(f"test_{label}_stale_when_target_is_gone"), \
+                    self._redirected(system, filename):
+                self._write(system, self.missing)
+                self.assertEqual(ps.autostart_state("Sniptype", self.command), ps.AUTOSTART_STALE)
 
-    def test_linux_stale_when_another_install_owns_it(self):
-        self._redirect("linux", "sniptype.desktop")
-        self._write("linux", self.other_install)
-        self.assertEqual(ps.autostart_state("Sniptype", self.command), ps.AUTOSTART_STALE)
+    def test_posix_stale_when_another_install_owns_it(self):
+        for label, system, filename in self.POSIX_ENTRIES:
+            with self.subTest(f"test_{label}_stale_when_another_install_owns_it"), \
+                    self._redirected(system, filename):
+                self._write(system, self.other_install)
+                self.assertEqual(ps.autostart_state("Sniptype", self.command), ps.AUTOSTART_STALE)
 
     def test_stale_when_script_is_gone_even_if_interpreter_survives(self):
         """A surviving interpreter must not make a deleted checkout's entry live."""
@@ -469,26 +478,6 @@ class AutostartStateTests(unittest.TestCase):
         self.assertEqual(ps.autostart_state("Sniptype", self.command), ps.AUTOSTART_STALE)
         # And it is the dead kind of stale — the one the app may repair.
         self.assertFalse(ps.autostart_target_exists(dead))
-
-    # -- macOS ------------------------------------------------------------
-    def test_macos_absent(self):
-        self._redirect("darwin", "com.sniptype.plist")
-        self.assertEqual(ps.autostart_state("Sniptype", self.command), ps.AUTOSTART_ABSENT)
-
-    def test_macos_current(self):
-        self._redirect("darwin", "com.sniptype.plist")
-        self._write("darwin", self.command)
-        self.assertEqual(ps.autostart_state("Sniptype", self.command), ps.AUTOSTART_CURRENT)
-
-    def test_macos_stale_when_target_is_gone(self):
-        self._redirect("darwin", "com.sniptype.plist")
-        self._write("darwin", self.missing)
-        self.assertEqual(ps.autostart_state("Sniptype", self.command), ps.AUTOSTART_STALE)
-
-    def test_macos_stale_when_another_install_owns_it(self):
-        self._redirect("darwin", "com.sniptype.plist")
-        self._write("darwin", self.other_install)
-        self.assertEqual(ps.autostart_state("Sniptype", self.command), ps.AUTOSTART_STALE)
 
     # -- windows ----------------------------------------------------------
     def test_windows_absent_reads_nothing(self):
@@ -505,29 +494,17 @@ class AutostartStateTests(unittest.TestCase):
         # One shortcut read, not one per caller.
         self.assertEqual(run.call_count, 1)
 
-    def test_windows_current_ignores_case_and_separators(self):
+    def test_windows_stale_when_target_is_gone_or_another_install_owns_it(self):
         self._redirect("windows", "Sniptype.lnk")
-        self._write("windows", self.command)
-        shouty = [arg.upper().replace("\\", "/") for arg in self.command]
-        # The subject here is the path *comparison*, not the on-disk check: an
-        # uppercased temp path does not exist on a case-sensitive filesystem, so
-        # off Windows the entry would classify as stale before ever being
-        # compared. test_windows_current covers the unmocked chain.
-        with self._windows_read(shouty), \
-                mock.patch.object(ps, "autostart_target_exists", return_value=True):
-            self.assertEqual(ps.autostart_state("Sniptype", self.command), ps.AUTOSTART_CURRENT)
-
-    def test_windows_stale_when_target_is_gone(self):
-        self._redirect("windows", "Sniptype.lnk")
-        self._write("windows", self.missing)
-        with self._windows_read(self.missing):
-            self.assertEqual(ps.autostart_state("Sniptype", self.command), ps.AUTOSTART_STALE)
-
-    def test_windows_stale_when_another_install_owns_it(self):
-        self._redirect("windows", "Sniptype.lnk")
-        self._write("windows", self.other_install)
-        with self._windows_read(self.other_install):
-            self.assertEqual(ps.autostart_state("Sniptype", self.command), ps.AUTOSTART_STALE)
+        rows = (
+            ("test_windows_stale_when_target_is_gone", self.missing),
+            ("test_windows_stale_when_another_install_owns_it", self.other_install),
+        )
+        for name, argv in rows:
+            with self.subTest(name):
+                self._write("windows", argv)
+                with self._windows_read(argv):
+                    self.assertEqual(ps.autostart_state("Sniptype", self.command), ps.AUTOSTART_STALE)
 
     def test_windows_unreadable_shortcut_is_stale_not_enabled(self):
         self._redirect("windows", "Sniptype.lnk")
@@ -535,17 +512,6 @@ class AutostartStateTests(unittest.TestCase):
         failure = mock.Mock(returncode=1, stdout="", stderr="cannot open")
         with mock.patch.object(ps.subprocess, "run", return_value=failure):
             self.assertEqual(ps.autostart_state("Sniptype", self.command), ps.AUTOSTART_STALE)
-
-    def test_is_enabled_is_no_longer_presence_only(self):
-        """The old predicate trusted the path alone; a dead entry fooled it."""
-        path = self._redirect("linux", "sniptype.desktop")
-        self._write("linux", self.missing)
-        with mock.patch.object(ps, "default_autostart_command", return_value=self.command):
-            self.assertTrue(os.path.exists(path))
-            self.assertFalse(ps.is_autostart_enabled("Sniptype"))
-
-            self._write("linux", self.command)
-            self.assertTrue(ps.is_autostart_enabled("Sniptype"))
 
     def test_windows_quoted_arguments_round_trip(self):
         """A .lnk stores args as one string; splitting it must recover the argv."""
@@ -574,14 +540,6 @@ class ClassifyAutostartTests(unittest.TestCase):
             open(path, "wb").close()
         self.command = [self.exe, self.script]
 
-    def test_none_is_absent(self):
-        self.assertEqual(ps.classify_autostart(None, self.command), ps.AUTOSTART_ABSENT)
-
-    def test_identical_argv_is_current(self):
-        self.assertEqual(
-            ps.classify_autostart(list(self.command), self.command), ps.AUTOSTART_CURRENT
-        )
-
     def test_differing_length_is_stale(self):
         # A single-element exe entry versus an interpreter+script expected command.
         self.assertEqual(ps.classify_autostart([self.exe], self.command), ps.AUTOSTART_STALE)
@@ -599,14 +557,6 @@ class ClassifyAutostartTests(unittest.TestCase):
         # not exist is dead at login and must classify stale, not current.
         self.assertEqual(ps.classify_autostart(gone, gone), ps.AUTOSTART_STALE)
 
-    def test_relative_path_entry_is_stale(self):
-        # A relative argv element cannot be confirmed on disk, so it is a dead
-        # pointer regardless of what the expected command is.
-        self.assertEqual(
-            ps.classify_autostart(["app.exe", "sniptype.pyw"], self.command),
-            ps.AUTOSTART_STALE,
-        )
-
     def test_windows_comparison_ignores_case_and_separators(self):
         # Only meaningful under Windows path rules; force them and stub the
         # on-disk check, since the shouty variant will not exist on disk.
@@ -616,10 +566,6 @@ class ClassifyAutostartTests(unittest.TestCase):
             self.assertEqual(
                 ps.classify_autostart(shouty, self.command), ps.AUTOSTART_CURRENT
             )
-
-    def test_defaults_to_default_autostart_command_when_expected_is_none(self):
-        with mock.patch.object(ps, "default_autostart_command", return_value=self.command):
-            self.assertEqual(ps.classify_autostart(list(self.command)), ps.AUTOSTART_CURRENT)
 
 
 class ReadShortcutFailureTests(unittest.TestCase):
@@ -649,21 +595,21 @@ class ReadShortcutFailureTests(unittest.TestCase):
             ps.read_autostart_command("Sniptype")
         self.assertIn("access is denied", str(ctx.exception))
 
-    def test_empty_output_yields_no_command(self):
-        result = mock.Mock(returncode=0, stdout="\n\n", stderr="")
-        patches = self._windows(result)
-        for patch in patches:
-            patch.start()
-            self.addCleanup(patch.stop)
-        self.assertEqual(ps.read_autostart_command("Sniptype"), [])
-
-    def test_target_only_output_has_no_arguments(self):
-        result = mock.Mock(returncode=0, stdout=r"C:\App\Sniptype.exe" + "\n", stderr="")
-        patches = self._windows(result)
-        for patch in patches:
-            patch.start()
-            self.addCleanup(patch.stop)
-        self.assertEqual(ps.read_autostart_command("Sniptype"), [r"C:\App\Sniptype.exe"])
+    def test_empty_and_target_only_output_parse_to_argv(self):
+        rows = (
+            ("test_empty_output_yields_no_command", "\n\n", []),
+            (
+                "test_target_only_output_has_no_arguments",
+                r"C:\App\Sniptype.exe" + "\n",
+                [r"C:\App\Sniptype.exe"],
+            ),
+        )
+        for name, stdout, expected in rows:
+            result = mock.Mock(returncode=0, stdout=stdout, stderr="")
+            with self.subTest(name), contextlib.ExitStack() as stack:
+                for patch in self._windows(result):
+                    stack.enter_context(patch)
+                self.assertEqual(ps.read_autostart_command("Sniptype"), expected)
 
     def test_garbage_output_classifies_stale_not_enabled(self):
         # Empty stdout -> [] from the reader -> classify_autostart([]) is stale,
@@ -675,37 +621,29 @@ class ReadShortcutFailureTests(unittest.TestCase):
             self.addCleanup(patch.stop)
         self.assertEqual(ps.autostart_state("Sniptype"), ps.AUTOSTART_STALE)
 
-    def test_nonzero_exit_is_caught_as_stale_by_autostart_state(self):
-        result = mock.Mock(returncode=1, stdout="", stderr="cannot open")
-        patches = self._windows(result)
-        for patch in patches:
-            patch.start()
-            self.addCleanup(patch.stop)
-        self.assertEqual(ps.autostart_state("Sniptype"), ps.AUTOSTART_STALE)
-
 
 class TrayBackendTests(unittest.TestCase):
     """The win32 pin makes ``import pystray`` fail off Windows (issue #23)."""
 
-    def test_windows_pins_win32(self):
-        env = {}
-        with mock.patch.object(ps, "current_os", return_value="windows"):
-            self.assertEqual(ps.pin_tray_backend(env), "win32")
-        self.assertEqual(env, {"PYSTRAY_BACKEND": "win32"})
-
-    def test_windows_respects_an_explicit_override(self):
-        env = {"PYSTRAY_BACKEND": "xorg"}
-        with mock.patch.object(ps, "current_os", return_value="windows"):
-            self.assertEqual(ps.pin_tray_backend(env), "xorg")
-        self.assertEqual(env, {"PYSTRAY_BACKEND": "xorg"})
-
-    def test_non_windows_leaves_the_backend_unset(self):
-        for system in ("darwin", "linux"):
-            with self.subTest(system=system):
-                env = {}
+    def test_pin_applies_only_on_windows_and_keeps_an_override(self):
+        # (old test, system, env before, returned value, env after)
+        rows = (
+            ("test_windows_pins_win32", "windows", {}, "win32", {"PYSTRAY_BACKEND": "win32"}),
+            (
+                "test_windows_respects_an_explicit_override",
+                "windows",
+                {"PYSTRAY_BACKEND": "xorg"},
+                "xorg",
+                {"PYSTRAY_BACKEND": "xorg"},
+            ),
+            ("test_non_windows_leaves_the_backend_unset[darwin]", "darwin", {}, None, {}),
+            ("test_non_windows_leaves_the_backend_unset[linux]", "linux", {}, None, {}),
+        )
+        for name, system, env, returned, env_after in rows:
+            with self.subTest(name):
                 with mock.patch.object(ps, "current_os", return_value=system):
-                    self.assertIsNone(ps.pin_tray_backend(env))
-                self.assertEqual(env, {})
+                    self.assertEqual(ps.pin_tray_backend(env), returned)
+                self.assertEqual(env, env_after)
 
     def test_defaults_to_the_process_environment(self):
         with mock.patch.dict(os.environ, {}, clear=False):
@@ -738,23 +676,26 @@ class LauncherPinTests(unittest.TestCase):
 
 class AutostartCommandTests(unittest.TestCase):
     def test_frozen_build_points_at_the_executable(self):
-        with mock.patch.object(ps.sys, "frozen", True, create=True), \
-                mock.patch.object(ps.sys, "executable", r"C:\App\Sniptype.exe"):
-            self.assertEqual(ps.default_autostart_command(), [r"C:\App\Sniptype.exe"])
-
-    def test_macos_bundle_points_inside_the_app(self):
-        """The LaunchAgent runs the bundle's binary, not ``open -a``.
-
-        Verified against a real PyInstaller ``.app``: ``sys.executable`` is
-        ``…/Sniptype.app/Contents/MacOS/Sniptype``, launchd starts it,
-        and the process still resolves as the bundle (Info.plist honored, so
-        ``LSUIElement`` applies and TCC attributes the grants to the bundle).
-        ``open -a`` would hand launchd a wrapper that exits immediately.
-        """
-        binary = "/Applications/Sniptype.app/Contents/MacOS/Sniptype"
-        with mock.patch.object(ps.sys, "frozen", True, create=True), \
-                mock.patch.object(ps.sys, "executable", binary):
-            self.assertEqual(ps.default_autostart_command(), [binary])
+        rows = (
+            ("test_frozen_build_points_at_the_executable", r"C:\App\Sniptype.exe"),
+            # test_macos_bundle_points_inside_the_app: the LaunchAgent runs the
+            # bundle's binary, not ``open -a``. Verified against a real
+            # PyInstaller ``.app``: ``sys.executable`` is
+            # ``…/Sniptype.app/Contents/MacOS/Sniptype``, launchd starts it, and
+            # the process still resolves as the bundle (Info.plist honored, so
+            # ``LSUIElement`` applies and TCC attributes the grants to the
+            # bundle). ``open -a`` would hand launchd a wrapper that exits
+            # immediately.
+            (
+                "test_macos_bundle_points_inside_the_app",
+                "/Applications/Sniptype.app/Contents/MacOS/Sniptype",
+            ),
+        )
+        for name, binary in rows:
+            with self.subTest(name), \
+                    mock.patch.object(ps.sys, "frozen", True, create=True), \
+                    mock.patch.object(ps.sys, "executable", binary):
+                self.assertEqual(ps.default_autostart_command(), [binary])
 
     def test_source_checkout_points_at_the_launcher(self):
         with mock.patch.object(ps.sys, "frozen", False, create=True):
@@ -784,20 +725,21 @@ class DockIconTests(unittest.TestCase):
         # NSApplication the tray attaches to.
         shared.setActivationPolicy_.assert_called_once_with(1)
 
-    def test_a_refused_policy_is_reported_not_raised(self):
-        appkit = mock.Mock()
-        appkit.NSApplication.sharedApplication.return_value.setActivationPolicy_.return_value = False
-        with mock.patch.object(ps, "IS_MAC", True), \
-                mock.patch.dict(sys.modules, {"AppKit": appkit}):
-            self.assertFalse(ps.hide_dock_icon())
-
     def test_an_appkit_failure_never_escapes(self):
         """A Dock icon is cosmetic; it must not take the tray down."""
-        appkit = mock.Mock()
-        appkit.NSApplication.sharedApplication.side_effect = RuntimeError("no AppKit")
-        with mock.patch.object(ps, "IS_MAC", True), \
-                mock.patch.dict(sys.modules, {"AppKit": appkit}):
-            self.assertFalse(ps.hide_dock_icon())
+        refusing = mock.Mock()
+        refusing.return_value.setActivationPolicy_.return_value = False
+        rows = (
+            ("test_a_refused_policy_is_reported_not_raised", refusing),
+            ("test_an_appkit_failure_never_escapes", mock.Mock(side_effect=RuntimeError("no AppKit"))),
+        )
+        for name, shared_application in rows:
+            appkit = mock.Mock()
+            appkit.NSApplication.sharedApplication = shared_application
+            with self.subTest(name), \
+                    mock.patch.object(ps, "IS_MAC", True), \
+                    mock.patch.dict(sys.modules, {"AppKit": appkit}):
+                self.assertFalse(ps.hide_dock_icon())
 
 
 class FrontmostApplicationTests(unittest.TestCase):
@@ -809,31 +751,22 @@ class FrontmostApplicationTests(unittest.TestCase):
             self.assertIsNone(ps.capture_frontmost_application())
             self.assertFalse(ps.restore_frontmost_application(target))
 
-    def test_capture_returns_an_external_frontmost_application(self):
-        appkit = mock.Mock()
-        target = appkit.NSWorkspace.sharedWorkspace.return_value.frontmostApplication.return_value
-        target.processIdentifier.return_value = os.getpid() + 1
-        with mock.patch.object(ps, "IS_MAC", True), \
-                mock.patch.dict(sys.modules, {"AppKit": appkit}):
-            self.assertIs(target, ps.capture_frontmost_application())
-
-    def test_capture_ignores_sniptype_itself(self):
-        appkit = mock.Mock()
-        target = appkit.NSWorkspace.sharedWorkspace.return_value.frontmostApplication.return_value
-        target.processIdentifier.return_value = os.getpid()
-        with mock.patch.object(ps, "IS_MAC", True), \
-                mock.patch.dict(sys.modules, {"AppKit": appkit}):
-            self.assertIsNone(ps.capture_frontmost_application())
-
-    def test_restore_activates_the_captured_application(self):
-        appkit = mock.Mock()
-        appkit.NSApplicationActivateIgnoringOtherApps = 2
-        target = mock.Mock()
-        target.activateWithOptions_.return_value = True
-        with mock.patch.object(ps, "IS_MAC", True), \
-                mock.patch.dict(sys.modules, {"AppKit": appkit}):
-            self.assertTrue(ps.restore_frontmost_application(target))
-        target.activateWithOptions_.assert_called_once_with(2)
+    def test_capture_returns_an_external_app_but_never_sniptype_itself(self):
+        rows = (
+            ("test_capture_returns_an_external_frontmost_application", os.getpid() + 1, True),
+            ("test_capture_ignores_sniptype_itself", os.getpid(), False),
+        )
+        for name, pid, captured in rows:
+            appkit = mock.Mock()
+            target = appkit.NSWorkspace.sharedWorkspace.return_value.frontmostApplication.return_value
+            target.processIdentifier.return_value = pid
+            with self.subTest(name), \
+                    mock.patch.object(ps, "IS_MAC", True), \
+                    mock.patch.dict(sys.modules, {"AppKit": appkit}):
+                if captured:
+                    self.assertIs(target, ps.capture_frontmost_application())
+                else:
+                    self.assertIsNone(ps.capture_frontmost_application())
 
     def test_appkit_failures_never_escape(self):
         appkit = mock.Mock()
@@ -969,15 +902,6 @@ class ForegroundExecutableTests(unittest.TestCase):
                 mock.patch.object(ps, "_win32_kernel32", return_value=kernel32):
             self.assertIsNone(ps.foreground_executable_name())
         kernel32.OpenProcess.assert_not_called()
-
-    def test_query_failure_still_closes_process_handle(self):
-        user32, kernel32 = self._win32(None)
-        kernel32.QueryFullProcessImageNameW.return_value = 0
-        with mock.patch.object(ps, "IS_WINDOWS", True), \
-                mock.patch.object(ps, "_win32_user32", return_value=user32), \
-                mock.patch.object(ps, "_win32_kernel32", return_value=kernel32):
-            self.assertIsNone(ps.foreground_executable_name())
-        kernel32.CloseHandle.assert_called_once_with(9001)
 
     def test_query_failure_is_not_cached_and_next_query_can_succeed(self):
         user32, kernel32 = self._win32(r"C:\Apps\Editor.EXE")

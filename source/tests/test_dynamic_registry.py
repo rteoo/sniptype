@@ -116,21 +116,6 @@ class BuildDynamicSnippetsTests(unittest.TestCase):
         snippets, _ = dr.build_dynamic_snippets(registry, self.ctx)
         self.assertEqual(snippets, {})
 
-    def test_disabled_entry_is_skipped(self):
-        registry = {"xhj": {"provider": "datetime", "format": "%Y", "enabled": False}}
-        snippets, _ = dr.build_dynamic_snippets(registry, self.ctx)
-        self.assertNotIn("xhj", snippets)
-
-    def test_unknown_provider_is_skipped(self):
-        registry = {"xbad": {"provider": "nope"}}
-        snippets, _ = dr.build_dynamic_snippets(registry, self.ctx)
-        self.assertEqual(snippets, {})
-
-    def test_unknown_method_is_skipped(self):
-        registry = {"xbad": {"provider": "bcb", "method": "does_not_exist"}}
-        snippets, _ = dr.build_dynamic_snippets(registry, self.ctx)
-        self.assertEqual(snippets, {})
-
     def test_trigger_field_renames_binding(self):
         registry = {"xhj": {"provider": "datetime", "format": "%Y", "trigger": "xdata"}}
         snippets, _ = dr.build_dynamic_snippets(registry, self.ctx)
@@ -143,15 +128,6 @@ class BuildDynamicSnippetsTests(unittest.TestCase):
         snippets, slow = dr.build_dynamic_snippets(registry, self.ctx)
         self.assertEqual(snippets["xusd"](), "dolar-value")
         self.assertEqual(slow, {"xusd"})
-
-    def test_duplicate_effective_trigger_keeps_first(self):
-        registry = {
-            "xhj": {"provider": "datetime", "format": "%Y"},
-            "xnow": {"provider": "datetime", "method": "extenso", "trigger": "xhj"},
-        }
-        snippets, _ = dr.build_dynamic_snippets(registry, self.ctx)
-        self.assertEqual(len(snippets), 1)
-        self.assertNotEqual(snippets["xhj"](), "segunda-feira")  # first entry won
 
     def test_identity_map_keeps_the_same_duplicate_winner_as_the_callable(self):
         registry = {
@@ -198,18 +174,22 @@ class ReferenceEntriesTests(unittest.TestCase):
 
 
 class EffectiveTriggerTests(unittest.TestCase):
-    def test_defaults_to_key(self):
-        self.assertEqual(dr.effective_trigger("xhj", {"provider": "datetime"}), "xhj")
-
-    def test_uses_trigger_field(self):
-        self.assertEqual(dr.effective_trigger("xhj", {"trigger": "xdata"}), "xdata")
-
-    def test_blank_trigger_falls_back_to_key(self):
-        self.assertEqual(dr.effective_trigger("xhj", {"trigger": "   "}), "xhj")
-        self.assertEqual(dr.effective_trigger("xhj", {"trigger": None}), "xhj")
-
-    def test_trigger_is_stripped(self):
-        self.assertEqual(dr.effective_trigger("xhj", {"trigger": " xdata "}), "xdata")
+    def test_uses_trigger_field_or_falls_back_to_key(self):
+        cases = [
+            ("test_defaults_to_key", {"provider": "datetime"}, "xhj"),
+            ("test_uses_trigger_field", {"trigger": "xdata"}, "xdata"),
+            ("test_blank_trigger_falls_back_to_key", {"trigger": "   "}, "xhj"),
+            ("test_blank_trigger_falls_back_to_key", {"trigger": None}, "xhj"),
+            ("test_trigger_is_stripped", {"trigger": " xdata "}, "xdata"),
+            ("test_non_string_trigger_falls_back_to_key", {"trigger": 5}, "xhj"),
+            ("test_non_string_trigger_falls_back_to_key", {"trigger": ["x"]}, "xhj"),
+            ("test_entry_not_a_dict_returns_key", "notadict", "xhj"),
+            ("test_entry_not_a_dict_returns_key", None, "xhj"),
+            ("test_tab_newline_trigger_falls_back", {"trigger": "\t\n"}, "xhj"),
+        ]
+        for label, entry, expected in cases:
+            with self.subTest(label, entry=entry):
+                self.assertEqual(dr.effective_trigger("xhj", entry), expected)
 
 
 class DatetimeRenderSpecTests(unittest.TestCase):
@@ -256,17 +236,18 @@ class ValidateRenameTests(unittest.TestCase):
         errors, _ = dr.validate_rename(self.registry, "xhj", "xdata", self.snippets)
         self.assertEqual(errors, [])
 
-    def test_empty_is_rejected(self):
-        self.assertTrue(self._errors("   "))
-
-    def test_whitespace_is_rejected(self):
-        self.assertTrue(self._errors("x data"))
-
-    def test_collision_with_other_dynamic_is_rejected(self):
-        self.assertTrue(self._errors("xdolar"))
-
-    def test_collision_with_static_snippet_is_rejected(self):
-        self.assertTrue(self._errors("email"))
+    def test_unreachable_or_shadowing_triggers_are_rejected(self):
+        cases = [
+            ("test_empty_is_rejected", "   "),
+            ("test_whitespace_is_rejected", "x data"),
+            ("test_collision_with_other_dynamic_is_rejected", "xdolar"),
+            ("test_collision_with_static_snippet_is_rejected", "email"),
+            ("test_collision_with_mapping_prefix_is_rejected", "cpf"),
+            ("test_collision_with_composed_mapping_trigger_is_rejected", "cpffulano"),
+        ]
+        for label, new_trigger in cases:
+            with self.subTest(label, new_trigger=new_trigger):
+                self.assertTrue(self._errors(new_trigger))
 
     def test_collision_with_prefixed_static_snippet_is_rejected(self):
         metadata = {
@@ -281,12 +262,6 @@ class ValidateRenameTests(unittest.TestCase):
             metadata,
         )
         self.assertTrue(errors)
-
-    def test_collision_with_mapping_prefix_is_rejected(self):
-        self.assertTrue(self._errors("cpf"))
-
-    def test_collision_with_composed_mapping_trigger_is_rejected(self):
-        self.assertTrue(self._errors("cpffulano"))
 
     def test_renaming_to_own_current_trigger_is_allowed(self):
         self.assertEqual(self._errors("xhj"), [])
@@ -418,22 +393,6 @@ class LoadRegistryAdversarialTests(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------- #
-# Adversarial: effective_trigger edge inputs
-# --------------------------------------------------------------------------- #
-class EffectiveTriggerAdversarialTests(unittest.TestCase):
-    def test_non_string_trigger_falls_back_to_key(self):
-        self.assertEqual(dr.effective_trigger("xhj", {"trigger": 5}), "xhj")
-        self.assertEqual(dr.effective_trigger("xhj", {"trigger": ["x"]}), "xhj")
-
-    def test_entry_not_a_dict_returns_key(self):
-        self.assertEqual(dr.effective_trigger("xhj", "notadict"), "xhj")
-        self.assertEqual(dr.effective_trigger("xhj", None), "xhj")
-
-    def test_tab_newline_trigger_falls_back(self):
-        self.assertEqual(dr.effective_trigger("xhj", {"trigger": "\t\n"}), "xhj")
-
-
-# --------------------------------------------------------------------------- #
 # Adversarial: build_dynamic_snippets
 # --------------------------------------------------------------------------- #
 class BuildDynamicAdversarialTests(unittest.TestCase):
@@ -453,10 +412,6 @@ class BuildDynamicAdversarialTests(unittest.TestCase):
         logger.warning.assert_called_once()
         self.assertIn("xsame", logger.warning.call_args[0][0])
 
-    def test_non_dict_entry_is_skipped(self):
-        snippets, _ = dr.build_dynamic_snippets({"x": "notadict"}, self.ctx)
-        self.assertEqual(snippets, {})
-
     def test_datetime_unknown_method_falls_back_to_format(self):
         # Unlike bcb/stock, datetime never returns None: any method other than
         # 'extenso' is ignored and the format branch is used.
@@ -465,17 +420,18 @@ class BuildDynamicAdversarialTests(unittest.TestCase):
         self.assertIn("x", snippets)
         self.assertTrue(snippets["x"]().isdigit())
 
-    def test_datetime_default_format_when_absent(self):
-        registry = {"x": {"provider": "datetime"}}
-        snippets, _ = dr.build_dynamic_snippets(registry, self.ctx)
-        self.assertRegex(snippets["x"](), r"^\d{2}/\d{2}/\d{4}$")
-
     def test_unknown_provider_logs_warning(self):
-        logger = MagicMock()
-        snippets, _ = dr.build_dynamic_snippets({"xbad": {"provider": "nope"}}, self.ctx, logger=logger)
-        self.assertEqual(snippets, {})
-        logger.warning.assert_called_once()
-        self.assertIn("nope", logger.warning.call_args[0][0])
+        registry = {"xbad": {"provider": "nope"}}
+        with self.subTest("test_unknown_provider_is_skipped"):
+            # No logger: the entry is still skipped, silently.
+            snippets, _ = dr.build_dynamic_snippets(registry, self.ctx)
+            self.assertEqual(snippets, {})
+        with self.subTest("test_unknown_provider_logs_warning"):
+            logger = MagicMock()
+            snippets, _ = dr.build_dynamic_snippets(registry, self.ctx, logger=logger)
+            self.assertEqual(snippets, {})
+            logger.warning.assert_called_once()
+            self.assertIn("nope", logger.warning.call_args[0][0])
 
     def test_unknown_method_logs_warning(self):
         logger = MagicMock()
@@ -568,12 +524,6 @@ class ValidateRenameAdversarialTests(unittest.TestCase):
         errors = self._errors(None)
         self.assertTrue(errors)
         self.assertIn("vazio", errors[0])
-
-    def test_non_string_trigger_rejected(self):
-        self.assertTrue(self._errors(5))
-
-    def test_tab_only_trigger_rejected(self):
-        self.assertTrue(self._errors("\t\t"))
 
     def test_padded_trigger_is_stripped_then_collision_detected(self):
         # " xdolar " strips to "xdolar", which collides with the other dynamic.

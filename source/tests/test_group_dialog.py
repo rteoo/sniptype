@@ -71,26 +71,23 @@ class GroupDialogTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "prefixo"):
             build_group_definition({"label": "Grupo", "prefix": "work "})
 
-    def test_required_label_invalid_value_keeps_dialog_open_and_focuses_label(self):
-        controls = {"label": FakeControl("   ")}
-        controller = GroupDialogController(controls=controls)
+    def test_invalid_value_keeps_dialog_open_and_focuses_its_control(self):
+        for old_test, values, invalid_field, fragment in (
+            ("test_required_label_invalid_value_keeps_dialog_open_and_focuses_label",
+             {"label": "   "}, "label", "obrigatório"),
+            ("test_invalid_executable_keeps_dialog_open_and_focuses_executable_control",
+             {"label": "Grupo", "executables": "\\"}, "executables", None),
+        ):
+            with self.subTest(old_test):
+                controls = {name: FakeControl(value) for name, value in values.items()}
+                controller = GroupDialogController(controls=controls)
 
-        self.assertFalse(controller.save())
-        self.assertIsNone(controller.result)
-        self.assertEqual("label", controller.invalid_field)
-        self.assertTrue(controls["label"].focused)
-        self.assertIn("obrigatório", controller.error)
-
-    def test_invalid_executable_keeps_dialog_open_and_focuses_executable_control(self):
-        controls = {
-            "label": FakeControl("Grupo"),
-            "executables": FakeControl("\\"),
-        }
-        controller = GroupDialogController(controls=controls)
-
-        self.assertFalse(controller.save())
-        self.assertEqual("executables", controller.invalid_field)
-        self.assertTrue(controls["executables"].focused)
+                self.assertFalse(controller.save())
+                self.assertIsNone(controller.result)
+                self.assertEqual(invalid_field, controller.invalid_field)
+                self.assertTrue(controls[invalid_field].focused)
+                if fragment is not None:
+                    self.assertIn(fragment, controller.error)
 
     def test_save_then_cancel_discards_result(self):
         controls = {"label": FakeControl("Grupo")}
