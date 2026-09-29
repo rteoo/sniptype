@@ -92,36 +92,33 @@ class RunStartupTests(unittest.TestCase):
                 expander.run.assert_called_once_with(show_manager=requested)
 
     def test_show_manager_flag_opens_manager_through_existing_tray_action(self):
-        app = make_startup_app()
-        app.manage_snippets_gui = mock.Mock()
-        icon = mock.Mock()
-        with mock.patch.object(tx.pystray, "Icon", return_value=icon), \
-                mock.patch.object(
-                    tx.platform_support, "tk_runs_on_main_thread", return_value=False
-                ), \
-                mock.patch.object(
-                    tx.platform_support, "hide_dock_icon", return_value=True
-                ), \
-                mock.patch.object(tx.platform_support, "tray_icon_options", return_value={}):
-            app.run(show_manager=True)
+        # (old test, run(show_manager=...) or None for the default, main thread, opened)
+        rows = (
+            ("test_show_manager_flag_opens_manager_through_existing_tray_action", True, False, True),
+            ("test_default_startup_does_not_open_manager", None, True, False),
+        )
+        for name, show_manager, main_thread, opened in rows:
+            with self.subTest(name):
+                app = make_startup_app()
+                app.manage_snippets_gui = mock.Mock()
+                icon = mock.Mock()
+                with mock.patch.object(tx.pystray, "Icon", return_value=icon), \
+                        mock.patch.object(
+                            tx.platform_support, "tk_runs_on_main_thread", return_value=main_thread
+                        ), \
+                        mock.patch.object(
+                            tx.platform_support, "hide_dock_icon", return_value=True
+                        ), \
+                        mock.patch.object(tx.platform_support, "tray_icon_options", return_value={}):
+                    if show_manager is None:
+                        app.run()
+                    else:
+                        app.run(show_manager=show_manager)
 
-        app.manage_snippets_gui.assert_called_once_with(None, None)
-
-    def test_default_startup_does_not_open_manager(self):
-        app = make_startup_app()
-        app.manage_snippets_gui = mock.Mock()
-        icon = mock.Mock()
-        with mock.patch.object(tx.pystray, "Icon", return_value=icon), \
-                mock.patch.object(
-                    tx.platform_support, "tk_runs_on_main_thread", return_value=True
-                ), \
-                mock.patch.object(
-                    tx.platform_support, "hide_dock_icon", return_value=True
-                ), \
-                mock.patch.object(tx.platform_support, "tray_icon_options", return_value={}):
-            app.run()
-
-        app.manage_snippets_gui.assert_not_called()
+                if opened:
+                    app.manage_snippets_gui.assert_called_once_with(None, None)
+                else:
+                    app.manage_snippets_gui.assert_not_called()
 
     def test_macos_show_manager_uses_gui_submission_boundary(self):
         app, _icon, _icon_cls = self._run(main_thread=True, show_manager=True)
@@ -256,29 +253,6 @@ class StartupAndSingleInstanceCompatibilityTests(unittest.TestCase):
         app.gui.run_mainloop.assert_called_once_with()
         self.assertEqual(icon_cls.call_args.kwargs, {"darwin_nsapplication": shared})
 
-    def test_macos_drops_the_dock_icon_after_the_root_exists(self):
-        """Order is the whole point: Tk sets the Regular policy as it starts.
-
-        Reversing the policy before ``tk.Tk()`` would simply be overwritten,
-        and the menu-bar-only bundle would still show a Dock icon.
-        """
-        order = []
-        app = make_startup_app()
-        app.gui.adopt_main_thread.side_effect = lambda: order.append("root") or True
-        with mock.patch.object(tx.pystray, "Icon", return_value=mock.Mock()), \
-                mock.patch.object(
-                    tx.platform_support, "tk_runs_on_main_thread", return_value=True
-                ), \
-                mock.patch.object(
-                    tx.platform_support,
-                    "hide_dock_icon",
-                    side_effect=lambda: order.append("dock") or True,
-                ), \
-                mock.patch.object(tx.platform_support, "tray_icon_options", return_value={}):
-            app.run()
-        self.assertEqual(order, ["root", "dock"])
-        app.logger.warning.assert_not_called()
-
     def test_windows_never_touches_the_activation_policy(self):
         app = make_startup_app()
         with mock.patch.object(tx.pystray, "Icon", return_value=mock.Mock()), \
@@ -311,6 +285,12 @@ class StartupAndSingleInstanceCompatibilityTests(unittest.TestCase):
 
         Reading it before ``tk.Tk()`` would hand pystray an application object
         that no loop ever runs, so the icon would simply never appear.
+
+        The Dock icon is dropped after the root too (formerly
+        test_macos_drops_the_dock_icon_after_the_root_exists): Tk sets the
+        Regular policy as it starts, so reversing it before ``tk.Tk()`` would
+        simply be overwritten and the menu-bar-only bundle would still show a
+        Dock icon.
         """
         order = []
         app = make_startup_app()
@@ -331,6 +311,7 @@ class StartupAndSingleInstanceCompatibilityTests(unittest.TestCase):
                 ):
             app.run()
         self.assertEqual(order, ["root", "dock", "nsapp"])
+        app.logger.warning.assert_not_called()
 
     def test_a_failed_gui_start_still_raises_a_windows_tray(self):
         """pystray owns its own loop there, so a dialog-less tray still works."""
@@ -366,17 +347,15 @@ class StartupAndSingleInstanceCompatibilityTests(unittest.TestCase):
 
 
 class AppVersionFormattingTests(unittest.TestCase):
-    def test_stable_version_has_no_channel_suffix(self):
-        self.assertEqual(
-            tx.format_app_version("3.2.1", "stable"),
-            "SnipType v3.2.1",
+    def test_format_app_version(self):
+        rows = (
+            ("test_stable_version_has_no_channel_suffix", ("3.2.1", "stable"), "SnipType v3.2.1"),
+            ("test_beta_version_has_an_explicit_channel_suffix", ("3.3.0", "beta"), "SnipType v3.3.0 beta"),
+            ("test_missing_version_has_a_clear_fallback", (None,), "SnipType — versão desconhecida"),
         )
-
-    def test_beta_version_has_an_explicit_channel_suffix(self):
-        self.assertEqual(
-            tx.format_app_version("3.3.0", "beta"),
-            "SnipType v3.3.0 beta",
-        )
+        for name, args, expected in rows:
+            with self.subTest(name):
+                self.assertEqual(tx.format_app_version(*args), expected)
 
     def test_running_build_is_the_1_2_0_stable_release(self):
         self.assertEqual(tx.APP_VERSION, "1.2.0")
@@ -391,12 +370,6 @@ class AppVersionFormattingTests(unittest.TestCase):
         with mock.patch.object(tx, "__doc__", "Version: 9.8.7\nChannel: nightly"):
             with self.assertRaisesRegex(ValueError, "Unsupported release channel"):
                 tx._read_release_metadata()
-
-    def test_missing_version_has_a_clear_fallback(self):
-        self.assertEqual(
-            tx.format_app_version(None),
-            "SnipType — versão desconhecida",
-        )
 
     def test_windows_installer_matches_the_stable_metadata(self):
         repo_root = Path(__file__).resolve().parents[2]
@@ -454,20 +427,18 @@ class AppVersionFormattingTests(unittest.TestCase):
         repo_root = Path(__file__).resolve().parents[2]
         script = (repo_root / "build_release_macos.sh").read_text(encoding="utf-8")
 
-        self.assertIn(
-            'DEFAULT_SIGN_IDENTITIES=("Sniptype Dev" "Txt Xpander Dev")', script
-        )
-        self.assertIn('for candidate in "${DEFAULT_SIGN_IDENTITIES[@]}"', script)
-        # Matched with its quotes, as `security find-identity` prints it.
-        self.assertIn('grep -qF "\\"$candidate\\""', script)
+        with self.subTest("test_macos_release_tries_current_then_pre_rebrand_signing_identity"):
+            self.assertIn(
+                'DEFAULT_SIGN_IDENTITIES=("Sniptype Dev" "Txt Xpander Dev")', script
+            )
+            self.assertIn('for candidate in "${DEFAULT_SIGN_IDENTITIES[@]}"', script)
+            # Matched with its quotes, as `security find-identity` prints it.
+            self.assertIn('grep -qF "\\"$candidate\\""', script)
 
-    def test_macos_release_reports_the_signing_mode_that_was_used(self):
-        repo_root = Path(__file__).resolve().parents[2]
-        script = (repo_root / "build_release_macos.sh").read_text(encoding="utf-8")
-
-        self.assertIn('if [[ "$SIGN_IDENTITY" == "-" ]]', script)
-        self.assertIn("Every ad-hoc rebuild changes the bundle's identity", script)
-        self.assertIn('The bundle is signed with \\"$SIGN_IDENTITY\\"', script)
+        with self.subTest("test_macos_release_reports_the_signing_mode_that_was_used"):
+            self.assertIn('if [[ "$SIGN_IDENTITY" == "-" ]]', script)
+            self.assertIn("Every ad-hoc rebuild changes the bundle's identity", script)
+            self.assertIn('The bundle is signed with \\"$SIGN_IDENTITY\\"', script)
 
 if __name__ == "__main__":
     unittest.main()
