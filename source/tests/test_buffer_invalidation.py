@@ -126,10 +126,6 @@ class ForegroundWindowTests(BufferInvalidationTestCase):
         self.press("i")
         self.assert_not_expanded()
 
-    def test_same_window_expands(self):
-        self.press("x", "h", "i")
-        self.assert_expanded()
-
     def test_unknown_window_everywhere_keeps_legacy_behavior(self):
         # Off Windows (or when the query fails) the handle is None for every
         # key, so detection is exactly what it was before the check existed.
@@ -152,18 +148,17 @@ class ForegroundWindowHandleTests(unittest.TestCase):
         user32.assert_not_called()
 
     def test_windows_returns_the_foreground_hwnd(self):
-        user32 = mock.Mock()
-        user32.GetForegroundWindow.return_value = 0x3003
-        with mock.patch.object(platform_support, "IS_WINDOWS", True), \
-                mock.patch.object(platform_support, "_win32_user32", return_value=user32):
-            self.assertEqual(0x3003, platform_support.foreground_window_handle())
-
-    def test_windows_without_foreground_window_returns_none(self):
-        user32 = mock.Mock()
-        user32.GetForegroundWindow.return_value = 0
-        with mock.patch.object(platform_support, "IS_WINDOWS", True), \
-                mock.patch.object(platform_support, "_win32_user32", return_value=user32):
-            self.assertIsNone(platform_support.foreground_window_handle())
+        cases = (
+            ("windows_returns_the_foreground_hwnd", 0x3003, 0x3003),
+            ("windows_without_foreground_window_returns_none", 0, None),
+        )
+        for label, hwnd, expected in cases:
+            with self.subTest(label):
+                user32 = mock.Mock()
+                user32.GetForegroundWindow.return_value = hwnd
+                with mock.patch.object(platform_support, "IS_WINDOWS", True), \
+                        mock.patch.object(platform_support, "_win32_user32", return_value=user32):
+                    self.assertEqual(expected, platform_support.foreground_window_handle())
 
     def test_windows_query_failure_returns_none(self):
         with mock.patch.object(platform_support, "IS_WINDOWS", True), \

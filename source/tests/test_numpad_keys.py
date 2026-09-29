@@ -41,28 +41,29 @@ class NumpadTableTests(unittest.TestCase):
             self.assertEqual(str(digit), win_input.NUMPAD_CHARS[win_input.VK_NUMPAD0 + digit])
         self.assertEqual("/", win_input.NUMPAD_CHARS[win_input.VK_DIVIDE])
 
-    def test_operators_pynput_already_translates_are_left_alone(self):
-        # VK_MULTIPLY, VK_ADD, VK_SUBTRACT arrive as '*', '+', '-'.
-        for vk, char in ((0x6A, "*"), (0x6B, "+"), (0x6D, "-")):
-            self.assertEqual(char, win_input.typed_char(vk, char))
-
     def test_non_numpad_keys_keep_pynputs_char_without_user32_reads(self):
-        with mock.patch.object(win_input, "ctrl_or_alt_held") as held, \
-                mock.patch.object(win_input, "layout_decimal_char") as decimal:
-            for vk, char in ((0x39, "9"), (0x41, "a"), (0x0D, None), (None, "x")):
-                self.assertEqual(char, win_input.typed_char(vk, char))
-        held.assert_not_called()
-        decimal.assert_not_called()
+        cases = (
+            ("non_numpad_keys", ((0x39, "9"), (0x41, "a"), (0x0D, None), (None, "x"))),
+            # VK_MULTIPLY, VK_ADD, VK_SUBTRACT arrive as '*', '+', '-'.
+            ("operators_pynput_already_translates_are_left_alone",
+             ((0x6A, "*"), (0x6B, "+"), (0x6D, "-"))),
+        )
+        for label, keys in cases:
+            with self.subTest(label), \
+                    mock.patch.object(win_input, "ctrl_or_alt_held") as held, \
+                    mock.patch.object(win_input, "layout_decimal_char") as decimal:
+                for vk, char in keys:
+                    self.assertEqual(char, win_input.typed_char(vk, char))
+                held.assert_not_called()
+                decimal.assert_not_called()
 
     def test_numpad_keys_override_pynputs_char(self):
-        with mock.patch.object(win_input, "ctrl_or_alt_held", return_value=False):
-            self.assertEqual("9", win_input.typed_char(VK_NUMPAD9, None))
-            self.assertEqual("/", win_input.typed_char(win_input.VK_DIVIDE, ";"))
-
-    def test_decimal_uses_the_active_layout(self):
         with mock.patch.object(win_input, "ctrl_or_alt_held", return_value=False), \
                 mock.patch.object(win_input, "layout_decimal_char", return_value=","):
-            self.assertEqual(",", win_input.typed_char(win_input.VK_DECIMAL, None))
+            self.assertEqual("9", win_input.typed_char(VK_NUMPAD9, None))
+            self.assertEqual("/", win_input.typed_char(win_input.VK_DIVIDE, ";"))
+            with self.subTest("decimal_uses_the_active_layout"):
+                self.assertEqual(",", win_input.typed_char(win_input.VK_DECIMAL, None))
 
     def test_ctrl_or_alt_means_the_key_types_no_character(self):
         # Alt+numpad digits compose an Alt code; Ctrl+digit types nothing.
@@ -86,18 +87,19 @@ class LayoutDecimalTests(unittest.TestCase):
         return user32
 
     def test_reads_the_foreground_threads_layout(self):
-        user32 = self._user32(ord(","))
-        with mock.patch.object(win_input, "_USER32", user32, create=True):
-            self.assertEqual(",", win_input.layout_decimal_char())
-        user32.GetWindowThreadProcessId.assert_called_once_with(0x1234, None)
-        user32.GetKeyboardLayout.assert_called_once_with(77)
-        user32.MapVirtualKeyExW.assert_called_once_with(
-            win_input.VK_DECIMAL, win_input.MAPVK_VK_TO_CHAR, 0x04160416
-        )
-
-    def test_us_layout_types_a_period(self):
-        with mock.patch.object(win_input, "_USER32", self._user32(ord(".")), create=True):
-            self.assertEqual(".", win_input.layout_decimal_char())
+        for label, char in (
+            ("reads_the_foreground_threads_layout", ","),
+            ("us_layout_types_a_period", "."),
+        ):
+            with self.subTest(label):
+                user32 = self._user32(ord(char))
+                with mock.patch.object(win_input, "_USER32", user32, create=True):
+                    self.assertEqual(char, win_input.layout_decimal_char())
+                user32.GetWindowThreadProcessId.assert_called_once_with(0x1234, None)
+                user32.GetKeyboardLayout.assert_called_once_with(77)
+                user32.MapVirtualKeyExW.assert_called_once_with(
+                    win_input.VK_DECIMAL, win_input.MAPVK_VK_TO_CHAR, 0x04160416
+                )
 
     def test_unmapped_or_dead_decimal_types_nothing(self):
         for mapped in (0, 0x80000000 | ord(",")):

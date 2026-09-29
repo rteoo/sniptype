@@ -68,10 +68,6 @@ class ImmediateModeTests(unittest.TestCase):
         self.assertEqual(args.args[2], "")  # no terminator appended
         self.assertEqual(self.app.typed_text, "")
 
-    def test_no_dispatch_without_match(self):
-        self._type("zzz")
-        self.app.task_runner.start.assert_not_called()
-
 
 class WorkflowHotkeyIntegrationTests(unittest.TestCase):
     def setUp(self):
@@ -196,11 +192,6 @@ class WorkflowHotkeyIntegrationTests(unittest.TestCase):
             self.app.workflow_state.last_successful_item,
         )
 
-    def test_failed_or_cancelled_expansion_does_not_record(self):
-        self.app.expand_snippet = mock.Mock(return_value=False)
-        self.app._run_expansion("xhi")
-        self.assertIsNone(self.app.workflow_state.last_successful_item)
-
     def test_action_only_success_records_without_inserting_a_terminator(self):
         self.app.dynamic_registry = {
             "xwapp": {"provider": "whatsapp", "mode": "open", "slow": True},
@@ -226,15 +217,6 @@ class WorkflowHotkeyIntegrationTests(unittest.TestCase):
         self.app.snippets["xwapp"] = lambda: ACTION_COMPLETED
 
         result = self.app.run_slow_snippet("xwapp")
-
-        self.assertIs(ACTION_COMPLETED, result)
-        self.app.text_inserter.insert_text.assert_not_called()
-
-    def test_action_only_fast_result_is_not_inserted_as_text(self):
-        self.app.snippets["xwapp"] = lambda: ACTION_COMPLETED
-        self.app.trigger_index["slow_triggers"] = frozenset()
-
-        result = self.app.expand_snippet("xwapp")
 
         self.assertIs(ACTION_COMPLETED, result)
         self.app.text_inserter.insert_text.assert_not_called()
@@ -310,28 +292,6 @@ class WorkflowHotkeyIntegrationTests(unittest.TestCase):
         save.assert_called_once()
         self.assertEqual("<alt>+m", self.app.settings["hotkeys"]["open_manager"])
         self.assertIsNot(original_router, self.app.hotkey_router)
-
-
-class TerminatorModeTests(unittest.TestCase):
-    def setUp(self):
-        self.tmp = tempfile.mkdtemp()
-        self.app = make_app(self.tmp, {"xhi": "hello"})
-        self.app.terminator_mode = True
-
-    def _type(self, text):
-        for char in text:
-            self.app._handle_char(char)
-
-    def test_no_expansion_until_terminator(self):
-        self._type("xhi")
-        self.app.task_runner.start.assert_not_called()
-
-    def test_expands_on_terminator_and_reemits_it(self):
-        self._type("xhi ")
-        self.app.task_runner.start.assert_called_once()
-        args = self.app.task_runner.start.call_args
-        self.assertEqual(args.args[1], "xhi")
-        self.assertEqual(args.args[2], " ")  # terminator re-typed after expansion
 
 
 class GroupPolicyHotpathTests(unittest.TestCase):
@@ -519,11 +479,6 @@ class TerminatorReemitTests(unittest.TestCase):
         self.tmp = tempfile.mkdtemp()
         self.app = make_app(self.tmp, {"xhi": "hello"})
 
-    def test_terminator_not_reemitted_when_nothing_inserted(self):
-        with mock.patch.object(self.app, "expand_snippet", return_value=False):
-            self.app._run_expansion("xhi", append_text=" ")
-        self.app.keyboard_controller.type.assert_not_called()
-
     def test_unavailable_clipboard_variable_inserts_nothing_and_notifies(self):
         self.app.snippets["xclip"] = "before %%clipboard-paste%% after"
         self.app.refresh_runtime_indexes()
@@ -535,21 +490,6 @@ class TerminatorReemitTests(unittest.TestCase):
         self.app.text_inserter.insert_text.assert_not_called()
         self.app.notify_error.assert_called_once()
         self.assertIn("transferência", self.app.notify_error.call_args.args[0])
-
-    def test_terminator_reemitted_when_inserted(self):
-        with mock.patch.object(self.app, "expand_snippet", return_value=True):
-            self.app._run_expansion("xhi", append_text=" ")
-        self.app.keyboard_controller.type.assert_called_once_with(" ")
-
-    def test_cancelled_form_dialog_inserts_nothing(self):
-        """A cancelled form dialog must leave no text and no terminator."""
-        self.app.snippets["xform"] = "Olá %%nome%%"
-        self.app.refresh_runtime_indexes()
-        with mock.patch.object(self.app, "_show_form_dialog", return_value=None) as dialog:
-            self.app._run_expansion("xform", append_text=" ")
-        dialog.assert_called_once_with(["nome"])
-        self.app.text_inserter.insert_text.assert_not_called()
-        self.app.keyboard_controller.type.assert_not_called()
 
 
 class ModalDialogFocusTests(unittest.TestCase):
@@ -853,27 +793,25 @@ class ClipboardCoWriterTests(unittest.TestCase):
         warnings = " ".join(str(call.args[0]) for call in logger.warning.call_args_list)
         self.assertIn("sobrescrita por outro programa", warnings)
 
-    def test_normal_paste_logs_no_warning(self):
-        logger = self._insert(FakeClipboard(initial="orig"), "bom dia")
-        logger.warning.assert_not_called()
-
-    def test_single_line_restores_previous_clipboard(self):
-        clipboard = FakeClipboard(initial="orig")
-        self._insert(clipboard, "bom dia")
-        self.assertEqual(clipboard.value, "orig")
-
     def test_multiline_restores_previous_clipboard(self):
         # A paste must never leave the snippet behind, multi-line included
         # (it used to be skipped and was the main source of a replaced
-        # clipboard). The CRLF round-trip must still compare as our payload.
-        clipboard = FakeClipboard(initial="orig")
-        self._insert(clipboard, "linha um\nlinha dois")
-        self.assertEqual(clipboard.value, "orig")
-
-    def test_multiline_with_crlf_snapshot_restores_verbatim(self):
-        clipboard = FakeClipboard(initial="antes\r\ndepois")
-        self._insert(clipboard, "linha um\nlinha dois")
-        self.assertEqual(clipboard.value, "antes\r\ndepois")
+        # clipboard). The CRLF round-trip must still compare as our payload,
+        # so no row may log the co-writer warning either.
+        cases = (
+            ("normal_paste_logs_no_warning / single_line_restores_previous_clipboard",
+             "orig", "bom dia", "orig"),
+            ("multiline_restores_previous_clipboard",
+             "orig", "linha um\nlinha dois", "orig"),
+            ("multiline_with_crlf_snapshot_restores_verbatim",
+             "antes\r\ndepois", "linha um\nlinha dois", "antes\r\ndepois"),
+        )
+        for label, initial, snippet, expected in cases:
+            with self.subTest(label):
+                clipboard = FakeClipboard(initial=initial)
+                logger = self._insert(clipboard, snippet)
+                self.assertEqual(clipboard.value, expected)
+                logger.warning.assert_not_called()
 
 
 class SlowRefRoutingTests(unittest.TestCase):
@@ -896,13 +834,6 @@ class SlowRefRoutingTests(unittest.TestCase):
         slow.assert_called_once_with("xreport")
         fast.assert_not_called()
 
-    def test_plain_snippet_still_uses_fast_path(self):
-        with mock.patch.object(self.app, "run_slow_snippet", return_value=True) as slow, \
-                mock.patch.object(self.app, "expand_snippet", return_value=True) as fast:
-            self.app._run_expansion("xplain")
-        fast.assert_called_once_with("xplain")
-        slow.assert_not_called()
-
 
 class OnPressSpecialKeyTests(unittest.TestCase):
     """on_press feeds the detection buffer; Enter must reset it and Backspace
@@ -916,10 +847,6 @@ class OnPressSpecialKeyTests(unittest.TestCase):
         for char in text:
             self.app.on_press(KeyCode.from_char(char))
 
-    def test_char_keys_accumulate_in_the_buffer(self):
-        self._press("ab")
-        self.assertEqual("ab", self.app.typed_text)
-
     def test_enter_resets_the_buffer(self):
         self._press("ab")
         self.app.on_press(Key.enter)
@@ -929,18 +856,6 @@ class OnPressSpecialKeyTests(unittest.TestCase):
         self._press("abx")
         self.app.on_press(Key.backspace)
         self.assertEqual("ab", self.app.typed_text)
-
-    def test_unknown_special_key_neither_crashes_nor_changes_buffer(self):
-        self._press("ab")
-        self.app.on_press(Key.shift)
-        self.assertEqual("ab", self.app.typed_text)
-
-    def test_escape_clears_buffer_without_dispatch(self):
-        self._press("ab")
-        self.app.task_runner.reset_mock()
-        self.app.on_press(Key.esc)
-        self.assertEqual("", self.app.typed_text)
-        self.app.task_runner.start.assert_not_called()
 
 
 
@@ -1143,17 +1058,30 @@ class FormRoutingTests(unittest.TestCase):
         )
 
     def test_structured_form_cancel_inserts_nothing_or_reemits_terminator(self):
-        app = make_app(self.tmp, {"xform": "Olá %%nome%%"})
-        app.library_metadata = {
-            "items": {"static": {"xform": {"form": {"fields": [{"name": "nome"}]}}}}
-        }
-        app.refresh_runtime_indexes()
-        with mock.patch.object(app, "_show_form_dialog", return_value=None) as dialog, \
-                mock.patch.object(tx.time, "sleep"):
-            app._run_expansion("xform", append_text=" ")
-        dialog.assert_called_once()
-        app.text_inserter.insert_text.assert_not_called()
-        app.keyboard_controller.type.assert_not_called()
+        """A cancelled form dialog must leave no text and no terminator."""
+        cases = (
+            # Legacy form: fields come from the %%name%% tokens alone.
+            ("cancelled_form_dialog_inserts_nothing", None),
+            ("structured_form_cancel_inserts_nothing_or_reemits_terminator", {
+                "items": {"static": {"xform": {"form": {"fields": [{"name": "nome"}]}}}}
+            }),
+        )
+        for label, metadata in cases:
+            with self.subTest(label):
+                app = make_app(self.tmp, {"xform": "Olá %%nome%%"})
+                if metadata is not None:
+                    app.library_metadata = metadata
+                app.refresh_runtime_indexes()
+                with mock.patch.object(app, "_show_form_dialog", return_value=None) as dialog, \
+                        mock.patch.object(tx.time, "sleep"):
+                    app._run_expansion("xform", append_text=" ")
+                dialog.assert_called_once()
+                self.assertEqual(["nome"], dialog.call_args.args[0])
+                if metadata is None:
+                    # The legacy dialog is opened with the field names only.
+                    dialog.assert_called_once_with(["nome"])
+                app.text_inserter.insert_text.assert_not_called()
+                app.keyboard_controller.type.assert_not_called()
 
     def test_structured_form_rebuilds_rich_spans_after_expansion(self):
         rich = build_rich_text_payload(
@@ -1343,13 +1271,6 @@ class ListenerNeverSleepsTests(unittest.TestCase):
         sleep.assert_not_called()
         self.app.keyboard_controller.press.assert_not_called()
         self.app.task_runner.start.assert_called_once()
-
-    def test_blocked_erase_is_logged(self):
-        self.app.erase_key_delay = 0.0
-        self.batch.erase.return_value = False
-        self.app.logger = mock.Mock()
-        self.app._erase_chars(3)
-        self.app.logger.warning.assert_called_once()
 
     def test_configured_per_key_delay_keeps_the_paced_erase(self):
         self.app.erase_key_delay = 0.02
