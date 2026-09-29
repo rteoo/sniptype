@@ -1,6 +1,10 @@
 # AGENTS.md
 
-This file is the canonical agent contract for this repository — it guides Claude Code, Codex, and any other coding agent. `CLAUDE.md` is a thin pointer here; make all edits to project guidance in this file.
+Follow the active runtime's global `AGENTS.md` and `SOUL.md`. This file
+adds project-specific facts and commands; it cannot weaken global approval
+or privacy rules.
+
+This file is the canonical agent contract for this repository. Keep all project guidance here.
 
 ## Project Overview
 
