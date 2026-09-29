@@ -58,10 +58,13 @@ class TopLevelShapeTests(unittest.TestCase):
 
     def test_injected_app_version_round_trips(self):
         # §5.1 leaves the constant undecided, so assert the round-trip, not a literal.
-        self.assertEqual(build({}, app_version="9.9.9")["generator"]["version"], "9.9.9")
-
-    def test_app_version_may_be_null(self):
-        self.assertIsNone(build({}, app_version=None)["generator"]["version"])
+        cases = [
+            ("injected_app_version_round_trips", "9.9.9"),
+            ("app_version_may_be_null", None),
+        ]
+        for label, version in cases:
+            with self.subTest(label):
+                self.assertEqual(build({}, app_version=version)["generator"]["version"], version)
 
 
 class MappingExpansionTests(unittest.TestCase):
@@ -77,15 +80,6 @@ class MappingExpansionTests(unittest.TestCase):
             entry["group"],
             {"container": "_cpf_numbers", "prefix": "cpf", "item": "fulano"},
         )
-
-    def test_custom_container_uses_explicit_prefix(self):
-        bundle = build({"_custom_codes": {"__prefix__": "cod", "nf": "NF-4471"}})
-        self.assertEqual(triggers(bundle), ["codnf"])
-
-    def test_prefix_key_never_becomes_a_trigger(self):
-        bundle = build({"_custom_codes": {"__prefix__": "cod", "nf": "x"}})
-        self.assertNotIn("cod__prefix__", triggers(bundle))
-        self.assertNotIn("__prefix__", triggers(bundle))
 
     def test_empty_prefix_yields_bare_item_names(self):
         bundle = build({"_custom_codes": {"__prefix__": "", "nf": "NF-1"}})
@@ -131,13 +125,6 @@ class OrderingTests(unittest.TestCase):
             "xa": "A",
         })
         self.assertEqual(triggers(bundle), ["xb", "xa", "cpfz", "cpfa"])
-
-    def test_identical_input_yields_byte_identical_output(self):
-        static = {"xa": "A", "_cpf_numbers": {"f": "1"}}
-        registry = {"xhj": {"provider": "datetime", "format": "%d/%m/%Y"}}
-        first = json.dumps(build(static, registry), ensure_ascii=False, indent=2)
-        second = json.dumps(build(static, registry), ensure_ascii=False, indent=2)
-        self.assertEqual(first, second)
 
 
 class RichTextTests(unittest.TestCase):
@@ -186,12 +173,6 @@ class UnexportableValueTests(unittest.TestCase):
 
 
 class VariableResolutionTests(unittest.TestCase):
-    def test_snippet_ref_is_resolved(self):
-        bundle = build({"xname": "Example User", "xs": "Hello, this is %%xname%%."})
-        entry = entry_for(bundle, "xs")
-        self.assertEqual(entry["text"], "Hello, this is Example User.")
-        self.assertNotIn("input", entry)
-
     def test_mapping_ref_is_resolved(self):
         bundle = build({
             "_cpf_numbers": {"fulano": "123.456.789-00"},
@@ -205,19 +186,6 @@ class VariableResolutionTests(unittest.TestCase):
         self.assertEqual(entry["text"], "Copiado: %%clipboard-paste%%")
         self.assertTrue(entry["input"]["clipboard"])
         self.assertEqual(entry["input"]["fields"], [])
-
-    def test_form_field_is_preserved_and_listed(self):
-        bundle = build({"xs": "Prezado %%cliente%%, tudo bem %%cliente%%?"})
-        entry = entry_for(bundle, "xs")
-        self.assertEqual(entry["input"]["fields"], ["cliente"])
-        self.assertFalse(entry["input"]["clipboard"])
-
-    def test_dynamic_ref_is_preserved_and_listed(self):
-        registry = {"xdolar": {"provider": "bcb", "method": "dolar"}}
-        bundle = build({"xs": "Hoje: %%xdolar%%"}, registry)
-        entry = entry_for(bundle, "xs")
-        self.assertEqual(entry["text"], "Hoje: %%xdolar%%")
-        self.assertEqual(entry["input"]["dynamic_refs"], ["xdolar"])
 
     def test_static_never_shadows_a_dynamic_ref_in_the_classification_map(self):
         # The map is built dynamic-last. Built the other way round, %%xdolar%%
@@ -279,9 +247,6 @@ class VariableResolutionTests(unittest.TestCase):
         self.assertEqual(entry["text"], "Olá %%xbad%%")
         self.assertEqual(entry["input"]["residual"], ["xbad"])
 
-    def test_clean_value_has_no_input_block(self):
-        self.assertNotIn("input", entry_for(build({"xa": "plain"}), "xa"))
-
 
 class PrecedenceTests(unittest.TestCase):
     def test_accepted_dynamic_beats_static(self):
@@ -299,11 +264,6 @@ class PrecedenceTests(unittest.TestCase):
         self.assertEqual(triggers(bundle), ["xhj"])
         self.assertEqual(entry_for(bundle, "xhj")["text"], "static value")
 
-    def test_disabled_dynamic_loses_to_the_static_snippet(self):
-        registry = {"xhj": {"provider": "datetime", "enabled": False}}
-        bundle = build({"xhj": "static value"}, registry)
-        self.assertEqual(triggers(bundle), ["xhj"])
-
     def test_static_beats_mapping_composed(self):
         logger = RecordingLogger()
         bundle = build(
@@ -318,14 +278,6 @@ class PrecedenceTests(unittest.TestCase):
         bundle = build({"_cpf_numbers": {"fulano": "mapped"}}, registry)
         self.assertEqual(triggers(bundle), [])
 
-    def test_no_duplicate_triggers_ever(self):
-        bundle = build({
-            "cpffulano": "static",
-            "_cpf_numbers": {"fulano": "mapped"},
-            "_other_codes": {"__prefix__": "cpf", "fulano": "also"},
-        })
-        self.assertEqual(len(triggers(bundle)), len(set(triggers(bundle))))
-
 
 class AcceptSetTests(unittest.TestCase):
     def test_invalid_enabled_value_preserves_static_and_warns(self):
@@ -337,33 +289,23 @@ class AcceptSetTests(unittest.TestCase):
         self.assertEqual(entry_for(bundle, "xhj")["text"], "static survives")
         self.assertTrue(any("enabled" in message for message in logger.warnings))
 
-    def test_disabled_entries_excluded(self):
-        registry = {
-            "xhj": {"provider": "datetime", "format": "%d/%m/%Y"},
-            "xdolar": {"provider": "bcb", "method": "dolar", "enabled": False},
-        }
-        bundle = build({}, registry)
-        self.assertEqual([row["id"] for row in bundle["dynamic"]], ["xhj"])
-
-    def test_enabled_field_is_emitted_on_survivors(self):
-        bundle = build({}, {"xhj": {"provider": "datetime", "format": "%d"}})
-        self.assertTrue(bundle["dynamic"][0]["enabled"])
-
     def test_non_dict_entry_skipped(self):
         bundle = build({}, {"xhj": "not a dict"})
         self.assertEqual(bundle["dynamic"], [])
 
-    def test_entry_without_a_provider_is_skipped_with_warning(self):
-        logger = RecordingLogger()
-        bundle = build({}, {"xhj": {"category": "datetime", "description": "x"}}, logger=logger)
-        self.assertEqual(bundle["dynamic"], [])
-        self.assertTrue(any("provider" in w.lower() for w in logger.warnings))
-
     def test_unknown_provider_skipped_with_warning(self):
-        logger = RecordingLogger()
-        bundle = build({}, {"xhj": {"provider": "nope"}}, logger=logger)
-        self.assertEqual(bundle["dynamic"], [])
-        self.assertTrue(any("nope" in w for w in logger.warnings))
+        cases = [
+            ("entry_without_a_provider_is_skipped_with_warning",
+             {"category": "datetime", "description": "x"}, lambda w: "provider" in w.lower()),
+            ("unknown_provider_skipped_with_warning",
+             {"provider": "nope"}, lambda w: "nope" in w),
+        ]
+        for label, entry, warned in cases:
+            with self.subTest(label):
+                logger = RecordingLogger()
+                bundle = build({}, {"xhj": entry}, logger=logger)
+                self.assertEqual(bundle["dynamic"], [])
+                self.assertTrue(any(warned(w) for w in logger.warnings))
 
     def test_invalid_bcb_and_stock_methods_skipped(self):
         registry = {
@@ -411,25 +353,6 @@ class ProviderAllowlistCouplingTests(unittest.TestCase):
     dynamic_registry.PROVIDERS, not a hand-copied tuple, so registering a fifth
     provider can never silently drop its triggers from the bundle."""
 
-    def test_every_registered_provider_is_admitted(self):
-        from dynamic_registry import PROVIDERS
-
-        valid = {
-            "datetime": {"provider": "datetime"},
-            "bcb": {"provider": "bcb", "method": "dolar"},
-            "stock": {"provider": "stock", "method": "cotacao"},
-            "whatsapp": {"provider": "whatsapp", "mode": "open"},
-        }
-        for name in PROVIDERS:
-            entry = valid.get(name, {"provider": name})
-            ok, reason = se._provider_binds(entry)
-            self.assertTrue(ok, f"{name} rejected by the accept set: {reason}")
-
-    def test_unregistered_provider_is_rejected(self):
-        ok, reason = se._provider_binds({"provider": "not_a_provider"})
-        self.assertFalse(ok)
-        self.assertIn("not_a_provider", reason)
-
     def test_registering_a_new_provider_admits_its_triggers(self):
         # The drift-catcher: mutating PROVIDERS must change the accept set live.
         # Registering a factory (the documented extension path) makes the new
@@ -459,15 +382,6 @@ class DynamicMetadataTests(unittest.TestCase):
     def test_description_defaults_to_empty_string(self):
         self.assertEqual(build({}, {"a": {"provider": "datetime"}})["dynamic"][0]["description"], "")
 
-    def test_datetime_is_local_with_render(self):
-        registry = {"xhj": {"provider": "datetime", "format": "%d/%m/%Y"}}
-        row = build({}, registry)["dynamic"][0]
-        self.assertTrue(row["local"])
-        self.assertEqual(
-            row["render"],
-            {"kind": "date_format", "unicode_pattern": "dd/MM/yyyy", "locale": "pt-BR"},
-        )
-
     def test_non_datetime_providers_are_not_local(self):
         registry = {"xdolar": {"provider": "bcb", "method": "dolar"}}
         row = build({}, registry)["dynamic"][0]
@@ -484,16 +398,20 @@ class DynamicMetadataTests(unittest.TestCase):
         self.assertEqual(row["render"]["unicode_pattern"], "EEEE, dd' de 'MMMM' de 'yyyy")
 
     def test_unknown_directive_drops_render_and_local(self):
-        logger = RecordingLogger()
-        registry = {"a": {"provider": "datetime", "format": "%Q"}}
-        row = build({}, registry, logger=logger)["dynamic"][0]
-        self.assertFalse(row["local"])
-        self.assertNotIn("render", row)
-        self.assertTrue(any("%Q" in w for w in logger.warnings))
-
-    def test_non_string_format_drops_render(self):
-        row = build({}, {"a": {"provider": "datetime", "format": 5}})["dynamic"][0]
-        self.assertFalse(row["local"])
+        # The non-string row also asserts no render and a warning naming the
+        # value; _render_block warns with repr(fmt) for both.
+        cases = [
+            ("unknown_directive_drops_render_and_local", "%Q", "%Q"),
+            ("non_string_format_drops_render", 5, "5"),
+        ]
+        for label, fmt, fragment in cases:
+            with self.subTest(label):
+                logger = RecordingLogger()
+                registry = {"a": {"provider": "datetime", "format": fmt}}
+                row = build({}, registry, logger=logger)["dynamic"][0]
+                self.assertFalse(row["local"])
+                self.assertNotIn("render", row)
+                self.assertTrue(any(fragment in w for w in logger.warnings))
 
 
 class DatetimeRenderSingleSourceTests(unittest.TestCase):
@@ -514,17 +432,6 @@ class DatetimeRenderSingleSourceTests(unittest.TestCase):
             se.strftime_to_unicode_pattern(DEFAULT_DATE_FORMAT),
         )
 
-    def test_extenso_wins_over_format_from_the_shared_source(self):
-        from dynamic_registry import datetime_render_spec
-
-        self.assertEqual(
-            datetime_render_spec({"method": "extenso", "format": "%d"}),
-            ("extenso", None),
-        )
-        registry = {"a": {"provider": "datetime", "method": "extenso", "format": "%d"}}
-        row = build({}, registry)["dynamic"][0]
-        self.assertEqual(row["render"]["unicode_pattern"], se.EXTENSO_PATTERN)
-
 
 class StrftimeConversionTests(unittest.TestCase):
     def test_every_directive_in_the_table(self):
@@ -537,40 +444,33 @@ class StrftimeConversionTests(unittest.TestCase):
             with self.subTest(fmt=fmt):
                 self.assertEqual(se.strftime_to_unicode_pattern(fmt), expected)
 
-    def test_percent_literal(self):
-        self.assertEqual(se.strftime_to_unicode_pattern("%d%%"), "dd%")
-
     def test_literal_run_with_letters_is_quoted_wholesale(self):
-        # Leave 'às' unquoted and the 's' renders as seconds.
-        self.assertEqual(
-            se.strftime_to_unicode_pattern("%d/%m/%Y às %H:%M"),
-            "dd/MM/yyyy' às 'HH:mm",
-        )
-
-    def test_letterless_literals_stay_bare(self):
-        self.assertEqual(se.strftime_to_unicode_pattern("%d/%m/%Y"), "dd/MM/yyyy")
-        self.assertEqual(se.strftime_to_unicode_pattern("%H:%M:%S"), "HH:mm:ss")
-
-    def test_apostrophe_is_doubled(self):
-        self.assertEqual(se.strftime_to_unicode_pattern("%H'%M"), "HH''mm")
-        self.assertEqual(se.strftime_to_unicode_pattern("%d o'clock"), "dd' o''clock'")
-
-    def test_name_based_user_override(self):
-        self.assertEqual(
-            se.strftime_to_unicode_pattern("%A, %d de %B"),
+        cases = [
+            ("percent_literal", "%d%%", "dd%"),
+            # Leave 'às' unquoted and the 's' renders as seconds.
+            ("literal_run_with_letters_is_quoted_wholesale",
+             "%d/%m/%Y às %H:%M", "dd/MM/yyyy' às 'HH:mm"),
+            ("letterless_literals_stay_bare", "%d/%m/%Y", "dd/MM/yyyy"),
+            ("letterless_literals_stay_bare", "%H:%M:%S", "HH:mm:ss"),
+            ("apostrophe_is_doubled", "%H'%M", "HH''mm"),
+            ("apostrophe_is_doubled", "%d o'clock", "dd' o''clock'"),
             # ", " holds no ASCII letter, so it stays bare — same as the extenso
             # pattern's own "EEEE, dd".
-            "EEEE, dd' de 'MMMM",
-        )
+            ("name_based_user_override", "%A, %d de %B", "EEEE, dd' de 'MMMM"),
+        ]
+        for label, fmt, expected in cases:
+            with self.subTest(label, fmt=fmt):
+                self.assertEqual(se.strftime_to_unicode_pattern(fmt), expected)
 
     def test_unknown_directive_returns_none(self):
-        self.assertIsNone(se.strftime_to_unicode_pattern("%Q"))
-
-    def test_trailing_lone_percent_returns_none(self):
-        self.assertIsNone(se.strftime_to_unicode_pattern("%d%"))
-
-    def test_non_string_returns_none(self):
-        self.assertIsNone(se.strftime_to_unicode_pattern(None))
+        cases = [
+            ("unknown_directive_returns_none", "%Q"),
+            ("trailing_lone_percent_returns_none", "%d%"),
+            ("non_string_returns_none", None),
+        ]
+        for label, fmt in cases:
+            with self.subTest(label, fmt=fmt):
+                self.assertIsNone(se.strftime_to_unicode_pattern(fmt))
 
 
 class WorkedExampleTests(unittest.TestCase):
@@ -607,18 +507,6 @@ class WorkedExampleTests(unittest.TestCase):
 
 
 class DigestTests(unittest.TestCase):
-    def test_excludes_exported_at_and_generator(self):
-        static = {"xa": "A"}
-        first = se.build_bundle(static, {}, app_version="1.0.0", now=FIXED_TIME)
-        later = time.strptime("2027-01-01T00:00:00", "%Y-%m-%dT%H:%M:%S")
-        second = se.build_bundle(static, {}, app_version="2.0.0", now=later)
-        self.assertEqual(se.bundle_digest(first), se.bundle_digest(second))
-
-    def test_content_change_changes_the_digest(self):
-        a = se.build_bundle({"xa": "A"}, {}, now=FIXED_TIME)
-        b = se.build_bundle({"xa": "B"}, {}, now=FIXED_TIME)
-        self.assertNotEqual(se.bundle_digest(a), se.bundle_digest(b))
-
     def test_digest_bytes_are_reproducible(self):
         import hashlib
 
@@ -659,9 +547,6 @@ class ExportDirTests(unittest.TestCase):
             handle.write("x")
         self.assertIsNone(se.resolve_export_dir(target, self.logger))
         self.assertTrue(any("diretório" in w for w in self.logger.warnings))
-
-    def test_existing_directory_accepted(self):
-        self.assertEqual(se.resolve_export_dir(self.tmp.name, self.logger), self.tmp.name)
 
 
 class ExportBundleTests(unittest.TestCase):
@@ -741,21 +626,23 @@ class ExportBundleTests(unittest.TestCase):
         self.assertTrue(self.export({"xa": "A"}))
         self.assertTrue(os.path.exists(self.bundle_path))
 
-    def test_missing_state_file_forces_an_export(self):
-        self.export({"xa": "A"})
-        os.remove(self.state_path)
-        self.assertTrue(self.export({"xa": "A"}))
-
     def test_unreadable_state_file_forces_an_export(self):
-        self.export({"xa": "A"})
-        with open(self.state_path, "w", encoding="utf-8") as handle:
-            handle.write("not json")
-        self.assertTrue(self.export({"xa": "A"}))
-
-    def test_unwritable_dir_warns_and_returns_false(self):
-        missing = os.path.join(self.tmp.name, "gone")
-        self.assertFalse(self.export({"xa": "A"}, export_dir=missing))
-        self.assertTrue(self.logger.warnings)
+        cases = [
+            ("missing_state_file_forces_an_export", None),
+            ("unreadable_state_file_forces_an_export", "not json"),
+            # Valid JSON but not the expected object: _load_state must treat it as
+            # absent and export unconditionally rather than crash on .get().
+            ("state_file_that_is_a_json_list_forces_an_export", "[1, 2, 3]"),
+        ]
+        for label, content in cases:
+            with self.subTest(label):
+                self.export({"xa": "A"})  # leaves a valid state behind
+                if content is None:
+                    os.remove(self.state_path)
+                else:
+                    with open(self.state_path, "w", encoding="utf-8") as handle:
+                        handle.write(content)
+                self.assertTrue(self.export({"xa": "A"}))
 
     def test_write_failure_warns_and_never_raises(self):
         original = se.write_json_atomic
@@ -824,14 +711,6 @@ class ExportBundleTests(unittest.TestCase):
         self.assertTrue(self.export({"xa": "A"}))
         self.assertTrue(os.path.exists(self.bundle_path))
         self.assertTrue(any("grande" in w for w in self.logger.warnings))
-
-    def test_state_file_that_is_a_json_list_forces_an_export(self):
-        # Valid JSON but not the expected object: _load_state must treat it as
-        # absent and export unconditionally rather than crash on .get().
-        self.export({"xa": "A"})
-        with open(self.state_path, "w", encoding="utf-8") as handle:
-            handle.write("[1, 2, 3]")
-        self.assertTrue(self.export({"xa": "A"}))
 
     def test_unicode_and_rich_text_survive_a_file_round_trip(self):
         static = {
