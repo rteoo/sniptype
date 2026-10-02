@@ -245,6 +245,11 @@ The deeper architecture and completed audit roadmap are documented in
 [documentation index](source/docs/README.md). Release history lives only in
 [CHANGELOG.md](CHANGELOG.md).
 
+## Windows release preparation
+
+See [RELEASE-WINDOWS.md](RELEASE-WINDOWS.md) for the dry run, native package
+and installer preparation, artifact verification, and remaining release gates.
+
 ## License
 
 SnipType is released under the [MIT License](LICENSE). Packaged builds include
