@@ -156,7 +156,13 @@ class OnPressNumpadTests(unittest.TestCase):
         self.app.task_runner.reset_mock()
         self.app.on_press(KeyCode.from_char("x"))
         self.app.on_press(KeyCode.from_vk(VK_NUMPAD9))
-        self.assertEqual(top_row, self.app.task_runner.start.call_args)
+        numpad = self.app.task_runner.start.call_args
+        self.assertEqual(top_row.args, numpad.args)
+        self.assertEqual(top_row.kwargs["name"], numpad.kwargs["name"])
+        # Each dispatch has its own sequence; the input target and routing
+        # remain identical for the numpad and top-row representations.
+        self.assertEqual(top_row.kwargs["context"][:-1], numpad.kwargs["context"][:-1])
+        self.assertGreater(numpad.kwargs["context"][-1], top_row.kwargs["context"][-1])
         self.assertEqual(["x9"], self._dispatched())
 
     def test_numpad_divide_types_a_slash_not_the_shared_scan_code_char(self):

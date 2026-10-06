@@ -1283,6 +1283,7 @@ class ListenerNeverSleepsTests(unittest.TestCase):
 
     def test_windows_listener_filters_out_its_own_injected_keys(self):
         listener = mock.Mock()
+        self.app.mouse_monitor = mock.Mock()
         with mock.patch.object(tx.platform_support, "IS_WINDOWS", True), \
                 mock.patch.object(tx.keyboard, "Listener", return_value=listener) as factory:
             self.app.run_keyboard_listener()
@@ -1291,6 +1292,51 @@ class ListenerNeverSleepsTests(unittest.TestCase):
             tx.win_input.listener_event_filter,
             factory.call_args.kwargs["win32_event_filter"],
         )
+        self.app.mouse_monitor.start.assert_called_once_with()
+        self.app.mouse_monitor.stop.assert_called_once_with()
+
+    def test_mouse_capture_is_ready_before_keyboard_capture_starts(self):
+        listener = mock.Mock()
+        self.app.mouse_monitor = mock.Mock()
+        calls = mock.Mock()
+        calls.attach_mock(self.app.mouse_monitor.start, "mouse_start")
+        calls.attach_mock(listener.start, "keyboard_start")
+        calls.attach_mock(listener.join, "keyboard_join")
+        calls.attach_mock(listener.stop, "keyboard_stop")
+        calls.attach_mock(self.app.mouse_monitor.stop, "mouse_stop")
+        with mock.patch.object(tx.keyboard, "Listener", return_value=listener):
+            self.app.run_keyboard_listener()
+
+        self.assertEqual(
+            [mock.call.mouse_start(), mock.call.keyboard_start(),
+             mock.call.keyboard_join(), mock.call.keyboard_stop(), mock.call.mouse_stop()],
+            calls.mock_calls,
+        )
+
+    def test_mouse_start_failure_does_not_accept_keyboard_triggers(self):
+        self.app.mouse_monitor = mock.Mock()
+        self.app.mouse_monitor.start.side_effect = RuntimeError("capture unavailable")
+        self.app.notify_error = mock.Mock()
+        with mock.patch.object(tx.keyboard, "Listener") as factory:
+            self.app.run_keyboard_listener()
+
+        factory.assert_not_called()
+        self.assertFalse(self.app.enabled)
+        self.app.mouse_monitor.stop.assert_called_once_with()
+        self.assertEqual("input-capture-error", self.app.notify_error.call_args.kwargs["key"])
+
+    def test_keyboard_failure_stops_mouse_capture(self):
+        listener = mock.Mock()
+        listener.join.side_effect = RuntimeError("listener unavailable")
+        self.app.mouse_monitor = mock.Mock()
+        self.app.notify_error = mock.Mock()
+        with mock.patch.object(tx.keyboard, "Listener", return_value=listener):
+            self.app.run_keyboard_listener()
+
+        self.app.mouse_monitor.stop.assert_called_once_with()
+        listener.stop.assert_called_once_with()
+        self.assertFalse(self.app.enabled)
+        self.app.notify_error.assert_called_once()
 
 
 if __name__ == "__main__":

@@ -4,17 +4,20 @@ Every match resolves on its own worker, so a slow result (network callable,
 form) can finish after the user kept typing, switched windows, or typed a
 second trigger. Pasting it then lands the text in the wrong place or out of
 typed order; it must go to the clipboard with a notification instead. A fast
-expansion is only checked for a window change: it pastes within ~0.1 s, and a
-fast typist's next key must not cost them the expansion.
+expansion survives ordinary subsequent typing, but a mouse click, a window
+change, or a newer trigger cancels its automatic insertion.
 
-Workers are driven by calling the queued ``_run_expansion`` directly, in a
-chosen order: no real threads, no real keys, no real clipboard.
+Most workers are driven by calling the queued ``_run_expansion`` directly in
+a chosen order; one event-barrier regression uses a real worker thread. No
+test sends real keys or accesses the OS clipboard.
 """
 
+import logging
 import os
 import shutil
 import sys
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -32,13 +35,18 @@ class _GuardFixture(unittest.TestCase):
     """A real app and real TextInserter over an in-memory clipboard."""
 
     def setUp(self):
-        self.tmp = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, self.tmp, True)
+        test_tmp = os.path.join(os.path.dirname(__file__), "tmp")
+        os.makedirs(test_tmp, exist_ok=True)
+        self.tmp = tempfile.mkdtemp(dir=test_tmp)
+        self.addCleanup(shutil.rmtree, self.tmp)
+        self.addCleanup(logging.shutdown)
         self.app = make_app(
             self.tmp,
             {"xfast": "SECOND", "xform": "Olá %%nome%%"},
             stub_inserter=False,
         )
+        self.app.mouse_monitor = mock.Mock(generation=0)
+        self.app.snippets["xfirst"] = "FIRST"
         # A slow-route callable, like the BCB and stock providers.
         self.app.snippets["xslow"] = lambda: "FIRST"
         self.app.slow_snippets = {"xslow"}
@@ -150,6 +158,97 @@ class ExpansionTargetGuardTests(_GuardFixture):
 
         self._assert_stale_fallback("SECOND")
 
+    def test_click_in_the_same_window_cancels_a_pending_fast_expansion(self):
+        self._type("xfast")
+        self.app.mouse_monitor.generation += 1
+        self._run_worker(0)
+
+        self._assert_stale_fallback("SECOND")
+
+    def test_click_in_the_same_window_cancels_a_pending_slow_expansion(self):
+        self._type("xslow")
+        self.app.mouse_monitor.generation += 1
+        self._run_worker(0)
+
+        self._assert_stale_fallback("FIRST")
+
+    def test_mouse_observer_failure_leaves_the_pending_result_for_manual_paste(self):
+        self._type("xfast")
+        monitor = tx.MouseActivityMonitor()
+        monitor._error = RuntimeError("observer unavailable")
+        self.app.mouse_monitor = monitor
+        self._run_worker(0)
+
+        self._assert_stale_fallback("SECOND")
+
+    def test_window_change_during_erasure_cannot_retarget_the_worker(self):
+        window = [100]
+        with mock.patch.object(
+            tx.platform_support, "foreground_window_handle", side_effect=lambda: window[0],
+        ), mock.patch.object(
+            self.app, "_erase_chars", side_effect=lambda _count: window.__setitem__(0, 200) or True,
+        ):
+            self._type("xfast")
+            self._run_worker(0)
+
+        self._assert_stale_fallback("SECOND")
+
+    def test_overlapping_fast_results_never_paste_in_reverse_order(self):
+        self._type("xfirst")
+        self._type("xfast")
+        self._run_worker(1)
+        self._run_worker(0)
+
+        self.assertEqual(["SECOND"], self.pasted)
+        self._assert_on_clipboard_with_notice("FIRST")
+
+    def test_newer_fast_trigger_cancels_older_result_even_if_it_finishes_first(self):
+        self._type("xfirst")
+        self._type("xfast")
+        self._run_worker(0)
+        self._run_worker(1)
+
+        self.assertEqual(["SECOND"], self.pasted)
+        self._assert_on_clipboard_with_notice("FIRST")
+
+    def test_completed_fast_results_still_paste_in_order(self):
+        self._type("xfirst")
+        self._run_worker(0)
+        self._type("xfast")
+        self._run_worker(1)
+
+        self.assertEqual(["FIRST", "SECOND"], self.pasted)
+        self.app.text_inserter.notify.assert_not_called()
+
+    def test_fast_worker_that_finishes_after_a_newer_thread_cannot_paste(self):
+        entered = threading.Event()
+        finish = threading.Event()
+
+        def first_provider():
+            entered.set()
+            if not finish.wait(3):
+                raise RuntimeError("test did not release the first worker")
+            return "FIRST"
+
+        # A callable on the fast route lets this test hold resolution without
+        # changing the paste path. The OS clipboard and keyboard remain mocked.
+        self.app.snippets["xfirst"] = first_provider
+        self.app.refresh_runtime_indexes()
+        self._type("xfirst")
+        self.assertIs(False, self.app.task_runner.start.call_args.args[3])
+        thread = threading.Thread(target=self._run_worker, args=(0,), daemon=True)
+        thread.start()
+        try:
+            self.assertTrue(entered.wait(3), "first worker did not start")
+            self._type("xfast")
+            self._run_worker(1)
+        finally:
+            finish.set()
+            thread.join(3)
+        self.assertFalse(thread.is_alive(), "expansion worker did not exit")
+        self.assertEqual(["SECOND"], self.pasted)
+        self._assert_on_clipboard_with_notice("FIRST")
+
     def test_overlapping_slow_and_fast_never_insert_out_of_typed_order(self):
         self._type("xslow")
         self._type("xfast")
@@ -181,6 +280,21 @@ class ExpansionTargetGuardTests(_GuardFixture):
         self._run_worker(0)
 
         self._assert_stale_fallback("FIRST")
+        self.app.keyboard_controller.type.assert_not_called()
+
+    def test_click_after_a_successful_paste_does_not_receive_its_terminator(self):
+        self.app.terminator_mode = True
+        self._type("xfast ")
+
+        def paste_then_click():
+            self.pasted.append(self.clipboard.value)
+            self.app.mouse_monitor.generation += 1
+            return True
+
+        self.app.text_inserter._send_paste_shortcut = paste_then_click
+        self._run_worker(0)
+
+        self.assertEqual(["SECOND"], self.pasted)
         self.app.keyboard_controller.type.assert_not_called()
 
     def test_self_injected_events_do_not_mark_the_expansion_stale(self):
@@ -241,6 +355,7 @@ class FormDialogTargetGuardTests(_GuardFixture):
         """Replace the Tk form with one that 'types' its answer into the hook."""
         def show(field_names, compiled_form=None):
             def build(_root):
+                self.app.mouse_monitor.generation += 1
                 self._type("Ada\t")
                 self.app.on_press(Key.enter)
                 return {name: "Ada" for name in field_names}
@@ -266,6 +381,39 @@ class FormDialogTargetGuardTests(_GuardFixture):
             self._run_worker(0)
 
         self._assert_stale_fallback("Olá Ada")
+
+    def test_click_after_the_dialog_closes_still_marks_it_stale(self):
+        def click():
+            self.app.mouse_monitor.generation += 1
+
+        self._type("xform")
+        with self._fake_dialog(after_close=click):
+            self._run_worker(0)
+
+        self._assert_stale_fallback("Olá Ada")
+
+    def test_dialog_rebaseline_cannot_revive_an_overtaken_worker(self):
+        self._type("xform")
+        with self._fake_dialog(after_close=lambda: self._type("xfast")):
+            self._run_worker(0)
+        self._run_worker(1)
+
+        self.assertEqual(["SECOND"], self.pasted)
+        self._assert_on_clipboard_with_notice("Olá Ada")
+
+    def test_fast_provider_dialog_can_accept_clicks_without_enabling_key_checks(self):
+        def show(_root):
+            self.app.mouse_monitor.generation += 1
+            self._type("Ada")
+            return "FIRST"
+
+        self.app.snippets["xdialog"] = lambda: self.app._run_modal_dialog(show, None, "test")
+        self.app.refresh_runtime_indexes()
+        self._type("xdialog")
+        self._run_worker(0)
+
+        self.assertEqual(["FIRST"], self.pasted)
+        self.app.text_inserter.notify.assert_not_called()
 
     def test_focus_left_on_another_window_after_the_dialog_is_stale(self):
         self._type("xform")

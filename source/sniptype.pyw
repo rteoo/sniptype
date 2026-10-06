@@ -34,6 +34,7 @@ platform_support.pin_tray_backend()
 
 from pynput import keyboard
 from pynput.keyboard import Controller, Key
+from mouse_input import MouseActivityMonitor
 import pystray
 from PIL import Image, ImageDraw, ImageTk
 
@@ -322,7 +323,12 @@ class Sniptype:
         # Bumped by the listener on every user keystroke; a slow-route expansion
         # whose dispatch-time value is no longer current must not be pasted.
         self._input_generation = 0
-        # (generation, foreground HWND) of the expansion running on this worker.
+        self.mouse_monitor = MouseActivityMonitor()
+        self._buffer_mouse_generation = 0
+        # Every newer trigger retires an unfinished older insertion, including
+        # fast snippets. Workers never wait for one another on the keyboard hook.
+        self._expansion_generation = 0
+        # (keystrokes, foreground HWND, clicks, trigger order) on this worker.
         self._expansion_context = threading.local()
         self.expansion_failed = False
         self.last_expansion_time = 0
@@ -1918,6 +1924,10 @@ class Sniptype:
                 # above stays live so the toggle hotkey can resume expansion.
                 self.typed_text = ""
                 return
+            mouse_generation = self.mouse_monitor.generation
+            if mouse_generation != self._buffer_mouse_generation:
+                self.typed_text = ""
+                self._buffer_mouse_generation = mouse_generation
             char = getattr(key, 'char', None)
             if IS_WINDOWS:
                 # pynput mistranslates numpad digits, '/' and the decimal key.
@@ -1936,12 +1946,6 @@ class Sniptype:
             elif key == Key.backspace and self.typed_text:
                 self.typed_text = self.typed_text[:-1]
             elif key in BUFFER_RESET_KEYS:
-                # ceiling: a mouse click moves the caret without a key event, so
-                # "x", click elsewhere, "hi" still completes "xhi". A pynput mouse
-                # listener would put Python on the synchronous WH_MOUSE_LL path for
-                # every mouse move. Add click resets when an asynchronous source
-                # exists (e.g. Raw Input on a message-only window) or users report
-                # wrong erasures after clicking.
                 self.typed_text = ""
         except Exception as e:
             # A detection error must never stop the global keyboard listener.
@@ -2105,6 +2109,15 @@ class Sniptype:
 
     def _dispatch_expansion(self, trigger, erase_length, append_text=""):
         """Erase the typed trigger and run the expansion on a worker thread."""
+        self._expansion_generation = getattr(self, "_expansion_generation", 0) + 1
+        monitor = getattr(self, "mouse_monitor", None)
+        mouse_generation = monitor.generation if monitor is not None else 0
+        if mouse_generation != getattr(self, "_buffer_mouse_generation", 0):
+            # A click observed between matching and erasure invalidated this match.
+            self.typed_text = ""
+            self._buffer_mouse_generation = mouse_generation
+            return
+        window = platform_support.foreground_window_handle()
         if self._secure_input_blocks_expansion():
             self.typed_text = ""
             return
@@ -2162,7 +2175,9 @@ class Sniptype:
         # clipboard notice.
         context = (
             getattr(self, "_input_generation", 0) if slow_route else None,
-            platform_support.foreground_window_handle(),
+            window,
+            mouse_generation,
+            self._expansion_generation,
         )
         self.task_runner.start(
             self._run_expansion,
@@ -2262,7 +2277,7 @@ class Sniptype:
                     self.workflow_state.record_success(reference)
             # Only re-emit the terminator when text was actually inserted, so a
             # cancelled form dialog or a failed paste does not leave a stray char.
-            if append_text and inserted:
+            if append_text and inserted and self._expansion_target_is_current():
                 self.keyboard_controller.type(append_text)
         except Exception as e:
             self.logger.error(f"Erro na expansão de {getattr(trigger, 'effective_trigger', trigger)}: {e}")
@@ -2277,28 +2292,39 @@ class Sniptype:
     def _expansion_target_is_current(self):
         """True when this worker's expansion may still be pasted.
 
-        Stale when a slow-route expansion saw any user key since its trigger
-        (the text would land after it, or after a later trigger's text) or, on
-        Windows, when another window is in the foreground. Workers not running
-        an expansion have no context and are never blocked.
+        Mouse clicks and newer triggers retire every pending result. A slow
+        route also checks ordinary typing; Windows checks the foreground HWND.
+        Workers outside an expansion have no context and are never blocked.
         """
         context = getattr(self._expansion_context, "value", None)
         if context is None:
             return True
-        generation, window = context
+        generation, window, mouse_generation, expansion_generation = context
+        if not self.enabled or expansion_generation != self._expansion_generation:
+            return False
+        try:
+            if mouse_generation != self.mouse_monitor.generation:
+                return False
+        except RuntimeError:
+            # A failed observer cannot establish that the insertion target is safe.
+            return False
         if generation is not None and generation != self._input_generation:
             return False
         return window is None or platform_support.foreground_window_handle() == window
 
     def _rebaseline_expansion_context(self):
-        """Accept the keystrokes typed into an expansion dialog that just closed.
+        """Accept keys/clicks inside an expansion dialog that just closed.
 
         The global hook sees what the user types into Sniptype's own dialog;
         only keys pressed after focus is back on the original target count.
         """
         context = getattr(self._expansion_context, "value", None)
-        if context is not None and context[0] is not None:
-            self._expansion_context.value = (self._input_generation, context[1])
+        if context is not None:
+            self._expansion_context.value = (
+                self._input_generation if context[0] is not None else None,
+                context[1], self.mouse_monitor.generation,
+                context[3],
+            )
 
 
 
@@ -5920,13 +5946,34 @@ class Sniptype:
             # the hotkey router: a late Ctrl+V landing mid-word would break the
             # user's next trigger.
             options["win32_event_filter"] = win_input.listener_event_filter
-        self.listener = keyboard.Listener(
-            on_press=self.on_press,
-            on_release=self.on_release,
-            **options,
-        )
-        self.listener.start()
-        self.listener.join()
+        try:
+            # Establish click observation before accepting the first trigger.
+            self.mouse_monitor.start()
+            self.listener = keyboard.Listener(
+                on_press=self.on_press,
+                on_release=self.on_release,
+                **options,
+            )
+            self.listener.start()
+            self.listener.join()
+        except Exception as error:
+            self.enabled = False
+            self.logger.error(f"Input capture failed: {error}")
+            self.notify_error(
+                _("Não foi possível iniciar a captura de entrada. Reinicie o "
+                  "Sniptype. Detalhes: {e}").format(e=error),
+                key="input-capture-error",
+            )
+        finally:
+            try:
+                if self.listener is not None:
+                    self.listener.stop()
+            except Exception as error:
+                self.logger.error(f"Keyboard input shutdown failed: {error}")
+            try:
+                self.mouse_monitor.stop()
+            except Exception as error:
+                self.logger.error(f"Mouse input shutdown failed: {error}")
     
     def run(self, *, show_manager=False):
         """Start the program with the system tray."""
