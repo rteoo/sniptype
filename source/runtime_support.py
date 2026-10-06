@@ -231,7 +231,8 @@ class TextInserter:
         plain_text = extract_plain_text(value)
         outcome = self._paste_value(value)
         if outcome == self.STALE_TARGET:
-            message = _("Você continuou digitando ou trocou de janela antes da "
+            message = _("Você digitou outro snippet, clicou, continuou digitando "
+                        "ou trocou de janela antes da "
                         "expansão terminar. O snippet está na área de "
                         "transferência: use Ctrl+V.")
             self.logger.warning(message)
