@@ -5,6 +5,7 @@ erase and the expansion worker are mocks, and the foreground window is always
 patched so no test reads or depends on the desktop it runs on.
 """
 
+import logging
 import os
 import shutil
 import sys
@@ -22,9 +23,13 @@ from test_hotpath import make_app
 
 class BufferInvalidationTestCase(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        test_tmp = os.path.join(os.path.dirname(__file__), "tmp")
+        os.makedirs(test_tmp, exist_ok=True)
+        self.tmp = tempfile.mkdtemp(dir=test_tmp)
+        self.addCleanup(shutil.rmtree, self.tmp)
+        self.addCleanup(logging.shutdown)
         self.app = make_app(self.tmp, {"xhi": "hello"})
+        self.app.mouse_monitor = mock.Mock(generation=0)
         self.app._erase_chars = mock.Mock()
         self.window = 0x1001
         # create=True lets the listener tests run (and fail on their
@@ -138,6 +143,45 @@ class ForegroundWindowTests(BufferInvalidationTestCase):
         self.window = 0x2002
         self.press("x", "h", "i")
         self.assert_expanded()
+
+
+class MouseClickTests(BufferInvalidationTestCase):
+    def test_click_in_the_same_window_does_not_join_fragments(self):
+        self.press("x")
+        self.app.mouse_monitor.generation += 1
+        self.press("h", "i")
+
+        self.assert_not_expanded()
+        self.assertEqual("hi", self.app.typed_text)
+
+    def test_complete_trigger_after_a_click_still_expands(self):
+        self.press("q")
+        self.app.mouse_monitor.generation += 1
+        self.press("x", "h", "i")
+
+        self.assert_expanded()
+
+    def test_click_then_backspace_does_not_reuse_the_old_buffer(self):
+        self.press("x", "h")
+        self.app.mouse_monitor.generation += 1
+        self.press(Key.backspace, "h", "i")
+
+        self.assert_not_expanded()
+
+    def test_click_observed_during_matching_prevents_erasure(self):
+        self.press("x", "h")
+        match = self.app._find_direct_target
+
+        def click_during_match(*args):
+            result = match(*args)
+            self.app.mouse_monitor.generation += 1
+            return result
+
+        with mock.patch.object(self.app, "_find_direct_target", side_effect=click_during_match):
+            self.press("i")
+
+        self.assert_not_expanded()
+        self.assertEqual("", self.app.typed_text)
 
 
 class ForegroundWindowHandleTests(unittest.TestCase):
