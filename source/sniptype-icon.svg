@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-labelledby="title desc">
+  <title id="title">SnipType</title>
+  <desc id="desc">A document whose short trigger expands into full lines, with a text cursor and orange motion streaks, on a rounded navy tile.</desc>
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#000080"/>
+      <stop offset="0.5" stop-color="#000066"/>
+      <stop offset="1" stop-color="#000033"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="glyph" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#F7F6F2"/>
+      <stop offset="1" stop-color="#AAB0FF"/>
+    </linearGradient>
+    <radialGradient id="halo">
+      <stop offset="0" stop-color="#FF8C00" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#FF8C00" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="tile-clip">
+      <rect x="64" y="64" width="896" height="896" rx="200"/>
+    </clipPath>
+  </defs>
+
+  <!-- Tile: navy-500 to navy-900, lit from above, with a navy-400 rim. -->
+  <rect x="64" y="64" width="896" height="896" rx="200" fill="url(#tile)"/>
+  <rect x="64" y="64" width="896" height="380" fill="url(#sheen)" clip-path="url(#tile-clip)"/>
+  <rect x="68" y="68" width="888" height="888" rx="196" fill="none" stroke="#7D86FF" stroke-opacity="0.35" stroke-width="8"/>
+
+  <!-- Page with a folded corner; the lines are the expanded snippet. -->
+  <path d="M284 220 H582 L708 346 V776 Q708 812 672 812 H284 Q248 812 248 776 V256 Q248 220 284 220 Z" fill="url(#glyph)"/>
+  <path d="M582 220 V310 Q582 346 618 346 H708 Z" fill="#AAB0FF"/>
+  <rect x="316" y="392" width="300" height="52" rx="26" fill="#000066"/>
+  <rect x="316" y="488" width="232" height="52" rx="26" fill="#000066" fill-opacity="0.75"/>
+  <rect x="316" y="584" width="268" height="52" rx="26" fill="#000066" fill-opacity="0.75"/>
+  <rect x="316" y="680" width="176" height="52" rx="26" fill="#000066" fill-opacity="0.75"/>
+  <!-- Text cursor: the insertion point. -->
+  <path d="M722 470 H822 M722 812 H822 M772 470 V812" fill="none" stroke="#000033" stroke-width="84" stroke-linecap="round"/>
+  <path d="M722 470 H822 M722 812 H822 M772 470 V812" fill="none" stroke="url(#glyph)" stroke-width="44" stroke-linecap="round"/>
+  <!-- Motion: the trigger firing, the one orange accent. -->
+  <ellipse cx="196" cy="508" rx="110" ry="150" fill="url(#halo)"/>
+  <path d="M140 414 H220 M116 508 H220 M140 602 H220" fill="none" stroke="#FF8C00" stroke-width="44" stroke-linecap="round"/>
+</svg>
