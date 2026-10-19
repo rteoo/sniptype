@@ -1,4 +1,5 @@
 import copy
+import threading
 import unittest
 
 from library_metadata import split_library_document
@@ -205,6 +206,36 @@ class ManagerActionTests(unittest.TestCase):
         result = update_group(snippets, metadata, "group", {"notes": "updated"})
 
         self.assertIn(("a", "ba"), result.reachability_warnings)
+
+    def test_runtime_providers_are_kept_by_reference_while_data_is_copied(self):
+        # Regression: providers are bound methods of objects holding locks, so
+        # deep-copying them raised "cannot pickle '_thread.RLock'".
+        class Provider:
+            def __init__(self):
+                self.lock = threading.RLock()
+
+            def today(self):
+                return "hoje"
+
+        provider = Provider().today
+        mapping = {"__prefix__": "c", "alpha": "A"}
+        snippets = {"x": "value", "xhoje": provider, "_codes": mapping}
+        metadata = {"groups": {}, "items": {"static": {}, "mappings": {}}}
+
+        for name, operation in (
+            ("toggle_favorite", lambda: toggle_favorite(snippets, metadata, "x", True)),
+            ("create_group", lambda: create_group(snippets, metadata, group_id="g", label="G")),
+            ("duplicate_static", lambda: duplicate_static(snippets, metadata, "x", "y")),
+            ("rename_static", lambda: rename_static(snippets, metadata, "x", "y")),
+            ("set_form", lambda: set_form(snippets, metadata, "x", {"fields": []})),
+            ("toggle_mapping_favorite",
+             lambda: toggle_mapping_favorite(snippets, metadata, "_codes", "alpha", True)),
+        ):
+            with self.subTest(name):
+                result = operation()
+                self.assertIs(provider, result.snippets["xhoje"])
+                self.assertIsNot(mapping, result.snippets["_codes"])
+                self.assertEqual(mapping, result.snippets["_codes"])
 
     def test_read_only_metadata_is_rejected_before_content_changes(self):
         snippets, metadata = split_library_document({"x": "value", "__sniptype__": {"schema_version": 99}})

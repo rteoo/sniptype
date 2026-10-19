@@ -7,6 +7,7 @@ where Tk cannot open a display (e.g. headless CI), and on macOS, where the
 app's worker-thread Tk root is not something AppKit permits at all.
 """
 
+import json
 import os
 import sys
 import gc
@@ -22,6 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from app_module import sniptype as tx  # .pyw is not importable off Windows
 from gui_thread import GuiThread
 from library_metadata import LibraryMetadata
+import manager_actions
 from platform_support import IS_MAC
 import ui_widgets
 
@@ -575,7 +577,151 @@ class ManagerGuiSmokeTests(unittest.TestCase):
         # Filtering only reads, so it stays usable with read-only metadata.
         self.assertEqual("readonly", filter_state)
         self.assertEqual(("Todos os grupos", "Sem grupo", "Work"), filter_values)
-        self.assertIn("work", group_values)
+        # The editor's picker shows group labels, never their ids.
+        self.assertEqual(("Sem grupo", "Work"), group_values)
+
+    def _build_static_tab(self, shared_root):
+        root = tk.Toplevel(shared_root)
+        root.withdraw()
+        # As the app does for every Toplevel; without it the tab depends on an
+        # earlier test having installed this palette's theme.
+        tx.ui_theme.prepare_window(root, tx.ui_theme.bind(root))
+        frame = tk.Frame(root)
+        self.app._create_static_snippets_tab(frame, root)
+        root.update_idletasks()
+        return root, frame
+
+    def _persist(self, result):
+        self.assertTrue(self.app._persist_manager_action(result))
+
+    def _saved_static_metadata(self, key):
+        with open(self.app.snippets_file, encoding="utf-8") as handle:
+            document = json.load(handle)
+        return document.get("__sniptype__", {}).get("items", {}).get("static", {}).get(key, {})
+
+    @staticmethod
+    def _checked(checkbox):
+        return checkbox.tk.getboolean(checkbox.getvar(str(checkbox.cget("variable"))))
+
+    def test_favorite_persists_with_the_bundled_providers_and_new_clears_it(self):
+        # Regression: the bundled providers made every metadata action raise
+        # TypeError, so the box showed checked while nothing was saved.
+        self.assertTrue(callable(self.app.snippets.get("xhoje")))
+
+        def run(shared_root):
+            root, frame = self._build_static_tab(shared_root)
+            tree = next(w for w in _descendants(frame) if isinstance(w, ttk.Treeview))
+            favorite = next(
+                w for w in _descendants(frame)
+                if isinstance(w, CHECKBOXES) and w.cget("text") == "Favorito"
+            )
+            tree.selection_set("xhi")
+            root.update()
+            favorite.invoke()
+            root.update()
+            after_toggle = self._checked(favorite)
+            tree.selection_set("xhi")
+            root.update()
+            reselected = self._checked(favorite)
+            new = next(
+                w for w in _descendants(frame)
+                if isinstance(w, BUTTONS) and w.cget("text") == "Novo"
+            )
+            new.invoke()
+            root.update()
+            return after_toggle, reselected, self._checked(favorite)
+
+        with mock.patch.object(tx.messagebox, "showerror") as error, \
+                mock.patch.object(tx.messagebox, "showwarning") as warning:
+            after_toggle, reselected, after_new = self._on_gui(run)
+
+        error.assert_not_called()
+        warning.assert_not_called()
+        self.assertTrue(self._saved_static_metadata("xhi").get("favorite"))
+        self.assertTrue(after_toggle)
+        self.assertTrue(reselected)
+        self.assertFalse(after_new, "Novo must not carry the previous item's Favorito")
+
+    def test_group_picker_shows_labels_and_assigns_the_group_id(self):
+        self._persist(manager_actions.create_group(
+            self.app.snippets, self.app.library_metadata,
+            group_id="3f2a9c1e-5b7d", label="Trabalho",
+        ))
+
+        def run(shared_root):
+            root, frame = self._build_static_tab(shared_root)
+            tree = next(w for w in _descendants(frame) if isinstance(w, ttk.Treeview))
+            picker = [w for w in _descendants(frame) if isinstance(w, ttk.Combobox)][1]
+            values = tuple(picker.cget("values"))
+            tree.selection_set("xhi")
+            root.update()
+            before = picker.get()
+            picker.set("Trabalho")
+            picker.event_generate("<<ComboboxSelected>>")
+            root.update()
+            assigned = picker.get()
+            new = next(
+                w for w in _descendants(frame)
+                if isinstance(w, BUTTONS) and w.cget("text") == "Novo"
+            )
+            new.invoke()
+            root.update()
+            return values, before, assigned, picker.get()
+
+        with mock.patch.object(tx.messagebox, "showerror") as error, \
+                mock.patch.object(tx.messagebox, "showwarning") as warning:
+            values, before, assigned, after_new = self._on_gui(run)
+
+        error.assert_not_called()
+        warning.assert_not_called()
+        self.assertEqual(("Sem grupo", "Trabalho"), values)
+        self.assertEqual("Sem grupo", before)
+        self.assertEqual("Trabalho", assigned)
+        self.assertEqual("3f2a9c1e-5b7d", self._saved_static_metadata("xhi").get("group_id"))
+        self.assertEqual("Sem grupo", after_new)
+
+    def test_search_finds_the_effective_trigger_and_ranks_triggers_first(self):
+        # Regression: the list showed "sig → assig" but "assig" found nothing.
+        self.app.snippets["sig"] = "Atenciosamente"
+        self.app.snippets["xnota"] = "use assig no fim"
+        self._persist(manager_actions.create_group(
+            self.app.snippets, self.app.library_metadata,
+            group_id="mail", label="Correio", prefix="as",
+        ))
+        self._persist(manager_actions.assign_item(
+            self.app.snippets, self.app.library_metadata, "sig", "mail",
+        ))
+
+        def run(shared_root):
+            root, frame = self._build_static_tab(shared_root)
+            search = [w for w in _descendants(frame) if _is_text_entry(w)][0]
+            search.insert(0, "assig")
+            root.update()
+            tree = next(w for w in _descendants(frame) if isinstance(w, ttk.Treeview))
+            return [(iid, tree.item(iid, "values")[0]) for iid in tree.get_children()]
+
+        self.assertEqual(
+            [("sig", "sig → assig"), ("xnota", "xnota")], self._on_gui(run)
+        )
+
+    def test_capture_failure_reads_as_failed_and_cannot_be_resumed(self):
+        self.app.enabled = False
+        self.app.capture_error = OSError("hook unavailable")
+
+        def run(shared_root):
+            self.app._build_manager_window(shared_root)
+            self.app.manager_window.update_idletasks()
+            button = self.app._manager_toggle_button
+            return (
+                self.app._manager_status_var.get(),
+                str(button.cget("text")),
+                str(button.cget("state")),
+            )
+
+        status, text, state = self._on_gui(run)
+        self.assertEqual("Captura de teclado falhou", status)
+        self.assertEqual("Reinicie o SnipType", text)
+        self.assertEqual("disabled", state)
 
     def test_mapping_tab_counts_every_type_not_just_the_selected_one(self):
         self.app.snippets["_cpf_numbers"] = {"__prefix__": "cpf", "alice": "1", "bruno": "2"}

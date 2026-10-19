@@ -176,13 +176,13 @@ from manager_view_support import (
     UNGROUPED_FILTER,
     build_manager_rows,
     filter_manager_rows,
+    filter_static_rows,
     find_manager_target,
     format_trigger_pair,
 )
 from gui_support import (
     center_dialog,
     center_on_screen,
-    filter_static_snippets,
     focus_modal_input,
     iter_filtered_mapping_items,
     layout_wrapping_row,
@@ -333,6 +333,9 @@ class Sniptype:
         self.expansion_failed = False
         self.last_expansion_time = 0
         self.enabled = True
+        # The exception that stopped keyboard capture. Only a restart clears
+        # it, so expansion must not claim to be resumable while it is set.
+        self.capture_error = None
         self.icon = None
         self.listener = None
         self.logger = AppLogger()
@@ -3164,7 +3167,7 @@ class Sniptype:
             parent,
             _("Pasta de dados"),
             _("Biblioteca, configurações, backups e logs ficam nesta pasta. Os "
-            "backups são gerenciados na aba Backups."),
+            "backups são gerenciados em Cópias de segurança."),
         )
         rows = (
             (_("Pasta de dados"), self.data_dir),
@@ -3348,7 +3351,8 @@ class Sniptype:
         self._manager_tab_selectors = {}
         self._manager_preview_controller = None
 
-    def _refresh_manager_lists(self):
+    def _refresh_manager_lists(self, _root=None):
+        """Rebuild every registered list. ``_root`` is the arg the GuiThread pump passes."""
         for refresher in list(self._manager_refreshers):
             try:
                 refresher()
@@ -3469,7 +3473,7 @@ class Sniptype:
 
         def apply_style(style_name):
             if not toggle_text_style(text_widget, style_name):
-                messagebox.showinfo(_("Formatação"), _("Selecione um trecho para formatar."))
+                messagebox.showinfo(_("Formatação"), _("Selecione um trecho para formatar."), parent=text_widget.winfo_toplevel())
                 return
             update_status()
             text_widget.focus_set()
@@ -3885,7 +3889,10 @@ class Sniptype:
             ui_widgets.face_gap(btn_frame, ui.space_sm),
         )
 
-        item_group_var = tk.StringVar(value="")
+        # The editor's group picker shows labels; this maps each back to its
+        # group id ("" is no group). Rebuilt with the filter's choices.
+        item_group_choices = {}
+        item_group_var = tk.StringVar(value=_("Sem grupo"))
         item_favorite_var = tk.BooleanVar(value=False)
         item_frame = tk.Frame(frame_right, bg=ui.card)
         item_frame.grid(row=8, column=0, sticky="ew", pady=(ui.space_md, 0))
@@ -3957,35 +3964,47 @@ class Sniptype:
                 group_choices[label] = ("group", str(group_id))
             group_filter.configure(values=tuple(group_choices))
             sync_group_label()
-            item_group_combo.configure(values=("",) + tuple(str(group_id) for group_id in groups))
+            item_group_choices.clear()
+            item_group_choices[_("Sem grupo")] = ""
+            item_group_choices.update(
+                (label, group_id)
+                for label, (kind, group_id) in group_choices.items()
+                if kind == "group"
+            )
+            item_group_combo.configure(values=tuple(item_group_choices))
+            # A deleted or relabelled group must not stay on the picker.
+            show_item_metadata(static_row(current_static_key()))
+
+        def static_row(key):
+            if key is None:
+                return None
+            return next((candidate for candidate in self._manager_rows()
+                         if candidate.kind == "static" and candidate.stored_trigger == key), None)
+
+        def show_item_metadata(row):
+            """Show the saved group and favorite of ``row`` (none for a new item)."""
+            group_id = row.group_id if row and row.group_id else ""
+            item_group_var.set(next(
+                (label for label, choice in item_group_choices.items() if choice == group_id),
+                _("Sem grupo"),
+            ))
+            item_favorite_var.set(bool(row and row.favorite))
 
         def get_static_visible_snippets():
-            rows = [row for row in filter_manager_rows(
-                self._manager_rows(),
-                filter_var.get(),
-                workflow_state=self.workflow_state,
-                group_id=group_var.get() or None,
-            ) if row.kind == "static"]
-            allowed = {row.stored_trigger: row for row in rows}
-            visible = filter_static_snippets(self.snippets, search_var.get())
-            visible = {
-                key: value for key, value in visible.items()
-                if key in allowed
-                or (
-                    isinstance(key, str)
-                    and any(
-                        key == row.stored_trigger
-                        and row.effective_trigger.casefold().find(search_var.get().casefold()) >= 0
-                        for row in allowed.values()
-                    )
-                )
-            }
-            # A blank key cannot be a Treeview row iid (or a trigger); hand-
-            # edited data must not produce a phantom row or skew the count.
-            visible.pop("", None)
+            """Visible static snippets in display order, best search match first."""
+            rows = filter_static_rows(
+                filter_manager_rows(
+                    self._manager_rows(),
+                    filter_var.get(),
+                    workflow_state=self.workflow_state,
+                    group_id=group_var.get() or None,
+                ),
+                search_var.get(),
+                self.snippets,
+            )
             visible_rows.clear()
-            visible_rows.update({key: allowed[key] for key in visible if key in allowed})
-            return visible
+            visible_rows.update((row.stored_trigger, row) for row in rows)
+            return {row.stored_trigger: self.snippets[row.stored_trigger] for row in rows}
 
         static_snips = get_static_visible_snippets()
 
@@ -3993,7 +4012,7 @@ class Sniptype:
             tree.delete(*tree.get_children())
             static_snips.clear()
             static_snips.update(get_static_visible_snippets())
-            for key in sorted(static_snips.keys()):
+            for key in static_snips:
                 row = visible_rows.get(key)
                 display_trigger = format_trigger_pair(row) if row else key
                 tree.insert("", tk.END, iid=key,
@@ -4016,10 +4035,8 @@ class Sniptype:
             entry_trigger.delete(0, tk.END)
             entry_trigger.insert(0, key)
             load_value_into_text_widget(text_value, static_snips.get(key, ""))
-            row = next((candidate for candidate in self._manager_rows()
-                        if candidate.kind == "static" and candidate.stored_trigger == key), None)
-            item_group_var.set(row.group_id if row and row.group_id else "")
-            item_favorite_var.set(bool(row and row.favorite))
+            row = static_row(key)
+            show_item_metadata(row)
             effective_trigger_var.set(
                 _("Efetivo: {trigger}").format(trigger=row.effective_trigger) if row else _("Efetivo: —")
             )
@@ -4051,7 +4068,7 @@ class Sniptype:
             key = entry_trigger.get().strip()
             return key if key in self.snippets and not callable(self.snippets.get(key)) else None
 
-        def manager_action_failed(title="Gerenciador"):
+        def manager_action_failed(title):
             if getattr(self.library_metadata, "read_only", False):
                 messagebox.showwarning(
                     title,
@@ -4081,6 +4098,9 @@ class Sniptype:
             except (KeyError, ValueError, MetadataReadOnlyError) as error:
                 self.logger.warning(f"Manager group creation failed: {error}")
                 manager_action_failed(_("Criar grupo"))
+            except Exception:
+                self.logger.exception("Manager group creation failed unexpectedly")
+                manager_action_failed(_("Criar grupo"))
 
         def on_edit_group():
             group_id = group_var.get()
@@ -4105,6 +4125,9 @@ class Sniptype:
             except (KeyError, ValueError, MetadataReadOnlyError) as error:
                 self.logger.warning(f"Manager group update failed: {error}")
                 manager_action_failed(_("Editar grupo"))
+            except Exception:
+                self.logger.exception("Manager group update failed unexpectedly")
+                manager_action_failed(_("Editar grupo"))
 
         def on_delete_group():
             group_id = group_var.get()
@@ -4127,6 +4150,9 @@ class Sniptype:
             except (KeyError, ValueError, MetadataReadOnlyError) as error:
                 self.logger.warning(f"Manager group deletion failed: {error}")
                 manager_action_failed(_("Excluir grupo"))
+            except Exception:
+                self.logger.exception("Manager group deletion failed unexpectedly")
+                manager_action_failed(_("Excluir grupo"))
 
         def on_toggle_favorite():
             key = current_static_key()
@@ -4139,21 +4165,26 @@ class Sniptype:
                     dynamic_triggers=self._manager_dynamic_triggers(),
                 )
                 if not self._persist_manager_action(result):
-                    item_favorite_var.set(not item_favorite_var.get())
-                    manager_action_failed()
+                    show_item_metadata(static_row(key))
+                    manager_action_failed(_("Favorito"))
             except (KeyError, ValueError, MetadataReadOnlyError) as error:
-                item_favorite_var.set(not item_favorite_var.get())
+                show_item_metadata(static_row(key))
                 self.logger.warning(f"Manager favorite update failed: {error}")
-                manager_action_failed()
+                manager_action_failed(_("Favorito"))
+            except Exception:
+                show_item_metadata(static_row(key))
+                self.logger.exception("Manager favorite update failed unexpectedly")
+                manager_action_failed(_("Favorito"))
 
         def on_group_assignment(_event=None):
             key = current_static_key()
             if key is None:
                 return
+            group_id = item_group_choices.get(item_group_var.get(), "")
             try:
-                if item_group_var.get():
+                if group_id:
                     result = manager_assign_item(
-                        self.snippets, self.library_metadata, key, item_group_var.get(),
+                        self.snippets, self.library_metadata, key, group_id,
                         dynamic_triggers=self._manager_dynamic_triggers(),
                     )
                 else:
@@ -4163,10 +4194,16 @@ class Sniptype:
                         dynamic_triggers=self._manager_dynamic_triggers(),
                     )
                 if not self._persist_manager_action(result):
-                    manager_action_failed()
+                    show_item_metadata(static_row(key))
+                    manager_action_failed(_("Grupo"))
             except (KeyError, ValueError, MetadataReadOnlyError) as error:
+                show_item_metadata(static_row(key))
                 self.logger.warning(f"Manager group assignment failed: {error}")
-                manager_action_failed()
+                manager_action_failed(_("Grupo"))
+            except Exception:
+                show_item_metadata(static_row(key))
+                self.logger.exception("Manager group assignment failed unexpectedly")
+                manager_action_failed(_("Grupo"))
 
         def on_edit_form():
             key = current_static_key()
@@ -4186,10 +4223,13 @@ class Sniptype:
                     dynamic_triggers=self._manager_dynamic_triggers(),
                 )
                 if not self._persist_manager_action(result):
-                    manager_action_failed()
+                    manager_action_failed(_("Formulário"))
             except (KeyError, ValueError, MetadataReadOnlyError) as error:
                 self.logger.warning(f"Manager form update failed: {error}")
-                manager_action_failed()
+                manager_action_failed(_("Formulário"))
+            except Exception:
+                self.logger.exception("Manager form update failed unexpectedly")
+                manager_action_failed(_("Formulário"))
 
         def on_preview():
             key = current_static_key()
@@ -4205,6 +4245,7 @@ class Sniptype:
         def on_new():
             entry_trigger.delete(0, tk.END)
             load_value_into_text_widget(text_value, "")
+            show_item_metadata(None)
             effective_trigger_var.set(_("Efetivo: —"))
             update_format_status()
             entry_trigger.focus_set()
@@ -4214,13 +4255,13 @@ class Sniptype:
             value = serialize_text_widget_content(text_value)
 
             if not trigger:
-                messagebox.showwarning(_("Aviso"), _("Informe um trigger."))
+                messagebox.showwarning(_("Aviso"), _("Informe um trigger."), parent=root)
                 return
             if trigger.startswith("_"):
-                messagebox.showwarning(_("Aviso"), _("Triggers com '_' são reservados."))
+                messagebox.showwarning(_("Aviso"), _("Triggers com '_' são reservados."), parent=root)
                 return
             if not extract_plain_text(value).strip():
-                messagebox.showwarning(_("Aviso"), _("Informe um valor para o snippet."))
+                messagebox.showwarning(_("Aviso"), _("Informe um valor para o snippet."), parent=root)
                 return
 
             # "Already in self.snippets" is not the same as "editing an existing
@@ -4233,6 +4274,7 @@ class Sniptype:
                     _("Avisos sobre este trigger:\n\n• {warnings}\n\nSalvar mesmo assim?").format(
                         warnings="\n• ".join(warnings)
                     ),
+                    parent=root,
                 ):
                     return
 
@@ -4244,6 +4286,7 @@ class Sniptype:
                 messagebox.showerror(
                     _("Erro ao salvar"),
                     _("Não foi possível gravar snippets.json. Verifique os logs; suas edições podem não ter sido salvas."),
+                    parent=root,
                 )
                 return
             self.refresh_runtime_indexes()
@@ -4255,12 +4298,12 @@ class Sniptype:
         def on_delete():
             trigger = entry_trigger.get().strip()
             if not trigger:
-                messagebox.showwarning(_("Aviso"), _("Selecione um snippet."))
+                messagebox.showwarning(_("Aviso"), _("Selecione um snippet."), parent=root)
                 return
 
             result = self._delete_static_snippet(
                 trigger,
-                lambda: messagebox.askyesno(_("Confirmar"), _("Excluir '{trigger}'?").format(trigger=trigger)),
+                lambda: messagebox.askyesno(_("Confirmar"), _("Excluir '{trigger}'?").format(trigger=trigger), parent=root),
             )
             if result == "dynamic":
                 # A dynamic trigger owns the name; the free-text box let the user
@@ -4268,13 +4311,15 @@ class Sniptype:
                 # so refuse and point at the tab that manages the dynamic entry.
                 messagebox.showwarning(
                     _("Aviso"),
-                    _("'{trigger}' é um snippet dinâmico. Gerencie-o na aba Dinâmicos.").format(trigger=trigger),
+                    _("'{trigger}' é um snippet dinâmico. Gerencie-o em Ações dinâmicas.").format(trigger=trigger),
+                    parent=root,
                 )
                 return
             if result == "error":
                 messagebox.showerror(
                     _("Erro ao salvar"),
                     _("Não foi possível gravar snippets.json. Verifique os logs; a exclusão pode não ter sido salva."),
+                    parent=root,
                 )
                 return
             if result != "ok":
@@ -4308,6 +4353,10 @@ class Sniptype:
                 self.logger.warning(f"Manager duplicate failed: {error}")
                 manager_action_failed(_("Duplicar"))
                 return
+            except Exception:
+                self.logger.exception("Manager duplicate failed unexpectedly")
+                manager_action_failed(_("Duplicar"))
+                return
             entry_trigger.delete(0, tk.END)
             entry_trigger.insert(0, destination)
             refresh_listbox()
@@ -4319,12 +4368,13 @@ class Sniptype:
         def on_rename():
             old_trigger = entry_trigger.get().strip()
             if old_trigger not in self.snippets:
-                messagebox.showwarning(_("Aviso"), _("Selecione um snippet salvo para renomear."))
+                messagebox.showwarning(_("Aviso"), _("Selecione um snippet salvo para renomear."), parent=root)
                 return
             if callable(self.snippets[old_trigger]):
                 messagebox.showwarning(
                     _("Aviso"),
-                    _("'{old_trigger}' é um snippet dinâmico. Renomeie-o na aba Dinâmicos.").format(old_trigger=old_trigger),
+                    _("'{old_trigger}' é um snippet dinâmico. Renomeie-o em Ações dinâmicas.").format(old_trigger=old_trigger),
+                    parent=root,
                 )
                 return
             new_trigger = simpledialog.askstring(_("Renomear"), _("Novo trigger:"), initialvalue=old_trigger, parent=root)
@@ -4334,10 +4384,10 @@ class Sniptype:
             if new_trigger == old_trigger:
                 return
             if new_trigger.startswith("_"):
-                messagebox.showwarning(_("Aviso"), _("Triggers com '_' são reservados."))
+                messagebox.showwarning(_("Aviso"), _("Triggers com '_' são reservados."), parent=root)
                 return
             if new_trigger in self.snippets:
-                messagebox.showwarning(_("Aviso"), _("O trigger '{new_trigger}' já existe.").format(new_trigger=new_trigger))
+                messagebox.showwarning(_("Aviso"), _("O trigger '{new_trigger}' já existe.").format(new_trigger=new_trigger), parent=root)
                 return
             warnings = self._validate_trigger_warnings(new_trigger)
             if warnings and not messagebox.askyesno(
@@ -4345,6 +4395,7 @@ class Sniptype:
                 _("Avisos sobre este trigger:\n\n• {warnings}\n\nRenomear mesmo assim?").format(
                     warnings="\n• ".join(warnings)
                 ),
+                parent=root,
             ):
                 return
             try:
@@ -4365,6 +4416,10 @@ class Sniptype:
             except (KeyError, ValueError, MetadataReadOnlyError) as error:
                 self.logger.warning(f"Manager rename failed: {error}")
                 messagebox.showwarning(_("Renomear"), str(error), parent=root)
+                return
+            except Exception:
+                self.logger.exception("Manager rename failed unexpectedly")
+                manager_action_failed(_("Renomear"))
                 return
             entry_trigger.delete(0, tk.END)
             entry_trigger.insert(0, new_trigger)
@@ -4836,11 +4891,11 @@ class Sniptype:
             info = mappings_info.get(current_type, {})
 
             if info.get("builtin", False):
-                messagebox.showwarning(_("Aviso"), _("Não é possível excluir tipos padrão (CPF, CNPJ)."))
+                messagebox.showwarning(_("Aviso"), _("Não é possível excluir tipos padrão (CPF, CNPJ)."), parent=root)
                 return
             if current_type not in self.snippets:
                 return
-            if not messagebox.askyesno(_("Confirmar"), _("Excluir o tipo '{type}' e todos os itens?").format(type=info.get('label', current_type))):
+            if not messagebox.askyesno(_("Confirmar"), _("Excluir o tipo '{type}' e todos os itens?").format(type=info.get('label', current_type)), parent=root):
                 return
 
             removed_mapping = self.snippets.pop(current_type)
@@ -4849,6 +4904,7 @@ class Sniptype:
                 messagebox.showerror(
                     _("Erro ao salvar"),
                     _("Não foi possível gravar snippets.json. Verifique os logs; o tipo não foi excluído."),
+                    parent=root,
                 )
                 return
             self.refresh_runtime_indexes()
@@ -4943,6 +4999,10 @@ class Sniptype:
                     _("Os metadados da biblioteca são somente leitura nesta versão.") if getattr(self.library_metadata, "read_only", False) else str(error),
                     parent=root,
                 )
+            except Exception:
+                mapping_favorite_var.set(not mapping_favorite_var.get())
+                self.logger.exception("Mapping favorite update failed unexpectedly")
+                messagebox.showerror(_("Favorito"), _("Não foi possível salvar a alteração."), parent=root)
 
         def on_edit_mapping_form():
             current_type = mapping_type.get()
@@ -4985,6 +5045,9 @@ class Sniptype:
                     else str(error),
                     parent=root,
                 )
+            except Exception:
+                self.logger.exception("Mapping form update failed unexpectedly")
+                messagebox.showerror(_("Formulário"), _("Não foi possível salvar a alteração."), parent=root)
 
         def on_preview_mapping():
             current_type = mapping_type.get()
@@ -5026,16 +5089,17 @@ class Sniptype:
             value = serialize_text_widget_content(text_value)
 
             if not name:
-                messagebox.showwarning(_("Aviso"), _("Informe um identificador."))
+                messagebox.showwarning(_("Aviso"), _("Informe um identificador."), parent=root)
                 return
             if name == "__prefix__":
                 messagebox.showwarning(
                     _("Aviso"),
                     _("'__prefix__' é reservado para o prefixo do tipo de mapeamento."),
+                    parent=root,
                 )
                 return
             if not extract_plain_text(value).strip():
-                messagebox.showwarning(_("Aviso"), _("Informe um valor."))
+                messagebox.showwarning(_("Aviso"), _("Informe um valor."), parent=root)
                 return
 
             previous_mapping = self.snippets.get(current_type, _MISSING)
@@ -5055,6 +5119,7 @@ class Sniptype:
                 messagebox.showerror(
                     _("Erro ao salvar"),
                     _("Não foi possível gravar snippets.json. Verifique os logs; o item não foi salvo."),
+                    parent=root,
                 )
                 return
             self.refresh_runtime_indexes()
@@ -5067,17 +5132,18 @@ class Sniptype:
             name = entry_name.get().strip()
 
             if not name:
-                messagebox.showwarning(_("Aviso"), _("Selecione um item."))
+                messagebox.showwarning(_("Aviso"), _("Selecione um item."), parent=root)
                 return
 
             mapping = self.snippets.get(current_type, {})
-            if isinstance(mapping, dict) and name in mapping and messagebox.askyesno(_("Confirmar"), _("Excluir '{name}'?").format(name=name)):
+            if isinstance(mapping, dict) and name in mapping and messagebox.askyesno(_("Confirmar"), _("Excluir '{name}'?").format(name=name), parent=root):
                 removed_value = mapping.pop(name)
                 if not self.save_snippets(self.snippets):
                     mapping[name] = removed_value
                     messagebox.showerror(
                         _("Erro ao salvar"),
                         _("Não foi possível gravar snippets.json. Verifique os logs; a exclusão não foi salva."),
+                        parent=root,
                     )
                     return
                 self.refresh_runtime_indexes()
@@ -5184,7 +5250,7 @@ class Sniptype:
                     ui_widgets.switch(
                         row,
                         variable=var,
-                        command=lambda k=key, v=var: self._on_registry_checkbox(k, v),
+                        command=lambda k=key, v=var: self._on_registry_checkbox(k, v, root),
                     ).pack(side=tk.LEFT)
                     trigger_label = tk.Label(
                         row,
@@ -5252,19 +5318,19 @@ class Sniptype:
 
         self._manager_tab_selectors["dynamic"] = select_dynamic_target
 
-    def _on_registry_checkbox(self, key, var):
+    def _on_registry_checkbox(self, key, var, parent=None):
         """Apply a checkbox toggle, snapping the box back when it is refused."""
         enabled = var.get()
-        if not self._toggle_registry_entry(key, enabled):
+        if not self._toggle_registry_entry(key, enabled, parent=parent):
             var.set(not enabled)
 
-    def _toggle_registry_entry(self, key, enabled):
+    def _toggle_registry_entry(self, key, enabled, *, parent=None):
         """Enable/disable a dynamic trigger, persisting to the user override file.
 
         Keyed by the stable registry id so a renamed trigger still writes the
         right override entry. Returns True when the change was applied.
         """
-        if enabled and not self._confirm_dynamic_shadows_static(key):
+        if enabled and not self._confirm_dynamic_shadows_static(key, parent=parent):
             return False
 
         try:
@@ -5303,7 +5369,7 @@ class Sniptype:
         self.notify_status(message, key=f"registry-toggle:{key}")
         return True
 
-    def _confirm_dynamic_shadows_static(self, key):
+    def _confirm_dynamic_shadows_static(self, key, *, parent=None):
         """Ask before enabling a dynamic trigger that shadows an existing trigger.
 
         ``validate_rename`` blocks both collisions when they come from a rename;
@@ -5311,7 +5377,7 @@ class Sniptype:
         Enabling is allowed with confirmation: the shadowed value stays on disk
         (a static snippet in ``snippets.json``, or the mapping container a
         composed trigger like ``cpffulano`` is built from), and the dynamic
-        snippet is what expands.
+        snippet is what expands. ``parent`` is the window that owns the question.
         """
         trigger = effective_trigger(key, self.dynamic_registry.get(key, {}))
         if trigger.startswith("_"):
@@ -5342,6 +5408,7 @@ class Sniptype:
                 _("Já existe um snippet estático com o trigger '{trigger}'.\n\nAo ativar o "
                   "dinâmico, é ele que passa a expandir. O texto estático continua salvo em "
                   "snippets.json, mas deixa de ser acionado.\n\nAtivar mesmo assim?").format(trigger=trigger),
+                parent=parent,
             )
 
         # A mapping-composed trigger (e.g. ``cpffulano`` from the ``_cpf_numbers``
@@ -5359,6 +5426,7 @@ class Sniptype:
                   "snippet dinâmico, é ele que passa a expandir. O valor mapeado continua "
                   "salvo no container de mapeamento, mas deixa de ser acionado.\n\nAtivar mesmo "
                   "assim?").format(trigger=trigger),
+                parent=parent,
             )
 
         return True
@@ -5411,7 +5479,7 @@ class Sniptype:
         if warnings:
             proceed = messagebox.askyesno(
                 _("Confirmar trigger"),
-                "\n".join(warnings) + "\n\nDeseja continuar mesmo assim?",
+                _("{warnings}\n\nDeseja continuar mesmo assim?").format(warnings="\n".join(warnings)),
                 parent=root,
             )
             if not proceed:
@@ -5509,6 +5577,15 @@ class Sniptype:
 
     def toggle_enabled(self, icon, item):
         """Enable/disable snippet expansion."""
+        if not self.enabled and self.capture_error is not None:
+            # No listener runs after a capture failure, so "Expansão ativa"
+            # would claim an expansion that cannot happen.
+            self.notify_error(
+                _("A captura de teclado falhou, então a expansão não pode ser "
+                  "retomada. Reinicie o SnipType."),
+                key="toggle-enabled-capture-error",
+            )
+            return
         # A partial trigger typed before the toggle must not complete after it.
         self.typed_text = ""
         self.enabled = not self.enabled
@@ -5526,6 +5603,11 @@ class Sniptype:
         status = self._manager_status_var
         button = self._manager_toggle_button
         if status is None or button is None:
+            return
+        if self.capture_error is not None:
+            status.set(_("Captura de teclado falhou"))
+            button.configure(text=_("Reinicie o SnipType"), state=tk.DISABLED)
+            ui_widgets.set_icon(button, "refresh")
             return
         status.set(_("Expansão ativa") if self.enabled else _("Expansão pausada"))
         button.configure(text=_("Pausar expansão") if self.enabled else _("Retomar expansão"))
@@ -5946,6 +6028,7 @@ class Sniptype:
             self.listener.start()
             self.listener.join()
         except Exception as error:
+            self.capture_error = error
             self.enabled = False
             self.logger.error(f"Input capture failed: {error}")
             self.notify_error(
@@ -5953,6 +6036,10 @@ class Sniptype:
                   "Sniptype. Detalhes: {e}").format(e=error),
                 key="input-capture-error",
             )
+            # A manager built after this check reads capture_error right after
+            # it creates the status variable, so it cannot miss the failure.
+            if self._manager_status_var is not None:
+                self.gui.submit(self._refresh_manager_status)
         finally:
             try:
                 if self.listener is not None:

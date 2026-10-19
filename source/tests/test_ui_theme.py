@@ -568,6 +568,22 @@ class GuiSourceTests(unittest.TestCase):
                     offenders.append((node.lineno, func.attr, keyword.arg))
         self.assertEqual(offenders, [])
 
+    def test_every_native_prompt_names_its_owner_window(self):
+        """A parent-less prompt belongs to the hidden shared root, not to the
+        window the person acted in, so it is not modal to it and can open
+        behind it."""
+        import ast
+        orphans = [
+            (node.lineno, f"{node.func.value.id}.{node.func.attr}")
+            for node in ast.walk(ast.parse(self._source()))
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id in ("messagebox", "simpledialog")
+            and not any(keyword.arg == "parent" for keyword in node.keywords)
+        ]
+        self.assertEqual(orphans, [])
+
     def test_the_windows_only_ttk_theme_is_no_longer_forced(self):
         self.assertNotIn('theme_use("vista")', self._source())
 

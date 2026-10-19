@@ -6,6 +6,7 @@ from manager_view_support import (
     UNGROUPED_FILTER,
     build_manager_rows,
     filter_manager_rows,
+    filter_static_rows,
     find_manager_target,
     format_trigger_pair,
 )
@@ -121,6 +122,79 @@ class ManagerFilterTests(unittest.TestCase):
             (SnippetRef("static", "two"),),
             tuple(row.ref for row in rows),
         )
+
+
+class StaticSearchTests(unittest.TestCase):
+    def _search(self, snippets, query, metadata=None):
+        rows = build_manager_rows(snippets, metadata)
+        return [row.stored_trigger for row in filter_static_rows(rows, query, snippets)]
+
+    def test_the_effective_trigger_the_list_shows_is_searchable(self):
+        # Regression: "sig → assig" was listed but "assig" found nothing.
+        metadata = {
+            "groups": {"mail": {"label": "Mail", "prefix": "as"}},
+            "items": {"static": {"sig": {"group_id": "mail"}}, "mappings": {}},
+        }
+
+        self.assertEqual(["sig"], self._search({"sig": "Atenciosamente"}, "assig", metadata))
+
+    def test_a_blank_query_keeps_every_static_row_in_trigger_order(self):
+        snippets = {
+            "xname": "Alex", "_cpf_numbers": {"fulano": "123"},
+            "xdyn": lambda: "value", "xemail": "a@b.com",
+        }
+        for query in ("", "   \t "):
+            with self.subTest(query=query):
+                self.assertEqual(["xemail", "xname"], self._search(snippets, query))
+
+    def test_triggers_rank_before_groups_and_content_then_exact_prefix_substring(self):
+        snippets = {
+            "zz": "texto com mail no meio",
+            "xmail2": "segundo",
+            "amail": "termina em mail",
+            "mail": "exato",
+            "grouped": "nada",
+            "mailbox": "prefixo",
+        }
+        metadata = {
+            "groups": {"g": {"label": "Mail"}},
+            "items": {"static": {"grouped": {"group_id": "g"}}, "mappings": {}},
+        }
+
+        self.assertEqual(
+            ["mail", "mailbox", "amail", "xmail2", "grouped", "zz"],
+            self._search(snippets, "MAIL", metadata),
+        )
+
+    def test_ungrouped_rows_do_not_match_the_placeholder_group_label(self):
+        self.assertEqual([], self._search({"xhi": "hello"}, "ungrouped"))
+
+    def test_content_matching_follows_the_literal_case_insensitive_rules(self):
+        rich_signature = {
+            "__kind__": "rich_text",
+            "text": "Assinatura principal",
+            "spans": [],
+        }
+        for case, snippets, query, expected in (
+            ("matches key and value",
+             {"xname": "Alex", "xemail": "contato@example.com"}, "example", ["xemail"]),
+            ("matches key and value",
+             {"xname": "Alex", "xemail": "contato@example.com"}, "name", ["xname"]),
+            ("matches rich text plain value", {"xsig": rich_signature}, "assinatura", ["xsig"]),
+            # A blind re.search would treat "(net)" as a group and ".*" as
+            # match-all; the filter must compare literally.
+            ("literal, not a regex",
+             {"xa": "Total (net) due", "xb": "plain text"}, "(net)", ["xa"]),
+            ("literal, not a regex", {"xa": "Total (net) due", "xb": "plain text"}, ".*", []),
+            ("metacharacter does not raise", {"xa": "array[0] value"}, "[", ["xa"]),
+            ("case-insensitive",
+             {"xinsc": "Inscrição estadual", "xother": "Cadastro"}, "INSCRIÇÃO", ["xinsc"]),
+            ("accent-sensitive",
+             {"xinsc": "Inscrição estadual", "xother": "Cadastro"}, "inscricao", []),
+            ("unicode key", {"xcafé": "espresso"}, "CAFÉ", ["xcafé"]),
+        ):
+            with self.subTest(case, query=query):
+                self.assertEqual(expected, self._search(snippets, query))
 
 
 class ManagerNavigationTests(unittest.TestCase):

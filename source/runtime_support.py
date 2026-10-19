@@ -124,6 +124,10 @@ class AppLogger:
     def error(self, message):
         self._logger.error(message)
 
+    def exception(self, message):
+        """Log at error level with the active exception's traceback."""
+        self._logger.exception(message)
+
 
 class BackgroundTaskRunner:
     """Small thread launcher used for background UI and snippet tasks."""

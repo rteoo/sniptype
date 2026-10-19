@@ -13,6 +13,7 @@ from dynamic_registry import effective_trigger as registry_effective_trigger
 from dynamic_registry import is_enabled as registry_entry_enabled
 from group_policy import effective_trigger as static_effective_trigger
 from group_policy import get_group, get_static_item_metadata, static_item_enabled
+from rich_text_support import extract_plain_text
 from snippet_utils import get_dynamic_prefixes
 from workflow_support import SnippetRef
 
@@ -254,6 +255,63 @@ def filter_manager_rows(rows, filter_name=FILTER_ALL, *, workflow_state=None, gr
     return tuple(row for row in rows if row.group_id == selected_group)
 
 
+# Search rank: the matched field first (triggers, then the group label, then
+# content), then how it matched (exact, prefix, substring).
+_TRIGGER_FIELD, _GROUP_FIELD, _CONTENT_FIELD = range(3)
+_EXACT, _PREFIX, _SUBSTRING = range(3)
+
+
+def _match_rank(text, needle):
+    folded = text.casefold()
+    if folded == needle:
+        return _EXACT
+    if folded.startswith(needle):
+        return _PREFIX
+    if needle in folded:
+        return _SUBSTRING
+    return None
+
+
+def filter_static_rows(rows, query, snippets):
+    """Return the static rows that match ``query``, best match first.
+
+    A row matches on its stored trigger, its effective trigger (the one the
+    list shows after ``→``), its group's label or its plain-text content in
+    ``snippets``. Any trigger match outranks a group-label match, which
+    outranks a content match; within a field, exact beats prefix beats
+    substring. The query is a literal, case-insensitive substring, and accents
+    still count. Ties, and every row of a blank query, keep stored-trigger
+    order.
+    """
+    candidates = sorted(
+        (row for row in rows or () if row.kind == "static"),
+        key=lambda row: row.stored_trigger,
+    )
+    needle = query.strip().casefold()
+    if not needle:
+        return tuple(candidates)
+    ranked = []
+    for row in candidates:
+        fields = [
+            (_TRIGGER_FIELD, row.stored_trigger),
+            (_TRIGGER_FIELD, row.effective_trigger),
+            (_CONTENT_FIELD, extract_plain_text(snippets[row.stored_trigger])),
+        ]
+        # An ungrouped row's label is an internal placeholder, not text the
+        # list shows, so it must not make every ungrouped row match.
+        if row.group_id is not None:
+            fields.append((_GROUP_FIELD, row.group_label))
+        ranks = [
+            (field, rank)
+            for field, text in fields
+            if (rank := _match_rank(text, needle)) is not None
+        ]
+        if ranks:
+            ranked.append((min(ranks), row))
+    ranked.sort(key=lambda item: item[0])
+    return tuple(row for _rank, row in ranked)
+
+
 def navigation_target(row):
     """Return a stable tab/row descriptor for a manager row."""
     if not isinstance(row, ManagerRow):
@@ -308,6 +366,7 @@ __all__ = [
     "build_manager_rows",
     "build_navigation_target",
     "filter_manager_rows",
+    "filter_static_rows",
     "find_manager_target",
     "format_trigger_pair",
     "lookup_manager_target",

@@ -70,7 +70,13 @@ class ActionResult:
 
 
 def _begin(snippets, metadata):
-    """Validate compatibility before taking independent working copies."""
+    """Validate compatibility before taking independent working copies.
+
+    Runtime dynamic snippets are kept by reference. They are bound provider
+    methods whose owners hold locks and caches: a deep copy either raises
+    (``RLock`` cannot be pickled) or re-binds the providers to copies of their
+    owners. No transaction edits a callable, and saves never persist one.
+    """
     state = normalize_metadata(metadata, None)
     if state.read_only:
         raise MetadataReadOnlyError(
@@ -79,7 +85,7 @@ def _begin(snippets, metadata):
     if not isinstance(snippets, Mapping):
         raise TypeError("snippets must be a mapping")
     content = {
-        key: copy.deepcopy(value)
+        key: value if callable(value) else copy.deepcopy(value)
         for key, value in snippets.items()
         if key != "__sniptype__"
     }

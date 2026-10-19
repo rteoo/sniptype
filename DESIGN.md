@@ -169,6 +169,28 @@ Adopted now as a project extension:
   box, check box and switch, and composes with selection. Marks use the
   primary border tone; copper fills only primary faces and checked fills.
   Contrast-theme handling from that profile is not implemented yet.
+- **State vocabulary (§12.1), expansion glossary.** The sidebar names one
+  canonical state, and the states never collapse into each other:
+
+  | Key | pt-BR | en | Command |
+  | --- | --- | --- | --- |
+  | `ok` | Expansão ativa | Expansion on | Pausar expansão |
+  | `paused` | Expansão pausada | Expansion paused | Retomar expansão |
+  | `down` | Captura de teclado falhou | Keyboard capture failed | Reinicie o SnipType, disabled |
+
+  After a capture failure, resuming is refused with the reason, from the
+  window, the tray and the hotkey alike. The tone, the signal dot and the tray
+  state are not drawn yet.
+- **No silent failures (§12.7).** Every library command ends in a receipt or
+  in an error dialog titled with the action, including errors nobody
+  anticipated, which are also logged with their traceback. A bound control
+  (Favorito, Grupo) that fails returns to the saved value. Each native prompt
+  is owned by the window the person acted in, and a source test enforces
+  `parent=` on every one.
+- **Search ranking.** Library search matches the stored trigger, the
+  effective trigger shown after `→`, the group label and the plain content.
+  Triggers rank before the group label, and the group label before content;
+  within each, exact beats prefix beats substring.
 
 ## Accessibility and proof
 
@@ -201,7 +223,7 @@ satisfy any of them.
 | Density: Comfortable and Touch | Not applicable until a density setting exists. |
 | Display: 125/150/200% DPI and mixed monitors | Not tested on hardware. Window minimums and spacing are still unscaled pixels. |
 | Keyboard: visible focus on list rows | Failed. A focused Treeview row is not drawn differently from a selected one. The light selection fill is faint without a marker: 1.14:1 on the panel and 1.02:1 on the navigation surface, where the copper pill and the semibold label carry the current page. |
-| Keyboard: formatting commands | Failed. Only bold, italic and underline have shortcuts (Ctrl+B, Ctrl+I, Ctrl+U); the other toolbar commands are pointer-only. |
+| Keyboard: formatting commands | Failed. Bold, italic, underline, code and strikethrough have shortcuts (Ctrl+B, Ctrl+I, Ctrl+U, Ctrl+Shift+C, Ctrl+Shift+S); clearing the formatting and the three variable inserts are pointer-only. |
 | Accessibility: Narrator roles, values and announcements | Not tested. |
 | Work preservation: drafts across appearance changes and refresh | Failed. Editors do not track dirty state. |
 | Physical desktop pass at minimum and default size, keyboard only, close and reopen | Not tested for this adoption. |

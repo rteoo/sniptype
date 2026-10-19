@@ -2,7 +2,6 @@ import unittest
 from unittest import mock
 
 from gui_support import (
-    filter_static_snippets,
     focus_modal_input,
     iter_filtered_mapping_items,
     snippet_row_values,
@@ -137,56 +136,6 @@ class GuiSupportTests(unittest.TestCase):
         dialog.destroy.assert_called_once_with()
         with self.assertRaisesRegex(RuntimeError, "native key failed"):
             cancel()
-
-    def test_filter_static_snippets_without_query_keeps_only_persisted_static_entries(self):
-        for old_test, snippets, query, expected in (
-            ("test_filter_static_snippets_without_query_keeps_only_persisted_static_entries",
-             {"xname": "Alex", "_cpf_numbers": {"fulano": "123"}, "xdyn": lambda: "value"},
-             "", {"xname": "Alex"}),
-            ("test_whitespace_only_query_behaves_like_an_empty_query",
-             {"xname": "Alex", "xemail": "a@b.com"},
-             "   \t ", {"xname": "Alex", "xemail": "a@b.com"}),
-        ):
-            with self.subTest(old_test):
-                self.assertEqual(expected, filter_static_snippets(snippets, query))
-
-    def test_filter_static_snippets_query_matching(self):
-        rich_signature = {
-            "__kind__": "rich_text",
-            "text": "Assinatura principal",
-            "spans": [],
-        }
-        for old_test, snippets, query, expected in (
-            ("test_filter_static_snippets_matches_key_and_value",
-             {"xname": "Alex", "xemail": "contato@example.com"},
-             "example", {"xemail": "contato@example.com"}),
-            ("test_filter_static_snippets_matches_key_and_value",
-             {"xname": "Alex", "xemail": "contato@example.com"},
-             "name", {"xname": "Alex"}),
-            ("test_filter_static_snippets_matches_rich_text_plain_value",
-             {"xsig": rich_signature}, "assinatura", {"xsig": rich_signature}),
-            # A blind re.search would treat "(net)" as a group and ".*" as
-            # match-all; the filter must compare literally.
-            ("test_query_is_a_literal_substring_not_a_regex",
-             {"xa": "Total (net) due", "xb": "plain text"},
-             "(net)", {"xa": "Total (net) due"}),
-            ("test_query_is_a_literal_substring_not_a_regex",
-             {"xa": "Total (net) due", "xb": "plain text"}, ".*", {}),
-            # An unbalanced bracket would blow up re.compile; str.__contains__ is safe.
-            ("test_regex_metacharacter_query_does_not_raise",
-             {"xa": "array[0] value"}, "[", {"xa": "array[0] value"}),
-            # Case folds: an all-caps accented query still matches.
-            ("test_matching_is_case_insensitive_but_accent_sensitive",
-             {"xinsc": "Inscrição estadual", "xother": "Cadastro"},
-             "INSCRIÇÃO", {"xinsc": "Inscrição estadual"}),
-            # Accents are not folded: the de-accented spelling does not match.
-            ("test_matching_is_case_insensitive_but_accent_sensitive",
-             {"xinsc": "Inscrição estadual", "xother": "Cadastro"}, "inscricao", {}),
-            ("test_unicode_key_match_is_case_insensitive",
-             {"xcafé": "espresso"}, "CAFÉ", {"xcafé": "espresso"}),
-        ):
-            with self.subTest(old_test, query=query):
-                self.assertEqual(expected, filter_static_snippets(snippets, query))
 
     def test_iter_filtered_mapping_items_query_matching(self):
         prefixed = {"__prefix__": "clw", "gtw": "gateway", "api": "api server"}

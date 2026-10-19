@@ -341,10 +341,31 @@ class AppLoggerTests(unittest.TestCase):
         app_logger.info("informação")
         app_logger.warning("aviso")
         app_logger.error("erro")
+        app_logger.exception("falha")
 
         app_logger._logger.info.assert_called_once_with("informação")
         app_logger._logger.warning.assert_called_once_with("aviso")
         app_logger._logger.error.assert_called_once_with("erro")
+        app_logger._logger.exception.assert_called_once_with("falha")
+
+    def test_exception_records_the_active_traceback(self):
+        records = []
+        handler = logging.Handler()
+        handler.emit = records.append
+        name = "test_runtime_support.exception"
+        logger = logging.getLogger(name)
+        logger.addHandler(handler)
+        logger.propagate = False
+        self.addCleanup(logger.removeHandler, handler)
+
+        try:
+            raise TypeError("cannot pickle")
+        except TypeError:
+            AppLogger(name).exception("action failed")
+
+        self.assertEqual(1, len(records))
+        self.assertEqual(logging.ERROR, records[0].levelno)
+        self.assertIs(TypeError, records[0].exc_info[0])
 
 
 class TextInserterFallbackTests(unittest.TestCase):

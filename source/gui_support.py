@@ -37,22 +37,6 @@ def snippet_tree_values(key, value, preview_chars=PREVIEW_CHARS):
     return key, f"{markers}  ·  {preview}" if markers else preview
 
 
-def filter_static_snippets(snippets, query):
-    lowered = query.strip().lower()
-    visible = {
-        key: value
-        for key, value in snippets.items()
-        if (not key.startswith("_")) and (not callable(value))
-    }
-    if not lowered:
-        return visible
-    return {
-        key: value
-        for key, value in visible.items()
-        if lowered in key.lower() or lowered in extract_plain_text(value).lower()
-    }
-
-
 def iter_filtered_mapping_items(mapping, query):
     lowered = query.strip().lower()
     if not isinstance(mapping, dict):
