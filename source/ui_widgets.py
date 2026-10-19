@@ -44,11 +44,9 @@ _SS = 4
 # Side of the tiled middle of every nine-slice image, in pixels.
 _SLICE_MIDDLE = 128
 
-# Segoe Fluent Icons (Windows 11), then Segoe MDL2 Assets (Windows 10); both
-# carry every codepoint below. Elsewhere there is no icon font and controls
-# show their text alone.
-_ICON_FONT_FILES = ("SegoeIcons.ttf", "segmdl2.ttf")
-
+# Glyphs of the icon fonts in ``ui_theme.ICON_FONT_FILES``; both carry every
+# codepoint below. Elsewhere there is no icon font and controls show their
+# text alone.
 ICONS = {
     "add": "\ue710",
     "bell": "\uea8f",
@@ -148,13 +146,26 @@ def surface_of(widget):
 # Image drawing
 # ---------------------------------------------------------------------------
 
+_CLEAR = (0, 0, 0, 0)
+
+
 class _Artist:
-    """Draws the theme's images at one display scale and keeps them alive."""
+    """Draws the theme's images at one display scale and keeps them alive.
+
+    Tk cannot paint outside a widget, so a focus ring drawn outside a face
+    (outset, as Windows draws it) needs room inside the widget: every
+    focusable face reserves ``margin`` transparent pixels around itself, the
+    ring takes the outer ``ring`` of them, and the rest is a gap of the
+    surface the style sits on. The gap is what separates the ring from a
+    copper fill, which the dark ring alone matches at only 1.35:1.
+    """
 
     def __init__(self, master, scale):
         self.master = master
         self.scale = scale
         self.images = []
+        self.ring = self.px(2)
+        self.margin = self.ring + self.px(1)
 
     def px(self, value):
         return max(1, round(value * self.scale))
@@ -189,7 +200,7 @@ class _Artist:
         # at the edges and shifts a one-pixel stroke off its token color.
         return self.photo(image.resize((width, height), Image.BOX))
 
-    def slice_size(self, radius):
+    def slice_size(self, radius, margin=0):
         """Nine-slice border and image side for a shape of ``radius``.
 
         ttk *tiles* the middle of an image element rather than stretching
@@ -198,33 +209,46 @@ class _Artist:
         a 2px one turned a card into tens of thousands of draws and one
         manager layout pass into ~30 seconds.
         """
-        border = radius + self.px(2)
+        border = margin + radius + self.px(2)
         return border, 2 * border + _SLICE_MIDDLE
 
+    def focus_ring(self, draw, box, radius, color):
+        """The outset ring in the outer ``ring`` pixels of ``box``.
+
+        Clears what it encloses: the gap stays transparent, so it shows the
+        style's surface.
+        """
+        x0, y0, x1, y1 = box
+        ring = self.ring
+        self.rounded(draw, box, radius, color)
+        self.rounded(draw, (x0 + ring, y0 + ring, x1 - ring, y1 - ring), radius - ring, _CLEAR)
+
     def face(self, radius, fill, stroke=None, bottom=None, bottom_width=None,
-             focus=None):
+             focus=None, margin=0):
         """A rounded control face; returns ``(image, slice border)``.
 
         ``stroke`` outlines it; ``bottom`` recolors the bottom edge (the
-        elevation shadow of a button, the underline of a text field), which
-        ``bottom_width`` thickens. ``focus`` swaps the stroke for a 2px ring.
+        underline of a text field), which ``bottom_width`` thickens.
+        ``margin`` reserves a transparent band around the face; ``focus``
+        draws the focus ring in it (see the class docstring).
         """
-        border, side = self.slice_size(radius)
+        if focus is not None and margin < self.margin:
+            raise ValueError("a focus ring needs the focus margin")
+        border, side = self.slice_size(radius, margin)
         image = self.canvas(side, side)
         draw = ImageDraw.Draw(image)
-        line = self.px(1)
         if focus is not None:
-            ring = self.px(2)
-            self.rounded(draw, (0, 0, side, side), radius, focus)
-            self.rounded(draw, (ring, ring, side - ring, side - ring), radius - ring, fill)
-            return self.finish(image, side, side), border
+            self.focus_ring(draw, (0, 0, side, side), radius + margin, focus)
+        x0 = y0 = margin
+        x1 = y1 = side - margin
+        line = self.px(1)
         if stroke is None:
-            self.rounded(draw, (0, 0, side, side), radius, fill)
+            self.rounded(draw, (x0, y0, x1, y1), radius, fill)
             return self.finish(image, side, side), border
         edge = self.px(bottom_width) if bottom_width else line
-        self.rounded(draw, (0, 0, side, side), radius, bottom or stroke)
-        self.rounded(draw, (0, 0, side, side - edge), radius, stroke)
-        self.rounded(draw, (line, line, side - line, side - edge), radius - line, fill)
+        self.rounded(draw, (x0, y0, x1, y1), radius, bottom or stroke)
+        self.rounded(draw, (x0, y0, x1, y1 - edge), radius, stroke)
+        self.rounded(draw, (x0 + line, y0 + line, x1 - line, y1 - edge), radius - line, fill)
         return self.finish(image, side, side), border
 
     def blank(self, width, height):
@@ -243,50 +267,60 @@ class _Artist:
         )
         return self.finish(image, width, height)
 
-    def checkbox(self, box, gap, fill, stroke=None, check=None):
-        width = box + gap
-        image = self.canvas(width, box)
+    def _outlined(self, draw, box, radius, fill, stroke):
+        x0, y0, x1, y1 = box
+        if stroke is None:
+            self.rounded(draw, box, radius, fill)
+            return
+        line = self.px(1)
+        self.rounded(draw, box, radius, stroke)
+        self.rounded(draw, (x0 + line, y0 + line, x1 - line, y1 - line), radius - line, fill)
+
+    def checkbox(self, box, gap, fill, stroke=None, check=None, focus=None):
+        """A check box ``box`` px square inside the focus margin, then ``gap``
+        transparent pixels that space it from its label."""
+        margin = self.margin
+        side = box + 2 * margin
+        image = self.canvas(side + gap, side)
         draw = ImageDraw.Draw(image)
         radius = self.px(4)
-        line = self.px(1)
-        if stroke is not None:
-            self.rounded(draw, (0, 0, box, box), radius, stroke)
-            self.rounded(draw, (line, line, box - line, box - line), radius - line, fill)
-        else:
-            self.rounded(draw, (0, 0, box, box), radius, fill)
+        if focus is not None:
+            self.focus_ring(draw, (0, 0, side, side), radius + margin, focus)
+        self._outlined(draw, (margin, margin, margin + box, margin + box), radius, fill, stroke)
         if check is not None:
             unit = box / 20
             draw.line(
-                [(x * unit * _SS, y * unit * _SS)
+                [((margin + x * unit) * _SS, (margin + y * unit) * _SS)
                  for x, y in ((5.5, 10.5), (8.5, 13.5), (14.5, 7.0))],
                 fill=check, width=round(1.4 * unit * _SS), joint="curve",
             )
-        return self.finish(image, width, box)
+        return self.finish(image, side + gap, side)
 
     def switch(self, track_width, height, gap, fill, knob, knob_size, on,
-               stroke=None):
-        width = track_width + gap
-        image = self.canvas(width, height)
+               stroke=None, focus=None):
+        """A switch track inside the focus margin, then ``gap`` transparent pixels."""
+        margin = self.margin
+        width, full_height = track_width + 2 * margin, height + 2 * margin
+        image = self.canvas(width + gap, full_height)
         draw = ImageDraw.Draw(image)
         radius = height / 2
-        line = self.px(1)
-        if stroke is not None:
-            self.rounded(draw, (0, 0, track_width, height), radius, stroke)
-            self.rounded(draw, (line, line, track_width - line, height - line), radius - line, fill)
-        else:
-            self.rounded(draw, (0, 0, track_width, height), radius, fill)
-        center_x = track_width - radius if on else radius
+        if focus is not None:
+            self.focus_ring(draw, (0, 0, width, full_height), radius + margin, focus)
+        self._outlined(
+            draw, (margin, margin, margin + track_width, margin + height), radius, fill, stroke)
+        center_x = margin + (track_width - radius if on else radius)
+        center_y = margin + radius
         half = knob_size / 2
         draw.ellipse(
-            ((center_x - half) * _SS, (radius - half) * _SS,
-             (center_x + half) * _SS, (radius + half) * _SS),
+            ((center_x - half) * _SS, (center_y - half) * _SS,
+             (center_x + half) * _SS, (center_y + half) * _SS),
             fill=knob,
         )
-        return self.finish(image, width, height)
+        return self.finish(image, width + gap, full_height)
 
 
 def _icon_font(size):
-    for name in _ICON_FONT_FILES:
+    for name in ui_theme.ICON_FONT_FILES:
         try:
             return ImageFont.truetype(name, size)
         except OSError:
@@ -322,16 +356,14 @@ class _ThemeState:
         self.artist = artist
         self.surface_styles = set()
         self.icons = {}
+        # Image element name -> ([(state spec, image), ...], default image), in
+        # the order ttk matches them: the first spec the widget is in wins.
+        self.elements = {}
 
 
 def _state(widget, ui=None):
     ui = ui or ui_theme.theme()
     return _themes.get((str(widget.tk.interpaddr()), theme_name(ui)))
-
-
-def _display_scale(widget):
-    # ``tk scaling`` is pixels per point; 96 DPI (100%) is 4/3.
-    return float(widget.tk.call("tk", "scaling")) * 72 / 96
 
 
 def install(window, ui=None):
@@ -343,9 +375,10 @@ def install(window, ui=None):
     if name not in style.theme_names():
         style.theme_create(name, parent="clam")
         style.theme_use(name)
-        artist = _Artist(window, _display_scale(window))
-        _themes[key] = _ThemeState(ui, artist)
-        _configure(style, ui, artist)
+        artist = _Artist(window, ui_theme.display_scale(window))
+        state = _ThemeState(ui, artist)
+        _themes[key] = state
+        _configure(style, ui, artist, state.elements)
         # Release the images while the root is being destroyed on the GUI
         # thread; left to interpreter exit, they would be freed elsewhere.
         root = window.nametowidget(".")
@@ -361,119 +394,150 @@ def install(window, ui=None):
     return name
 
 
-def _configure(style, ui, artist):
+def _configure(style, ui, artist, elements):
+    """Define every element and style of this palette's theme.
+
+    ``elements`` records each state-dependent image element as ttk matches
+    it (see :class:`_ThemeState`).
+    """
     px = artist.px
     light = not ui.is_dark
     base = ui.card
-    overlay = "#000000" if light else "#FFFFFF"
+    overlay = ui.overlay
     text = ui.text
     muted = ui.text_muted
     font = ui.font()
     radius = px(4)
+    margin = artist.margin
+    ring = ui.focus_ring
 
     style.configure(
         ".",
         background=ui.surface, foreground=text, font=font,
-        bordercolor=ui.control_stroke, lightcolor=ui.surface, darkcolor=ui.surface,
-        troughcolor=ui.surface, focuscolor=ui.focus_ring,
+        bordercolor=ui.field_border, lightcolor=ui.surface, darkcolor=ui.surface,
+        troughcolor=ui.surface, focuscolor=ring,
         selectbackground=ui.select_bg, selectforeground=ui.select_fg,
         insertcolor=text, fieldbackground=ui.field,
     )
     style.map(".", foreground=[("disabled", muted)])
 
+    def states(draw, rest, variants=(), disabled=(), focusable=True):
+        """``([(state spec, image), ...], rest image)`` in ttk match order.
+
+        ``draw(*args, focus=None)`` paints one state. Disabled comes first.
+        A focusable control then repeats every variant with the focus ring,
+        because focus composes with pressed, selected and hover rather than
+        hiding them; the plain variants follow.
+        """
+        specs = [(state, draw(*args)) for state, args in disabled]
+        if focusable:
+            specs += [(f"focus {state}", draw(*args, focus=ring)) for state, args in variants]
+            specs.append(("focus", draw(*rest, focus=ring)))
+        specs += [(state, draw(*args)) for state, args in variants]
+        return specs, draw(*rest)
+
     # -- Buttons ------------------------------------------------------------
-    def face_element(name, faces):
-        default, border = faces[0]
-        specs = [(state, image) for state, (image, _border) in faces[1:]]
+    def face(fill, stroke=None, bottom=None, bottom_width=None, focus=None):
+        return artist.face(radius, fill, stroke, bottom, bottom_width,
+                           focus=focus, margin=margin)[0]
+
+    def face_element(name, faces, margin=margin):
+        specs, default = faces
+        elements[name] = faces
+        border, _side = artist.slice_size(radius, margin)
         # An image element defaults to its image's size as a minimum; the
-        # wide tiling middle must not become the smallest control.
+        # wide tiling middle must not become the smallest control. Its
+        # children sit inside the focus margin, and the density sets the
+        # height of the visible face.
         style.element_create(
             name, "image", default, *specs,
-            border=border, sticky="nsew", padding=0,
-            width=2 * border, height=2 * border,
+            border=border, padding=margin, sticky="nsew",
+            width=2 * border, height=ui.control_height + 2 * margin,
         )
 
-    def elevated(fill, hover, pressed, stroke, bottom, disabled_fill):
-        return [
-            (None, artist.face(radius, fill, stroke, bottom)),
-            ("disabled", artist.face(radius, disabled_fill, stroke, stroke)),
-            ("pressed", artist.face(radius, pressed, stroke, stroke)),
-            ("focus", artist.face(radius, fill, focus=ui.focus_ring)),
-            ("active", artist.face(radius, hover, stroke, bottom)),
-        ]
-
-    def _pairs(faces):
-        return [faces[0][1]] + [(state, pair) for state, pair in faces[1:]]
-
+    stroke = ui.field_border
     disabled_fill = mix(base, overlay, 0.02)
-    neutral = elevated(
-        ui.control, ui.control_hover, ui.control_active,
-        ui.control_stroke, ui.control_stroke_bottom, disabled_fill)
-    face_element("Fluent.Button.face", _pairs(neutral))
-    accent_bottom = mix(ui.accent, "#000000", 0.3)
-    face_element("Fluent.Accent.face", _pairs([
-        (None, artist.face(radius, ui.accent, ui.accent, accent_bottom)),
-        ("disabled", artist.face(radius, mix(base, overlay, 0.16))),
-        ("pressed", artist.face(radius, ui.accent_active)),
-        ("focus", artist.face(radius, ui.accent, focus=ui.focus_ring if light else ui.text)),
-        ("active", artist.face(radius, ui.accent_hover, ui.accent_hover, accent_bottom)),
-    ]))
+    neutral_disabled = [("disabled", (disabled_fill, stroke))]
+    neutral = states(face, (ui.control, stroke), [
+        ("pressed", (ui.control_active, stroke)),
+        ("active", (ui.control_hover, stroke)),
+    ], neutral_disabled)
+    face_element("Fluent.Button.face", neutral)
+    # The dark danger label is under 4.5:1 on the neutral hover fill, so a
+    # destructive button hovers on its own state tint.
+    face_element("Fluent.Danger.face", states(face, (ui.control, stroke), [
+        ("pressed", (ui.control_active, stroke)),
+        ("active", (ui.danger_bg, stroke)),
+    ], neutral_disabled))
+    face_element("Fluent.Accent.face", states(face, (ui.accent,), [
+        ("pressed", (ui.accent_active,)),
+        ("active", (ui.accent_hover,)),
+    ], [("disabled", (mix(base, overlay, 0.16),))]))
     # Subtle controls draw nothing at rest; hover and press are translucent
     # overlays, composited over whatever surface the style sits on.
     subtle_hover = _rgba(overlay, 0.05 if light else 0.08)
     subtle_pressed = _rgba(overlay, 0.03 if light else 0.05)
-    clear = (0, 0, 0, 0)
-    face_element("Fluent.Subtle.face", _pairs([
-        (None, artist.face(radius, clear)),
-        ("disabled", artist.face(radius, clear)),
-        ("pressed", artist.face(radius, subtle_pressed)),
-        ("focus", artist.face(radius, clear, focus=ui.focus_ring)),
-        ("active", artist.face(radius, subtle_hover)),
-    ]))
-    face_element("Fluent.Nav.face", _pairs([
-        (None, artist.face(radius, clear)),
-        ("pressed", artist.face(radius, subtle_pressed)),
-        ("selected", artist.face(radius, subtle_hover)),
-        ("focus", artist.face(radius, clear, focus=ui.focus_ring)),
-        ("active", artist.face(radius, subtle_hover)),
+    face_element("Fluent.Subtle.face", states(face, (_CLEAR,), [
+        ("pressed", (subtle_pressed,)),
+        ("active", (subtle_hover,)),
+    ], [("disabled", (_CLEAR,))]))
+    # Toolbar buttons never take keyboard focus (see button()), so their
+    # faces reserve no focus margin: nine of them share the editor's width.
+
+    def flat_face(fill):
+        return artist.face(radius, fill)[0]
+
+    face_element("Fluent.Toolbar.face", states(flat_face, (_CLEAR,), [
+        ("pressed", (subtle_pressed,)),
+        ("active", (subtle_hover,)),
+    ], [("disabled", (_CLEAR,))], focusable=False), margin=0)
+    # The current page keeps the selection fill under hover and focus.
+    face_element("Fluent.Nav.face", states(face, (_CLEAR,), [
+        ("pressed", (subtle_pressed,)),
+        ("selected", (ui.select_bg,)),
+        ("active", (subtle_hover,)),
     ]))
     pill_width, pill_height = px(3), px(16)
+    pill = artist.pill(pill_width, pill_height, ui.accent_border)
+    blank_pill = artist.blank(pill_width, pill_height)
+    elements["Fluent.Nav.pill"] = ([("selected", pill)], blank_pill)
     style.element_create(
-        "Fluent.Nav.pill", "image", artist.blank(pill_width, pill_height),
-        ("selected", artist.pill(pill_width, pill_height, ui.accent)),
-        sticky="",
+        "Fluent.Nav.pill", "image", blank_pill, ("selected", pill), sticky="",
     )
 
-    def button_layout(face, pill=False):
+    def button_layout(face_name, with_pill=False):
         label = [("Button.padding", {"sticky": "nsew", "children": [
             ("Button.label", {"sticky": "nsew"})]})]
-        if pill:
+        if with_pill:
             label.insert(0, ("Fluent.Nav.pill", {"side": "left", "sticky": ""}))
-        return [(face, {"sticky": "nsew", "children": label})]
+        return [(face_name, {"sticky": "nsew", "children": label})]
 
-    button_padding = (px(11), px(5), px(11), px(6))
-    for style_name, face in (
+    # One line of body text between these paddings fills the Compact face.
+    label_height = tkfont.Font(root=artist.master, font=font).metrics("linespace")
+    slack = max(0, ui.control_height - label_height)
+    top, bottom = slack // 2, slack - slack // 2
+    for style_name, face_name in (
         ("TButton", "Fluent.Button.face"),
-        ("Danger.TButton", "Fluent.Button.face"),
+        ("Danger.TButton", "Fluent.Danger.face"),
         ("Accent.TButton", "Fluent.Accent.face"),
         ("Subtle.TButton", "Fluent.Subtle.face"),
-        ("Toolbar.TButton", "Fluent.Subtle.face"),
+        ("Toolbar.TButton", "Fluent.Toolbar.face"),
     ):
-        style.layout(style_name, button_layout(face))
-    style.layout("Nav.TButton", button_layout("Fluent.Nav.face", pill=True))
+        style.layout(style_name, button_layout(face_name))
+    style.layout("Nav.TButton", button_layout("Fluent.Nav.face", with_pill=True))
     style.configure(
-        "TButton", padding=button_padding, anchor="center", foreground=text,
-        font=font, focuscolor=ui.focus_ring,
+        "TButton", padding=(px(12), top, px(12), bottom), anchor="center",
+        foreground=text, font=font, focuscolor=ring,
     )
     style.map("TButton", foreground=[("disabled", muted), ("pressed", muted)])
     style.configure("Danger.TButton", foreground=ui.danger)
     style.map("Danger.TButton", foreground=[("disabled", muted)])
     style.configure("Accent.TButton", foreground=ui.text_on_accent)
     style.map("Accent.TButton", foreground=[("disabled", ui.card if light else muted)])
-    style.configure("Subtle.TButton", padding=(px(8), px(5), px(8), px(6)))
-    style.configure("Toolbar.TButton", padding=(px(6), px(4)))
+    style.configure("Subtle.TButton", padding=(px(8), top, px(8), bottom))
+    style.configure("Toolbar.TButton", padding=(px(6), top, px(6), bottom))
     style.configure(
-        "Nav.TButton", anchor="w", padding=(px(9), px(8), px(12), px(9)),
+        "Nav.TButton", anchor="w", padding=(px(9), top, px(12), bottom),
     )
     style.map(
         "Nav.TButton",
@@ -482,17 +546,18 @@ def _configure(style, ui, artist):
     )
 
     # -- Text fields --------------------------------------------------------
+    # Fields reserve the focus margin too, so they line up with the buttons
+    # and drop-downs stacked around them; their focus is the underline.
     field = ui.field
     field_hover = mix(field, overlay, 0.03)
     field_disabled = mix(base, overlay, 0.03)
-    field_faces = [
-        (None, artist.face(radius, field, ui.control_stroke, ui.stroke_strong)),
-        ("disabled", artist.face(radius, field_disabled, ui.control_stroke)),
-        ("readonly", artist.face(radius, field_disabled, ui.control_stroke)),
-        ("focus", artist.face(radius, field, ui.control_stroke, ui.accent, bottom_width=2)),
-        ("hover", artist.face(radius, field_hover, ui.control_stroke, ui.stroke_strong)),
-    ]
-    face_element("Fluent.Field.face", _pairs(field_faces))
+    face_element("Fluent.Field.face", states(face, (field, stroke), [
+        ("focus", (field, stroke, ui.accent_border, 2)),
+        ("hover", (field_hover, stroke)),
+    ], [
+        ("disabled", (field_disabled, stroke)),
+        ("readonly", (field_disabled, stroke)),
+    ], focusable=False))
     style.layout("TEntry", [("Fluent.Field.face", {"sticky": "nsew", "children": [
         ("Entry.padding", {"sticky": "nsew", "children": [
             ("Entry.textarea", {"sticky": "nsew"})]})]})])
@@ -504,7 +569,7 @@ def _configure(style, ui, artist):
         else {"selectbackground": ui.select_bg, "selectforeground": ui.select_fg}
     )
     style.configure(
-        "TEntry", padding=(px(10), px(6), px(6), px(7)), foreground=text,
+        "TEntry", padding=(px(10), top, px(6), bottom), foreground=text,
         insertcolor=text, insertwidth=px(1), **selection,
     )
     # Containers for tk.Text/Listbox borrow the field face; their focus state
@@ -512,9 +577,9 @@ def _configure(style, ui, artist):
     style.layout("Field.TFrame", [("Fluent.Field.face", {"sticky": "nsew"})])
 
     # -- Combobox (always read-only here: a button with a chevron) ----------
-    # No focus ring: a combobox takes focus on every click, unlike a button.
-    face_element("Fluent.Combo.face", _pairs(
-        [face for face in neutral if face[0] != "focus"]))
+    # It takes focus on every click, unlike a button, so the ring also shows
+    # after pointer use; keyboard users need it either way.
+    face_element("Fluent.Combo.face", neutral)
     arrow_width, arrow_height = px(30), px(16)
     center_x, center_y = arrow_width / 2 - px(2), arrow_height / 2
     half = px(4)
@@ -532,7 +597,7 @@ def _configure(style, ui, artist):
         ("Combobox.padding", {"expand": "1", "sticky": "nsew", "children": [
             ("Combobox.textarea", {"sticky": "nsew"})]})]})])
     style.configure(
-        "TCombobox", padding=(px(11), px(5), px(0), px(6)), foreground=text,
+        "TCombobox", padding=(px(11), top, px(0), bottom), foreground=text,
         arrowsize=px(12), **selection,
     )
     # A read-only combobox highlights its text on focus; keep it plain.
@@ -545,50 +610,64 @@ def _configure(style, ui, artist):
     )
 
     # -- Checkbox and switch ------------------------------------------------
-    box, gap = px(20), px(8)
+    # Checked is the copper fill with a copper-mark edge, which keeps the
+    # control's boundary at 3:1 where raw copper is too light (light mode).
+    box, label_gap = px(20), px(8)
     unchecked = _rgba(overlay, 0.02 if light else 0.1)
     unchecked_hover = _rgba(overlay, 0.06 if light else 0.14)
     check = ui.text_on_accent
-    style.element_create(
-        "Fluent.Check.indicator", "image",
-        artist.checkbox(box, gap, unchecked, ui.stroke_strong),
-        ("selected disabled", artist.checkbox(box, gap, mix(base, overlay, 0.2), check=base)),
-        ("disabled", artist.checkbox(box, gap, clear, mix(base, overlay, 0.2))),
-        ("pressed selected", artist.checkbox(box, gap, ui.accent_active, check=check)),
-        ("active selected", artist.checkbox(box, gap, ui.accent_hover, check=check)),
-        ("selected", artist.checkbox(box, gap, ui.accent, check=check)),
-        ("pressed", artist.checkbox(box, gap, unchecked_hover, ui.stroke_strong)),
-        ("active", artist.checkbox(box, gap, unchecked_hover, ui.stroke_strong)),
-        sticky="",
-    )
+    edge = ui.accent_border
+    off_stroke = ui.stroke_strong
+    indicator_disabled = mix(base, overlay, 0.2)
+
+    def checkbox(fill, outline=None, mark=None, focus=None):
+        return artist.checkbox(box, label_gap, fill, outline, mark, focus=focus)
+
+    indicators = {
+        "Fluent.Check.indicator": states(checkbox, (unchecked, off_stroke), [
+            ("pressed selected", (ui.accent_active, edge, check)),
+            ("active selected", (ui.accent_hover, edge, check)),
+            ("selected", (ui.accent, edge, check)),
+            ("pressed", (unchecked_hover, off_stroke)),
+            ("active", (unchecked_hover, off_stroke)),
+        ], [
+            ("selected disabled", (indicator_disabled, None, base)),
+            ("disabled", (_CLEAR, indicator_disabled)),
+        ]),
+    }
     track, height = px(40), px(20)
     knob, knob_hover = px(12), px(14)
     off_knob = mix(text, base, 0.35)
-    switch_disabled = mix(base, overlay, 0.2)
-    style.element_create(
-        "Fluent.Switch.indicator", "image",
-        artist.switch(track, height, gap, unchecked, off_knob, knob, False, ui.stroke_strong),
-        ("selected disabled", artist.switch(track, height, gap, switch_disabled, base, knob, True)),
-        ("disabled", artist.switch(track, height, gap, clear, switch_disabled, knob, False,
-                                   switch_disabled)),
-        ("active selected", artist.switch(track, height, gap, ui.accent_hover, check,
-                                          knob_hover, True)),
-        ("selected", artist.switch(track, height, gap, ui.accent, check, knob, True)),
-        ("active", artist.switch(track, height, gap, unchecked_hover, off_knob, knob_hover,
-                                 False, ui.stroke_strong)),
-        sticky="",
-    )
+
+    def switch(fill, knob_color, knob_size, on, outline=None, focus=None):
+        return artist.switch(track, height, label_gap, fill, knob_color, knob_size, on,
+                             outline, focus=focus)
+
+    indicators["Fluent.Switch.indicator"] = states(
+        switch, (unchecked, off_knob, knob, False, off_stroke), [
+            ("active selected", (ui.accent_hover, check, knob_hover, True, edge)),
+            ("selected", (ui.accent, check, knob, True, edge)),
+            ("active", (unchecked_hover, off_knob, knob_hover, False, off_stroke)),
+        ], [
+            ("selected disabled", (indicator_disabled, base, knob, True)),
+            ("disabled", (_CLEAR, indicator_disabled, knob, False, indicator_disabled)),
+        ])
+    for name, (specs, default) in indicators.items():
+        elements[name] = (specs, default)
+        style.element_create(name, "image", default, *specs, sticky="")
+    # The indicator carries the focus ring, so the label draws no focus
+    # rectangle of its own.
     for style_name, indicator in (
         ("TCheckbutton", "Fluent.Check.indicator"),
         ("Switch.TCheckbutton", "Fluent.Switch.indicator"),
     ):
         style.layout(style_name, [("Checkbutton.padding", {"sticky": "nsew", "children": [
             (indicator, {"side": "left", "sticky": ""}),
-            ("Checkbutton.focus", {"side": "left", "sticky": "w", "children": [
-                ("Checkbutton.label", {"sticky": "nsew"})]})]})])
+            ("Checkbutton.label", {"side": "left", "sticky": "w"})]})])
+    indicator_height = box + 2 * margin
     style.configure(
-        "TCheckbutton", padding=(0, px(4)), foreground=text, font=font,
-        focuscolor=ui.focus_ring, focusthickness=1,
+        "TCheckbutton", foreground=text, font=font,
+        padding=(0, max(0, (ui.control_height - indicator_height) // 2)),
     )
     style.map("TCheckbutton", foreground=[("disabled", muted)])
 
@@ -652,13 +731,13 @@ def _configure(style, ui, artist):
         ("Treeheading.padding", {"sticky": "nsew", "children": [
             ("Treeheading.image", {"side": "right", "sticky": ""}),
             ("Treeheading.text", {"sticky": "we"})]})]})])
-    # Clam's default row height is a fixed pixel count; at high DPI the
-    # scaled text outgrows it and the rows overlap.
-    linespace = tkfont.Font(root=artist.master, font=font).metrics("linespace")
+    # Rows follow the density. Clam's own default is a fixed pixel count the
+    # text outgrows at high DPI; a platform font taller than the row (Linux
+    # uses its own default size) still gets its line plus breathing room.
     style.configure(
         "Treeview", background=ui.card, fieldbackground=ui.card, foreground=text,
         bordercolor=ui.card, lightcolor=ui.card, darkcolor=ui.card, borderwidth=0,
-        rowheight=linespace + px(12),
+        rowheight=max(ui.tree_row_height, label_height + px(8)),
     )
     style.map(
         "Treeview",
@@ -694,6 +773,20 @@ def _surface_style(parent, base, ui=None):
         ttk.Style(parent).configure(name, background=color)
         state.surface_styles.add(name)
     return name
+
+
+def face_gap(widget, visible, ui=None):
+    """Padding that leaves ``visible`` px between two adjacent controls in ``widget``.
+
+    Every Fluent face reserves its focus margin on each side (see
+    :class:`_Artist`), so two controls packed flush already show two margins
+    of surface between their faces; only the rest is padding. Where the theme
+    is not installed (macOS), the padding is ``visible`` itself.
+    """
+    state = _state(widget, ui)
+    if state is None:
+        return visible
+    return max(0, visible - 2 * state.artist.margin)
 
 
 def has_icons(widget, ui=None):
@@ -773,7 +866,7 @@ def nav_item(parent, text, command, *, icon=None, ui=None):
     """A section-navigation entry, packed into ``parent``. Returns its button.
 
     Fluent draws the selection pill inside the button; macOS keeps its
-    native button with the accent bar beside it that it always had.
+    native button with the copper-mark (``accent_border``) bar beside it.
     """
     ui = ui or ui_theme.theme()
     if uses_fluent(ui):
@@ -800,7 +893,7 @@ def set_selected(widget, selected, ui=None):
     widget.configure(font=ui.font(ui_theme.BODY_FONT_SIZE, "bold" if selected else None))
     marker = getattr(widget, "marker", None)
     if marker is not None:
-        marker.configure(bg=ui.accent if selected else marker.master.cget("background"))
+        marker.configure(bg=ui.accent_border if selected else marker.master.cget("background"))
 
 
 def entry(parent, *, font=None, ui=None, **options):
@@ -889,11 +982,13 @@ def field_frame(parent, *, ui=None):
             parent, bg=ui.card, highlightbackground=ui.border, highlightthickness=1,
         )
     # A frame's padding must be a widget option: its layout has no padding
-    # element, so a style padding would let the child cover the border.
-    px = _state(parent, ui).artist.px
+    # element, so a style padding would let the child cover the border. It
+    # clears the face's focus margin as well (see _Artist).
+    artist = _state(parent, ui).artist
+    inset = artist.margin + artist.px(4)
     frame = ttk.Frame(
         parent, style=_surface_style(parent, "Field.TFrame", ui),
-        padding=(px(4), px(4), px(4), px(4)),
+        padding=(inset, inset, inset, inset),
     )
     frame.surface_color = ui.field
     return frame

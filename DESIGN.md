@@ -1,94 +1,207 @@
 # SnipType design contract
 
-Adopted: Windows Design System 1.0.0 (2026-09-25). This document records the
-SnipType mapping. `source/ui_theme.py` is the implementation authority for the
-running Tk interface; this file explains the decisions behind it.
+Adoption record: **Teô Personal DS 2.7.1 — Windows native family** (Ink &
+Copper), adopted 2026-10-19. It replaces the Windows Design System 1.0.0
+adoption of 2026-09-25. `source/ui_theme.py` and `source/ui_widgets.py` are
+the implementation authority for the running Tk interface; this file records
+the decisions behind them, the deviations and the gates still open. The
+design system's `DESIGN.md`, `native/windows/tokens.css`, `patterns.md` and
+`quality.md` are the upstream authority.
 
-## Intent and workflow
+## Product, workflow and stack
 
-SnipType is a local, keyboard-first text expander. The manager opens on the
-library, where people find a trigger, inspect its value, edit it, and save it.
-Mappings, dynamic actions, backups, and settings are peer views. The window
-shows whether expansion is active and provides the pause command without
-requiring a trip to the tray. Search, selection, and editor content stay in
-their view while switching tabs. The interface uses quiet neutral layers,
-precise type, and a restrained blue accent. No decorative dashboard precedes
-the collection.
+- **Owner:** the repository owner. Personal-project scope, as the design
+  system requires.
+- **Primary workflow:** SnipType is a local, keyboard-first text expander that
+  lives in the tray. The manager opens on the library, where people find a
+  trigger, inspect its value, edit it and save it. Mappings, dynamic actions,
+  backups and settings are peer views. The window shows whether expansion is
+  active and offers the pause command without a trip to the tray. No
+  decorative dashboard precedes the collection.
+- **Stack:** Python with Tkinter/ttk (Tcl/Tk 8.6 on Windows), Pillow for the
+  drawn control faces, pystray for the tray. No WinUI, no web view.
+- **Platforms:** Windows 10 and 11 x64 are the supported desktop. macOS
+  (Apple Silicon) is a beta that keeps native Aqua controls. Linux runs the
+  same Windows-family theme in CI only.
+
+## Defaults
+
+| Decision | Value | Where |
+| --- | --- | --- |
+| Appearance | **Dark** on Windows and Linux; Light and System are explicit choices in Configurações > Geral. macOS defaults to System (see Deviations). | `ui_theme.default_preference()` |
+| Density | **Compact**: 32 px controls and 32 px list rows at 100% scaling. Comfortable (40/44) and Touch (44/48) are defined but have no setting yet. | `ui_theme.DENSITY_METRICS` |
+| Corner radius | 4 px controls, 8 px cards | `ui_widgets._configure` |
+| Spacing | 4 / 8 / 12 / 16 / 24 px | `Theme.space_*` |
+
+An install with no saved appearance, or a malformed one, gets the default and
+keeps no explicit choice in `settings.json`.
 
 ## Tokens
 
-The Windows palettes map the design system's semantic roles to Tk tokens:
+The family's opaque neutrals carry the hierarchy: the canvas and navigation
+sit on `surface`, collections on `card`, editing on `field`. Copper marks the
+primary action and selection; it never washes a surface. Every value is pinned
+token by token in `source/tests/test_ui_theme.py`, so a change needs review.
 
-| Role | Light | Dark | Tk owner |
+| DS role | Dark | Light | Tk token |
 | --- | --- | --- | --- |
-| Canvas | `#F3F3F3` | `#202020` | `surface` |
-| Working surface | `#FFFFFF` | `#2B2B2B` | `card` |
-| Primary text | `#1A1A1A` | `#F5F5F5` | `text` |
-| Supporting text | `#5C5C5C` | `#C4C4C4` | `text_muted` |
-| Divider | `#D6D6D6` | `#494949` | `border`, `divider` |
-| Control boundary | `#767676` | `#A0A0A0` | `control_border` |
-| Main action | `#005FB8` | `#60CDFF` | `accent` |
-| Main action text | `#FFFFFF` | `#003047` | `text_on_accent` |
-| Selection | `#DCEEFF` | `#153F54` | `select_bg` |
-| Focus | `#005FB8` | `#75D5FF` | `focus_ring` |
-| Warning text | `#7A4D00` | `#FFD479` | `warning` |
-| Destructive action | `#A4262C` | `#FFB4B8` | `danger` |
+| Window background / navigation (`--native-bg`, `--native-nav`) | `#292929` | `#E9E8E7` | `surface`, `surface_alt` |
+| Collection panel (`--native-panel`) | `#232323` | `#F6F5F4` | `card` |
+| Content / field (`--native-content`) | `#1C1C1E` | `#FFFFFF` | `field`, `control` |
+| Selection (`--native-selection`) | `#484848` | `#E8E6E3` | `select_bg`, `control_hover`, `surface_alt_active` |
+| Line (`--native-line`) | `#454545` | `#D8D8D8` | `border`, `divider`, `card_border` |
+| Field border (`--native-field-border`) | `#999CA3` | `#7B8088` | `field_border`, `control_stroke`, `stroke_strong` |
+| Primary text | `#F2EFE9` | `#202630` | `text`, `select_fg` |
+| Muted text (`--native-muted`) | `#BCBCBC` | `#606060` | `text_muted` |
+| Primary action fill / hover / pressed | `#E6A05A` / `#EDB47C` / `#CE8845` | `#E6A05A` / `#D99551` / `#BE7836` | `accent`, `accent_hover`, `accent_active` |
+| Primary action label | `#15100A` | `#15100A` | `text_on_accent` |
+| Primary border (copper mark) | `#E6A05A` | `#A0520A` | `accent_border` |
+| Link | `#EDB47C` | `#A0520A` | `link` |
+| Focus ring | `#F0C293` | `#263C56` | `focus_ring` |
+| Success fg / bg | `#73E0A1` / `#13271D` | `#16643B` / `#E6F6EC` | `success`, `success_bg` |
+| Warning fg / bg | `#FFD27A` / `#342A17` | `#7A4A00` / `#FFF1D6` | `warning`, `warning_bg` |
+| Danger fg / bg | `#FF8A85` / `#351718` | `#9B2C2C` / `#FCE8E8` | `danger`, `danger_bg` |
+| Info fg / bg | `#ADC1DC` / `#202E40` | `#263C56` / `#E8EEF5` | `info`, `info_bg` |
 
-The full light and dark maps, including hover and pressed values, are pinned
-by `source/tests/test_ui_theme.py`. The neutral button fill is `#E6E6E6` in
-light mode: this SnipType adaptation separates an idle button from both the
-white working surface and the gray canvas. Tk uses one `activebackground` for
-hover and press, so it takes the design system's pressed value. A stronger
-control boundary and a separate focus ring preserve keyboard focus.
+Tk adaptations, each recorded because the design system has no value for it:
 
-Typography uses Segoe UI Variable on Windows, with Tk's system fallback if
-unavailable. The 10 pt default is approximately 13 px at 100% scaling; Tk's
-integer point sizes cannot represent the design system's 14 px body exactly.
-Monospaced trigger identifiers use Consolas. Spacing follows the 4/8/12/16/24
-pixel rhythm; the manager has a 44 px row height. Text, dialogs, and window
-chrome must scale with Windows DPI rather than fixed bitmap assets.
+- **Pressed neutral** (`control_active`): `#3A3A3A` dark, `#DEDCD8` light.
+  Tk needs a pressed face distinct from hover; it sits one step past hover.
+- **Danger hover:** a destructive button hovers on `danger_bg`, because the
+  dark danger label measures 4.0:1 on the neutral hover fill.
+- **Overlays:** subtle and navigation buttons hover and press through a
+  translucent overlay (`overlay`: black in light, white in dark), so they work
+  on any surface.
+- **Scrollbar thumb:** the muted text tone.
+- **Light Windows keeps two system colors:** unpainted labels use
+  `SystemButtonText` (`text_native`), and text selected *inside* a field uses
+  `SystemHighlight`, so the user's own highlight color survives.
+
+## Type roles
+
+Call sites keep naming a role by its historical point size, and the theme
+resolves it. On Windows every role is a negative (pixel) Tk size scaled by
+`tk scaling`, because Tk point sizes cannot express 14 px:
+
+| Call-site size | Role | Windows face at 100% |
+| --- | --- | --- |
+| 9 | Caption | Segoe UI Variable Text, 12 px |
+| 10 | Body | Segoe UI Variable Text, 14 px |
+| 12 | Heading | Segoe UI Variable Text Semibold, 18 px (bold) |
+| 14, 16 | Title | Segoe UI Variable Display (Semibold), 28 px |
+
+A size outside that ramp raises instead of guessing. Windows 10 falls back to
+the static Segoe UI faces at the same pixel sizes. Monospace is reserved for
+literal triggers and paths: Cascadia Mono, then Cascadia Code, then Consolas.
+The Mono cut of Cascadia is preferred because ligatures would disguise the
+characters of a trigger. macOS and Linux keep their platform point scale,
+shifted so the body role matches the platform's default size.
+
+## Controls, focus and selection
+
+- **Faces.** Rounded faces are Pillow-drawn nine-slice images per palette and
+  display scale. A neutral button is the `control` fill inside one 1 px
+  `field_border` stroke, with no darker bottom edge. The primary (accent)
+  button is a copper fill with no border, as the design system's `DESIGN.md`
+  states. Fields draw the same stroke and turn their bottom edge into a 2 px
+  `accent_border` underline on focus.
+- **Copper marks versus fills.** Copper fills appear only on the primary
+  button and on checked check boxes and switches. Marks use `accent_border`:
+  the 3 × 16 px pill of the current navigation item, the edge of a checked
+  control and the focused field's underline. Raw copper is below 3:1 on the
+  light surfaces; the deep tone is not.
+- **Focus.** Every focusable face reserves a transparent margin of 3 px at
+  100% scaling. Focus draws a 2 px `focus_ring` in its outer part, with a 1 px
+  gap of the surface between the ring and the face. This applies to every
+  button variant, the combo box, the check box and the switch. Focus composes
+  with pressed, selected and hover rather than hiding them: the current
+  navigation item keeps its selection fill under the ring. The formatting
+  toolbar's buttons never take keyboard focus, so Tab moves between fields;
+  they reserve no margin. Gaps between adjacent controls are measured face to
+  face (`ui_widgets.face_gap`).
+- **Selection.** A selected list row and the current navigation item use the
+  neutral `select_bg`. The navigation item adds the copper pill and a
+  semibold label.
+
+## Persistence model
+
+| Surface | Model | Behavior |
+| --- | --- | --- |
+| Text and mapping editors | Explicit save (Salvar, Ctrl+S) | Every save takes a rotating backup and writes atomically. A failure is reported, and the in-memory library rolls back. Drafts are not tracked as dirty yet. |
+| Settings switches and choices | Immediate preference | Written to `settings.json` at once; a failed write restores the control and says so. |
+| Appearance | Immediate preference with a confirmed rebuild | The manager is rebuilt after a warning that unsaved editor text is discarded. |
+| Backups | Explicit restore | Restore and import keep the backup and quarantine guarantees in `AGENTS.md`. |
 
 ## Components and layout
 
-- The native window title bar, ttk tabs, tree selections, scrollbars, and
-  combobox semantics remain in place. Buttons use semantic theme helpers;
-  the main Save action is the accent action in each editor.
-- The manager shows product identity, live expansion state, a command row,
-  and the five peer views. Ctrl+1 through Ctrl+5 switches views. Ctrl+F
-  focuses search in the Textos and Mapeamentos lists; Ctrl+S saves the active
-  editor. The tree and editor remain side by side at supported widths.
-- The library and mapping views retain a list/editor split. Empty lists say
-  what to do next. Backups and settings keep their existing recovery and
-  immediate-preference semantics. Destructive edits name their target in a
-  confirmation; persistence failures do not claim success.
-- Appearance defaults to System, with explicit Light and Dark choices.
-  Changing appearance rebuilds the manager after warning about unsaved editor
-  text. macOS System appearance continues to use Aqua's native colors and
-  control drawing; this Windows design adoption does not replace them.
+- The native title bar (dark caption requested from DWM), Windows Snap and
+  the system menu stay native. There is no custom title bar.
+- The manager shows identity, live expansion state, the pause command and
+  five peer views in a left sidebar on the family's neutral navigation
+  surface. Ctrl+1 to Ctrl+5 switch views, Ctrl+F focuses the list search and
+  Ctrl+S saves the active editor.
+- The library and mapping views keep a list/editor split. Empty lists say
+  what to do next. Destructive edits name their target in a confirmation, and
+  persistence failures never claim success.
+- The supported Windows minimum is 1180 × 760 and the default is 1280 × 800.
+  At the minimum, the text editor's actions fit on one row.
 
-## Deliberate limits
+## Deviations
 
-The current Tk manager keeps its peer views in a notebook because the mapping
-editor needs three columns. Its supported Windows minimum is 1020 × 760;
-the design system's small-width overlay layout is not implemented. Revisit
-this when the editor supports a list/detail mode. A Windows system theme
-change while the manager is open takes effect when the manager is reopened:
-rebuilding immediately could discard an unsaved editor draft. Revisit after
-draft state is tracked across appearance changes. Compact Tk controls have
-not been certified as touch targets; the current product is operated with
-keyboard and pointer. These limits must be reported with any release review.
+| Area | Design system | SnipType | Why |
+| --- | --- | --- | --- |
+| Toolkit | WinUI 3 controls | Tk/ttk with drawn faces | The existing stack works; migration has no demonstrated benefit. |
+| Accessibility API | UI Automation peers | Tk 8.6 provides no UI Automation peers for its widgets, so Narrator support is limited and untested | Tk limitation. |
+| Materials | Mica window base | Opaque surfaces | Tk cannot draw Mica; the family's opaque fallback is used. |
+| Control templates | Native templates | Nine-slice images, 128 px tiled middle, per-surface styles | Tk has no rounded primitive; see the runtime reference. |
+| Focus geometry | Web: 3 px ring, 3 px offset | 2 px ring, 1 px gap | Tk cannot paint outside a widget. Every pixel of margin widens every control, and 2 px still meets the WCAG 2.4.13 area. |
+| macOS | Not part of this family | Native Aqua controls, System default, Aqua dynamic colors, 44 px rows; the current navigation item is marked by a full-height 3 px `accent_border` bar beside its native button instead of the pill | Aqua draws its controls in the OS appearance whatever the app picks. |
+| Navigation surface | Web shell uses the slate-navy rail | Family neutral navigation (`#292929` / `#E9E8E7`) | The native family's surfaces take precedence over the web shell. |
+
+## Operations extensions (proposed Teô DS 2.8)
+
+Adopted now as a project extension:
+
+- **Tk/ttk profile.** One theme seam (`ui_theme` and `ui_widgets`) owns
+  tokens, metrics and faces. Pixel metrics scale with `tk scaling`. Fonts use
+  pixel sizes from the family ramp, and controls follow the active density.
+  The focus ring sits in a reserved margin on every face, including the combo
+  box, check box and switch, and composes with selection. Marks use the
+  primary border tone; copper fills only primary faces and checked fills.
+  Contrast-theme handling from that profile is not implemented yet.
 
 ## Accessibility and proof
 
-Normal text and action labels target 4.5:1 contrast; the test suite checks
-body, supporting, selected, and button pairs in both opaque palettes. State
-must have text as well as color. Focus remains visible on buttons and fields.
-Keyboard commands have visible counterparts. Keep labels readable at the
-minimum supported window size and with longer PT-BR text. Do not add a
-custom title bar, fake Mica, or a second Tk root.
+Body text and labels target 4.5:1, and control boundaries, copper marks and
+the focus ring target 3:1. The suite checks, in both palettes:
 
-Before shipping UI changes, run the theme and manager tests, the full unit
-suite, Ruff, and a real Windows desktop pass at minimum/default size in System,
-Light, and Dark. That pass must include keyboard navigation, Narrator, 125%
-and 200% scaling, contrast themes, empty and populated libraries, save
-failure, and close/reopen. A headless test pass does not satisfy these gates.
+- text and muted text on every surface and on the selection;
+- the primary label on the primary fills;
+- danger on its own button states;
+- each state color on its own tint;
+- field border, copper mark and focus ring on the canvas, panel and field.
+
+State is never conveyed by color alone. Keep labels readable at the minimum
+window size and with longer PT-BR text. Do not add a custom title bar, fake
+Mica or a second Tk root.
+
+Evidence for this adoption: the unit suite and the manager smoke tests, plus
+screenshots of the real windows on an isolated data home with synthetic data,
+in Dark and Light at 1180 × 760 and 1600 × 1000, at 100% scaling only.
+
+## Unresolved gates
+
+Recorded per the family's release gates. A headless or harness pass does not
+satisfy any of them.
+
+| Gate | Status |
+| --- | --- |
+| Appearance: live System change while the manager is open | Failed. The new appearance applies when the manager is reopened, because a rebuild could discard an unsaved draft. |
+| Appearance: Windows contrast themes | Not tested. Drawn faces ignore system colors. |
+| Density: Comfortable and Touch | Not applicable until a density setting exists. |
+| Display: 125/150/200% DPI and mixed monitors | Not tested on hardware. Window minimums and spacing are still unscaled pixels. |
+| Keyboard: visible focus on list rows | Failed. A focused Treeview row is not drawn differently from a selected one. The light selection fill is faint without a marker: 1.14:1 on the panel and 1.02:1 on the navigation surface, where the copper pill and the semibold label carry the current page. |
+| Keyboard: formatting commands | Failed. Only bold, italic and underline have shortcuts (Ctrl+B, Ctrl+I, Ctrl+U); the other toolbar commands are pointer-only. |
+| Accessibility: Narrator roles, values and announcements | Not tested. |
+| Work preservation: drafts across appearance changes and refresh | Failed. Editors do not track dirty state. |
+| Physical desktop pass at minimum and default size, keyboard only, close and reopen | Not tested for this adoption. |

@@ -12,7 +12,9 @@ from snippet_utils import load_json_file, write_json_atomic
 
 
 RUNTIME_SETTING_DEFAULTS = {
-    "appearance": "system",
+    # None: no choice yet, so ui_theme applies its platform default (Dark on
+    # Windows, per the DS 2.7.1 Windows family).
+    "appearance": None,
     # None: no choice yet, so the interface follows the system language.
     "language": None,
     "terminator_mode": False,
@@ -47,7 +49,7 @@ def normalize_runtime_settings(settings):
     invalid = {}
 
     if "appearance" in normalized and normalized["appearance"] not in {
-        "system", "light", "dark",
+        None, "system", "light", "dark",
     }:
         invalid["appearance"] = RUNTIME_SETTING_DEFAULTS["appearance"]
 

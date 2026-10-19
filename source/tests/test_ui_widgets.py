@@ -45,59 +45,98 @@ class ColorTests(unittest.TestCase):
 
 class DrawnImageTests(unittest.TestCase):
 
-    def test_control_face_is_rounded_filled_and_elevated(self):
+    def test_control_face_is_rounded_filled_and_outlined(self):
         artist = _artist()
-        image, border = artist.face(4, "#FBFBFB", "#E5E5E5", "#C4C4C4")
+        image, border = artist.face(4, "#FFFFFF", "#7B8088")
         side = image.width
         self.assertEqual((side, side), image.size)
         # The corner is outside the rounded shape.
         self.assertLess(image.getpixel((0, 0))[3], 64)
-        self.assertEqual(_hex(image.getpixel((side // 2, side // 2))), "#FBFBFB")
-        self.assertEqual(_hex(image.getpixel((side // 2, 0))), "#E5E5E5")
-        # The bottom edge carries the darker elevation stroke.
-        self.assertEqual(_hex(image.getpixel((side // 2, side - 1))), "#C4C4C4")
+        self.assertEqual(_hex(image.getpixel((side // 2, side // 2))), "#FFFFFF")
+        # One field-border stroke all round: no darker elevation edge.
+        self.assertEqual(_hex(image.getpixel((side // 2, 0))), "#7B8088")
+        self.assertEqual(_hex(image.getpixel((side // 2, side - 1))), "#7B8088")
         # The nine-slice border keeps the whole corner out of the stretch.
         self.assertGreater(border, 4)
 
-    def test_focused_field_has_a_thick_accent_underline(self):
+    def test_focused_field_has_a_thick_copper_underline(self):
         artist = _artist()
-        image, _border = artist.face(4, "#FFFFFF", "#E5E5E5", "#005FB8", bottom_width=2)
+        image, _border = artist.face(4, "#FFFFFF", "#7B8088", "#A0520A", bottom_width=2)
         middle = image.width // 2
-        self.assertEqual(_hex(image.getpixel((middle, image.height - 1))), "#005FB8")
-        self.assertEqual(_hex(image.getpixel((middle, image.height - 2))), "#005FB8")
+        self.assertEqual(_hex(image.getpixel((middle, image.height - 1))), "#A0520A")
+        self.assertEqual(_hex(image.getpixel((middle, image.height - 2))), "#A0520A")
         self.assertEqual(_hex(image.getpixel((middle, image.height - 3))), "#FFFFFF")
 
-    def test_focus_ring_replaces_the_stroke(self):
+    def test_focus_ring_is_outset_with_a_surface_gap(self):
+        # Regression: the dark ring on the copper primary matched it at
+        # 1.35:1; the ring now sits outside the face, past a gap that shows
+        # the surface (transparent over the style background).
         artist = _artist()
-        image, _border = artist.face(4, "#FBFBFB", focus="#005FB8")
-        middle = image.width // 2
-        self.assertEqual(_hex(image.getpixel((middle, 0))), "#005FB8")
-        self.assertEqual(_hex(image.getpixel((middle, 1))), "#005FB8")
-        self.assertEqual(_hex(image.getpixel((middle, 2))), "#FBFBFB")
+        margin = artist.margin
+        self.assertEqual((artist.ring, margin), (2, 3))
+        rest, rest_border = artist.face(4, "#E6A05A", margin=margin)
+        focused, focus_border = artist.face(4, "#E6A05A", focus="#F0C293", margin=margin)
+        self.assertEqual(rest.size, focused.size)
+        self.assertEqual(rest_border, focus_border)
+        middle = focused.width // 2
+        for y in (0, 1):
+            self.assertEqual(_hex(focused.getpixel((middle, y))), "#F0C293")
+            self.assertEqual(rest.getpixel((middle, y))[3], 0)
+        self.assertEqual(focused.getpixel((middle, 2))[3], 0)
+        for image in (rest, focused):
+            self.assertEqual(_hex(image.getpixel((middle, margin))), "#E6A05A")
+            self.assertEqual(_hex(image.getpixel((middle, middle))), "#E6A05A")
+        with self.assertRaises(ValueError):
+            artist.face(4, "#E6A05A", focus="#F0C293")
+
+    def test_the_focus_margin_scales_with_the_display(self):
+        artist = _artist(2.0)
+        self.assertEqual((artist.ring, artist.margin), (4, 6))
 
     def test_images_scale_with_the_display(self):
-        _small, small_border = _artist(1.0).face(4, "#FBFBFB", "#E5E5E5")
-        _large, large_border = _artist(2.0).face(8, "#FBFBFB", "#E5E5E5")
+        _small, small_border = _artist(1.0).face(4, "#FFFFFF", "#7B8088")
+        _large, large_border = _artist(2.0).face(8, "#FFFFFF", "#7B8088")
         self.assertEqual(large_border, 2 * small_border)
         self.assertEqual(_artist(1.5).px(16), 24)
 
-    def test_checked_box_is_an_accent_square_with_a_mark(self):
-        image = _artist().checkbox(20, 8, "#005FB8", check="#FFFFFF")
-        self.assertEqual((28, 20), image.size)
-        self.assertEqual(_hex(image.getpixel((3, 3))), "#005FB8")
+    def test_checked_box_is_a_copper_square_with_an_edge_and_a_mark(self):
+        artist = _artist()
+        margin = artist.margin
+        image = artist.checkbox(20, 8, "#E6A05A", "#A0520A", check="#15100A")
+        self.assertEqual((20 + 2 * margin + 8, 20 + 2 * margin), image.size)
+        # The focus margin stays clear at rest.
+        self.assertEqual(image.getpixel((1, 13))[3], 0)
+        self.assertEqual(_hex(image.getpixel((margin, margin + 10))), "#A0520A")
+        self.assertEqual(_hex(image.getpixel((margin + 3, margin + 3))), "#E6A05A")
         # The gap after the box is transparent, spacing it from the label.
-        self.assertEqual(image.getpixel((24, 10))[3], 0)
-        mark = [image.getpixel((x, y)) for x in range(4, 16) for y in range(6, 15)]
-        self.assertTrue(any(_hex(pixel) == "#FFFFFF" for pixel in mark))
+        self.assertEqual(image.getpixel((20 + 2 * margin + 4, 13))[3], 0)
+        mark = [image.getpixel((margin + x, margin + y))
+                for x in range(4, 16) for y in range(6, 15)]
+        self.assertTrue(any(_hex(pixel) == "#15100A" for pixel in mark))
+
+    def test_focused_box_draws_its_ring_in_the_margin(self):
+        artist = _artist()
+        image = artist.checkbox(20, 8, "#FFFFFF", "#7B8088", focus="#263C56")
+        middle = (20 + 2 * artist.margin) // 2
+        self.assertEqual(_hex(image.getpixel((middle, 0))), "#263C56")
+        self.assertEqual(image.getpixel((middle, 2))[3], 0)
+        self.assertEqual(_hex(image.getpixel((middle, artist.margin))), "#7B8088")
 
     def test_switch_knob_sits_on_the_side_of_its_state(self):
         artist = _artist()
-        on = artist.switch(40, 20, 8, "#005FB8", "#FFFFFF", 12, True)
-        off = artist.switch(40, 20, 8, "#FFFFFF", "#5C5C5C", 12, False, "#8A8A8A")
-        self.assertEqual(_hex(on.getpixel((30, 10))), "#FFFFFF")
-        self.assertEqual(_hex(on.getpixel((10, 10))), "#005FB8")
-        self.assertEqual(_hex(off.getpixel((10, 10))), "#5C5C5C")
-        self.assertEqual(_hex(off.getpixel((30, 10))), "#FFFFFF")
+        margin = artist.margin
+        on = artist.switch(40, 20, 8, "#E6A05A", "#15100A", 12, True, "#A0520A")
+        off = artist.switch(40, 20, 8, "#FFFFFF", "#606060", 12, False, "#7B8088")
+        self.assertEqual((40 + 2 * margin + 8, 20 + 2 * margin), on.size)
+        self.assertEqual(_hex(on.getpixel((margin + 30, margin + 10))), "#15100A")
+        self.assertEqual(_hex(on.getpixel((margin + 10, margin + 10))), "#E6A05A")
+        self.assertEqual(_hex(on.getpixel((margin + 20, margin))), "#A0520A")
+        self.assertEqual(_hex(off.getpixel((margin + 10, margin + 10))), "#606060")
+        self.assertEqual(_hex(off.getpixel((margin + 30, margin + 10))), "#FFFFFF")
+        focused = artist.switch(40, 20, 8, "#FFFFFF", "#606060", 12, False, "#7B8088",
+                                focus="#263C56")
+        self.assertEqual(_hex(focused.getpixel((margin + 20, 0))), "#263C56")
+        self.assertEqual(focused.getpixel((margin + 20, 2))[3], 0)
 
 
 class FactoryTests(unittest.TestCase):
@@ -137,6 +176,35 @@ class FactoryTests(unittest.TestCase):
             self.assertTrue(factory.call_args_list)
             for call in factory.call_args_list:
                 self.assertFalse(painted & set(call.kwargs), call)
+
+    def test_macos_marks_the_current_page_with_the_copper_mark_tone(self):
+        # Regression: the bar beside the current page took the raw copper
+        # fill, 1.8:1 on the light sidebar; marks use accent_border.
+        for kind in ("light", "dark"):
+            theme = ui_theme.build_theme(kind, system="darwin")
+            with self.subTest(kind=kind), mock.patch.object(ui_widgets.tk, "Button"), \
+                    mock.patch.object(ui_widgets.tk, "Frame"):
+                widget = ui_widgets.nav_item(mock.Mock(), "x", None, ui=theme)
+                widget.marker.master.cget.return_value = theme.surface_alt
+                ui_widgets.set_selected(widget, True, theme)
+                widget.marker.configure.assert_called_with(bg=theme.accent_border)
+                ui_widgets.set_selected(widget, False, theme)
+                widget.marker.configure.assert_called_with(bg=theme.surface_alt)
+
+    def test_gaps_between_fluent_faces_count_their_focus_margins(self):
+        widget = mock.Mock(**{"tk.interpaddr.return_value": "face-gap-test"})
+        # No installed theme (macOS, or before install): the padding is the gap.
+        self.assertEqual(ui_widgets.face_gap(widget, 16, self.windows), 16)
+        key = ("face-gap-test", ui_widgets.theme_name(self.windows))
+        for scale, visible, expected in ((1.0, 16, 10), (1.0, 6, 0), (1.0, 4, 0), (2.0, 16, 4)):
+            with self.subTest(scale=scale, visible=visible), mock.patch.dict(
+                ui_widgets._themes,
+                {key: ui_widgets._ThemeState(self.windows, _artist(scale))},
+            ):
+                self.assertEqual(ui_widgets.face_gap(widget, visible, self.windows), expected)
+
+    def test_icon_fonts_belong_to_the_theme_seam(self):
+        self.assertEqual(ui_theme.ICON_FONT_FILES, ("SegoeIcons.ttf", "segmdl2.ttf"))
 
     def test_icons_need_an_installed_theme(self):
         self.assertFalse(ui_widgets.has_icons(mock.Mock(**{"tk.interpaddr.return_value": 1}),

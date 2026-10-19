@@ -3251,36 +3251,16 @@ class Sniptype:
 
     def _configure_manager_styles(self, root):
         ui = ui_theme.theme()
-        theme_name = ui_theme.prepare_window(root, ui)
+        ui_theme.prepare_window(root, ui)
         style = ttk.Style(root)
 
-        style.configure(
-            "Manager.TNotebook",
-            background=ui.surface,
-            borderwidth=0,
-            tabmargins=(0, 0, 0, ui.space_sm),
-        )
-        style.configure(
-            "Manager.TNotebook.Tab",
-            padding=(18, 10),
-            font=ui.font(9, "bold"),
-        )
-        # The manager navigates from its sidebar: same page container, with
-        # the tab strip removed so it costs no vertical space.
+        # The manager navigates from its sidebar: the notebook is only the
+        # page container, with the tab strip removed so it costs no space.
         style.configure(
             "Pages.TNotebook", background=ui.surface, borderwidth=0,
             tabmargins=(0, 0, 0, 0),
         )
         style.layout("Pages.TNotebook.Tab", [])
-        if theme_name != "aqua":
-            # Aqua draws the tab strip natively and already follows the system
-            # appearance; overriding its colors is what made the labels
-            # unreadable in dark mode.
-            style.map(
-                "Manager.TNotebook.Tab",
-                background=[("selected", ui.card), ("!selected", ui.surface_alt)],
-                foreground=[("selected", ui.accent), ("!selected", ui.tab_unselected_fg)],
-            )
         style.configure(
             "Manager.Treeview",
             background=ui.card,
@@ -3890,13 +3870,19 @@ class Sniptype:
         btn_rename = editor_button(_("Renomear"), "rename")
         btn_delete = editor_button(_("Excluir"), "delete", variant="danger", parent=secondary_actions)
         btn_save = editor_button(_("Salvar"), "save", variant="accent", parent=secondary_actions)
-        btn_new.pack(side=tk.LEFT, padx=(0, 6))
-        btn_duplicate.pack(side=tk.LEFT, padx=(0, 6))
+        # Gaps are measured between faces: the focus margin every Fluent
+        # button reserves is part of the gap, which keeps the row at its
+        # pre-margin width (it must fit on one line at the minimum window).
+        button_gap = ui_widgets.face_gap(btn_frame, 6)
+        btn_new.pack(side=tk.LEFT, padx=(0, button_gap))
+        btn_duplicate.pack(side=tk.LEFT, padx=(0, button_gap))
         btn_rename.pack(side=tk.LEFT)
-        btn_delete.pack(side=tk.LEFT, padx=(0, 6))
+        btn_delete.pack(side=tk.LEFT, padx=(0, button_gap))
         btn_save.pack(side=tk.LEFT)
         layout_wrapping_row(
-            btn_frame, primary_actions, secondary_actions, ui.space_lg, ui.space_sm
+            btn_frame, primary_actions, secondary_actions,
+            ui_widgets.face_gap(btn_frame, ui.space_lg),
+            ui_widgets.face_gap(btn_frame, ui.space_sm),
         )
 
         item_group_var = tk.StringVar(value="")
@@ -4686,10 +4672,13 @@ class Sniptype:
         btn_delete_map = mapping_button(_("Excluir"), "delete", variant="danger", parent=secondary_actions)
         btn_save_map = mapping_button(_("Salvar"), "save", variant="accent", parent=secondary_actions)
         btn_new_map.pack(side=tk.LEFT)
-        btn_delete_map.pack(side=tk.LEFT, padx=(0, 6))
+        # Face-to-face gaps, as in the static editor's action row.
+        btn_delete_map.pack(side=tk.LEFT, padx=(0, ui_widgets.face_gap(btn_frame, 6)))
         btn_save_map.pack(side=tk.LEFT)
         layout_wrapping_row(
-            btn_frame, primary_actions, secondary_actions, ui.space_lg, ui.space_sm
+            btn_frame, primary_actions, secondary_actions,
+            ui_widgets.face_gap(btn_frame, ui.space_lg),
+            ui_widgets.face_gap(btn_frame, ui.space_sm),
         )
         mapping_metadata_frame = tk.Frame(frame_right, bg=ui.card)
         mapping_metadata_frame.grid(row=8, column=0, sticky="ew", pady=(ui.space_md, 0))

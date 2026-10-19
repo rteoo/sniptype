@@ -23,6 +23,7 @@ from app_module import sniptype as tx  # .pyw is not importable off Windows
 from gui_thread import GuiThread
 from library_metadata import LibraryMetadata
 from platform_support import IS_MAC
+import ui_widgets
 
 TK_AVAILABLE = False
 TK_SKIP_REASON = "Tk display not available"
@@ -128,8 +129,11 @@ class ManagerGuiSmokeTests(unittest.TestCase):
         # know, so the requested spec proves nothing; ask Tk what it used.
         def probe(shared_root):
             ui = tx.ui_theme.bind(shared_root)
-            for size, weight in ((10, None), (10, "bold"), (16, None), (16, "bold")):
-                spec = ui.font(size, weight)
+            specs = [ui.font(size, weight)
+                     for size, weight in ((10, None), (10, "bold"), (16, None), (16, "bold"))]
+            # Cascadia Mono where installed, else Consolas: either way, real.
+            specs.append(ui.mono_font())
+            for spec in specs:
                 rendered = tkfont.Font(root=shared_root, font=spec).actual("family")
                 self.assertEqual(rendered, spec[0], spec)
 
@@ -795,14 +799,17 @@ class ManagerGuiSmokeTests(unittest.TestCase):
         self._on_gui(run)
 
     def test_applying_an_appearance_rebuilds_the_manager_on_the_settings_tab(self):
-        self.addCleanup(tx.ui_theme.set_preference, "system")
+        self.addCleanup(tx.ui_theme.set_preference, None)
 
         def run(shared_root):
             self.app._build_manager_window(shared_root)
             first = self.app.manager_window
+            # No saved appearance: the manager opens in the Dark default.
+            self.assertEqual(ttk.Style(first).theme_use(), "sniptype-fluent-dark")
             combo, = self._settings_widgets(
-                ttk.Combobox, lambda w: tx.ui_theme.APPEARANCE_LABELS["dark"] in w.cget("values"))
-            combo.set(tx.ui_theme.APPEARANCE_LABELS["dark"])
+                ttk.Combobox, lambda w: tx.ui_theme.APPEARANCE_LABELS["light"] in w.cget("values"))
+            self.assertEqual(combo.get(), tx.ui_theme.APPEARANCE_LABELS["dark"])
+            combo.set(tx.ui_theme.APPEARANCE_LABELS["light"])
             apply, = self._settings_widgets(
                 BUTTONS, lambda w: w.cget("text") == "Aplicar aparência")
             with mock.patch.object(tx.messagebox, "askyesno", return_value=True):
@@ -811,34 +818,143 @@ class ManagerGuiSmokeTests(unittest.TestCase):
             rebuilt = self.app.manager_window
             self.assertIsNot(rebuilt, first)
             self.assertFalse(first.winfo_exists())
-            self.assertTrue(tx.ui_theme.theme().is_dark)
-            self.assertEqual(tx.load_settings(self.app.settings_file)["appearance"], "dark")
+            self.assertFalse(tx.ui_theme.theme().is_dark)
+            self.assertEqual(tx.load_settings(self.app.settings_file)["appearance"], "light")
             self.assertEqual(
                 self.app._manager_notebook.select(), str(self.app._manager_settings_tab))
-            self.assertEqual(ttk.Style(rebuilt).theme_use(), "sniptype-fluent-dark")
+            self.assertEqual(ttk.Style(rebuilt).theme_use(), "sniptype-fluent-light")
 
         self._on_gui(run)
 
     def test_declining_the_reload_changes_nothing(self):
-        self.addCleanup(tx.ui_theme.set_preference, "system")
+        self.addCleanup(tx.ui_theme.set_preference, None)
 
         def run(shared_root):
             self.app._build_manager_window(shared_root)
             first = self.app.manager_window
             combo, = self._settings_widgets(
-                ttk.Combobox, lambda w: tx.ui_theme.APPEARANCE_LABELS["dark"] in w.cget("values"))
-            combo.set(tx.ui_theme.APPEARANCE_LABELS["dark"])
+                ttk.Combobox, lambda w: tx.ui_theme.APPEARANCE_LABELS["light"] in w.cget("values"))
+            combo.set(tx.ui_theme.APPEARANCE_LABELS["light"])
             apply, = self._settings_widgets(
                 BUTTONS, lambda w: w.cget("text") == "Aplicar aparência")
             with mock.patch.object(tx.messagebox, "askyesno", return_value=False):
                 apply.invoke()
             first.update()
             self.assertIs(self.app.manager_window, first)
-            self.assertEqual(tx.ui_theme.preference(), "system")
+            self.assertEqual(tx.ui_theme.preference(), "dark")
             self.assertNotIn("appearance", tx.load_settings(self.app.settings_file))
-            self.assertEqual(combo.get(), tx.ui_theme.APPEARANCE_LABELS["system"])
+            self.assertEqual(combo.get(), tx.ui_theme.APPEARANCE_LABELS["dark"])
 
         self._on_gui(run)
+
+    def test_focus_changes_the_drawn_face_of_every_focusable_control(self):
+        """Regression (ST-07): focus was invisible on several controls.
+
+        The combobox had no focus face, and the current nav item matched
+        'selected' before 'focus', so it never drew the ring. This resolves
+        the image ttk draws for a widget exactly as ttk does (the first state
+        spec the widget is in) and reads the drawn pixels: at rest the focus
+        margin above the face is clear; focused it holds the ring color.
+        """
+        self.addCleanup(tx.ui_theme.set_preference, None)
+
+        def drawn(widget, element, ui):
+            specs, default = ui_widgets._state(widget, ui).elements[element]
+            for state, image in specs:
+                if widget.instate(state.split()):
+                    return image
+            return default
+
+        def ring_pixel(image, element):
+            # A point on the straight top edge of the ring: the middle of a
+            # face, of the square check box, and inside the switch track.
+            if element.endswith(".face"):
+                x = image.width() // 2
+            elif element == "Fluent.Check.indicator":
+                x = image.height() // 2
+            else:
+                x = image.height()
+            return x, 0
+
+        def run(shared_root):
+            results = []
+            for preference in ("dark", "light"):
+                tx.ui_theme.set_preference(preference)
+                window = tk.Toplevel(shared_root)
+                window.withdraw()
+                ui = tx.ui_theme.bind(window)
+                tx.ui_theme.prepare_window(window, ui)
+                window.configure(bg=ui.surface)
+                cases = [("accent", ui_widgets.button(window, text="Save", variant="accent", ui=ui),
+                          "Fluent.Accent.face")]
+                if preference == "dark":
+                    nav = ui_widgets.nav_item(window, "Texts", None, ui=ui)
+                    ui_widgets.set_selected(nav, True, ui)
+                    cases += [
+                        ("combobox", ui_widgets.combobox(window, values=("a",), ui=ui),
+                         "Fluent.Combo.face"),
+                        ("selected nav", nav, "Fluent.Nav.face"),
+                        ("checkbox", ui_widgets.checkbox(window, text="Favorite", ui=ui),
+                         "Fluent.Check.indicator"),
+                        ("switch", ui_widgets.switch(window, text="Terminator", ui=ui),
+                         "Fluent.Switch.indicator"),
+                    ]
+                ring = tuple(channel >> 8 for channel in window.winfo_rgb(ui.focus_ring))
+                for label, widget, element in cases:
+                    rest = drawn(widget, element, ui)
+                    widget.state(["focus"])
+                    focused = drawn(widget, element, ui)
+                    x, y = ring_pixel(focused, element)
+                    results.append((
+                        f"{preference} {label}",
+                        rest is not focused,
+                        bool(rest.transparency_get(x, y)),
+                        bool(focused.transparency_get(x, y)),
+                        tuple(focused.get(x, y)) == ring,
+                    ))
+                    widget.state(["!focus"])
+                    self.assertIs(drawn(widget, element, ui), rest, label)
+                window.destroy()
+            return results
+
+        for label, differs, rest_clear, focus_clear, ring_color in self._on_gui(run):
+            with self.subTest(label):
+                self.assertTrue(differs, "focus selects the same image as rest")
+                self.assertTrue(rest_clear, "the focus margin is painted at rest")
+                self.assertFalse(focus_clear, "no ring where the focus margin is")
+                self.assertTrue(ring_color, "the ring is not the focus color")
+
+    def test_compact_controls_and_rows_meet_the_density(self):
+        """DS 2.7.1 Compact: 32 px faces and list rows at 100% scaling."""
+        def run(shared_root):
+            self.app._build_manager_window(shared_root)
+            window = self.app.manager_window
+            ui = tx.ui_theme.theme()
+            margin = ui_widgets._state(window, ui).artist.margin
+            probe = tk.Frame(window, bg=ui.surface)
+            probe.grid(row=1, column=0)
+            widgets = {
+                "TButton": ui_widgets.button(probe, text="Novo", ui=ui),
+                "Accent": ui_widgets.button(probe, text="Salvar", variant="accent", ui=ui),
+                "TCombobox": ui_widgets.combobox(probe, values=("a",), ui=ui),
+                "TEntry": ui_widgets.entry(probe, ui=ui),
+            }
+            # Never focusable, so its face reserves no focus margin.
+            toolbar = ui_widgets.button(probe, text="B", variant="toolbar", ui=ui)
+            for widget in (*widgets.values(), toolbar):
+                widget.pack(side=tk.LEFT)
+            window.update_idletasks()
+            faces = {name: widget.winfo_reqheight() - 2 * margin
+                     for name, widget in widgets.items()}
+            rowheight = int(ttk.Style(window).lookup("Manager.Treeview", "rowheight"))
+            return ui.px(32), faces, rowheight, toolbar.winfo_reqheight()
+
+        compact, faces, rowheight, toolbar_height = self._on_gui(run)
+        for name, height in faces.items():
+            with self.subTest(name):
+                self.assertGreaterEqual(height, compact)
+        self.assertEqual(rowheight, compact)
+        self.assertEqual(toolbar_height, compact)
 
     def _displayed_texts(self, window):
         """Every piece of text the manager shows: widgets, headings, rows, tabs, titles."""

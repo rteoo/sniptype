@@ -96,13 +96,16 @@ class RuntimeSettingsNormalizationTests(unittest.TestCase):
         )
 
     def test_appearance_accepts_only_known_choices(self):
-        for value in ("system", "light", "dark"):
+        # None is "no choice yet", which is also what a malformed value becomes:
+        # ui_theme then applies its platform default (Dark on Windows), and a
+        # later settings save does not turn the fallback into an explicit choice.
+        for value in ("system", "light", "dark", None):
             normalized, invalid = normalize_runtime_settings({"appearance": value})
             self.assertEqual(normalized["appearance"], value)
             self.assertEqual(invalid, {})
-        for value in ("Dark", "", None, 1):
+        for value in ("Dark", "", 1):
             normalized, invalid = normalize_runtime_settings({"appearance": value})
-            self.assertEqual(normalized["appearance"], "system")
+            self.assertIsNone(normalized["appearance"])
             self.assertEqual(set(invalid), {"appearance"})
 
     def test_language_accepts_only_known_choices(self):
