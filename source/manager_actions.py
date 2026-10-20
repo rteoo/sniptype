@@ -21,6 +21,8 @@ from library_metadata import (
     duplicate_static_item_metadata,
     rename_static_item_metadata,
     normalize_metadata,
+    restore_mapping_item_metadata,
+    restore_static_item_metadata,
     remove_form_metadata as metadata_remove_form_metadata,
     set_form_metadata as metadata_set_form_metadata,
     set_mapping_form_metadata as metadata_set_mapping_form_metadata,
@@ -214,6 +216,71 @@ def rename_static(
     return _finish(content, state, dynamic_triggers)
 
 
+def _restorable_item(state, item_metadata):
+    """A copy of saved item metadata whose group still exists; an item whose
+    group was deleted since comes back ungrouped."""
+    item = copy.deepcopy(dict(item_metadata))
+    if item.get("group_id") not in dict(state).get("groups", {}):
+        item.pop("group_id", None)
+    return item
+
+
+def restore_static(
+    snippets,
+    metadata,
+    key,
+    value,
+    item_metadata=None,
+    *,
+    dynamic_triggers=(),
+):
+    """Undo a static delete: put ``value`` back under ``key`` with the item's
+    metadata as :func:`library_metadata.static_item_metadata` saved it.
+
+    Refused when anything has taken the name since, or when the item's
+    effective trigger now collides with another.
+    """
+    content, state = _begin(snippets, metadata)
+    if not isinstance(key, str) or not key or key.startswith("_"):
+        raise ValueError("key must be a non-empty non-reserved string")
+    if key in content:
+        raise ValueError(f"static item already exists: {key}")
+    content[key] = copy.deepcopy(value)
+    if item_metadata:
+        state = restore_static_item_metadata(state, key, _restorable_item(state, item_metadata))
+    _check_collisions(content, state, (key,), dynamic_triggers)
+    return _finish(content, state, dynamic_triggers)
+
+
+def restore_mapping_item(
+    snippets,
+    metadata,
+    container_key,
+    item_key,
+    value,
+    item_metadata=None,
+    *,
+    dynamic_triggers=(),
+):
+    """Undo a mapping-item delete, as :func:`restore_static` does for statics.
+
+    Refused when the mapping type is gone or the identifier is taken again.
+    """
+    content, state = _begin(snippets, metadata)
+    entries = content.get(container_key)
+    if not isinstance(entries, Mapping):
+        raise KeyError(f"unknown mapping type: {container_key}")
+    if not isinstance(item_key, str) or not item_key or item_key == "__prefix__":
+        raise ValueError("item_key must be a non-empty identifier other than __prefix__")
+    if item_key in entries:
+        raise ValueError(f"mapping item already exists: {item_key}")
+    entries[item_key] = copy.deepcopy(value)
+    if item_metadata:
+        state = restore_mapping_item_metadata(
+            state, container_key, item_key, _restorable_item(state, item_metadata))
+    return _finish(content, state, dynamic_triggers)
+
+
 def create_group(
     snippets,
     metadata,
@@ -266,6 +333,57 @@ def delete_group(snippets, metadata, group_id, *, dynamic_triggers=()):
     )
     state = metadata_delete_group(state, group_id)
     _check_collisions(content, state, assigned, dynamic_triggers)
+    return _finish(content, state, dynamic_triggers)
+
+
+def group_members(metadata, group_id):
+    """``(static keys, (container, key) mapping items)`` assigned to a group."""
+    items = dict(metadata or {}).get("items", {})
+    group_id = str(group_id)
+    static = tuple(
+        key for key, item in items.get("static", {}).items()
+        if isinstance(item, Mapping) and item.get("group_id") == group_id
+    )
+    mappings = tuple(
+        (container, key)
+        for container, entries in items.get("mappings", {}).items()
+        if isinstance(entries, Mapping)
+        for key, item in entries.items()
+        if isinstance(item, Mapping) and item.get("group_id") == group_id
+    )
+    return static, mappings
+
+
+def restore_group(
+    snippets,
+    metadata,
+    group_id,
+    definition,
+    *,
+    static_items=(),
+    mapping_items=(),
+    dynamic_triggers=(),
+):
+    """Undo :func:`delete_group`: recreate the group under its id and give it
+    back the members (from :func:`group_members`) that still exist and that
+    nothing has regrouped since."""
+    content, state = _begin(snippets, metadata)
+    state = metadata_create_group(state, group_id, definition)
+    group_id = str(group_id)
+    statics = state["items"]["static"]
+    regrouped = []
+    for key in static_items:
+        if key in content and not callable(content[key]) and "group_id" not in statics.get(key, {}):
+            statics.setdefault(key, {})["group_id"] = group_id
+            regrouped.append(key)
+    mappings = state["items"]["mappings"]
+    for container, key in mapping_items:
+        entries = content.get(container)
+        if not isinstance(entries, Mapping) or key not in entries:
+            continue
+        item = mappings.setdefault(container, {}).setdefault(key, {})
+        item.setdefault("group_id", group_id)
+    _check_collisions(content, state, regrouped, dynamic_triggers)
     return _finish(content, state, dynamic_triggers)
 
 
@@ -399,9 +517,13 @@ __all__ = [
     "delete_group",
     "duplicate_static",
     "duplicate_static_item",
+    "group_members",
     "rename_static",
     "remove_form",
     "remove_form_metadata",
+    "restore_group",
+    "restore_mapping_item",
+    "restore_static",
     "set_form",
     "set_form_metadata",
     "set_mapping_form",

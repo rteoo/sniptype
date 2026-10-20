@@ -14,6 +14,8 @@ Libraries used:
 - yfinance (open source, Apache 2.0)
 """
 
+import copy
+from datetime import datetime
 import time
 import threading
 import gc
@@ -46,6 +48,7 @@ from snippet_utils import (
     find_shadowed_statics,
     get_dynamic_prefixes,
     get_default_snippets as get_static_default_snippets,
+    library_change_counts,
     load_json_file,
     merge_snippets,
     validate_static_snippets,
@@ -54,9 +57,11 @@ from snippet_utils import (
 )
 from library_metadata import (
     build_library_document,
+    mapping_item_metadata,
     merge_metadata,
     normalize_metadata,
     split_library_document,
+    static_item_metadata,
 )
 from trigger_index import (
     ExpansionTarget,
@@ -77,6 +82,7 @@ from runtime_support import (
     NOTIFICATION_HISTORY_LIMIT,
 )
 from backup_support import (
+    backup_time,
     create_backup,
     list_backups,
     prune_backups,
@@ -98,6 +104,7 @@ from workflow_support import SnippetRef, WorkflowState
 from validation_support import validate_trigger
 import i18n
 import macos_permissions
+import time_format
 import ui_theme
 import ui_widgets
 import win_input
@@ -162,7 +169,11 @@ from manager_actions import (
     create_group as manager_create_group,
     delete_group as manager_delete_group,
     duplicate_static as manager_duplicate_static,
+    group_members as manager_group_members,
     rename_static as manager_rename_static,
+    restore_group as manager_restore_group,
+    restore_mapping_item as manager_restore_mapping_item,
+    restore_static as manager_restore_static,
     set_form as manager_set_form,
     set_mapping_form as manager_set_mapping_form,
     toggle_favorite as manager_toggle_favorite,
@@ -194,7 +205,7 @@ from gui_thread import GuiThread
 
 # GUI for managing snippets
 import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog, filedialog, font as tkfont
+from tkinter import ttk, filedialog, font as tkfont
 
 
 
@@ -809,17 +820,14 @@ class Sniptype:
             self.logger.error(f"Falha ao criar backup manual: {e}")
             return None
 
-    def restore_backup(self, backup_path):
-        """Replace the live library with a backup (current file backed up first).
-
-        Returns (ok, error_message).
-        """
+    def _read_backup(self, backup_path):
+        """Load and check a backup: ``(snippets, None)`` or ``(None, error_message)``."""
         try:
             data = validate_static_snippets(load_json_file(backup_path))
         except Exception as e:
-            return False, _("Backup inválido: {error}").format(error=e)
+            return None, _("Backup inválido: {error}").format(error=e)
         if data is None:
-            return False, _("Backup inválido: formato inesperado.")
+            return None, _("Backup inválido: formato inesperado.")
 
         restored_snippets, restored_metadata = split_library_document(data)
         restored_metadata = normalize_metadata(
@@ -831,7 +839,32 @@ class Sniptype:
             restored_metadata,
         )
         if collision_error:
-            return False, _("Backup inválido: {error}").format(error=collision_error)
+            return None, _("Backup inválido: {error}").format(error=collision_error)
+        return restored_snippets, None
+
+    def _saved_library(self):
+        """The static library as it is on disk: no callables, shadowed statics kept."""
+        return build_saveable_snippets(self.snippets, self.shadowed_static_snippets)
+
+    def preview_restore(self, backup_path):
+        """What restoring ``backup_path`` changes: ``(counts, None)`` or ``(None, error)``.
+
+        ``counts`` is :func:`snippet_utils.library_change_counts` from the live
+        library to the backup.
+        """
+        restored, error = self._read_backup(backup_path)
+        if error:
+            return None, error
+        return library_change_counts(self._saved_library(), restored), None
+
+    def restore_backup(self, backup_path):
+        """Replace the live library with a backup (current file backed up first).
+
+        Returns (ok, error_message).
+        """
+        _restored, error = self._read_backup(backup_path)
+        if error:
+            return False, error
 
         if not self._backup_current_library():
             return False, _("Falha ao criar backup de segurança; restauração cancelada.")
@@ -853,23 +886,49 @@ class Sniptype:
         except OSError as e:
             return False, str(e)
 
+    def read_import_source(self, src_path):
+        """Load a library file to import: ``(document, None)`` or ``(None, error_message)``.
+
+        The document is ``(snippets, metadata)``; hand it to :meth:`apply_import`.
+        """
+        try:
+            data = validate_static_snippets(load_json_file(src_path))
+        except Exception as e:
+            return None, _("Arquivo inválido: {error}").format(error=e)
+        if data is None:
+            return None, _("Arquivo inválido: o JSON precisa ser um objeto.")
+        return split_library_document(data), None
+
+    def _imported_snippets(self, imported_snippets, mode):
+        """The static library an import in ``mode`` leaves, before metadata."""
+        if mode == "merge":
+            return {**self._saved_library(), **imported_snippets}
+        return imported_snippets
+
+    def import_change_counts(self, document):
+        """``{mode: counts}`` for both import modes of a :meth:`read_import_source` document."""
+        current = self._saved_library()
+        return {
+            mode: library_change_counts(current, self._imported_snippets(document[0], mode))
+            for mode in ("merge", "replace")
+        }
+
     def import_library(self, src_path, mode="replace"):
         """Import a library file (mode 'replace' or 'merge').
 
         Validates the source is a JSON object, backs up the current library,
         applies the change, mirrors and reloads. Returns (ok, error_message).
         """
-        try:
-            data = validate_static_snippets(load_json_file(src_path))
-        except Exception as e:
-            return False, _("Arquivo inválido: {error}").format(error=e)
-        if data is None:
-            return False, _("Arquivo inválido: o JSON precisa ser um objeto.")
+        document, error = self.read_import_source(src_path)
+        if error:
+            return False, error
+        return self.apply_import(document, mode)
 
-        imported_snippets, imported_metadata = split_library_document(data)
+    def apply_import(self, document, mode):
+        """Apply a :meth:`read_import_source` document; see :meth:`import_library`."""
+        imported_snippets, imported_metadata = document
+        merged = self._imported_snippets(imported_snippets, mode)
         if mode == "merge":
-            current = build_saveable_snippets(self.snippets, self.shadowed_static_snippets)
-            merged = {**current, **imported_snippets}
             try:
                 merged_metadata = merge_metadata(
                     self.library_metadata,
@@ -882,7 +941,6 @@ class Sniptype:
             except ValueError as e:
                 return False, _("Falha ao importar metadados: {error}").format(error=e)
         else:
-            merged = imported_snippets
             merged_metadata = imported_metadata
 
         merged_metadata = normalize_metadata(
@@ -1192,35 +1250,34 @@ class Sniptype:
 
             tk.Label(container, text=_("Telefone"), font=ui.font(), bg=ui.surface, fg=ui.text_native).grid(row=2, column=0, sticky="w")
             entry_phone = ui_widgets.entry(container, width=42)
-            entry_phone.grid(row=3, column=0, sticky="ew", pady=(4, 10))
+            entry_phone.grid(row=3, column=0, sticky="ew", pady=(4, 0))
             if initial_phone:
                 entry_phone.insert(0, initial_phone)
+            phone_error = tk.Label(
+                container, text="", font=ui.caption_font(), bg=ui.surface, fg=ui.danger,
+                anchor="w", justify=tk.LEFT, wraplength=380,
+            )
+            phone_error.grid(row=4, column=0, sticky="ew", pady=(2, 6))
 
-            tk.Label(container, text=_("Mensagem"), font=ui.font(), bg=ui.surface, fg=ui.text_native).grid(row=4, column=0, sticky="w")
+            tk.Label(container, text=_("Mensagem"), font=ui.font(), bg=ui.surface, fg=ui.text_native).grid(row=5, column=0, sticky="w")
             message_field, text_message = ui_widgets.text_area(
                 container, width=42, height=5, padx=ui.space_sm, pady=ui.space_xs,
             )
-            message_field.grid(row=5, column=0, sticky="ew", pady=(4, 12))
+            message_field.grid(row=6, column=0, sticky="ew", pady=(4, 12))
             if initial_message:
                 text_message.insert("1.0", initial_message)
 
-            buttons = tk.Frame(container, bg=ui.surface)
-            buttons.grid(row=6, column=0, sticky="e")
-
-            def cancel_dialog(_event=None):
+            def cancel_dialog():
                 dialog.destroy()  # result stays empty
 
-            def submit_dialog(event=None):
+            def submit_dialog():
                 phone_text = entry_phone.get().strip()
                 message_text = text_message.get("1.0", tk.END).rstrip("\n")
                 normalized_phone = normalize_phone_number(phone_text)
 
                 if not normalized_phone:
-                    messagebox.showwarning(
-                        _("Telefone inválido"),
-                        _("Informe um telefone com DDD ou código do país em um formato válido."),
-                        parent=dialog,
-                    )
+                    phone_error.configure(
+                        text=_("Informe um telefone com DDD ou código do país em um formato válido."))
                     entry_phone.focus_set()
                     return
 
@@ -1228,15 +1285,9 @@ class Sniptype:
                 result["message"] = message_text
                 dialog.destroy()
 
-            btn_cancel = ui_widgets.button(buttons, text=_("Cancelar"), width=10, command=cancel_dialog)
-            btn_open = ui_widgets.button(
-                buttons, text=_("Abrir WhatsApp"), width=10, command=submit_dialog, variant="accent",
-            )
-            btn_cancel.pack(side=tk.LEFT, padx=(0, 6))
-            btn_open.pack(side=tk.LEFT)
-
-            entry_phone.bind("<Return>", submit_dialog)
-            dialog.bind("<Escape>", cancel_dialog)
+            ui_widgets.dialog_footer(
+                container, (_("Abrir WhatsApp"), submit_dialog), cancel_dialog, ui=ui,
+            ).grid(row=7, column=0, sticky="ew")
             dialog.protocol("WM_DELETE_WINDOW", cancel_dialog)
 
             # No grab_set — see _show_form_dialog. The pre-refactor grab was
@@ -1718,21 +1769,19 @@ class Sniptype:
         else:
             self.snippets[trigger] = value
 
-    def _delete_static_snippet(self, trigger, confirm):
+    def _delete_static_snippet(self, trigger):
         """Delete a static snippet by trigger, guarding shadowed dynamics.
 
-        ``confirm`` is called (returning a bool) only once the delete is
-        eligible. Returns one of ``"missing"``, ``"dynamic"`` (a dynamic trigger
-        owns the name — refused so the preserved static is not lost, and the
-        caller directs the user to the Snippets Dinâmicos tab), ``"cancelled"``,
-        ``"error"`` (save failed, in-memory state rolled back) or ``"ok"``.
+        It asks nothing: the manager offers Desfazer instead. Returns one of
+        ``"missing"``, ``"dynamic"`` (a dynamic trigger owns the name — refused
+        so the preserved static is not lost, and the caller directs the user
+        to Ações dinâmicas), ``"error"`` (save failed, in-memory state rolled
+        back) or ``"ok"``.
         """
         if trigger not in self.snippets:
             return "missing"
         if callable(self.snippets[trigger]):
             return "dynamic"
-        if not confirm():
-            return "cancelled"
         value = self.snippets[trigger]
         del self.snippets[trigger]
         # An explicit delete must win over the shadow safety net, or the
@@ -2489,7 +2538,6 @@ class Sniptype:
         body = tk.Frame(dialog, bg=ui.surface, padx=ui.space_lg, pady=ui.space_lg)
         body.pack(fill="both", expand=True)
         list_field = ui_widgets.field_frame(body)
-        list_field.pack(fill="both", expand=True)
         listbox = tk.Listbox(
             list_field,
             exportselection=False,
@@ -2521,15 +2569,14 @@ class Sniptype:
                 dialog.destroy()
 
         listbox.bind("<Double-Button-1>", activate)
-        listbox.bind("<Return>", activate)
-        buttons = tk.Frame(body, bg=ui.surface)
-        buttons.pack(fill="x", pady=(ui.space_md, 0))
-        ui_widgets.button(
-            buttons, text=_("Abrir"), command=activate, variant="accent", width=10,
-        ).pack(side="right")
-        ui_widgets.button(
-            buttons, text=_("Fechar"), command=dialog.destroy, width=10,
-        ).pack(side="right", padx=(0, ui.space_sm))
+        # Enter and Escape come from the footer, which is packed first so a
+        # short window shrinks the list rather than clipping the buttons.
+        footer = ui_widgets.dialog_footer(body, (_("Abrir"), activate), dialog.destroy, ui=ui)
+        footer.pack(side="bottom", fill="x", pady=(ui.space_md, 0))
+        if not rows:
+            footer.buttons["primary"].configure(state=tk.DISABLED)
+        list_field.pack(fill="both", expand=True)
+        listbox.focus_set()
         return dialog
 
     def _show_manager_window(self, tk_root):
@@ -2710,6 +2757,49 @@ class Sniptype:
             )
 
 
+    @staticmethod
+    def _change_counts_text(counts):
+        return _("Novos: {new} · Sobrescritos: {overwritten} · Removidos: {removed}").format(**counts)
+
+    def _ask_import_mode(self, root, file_name, document):
+        """Mesclar, Substituir tudo (typed SUBSTITUIR) or Cancelar: "merge", "replace" or None.
+
+        Replacing drops every item the file lacks, so it takes a second,
+        typed confirmation; merging only overwrites what the file redefines.
+        """
+        counts = self.import_change_counts(document)
+        choice = ui_widgets.confirm(
+            root,
+            _("Importar biblioteca"),
+            _("Arquivo: {file}\n\n"
+              "Mesclar mantém a biblioteca atual e dá prioridade ao arquivo.\n{merge}\n\n"
+              "Substituir tudo troca a biblioteca pelo arquivo.\n{replace}\n\n"
+              "Antes, a biblioteca atual é salva em um backup.").format(
+                file=file_name,
+                merge=self._change_counts_text(counts["merge"]),
+                replace=self._change_counts_text(counts["replace"]),
+            ),
+            _("Mesclar"),
+            extra=_("Substituir tudo…"),
+            extra_danger=True,
+        )
+        if choice == ui_widgets.PRIMARY:
+            return "merge"
+        if choice != ui_widgets.EXTRA:
+            return None
+        if ui_widgets.confirm(
+            root,
+            _("Substituir tudo"),
+            _("A biblioteca inteira é trocada pelo conteúdo de {file}.\n{replace}\n\n"
+              "Antes, a biblioteca atual é salva em um backup.").format(
+                file=file_name, replace=self._change_counts_text(counts["replace"])),
+            _("Substituir tudo"),
+            danger=True,
+            typed_word=_("SUBSTITUIR"),
+        ):
+            return "replace"
+        return None
+
     def _create_backups_tab(self, parent, root):
         """Backups tab: list backups and expose restore/export/import actions."""
         ui = ui_theme.theme()
@@ -2796,7 +2886,7 @@ class Sniptype:
         def selected_backup():
             selection = tree.selection()
             if not selection:
-                messagebox.showinfo(_("Backups"), _("Selecione um backup na lista."), parent=root)
+                ui_widgets.alert(root, _("Restaurar backup"), _("Selecione um backup na lista."))
                 return None
             return row_paths.get(selection[0])
 
@@ -2805,20 +2895,35 @@ class Sniptype:
             if not path:
                 return
             name = os.path.basename(path)
-            if not messagebox.askyesno(
+            counts, error = self.preview_restore(path)
+            if error:
+                ui_widgets.alert(root, _("Restaurar backup"), error, tone="danger")
+                return
+            taken = time_format.stamp_with_age(backup_time(path), datetime.now())
+            if not ui_widgets.confirm(
+                root,
                 _("Restaurar backup"),
-                _("Restaurar '{name}'? A biblioteca atual será salva como backup antes.").format(name=name),
-                parent=root,
+                _("Backup: {taken}\n{changes}\n\n"
+                  "A biblioteca atual é trocada por este backup. Antes, ela é salva "
+                  "em um novo backup.").format(
+                    taken=taken, changes=self._change_counts_text(counts)),
+                _("Restaurar backup"),
             ):
                 return
             ok, error = self.restore_backup(path)
             if ok:
                 self.notify_status(_("Backup restaurado: {name}").format(name=name), key="restore-backup")
-                messagebox.showinfo(_("Backups"), _("Backup '{name}' restaurado.").format(name=name), parent=root)
+                ui_widgets.alert(
+                    root, _("Restaurar backup"),
+                    _("Backup restaurado: {name}").format(name=taken), tone="info",
+                )
                 refresh_backups()
                 self._refresh_manager_lists()
             else:
-                messagebox.showerror(_("Backups"), _("Falha ao restaurar: {error}").format(error=error), parent=root)
+                ui_widgets.alert(
+                    root, _("Restaurar backup"), _("Falha ao restaurar: {error}").format(error=error),
+                    tone="danger",
+                )
 
         def on_export():
             dest = filedialog.asksaveasfilename(
@@ -2832,9 +2937,15 @@ class Sniptype:
                 return
             ok, error = self.export_library(dest)
             if ok:
-                messagebox.showinfo(_("Backups"), _("Biblioteca exportada com sucesso."), parent=root)
+                ui_widgets.alert(
+                    root, _("Exportar biblioteca"), _("Biblioteca exportada com sucesso."),
+                    tone="info",
+                )
             else:
-                messagebox.showerror(_("Backups"), _("Falha ao exportar: {error}").format(error=error), parent=root)
+                ui_widgets.alert(
+                    root, _("Exportar biblioteca"),
+                    _("Falha ao exportar: {error}").format(error=error), tone="danger",
+                )
 
         def on_import():
             src = filedialog.askopenfilename(
@@ -2844,28 +2955,40 @@ class Sniptype:
             )
             if not src:
                 return
-            merge = messagebox.askyesno(
-                _("Importar biblioteca"),
-                _("Mesclar com a biblioteca atual?\n\nSim = mesclar (entradas importadas têm prioridade)\n"
-                "Não = substituir tudo.\n\nA biblioteca atual será salva como backup antes."),
-                parent=root,
-            )
-            ok, error = self.import_library(src, mode="merge" if merge else "replace")
-            if ok:
+            # One read: the counts the question shows describe what is applied.
+            document, error = self.read_import_source(src)
+            if not error:
+                mode = self._ask_import_mode(root, os.path.basename(src), document)
+                if mode is None:
+                    return
+                _ok, error = self.apply_import(document, mode)
+            if not error:
                 self.notify_status(_("Biblioteca importada."), key="import-library")
-                messagebox.showinfo(_("Backups"), _("Biblioteca importada com sucesso."), parent=root)
+                ui_widgets.alert(
+                    root, _("Importar biblioteca"), _("Biblioteca importada com sucesso."),
+                    tone="info",
+                )
                 refresh_backups()
                 self._refresh_manager_lists()
             else:
-                messagebox.showerror(_("Backups"), _("Falha ao importar: {error}").format(error=error), parent=root)
+                ui_widgets.alert(
+                    root, _("Importar biblioteca"),
+                    _("Falha ao importar: {error}").format(error=error), tone="danger",
+                )
 
         def on_backup_now():
             created = self.backup_now()
             if created:
-                messagebox.showinfo(_("Backups"), _("Backup criado: {name}").format(name=os.path.basename(created)), parent=root)
+                ui_widgets.alert(
+                    root, _("Criar backup"),
+                    _("Backup criado: {name}").format(name=os.path.basename(created)), tone="info",
+                )
                 refresh_backups()
             else:
-                messagebox.showerror(_("Backups"), _("Falha ao criar backup. Verifique os logs."), parent=root)
+                ui_widgets.alert(
+                    root, _("Criar backup"), _("Falha ao criar backup. Verifique os logs."),
+                    tone="danger",
+                )
 
         buttons = tk.Frame(main, bg=ui.surface)
         buttons.grid(row=3, column=0, sticky="ew", pady=(ui.space_md, 0))
@@ -2990,11 +3113,12 @@ class Sniptype:
                 return
             # Same trade-off as the appearance switch: the rebuild drops
             # unsaved editor text, so ask before anything is saved.
-            if not messagebox.askyesno(
+            if not ui_widgets.confirm(
+                root,
                 _("Idioma"),
                 _("O gerenciador será recarregado para aplicar o idioma.\n\n"
-                  "Edições não salvas no editor serão descartadas. Continuar?"),
-                parent=root,
+                  "Edições não salvas no editor serão descartadas."),
+                _("Recarregar gerenciador"),
             ):
                 display.set(names[i18n.language()])
                 return
@@ -3046,11 +3170,12 @@ class Sniptype:
                 return
             # The editors track no dirty state, so a rebuild would silently
             # drop typed text; ask before anything is saved.
-            if not messagebox.askyesno(
+            if not ui_widgets.confirm(
+                root,
                 _("Aparência"),
                 _("O gerenciador será recarregado para aplicar a aparência.\n\n"
-                "Edições não salvas no editor serão descartadas. Continuar?"),
-                parent=root,
+                  "Edições não salvas no editor serão descartadas."),
+                _("Recarregar gerenciador"),
             ):
                 display.set(labels[ui_theme.preference()])
                 return
@@ -3446,6 +3571,7 @@ class Sniptype:
                 )
 
         self._bind_mousewheel(tree, tree)
+        history_window.bind("<Escape>", lambda _event: history_window.destroy())
         center_dialog(history_window, root)
 
 
@@ -3473,7 +3599,10 @@ class Sniptype:
 
         def apply_style(style_name):
             if not toggle_text_style(text_widget, style_name):
-                messagebox.showinfo(_("Formatação"), _("Selecione um trecho para formatar."), parent=text_widget.winfo_toplevel())
+                ui_widgets.alert(
+                    text_widget, _("Formatação"), _("Selecione um trecho para formatar."),
+                    tone="info",
+                )
                 return
             update_status()
             text_widget.focus_set()
@@ -3568,19 +3697,21 @@ class Sniptype:
             """Searchable listbox dialog; calls _insert_variable_text on selection."""
             picker = tk.Toplevel(parent_win)
             picker.title(_("Inserir referência de snippet"))
-            picker.geometry("300x380")
+            picker.geometry("320x400")
             picker.resizable(False, True)
             picker.transient(parent_win)
             picker.grab_set()
 
             picker.configure(bg=ui.surface)
             ui_theme.prepare_window(picker, ui)
+            body = tk.Frame(picker, bg=ui.surface, padx=ui.space_md, pady=ui.space_md)
+            body.pack(fill=tk.BOTH, expand=True)
 
             search_var = tk.StringVar()
-            ui_widgets.entry(picker, textvariable=search_var).pack(fill=tk.X, padx=8, pady=8)
+            search_entry = ui_widgets.entry(body, textvariable=search_var)
+            search_entry.pack(fill=tk.X, pady=(0, ui.space_sm))
 
-            lf = ui_widgets.field_frame(picker)
-            lf.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
+            lf = ui_widgets.field_frame(body)
             lf.grid_columnconfigure(0, weight=1)
             lf.grid_rowconfigure(0, weight=1)
 
@@ -3617,13 +3748,15 @@ class Sniptype:
                 _insert_variable_text(chosen)
 
             listbox.bind("<Double-Button-1>", confirm)
-            listbox.bind("<Return>", confirm)
-            ui_widgets.button(
-                picker, text=_("Inserir"), command=confirm, variant="accent", width=10,
-            ).pack(pady=(0, 8))
+            # Enter inserts and Escape closes, from the search field or the
+            # list; the footer is packed before the list so it is never clipped.
+            ui_widgets.dialog_footer(
+                body, (_("Inserir"), confirm), picker.destroy, ui=ui,
+            ).pack(side=tk.BOTTOM, fill=tk.X, pady=(ui.space_md, 0))
+            lf.pack(fill=tk.BOTH, expand=True)
 
             center_dialog(picker, parent_win)
-            picker.focus_set()
+            search_entry.focus_set()
 
         def insert_snippet_ref():
             # Every snippet kind is referenceable: static, runtime dynamic and
@@ -3632,8 +3765,9 @@ class Sniptype:
             names |= composed_mapping_triggers(self.snippets)
             choices = sorted(names)
             if not choices:
-                messagebox.showinfo(_("Variáveis"), _("Nenhum snippet disponível."),
-                                    parent=text_widget.winfo_toplevel())
+                ui_widgets.alert(
+                    text_widget, _("Variáveis"), _("Nenhum snippet disponível."), tone="info",
+                )
                 return
             _show_snippet_picker(text_widget.winfo_toplevel(), choices)
 
@@ -3641,10 +3775,15 @@ class Sniptype:
             _insert_variable_text("clipboard-paste")
 
         def insert_form_field():
-            win = text_widget.winfo_toplevel()
-            name = simpledialog.askstring(_("Campo de formulário"), _("Nome do campo:"), parent=win)
-            if name and name.strip():
-                _insert_variable_text(name.strip().replace(" ", "_"))
+            name = ui_widgets.ask_text(
+                text_widget,
+                _("Campo de formulário"),
+                _("Nome do campo"),
+                validate=lambda value: None if value else _("Informe o nome do campo."),
+                primary_label=_("Inserir"),
+            )
+            if name is not None:
+                _insert_variable_text(name.replace(" ", "_"))
 
         add_toolbar_button("%%s", insert_snippet_ref, 1, _("Variável: referenciar snippet (%%trigger%%)"), "var")
         add_toolbar_button("%%cb", insert_clipboard_var, 1, _("Variável: colar clipboard (%%clipboard-paste%%)"), "var")
@@ -3719,8 +3858,8 @@ class Sniptype:
         filter_frame.grid(row=4, column=0, sticky="ew", pady=(0, ui.space_sm))
         filter_frame.grid_columnconfigure(0, weight=1)
         # One drop-down picks the group filter; each label maps back to its
-        # (filter, group id). Group management lives behind the ⋯ menu so
-        # its Novo/Excluir are never confused with the editor's.
+        # (filter, group id). Group management lives behind the Grupos menu
+        # so its Novo/Excluir are never confused with the editor's.
         group_choices = {}
         group_choice_var = tk.StringVar()
         group_filter = ui_widgets.combobox(filter_frame, textvariable=group_choice_var)
@@ -3745,10 +3884,10 @@ class Sniptype:
         group_var.trace_add("write", sync_group_label)
         filter_var.trace_add("write", sync_group_label)
 
-        groups_menu = tk.Menu(filter_frame, tearoff=False)
+        groups_menu = ui_widgets.menu(filter_frame)
         groups_menu.add_command(label=_("Novo grupo…"), command=lambda: on_create_group())
         groups_menu.add_command(label=_("Editar grupo…"), command=lambda: on_edit_group())
-        groups_menu.add_command(label=_("Excluir grupo…"), command=lambda: on_delete_group())
+        groups_menu.add_command(label=_("Excluir grupo"), command=lambda: on_delete_group())
 
         def show_groups_menu():
             groups_menu.tk_popup(
@@ -3756,10 +3895,10 @@ class Sniptype:
                 group_actions.winfo_rooty() + group_actions.winfo_height(),
             )
 
-        group_actions = ui_widgets.button(
-            filter_frame, text="" if ui_widgets.has_icons(filter_frame) else "⋯",
-            variant="subtle", icon="more", command=show_groups_menu,
-        )
+        group_actions = ui_widgets.button(filter_frame, text=_("Grupos"), command=show_groups_menu)
+        # The chevron says the button opens a menu; without the icon font it is text.
+        if not ui_widgets.set_icon(group_actions, "chevron_down", trailing=True):
+            group_actions.configure(text=_("Grupos") + " ▾")
         group_actions.grid(row=0, column=1, padx=(ui.space_xs, 0))
         view_buttons = tk.Frame(filter_frame, bg=ui.card)
         view_buttons.grid(row=1, column=0, columnspan=2, sticky="w", pady=(ui.space_xs, 0))
@@ -3853,13 +3992,9 @@ class Sniptype:
         )
         update_format_status = self._create_formatting_toolbar(editor_shell, text_value)
         text_field.pack(fill=tk.BOTH, expand=True, pady=(0, 6))
-        tk.Label(
-            frame_right,
-            text=_("Formatação opcional  •  Ctrl+S para salvar"),
-            font=ui.caption_font(),
-            fg=ui.text_muted,
-            bg=ui.card,
-        ).grid(row=6, column=0, sticky="w", pady=(ui.space_xs, ui.space_md))
+        receipt = ui_widgets.ReceiptLine(
+            frame_right, _("Formatação opcional  •  Ctrl+S para salvar"))
+        receipt.frame.grid(row=6, column=0, sticky="ew", pady=(ui.space_xs, ui.space_sm))
 
         btn_frame = tk.Frame(frame_right, bg=ui.card)
         btn_frame.grid(row=7, column=0, sticky="ew")
@@ -4070,14 +4205,22 @@ class Sniptype:
 
         def manager_action_failed(title):
             if getattr(self.library_metadata, "read_only", False):
-                messagebox.showwarning(
-                    title,
+                ui_widgets.alert(
+                    root, title,
                     _("Os metadados da biblioteca são somente leitura nesta versão; "
-                    "favoritos, grupos e formulários não podem ser alterados."),
-                    parent=root,
+                      "favoritos, grupos e formulários não podem ser alterados."),
                 )
             else:
-                messagebox.showerror(title, _("Não foi possível salvar a alteração."), parent=root)
+                ui_widgets.alert(root, title, _("Não foi possível salvar a alteração."), tone="danger")
+
+        def show_restored_static(key):
+            refresh_listbox()
+            if tree.exists(key):
+                tree.selection_set(key)
+                tree.focus(key)
+                tree.see(key)
+                load_selected()
+            tree.focus_set()
 
         def on_create_group():
             from group_dialog import run_group_dialog
@@ -4106,7 +4249,7 @@ class Sniptype:
             group_id = group_var.get()
             groups = self.library_metadata.get("groups", {}) if isinstance(self.library_metadata, dict) else {}
             if not group_id or group_id not in groups:
-                messagebox.showwarning(_("Grupo"), _("Selecione um grupo para editar."), parent=root)
+                ui_widgets.alert(root, _("Editar grupo"), _("Selecione um grupo para editar."))
                 return
             from group_dialog import run_group_dialog
             definition = run_group_dialog(root, groups[group_id], title=_("Editar grupo"))
@@ -4131,28 +4274,63 @@ class Sniptype:
 
         def on_delete_group():
             group_id = group_var.get()
-            if not group_id:
-                messagebox.showwarning(_("Grupo"), _("Selecione um grupo para excluir."), parent=root)
+            groups = self.library_metadata.get("groups", {}) if isinstance(self.library_metadata, dict) else {}
+            if not group_id or group_id not in groups:
+                ui_widgets.alert(root, _("Excluir grupo"), _("Selecione um grupo para excluir."))
                 return
-            if not messagebox.askyesno(_("Excluir grupo"), _("Excluir o grupo selecionado?"), parent=root):
-                return
+            # Deleting is reversible for a while: the definition and the
+            # members go back through the same save path on Desfazer.
+            definition = copy.deepcopy(dict(groups[group_id]))
+            static_members, mapping_members = manager_group_members(self.library_metadata, group_id)
+            label = definition.get("label") or _("Sem nome")
             try:
                 result = manager_delete_group(
                     self.snippets, self.library_metadata, group_id,
                     dynamic_triggers=self._manager_dynamic_triggers(),
                 )
-                if self._persist_manager_action(result):
-                    group_var.set("")
-                    refresh_group_menu()
-                    self.notify_status(_("Grupo excluído."), key=f"manager-group-delete:{group_id}")
-                else:
+                if not self._persist_manager_action(result):
                     manager_action_failed(_("Excluir grupo"))
+                    return
             except (KeyError, ValueError, MetadataReadOnlyError) as error:
                 self.logger.warning(f"Manager group deletion failed: {error}")
                 manager_action_failed(_("Excluir grupo"))
+                return
             except Exception:
                 self.logger.exception("Manager group deletion failed unexpectedly")
                 manager_action_failed(_("Excluir grupo"))
+                return
+            group_var.set("")
+            refresh_group_menu()
+
+            def undo():
+                try:
+                    restored = manager_restore_group(
+                        self.snippets, self.library_metadata, group_id, definition,
+                        static_items=static_members, mapping_items=mapping_members,
+                        dynamic_triggers=self._manager_dynamic_triggers(),
+                    )
+                    if not self._persist_manager_action(restored):
+                        manager_action_failed(_("Desfazer exclusão"))
+                        return
+                except (KeyError, ValueError, MetadataReadOnlyError) as error:
+                    self.logger.warning(f"Manager group restore failed: {error}")
+                    ui_widgets.alert(
+                        root, _("Desfazer exclusão"),
+                        _("Não foi possível recriar o grupo {name}: {error}").format(name=label, error=error),
+                    )
+                    return
+                except Exception:
+                    self.logger.exception("Manager group restore failed unexpectedly")
+                    manager_action_failed(_("Desfazer exclusão"))
+                    return
+                refresh_group_menu()
+                receipt.show(_("Restaurado às {time} · {name}").format(
+                    time=time_format.clock(datetime.now()), name=label))
+
+            receipt.show(
+                _("Excluído às {time} · {name}").format(time=time_format.clock(datetime.now()), name=label),
+                _("Desfazer"), undo,
+            )
 
         def on_toggle_favorite():
             key = current_static_key()
@@ -4255,13 +4433,13 @@ class Sniptype:
             value = serialize_text_widget_content(text_value)
 
             if not trigger:
-                messagebox.showwarning(_("Aviso"), _("Informe um trigger."), parent=root)
+                ui_widgets.alert(root, _("Salvar snippet"), _("Informe um trigger."))
                 return
             if trigger.startswith("_"):
-                messagebox.showwarning(_("Aviso"), _("Triggers com '_' são reservados."), parent=root)
+                ui_widgets.alert(root, _("Salvar snippet"), _("Triggers com '_' são reservados."))
                 return
             if not extract_plain_text(value).strip():
-                messagebox.showwarning(_("Aviso"), _("Informe um valor para o snippet."), parent=root)
+                ui_widgets.alert(root, _("Salvar snippet"), _("Informe um valor para o snippet."))
                 return
 
             # "Already in self.snippets" is not the same as "editing an existing
@@ -4269,12 +4447,13 @@ class Sniptype:
             # the collision that needs the warning.
             if trigger not in self.snippets or callable(self.snippets[trigger]):
                 warnings = self._validate_trigger_warnings(trigger)
-                if warnings and not messagebox.askyesno(
+                if warnings and not ui_widgets.confirm(
+                    root,
                     _("Confirmar trigger"),
-                    _("Avisos sobre este trigger:\n\n• {warnings}\n\nSalvar mesmo assim?").format(
+                    _("Avisos sobre este trigger:\n\n• {warnings}").format(
                         warnings="\n• ".join(warnings)
                     ),
-                    parent=root,
+                    _("Salvar mesmo assim"),
                 ):
                     return
 
@@ -4283,10 +4462,10 @@ class Sniptype:
             # expanding as the dynamic snippet this session (see helper).
             self._store_static_snippet(trigger, value)
             if not self.save_snippets(self.snippets):
-                messagebox.showerror(
-                    _("Erro ao salvar"),
+                ui_widgets.alert(
+                    root, _("Erro ao salvar"),
                     _("Não foi possível gravar snippets.json. Verifique os logs; suas edições podem não ter sido salvas."),
-                    parent=root,
+                    tone="danger",
                 )
                 return
             self.refresh_runtime_indexes()
@@ -4298,48 +4477,92 @@ class Sniptype:
         def on_delete():
             trigger = entry_trigger.get().strip()
             if not trigger:
-                messagebox.showwarning(_("Aviso"), _("Selecione um snippet."), parent=root)
+                ui_widgets.alert(root, _("Excluir snippet"), _("Selecione um snippet."))
                 return
 
-            result = self._delete_static_snippet(
-                trigger,
-                lambda: messagebox.askyesno(_("Confirmar"), _("Excluir '{trigger}'?").format(trigger=trigger), parent=root),
-            )
+            # Deleting is reversible for a while (Desfazer), so it asks
+            # nothing; the value and its metadata are kept until then.
+            value = copy.deepcopy(self.snippets.get(trigger))
+            item_metadata = static_item_metadata(self.library_metadata, trigger)
+            result = self._delete_static_snippet(trigger)
             if result == "dynamic":
                 # A dynamic trigger owns the name; the free-text box let the user
                 # type it. Deleting would discard the shadowed static from disk,
                 # so refuse and point at the tab that manages the dynamic entry.
-                messagebox.showwarning(
-                    _("Aviso"),
+                ui_widgets.alert(
+                    root, _("Excluir snippet"),
                     _("'{trigger}' é um snippet dinâmico. Gerencie-o em Ações dinâmicas.").format(trigger=trigger),
-                    parent=root,
                 )
                 return
             if result == "error":
-                messagebox.showerror(
-                    _("Erro ao salvar"),
+                ui_widgets.alert(
+                    root, _("Erro ao salvar"),
                     _("Não foi possível gravar snippets.json. Verifique os logs; a exclusão pode não ter sido salva."),
-                    parent=root,
+                    tone="danger",
                 )
                 return
-            if result != "ok":
+            if result == "missing":
+                ui_widgets.alert(root, _("Excluir snippet"), _("Selecione um snippet."))
                 return
             entry_trigger.delete(0, tk.END)
             load_value_into_text_widget(text_value, "")
+            show_item_metadata(None)
+            effective_trigger_var.set(_("Efetivo: —"))
             update_format_status()
             refresh_listbox()
-            self.notify_status(_("Snippet '{trigger}' excluído.").format(trigger=trigger), key=f"delete-static:{trigger}")
+
+            def undo():
+                try:
+                    restored = manager_restore_static(
+                        self.snippets, self.library_metadata, trigger, value, item_metadata,
+                        dynamic_triggers=self._manager_dynamic_triggers(),
+                    )
+                    if not self._persist_manager_action(restored):
+                        manager_action_failed(_("Desfazer exclusão"))
+                        return
+                except (KeyError, ValueError, MetadataReadOnlyError) as error:
+                    self.logger.warning(f"Manager static restore failed: {error}")
+                    ui_widgets.alert(
+                        root, _("Desfazer exclusão"),
+                        _("Não foi possível restaurar {trigger}: {error}").format(trigger=trigger, error=error),
+                    )
+                    return
+                except Exception:
+                    self.logger.exception("Manager static restore failed unexpectedly")
+                    manager_action_failed(_("Desfazer exclusão"))
+                    return
+                show_restored_static(trigger)
+                receipt.show(_("Restaurado às {time} · {name}").format(
+                    time=time_format.clock(datetime.now()), name=trigger))
+
+            receipt.show(
+                _("Excluído às {time} · {name}").format(time=time_format.clock(datetime.now()), name=trigger),
+                _("Desfazer"), undo,
+            )
+
+        def new_trigger_problem(value, current=None):
+            """Why ``value`` cannot be a new stored trigger, or None."""
+            if not value:
+                return _("Informe um trigger.")
+            if value.startswith("_"):
+                return _("Triggers com '_' são reservados.")
+            if value != current and value in self.snippets:
+                return _("O trigger '{new_trigger}' já existe.").format(new_trigger=value)
+            return None
 
         def on_duplicate():
             source_key = current_static_key()
             if source_key is None:
-                messagebox.showwarning(_("Duplicar"), _("Selecione um snippet salvo."), parent=root)
+                ui_widgets.alert(root, _("Duplicar snippet"), _("Selecione um snippet salvo."))
                 return
-            destination = simpledialog.askstring(_("Duplicar"), _("Novo trigger:"), parent=root)
+            destination = ui_widgets.ask_text(
+                root,
+                _("Duplicar snippet"),
+                _("Trigger da cópia de {trigger}").format(trigger=source_key),
+                validate=new_trigger_problem,
+                primary_label=_("Duplicar"),
+            )
             if destination is None:
-                return
-            destination = destination.strip()
-            if not destination:
                 return
             try:
                 result = manager_duplicate_static(
@@ -4368,34 +4591,32 @@ class Sniptype:
         def on_rename():
             old_trigger = entry_trigger.get().strip()
             if old_trigger not in self.snippets:
-                messagebox.showwarning(_("Aviso"), _("Selecione um snippet salvo para renomear."), parent=root)
+                ui_widgets.alert(root, _("Renomear snippet"), _("Selecione um snippet salvo para renomear."))
                 return
             if callable(self.snippets[old_trigger]):
-                messagebox.showwarning(
-                    _("Aviso"),
+                ui_widgets.alert(
+                    root, _("Renomear snippet"),
                     _("'{old_trigger}' é um snippet dinâmico. Renomeie-o em Ações dinâmicas.").format(old_trigger=old_trigger),
-                    parent=root,
                 )
                 return
-            new_trigger = simpledialog.askstring(_("Renomear"), _("Novo trigger:"), initialvalue=old_trigger, parent=root)
-            if not new_trigger:
-                return
-            new_trigger = new_trigger.strip()
-            if new_trigger == old_trigger:
-                return
-            if new_trigger.startswith("_"):
-                messagebox.showwarning(_("Aviso"), _("Triggers com '_' são reservados."), parent=root)
-                return
-            if new_trigger in self.snippets:
-                messagebox.showwarning(_("Aviso"), _("O trigger '{new_trigger}' já existe.").format(new_trigger=new_trigger), parent=root)
+            new_trigger = ui_widgets.ask_text(
+                root,
+                _("Renomear snippet"),
+                _("Novo trigger de {trigger}").format(trigger=old_trigger),
+                old_trigger,
+                validate=lambda value: new_trigger_problem(value, old_trigger),
+                primary_label=_("Renomear"),
+            )
+            if new_trigger is None or new_trigger == old_trigger:
                 return
             warnings = self._validate_trigger_warnings(new_trigger)
-            if warnings and not messagebox.askyesno(
+            if warnings and not ui_widgets.confirm(
+                root,
                 _("Confirmar trigger"),
-                _("Avisos sobre este trigger:\n\n• {warnings}\n\nRenomear mesmo assim?").format(
+                _("Avisos sobre este trigger:\n\n• {warnings}").format(
                     warnings="\n• ".join(warnings)
                 ),
-                parent=root,
+                _("Renomear mesmo assim"),
             ):
                 return
             try:
@@ -4407,15 +4628,14 @@ class Sniptype:
                     dynamic_triggers=self._manager_dynamic_triggers(),
                 )
                 if not self._persist_manager_action(result):
-                    messagebox.showerror(
-                        _("Erro ao salvar"),
-                        _("Não foi possível gravar snippets.json."),
-                        parent=root,
+                    ui_widgets.alert(
+                        root, _("Erro ao salvar"), _("Não foi possível gravar snippets.json."),
+                        tone="danger",
                     )
                     return
             except (KeyError, ValueError, MetadataReadOnlyError) as error:
                 self.logger.warning(f"Manager rename failed: {error}")
-                messagebox.showwarning(_("Renomear"), str(error), parent=root)
+                ui_widgets.alert(root, _("Renomear snippet"), str(error))
                 return
             except Exception:
                 self.logger.exception("Manager rename failed unexpectedly")
@@ -4707,13 +4927,9 @@ class Sniptype:
         )
         update_format_status = self._create_formatting_toolbar(editor_shell, text_value)
         text_field.pack(fill=tk.BOTH, expand=True, pady=(0, 6))
-        tk.Label(
-            frame_right,
-            text=_("Formatação opcional  •  Ctrl+S para salvar"),
-            font=ui.caption_font(),
-            fg=ui.text_muted,
-            bg=ui.card,
-        ).grid(row=6, column=0, sticky="w", pady=(ui.space_xs, ui.space_md))
+        receipt = ui_widgets.ReceiptLine(
+            frame_right, _("Formatação opcional  •  Ctrl+S para salvar"))
+        receipt.frame.grid(row=6, column=0, sticky="ew", pady=(ui.space_xs, ui.space_sm))
 
         btn_frame = tk.Frame(frame_right, bg=ui.card)
         btn_frame.grid(row=7, column=0, sticky="ew")
@@ -4821,7 +5037,7 @@ class Sniptype:
 
         def add_new_type():
             dialog = tk.Toplevel(root)
-            dialog.title(_("Novo Tipo de Mapeamento"))
+            dialog.title(_("Novo tipo de mapeamento"))
             dialog.resizable(False, False)
             dialog.transient(root)
             dialog.grab_set()
@@ -4829,7 +5045,7 @@ class Sniptype:
             self._set_window_icon(dialog)
             ui_theme.prepare_window(dialog, ui)
 
-            body = tk.Frame(dialog, bg=ui.surface, padx=18, pady=18)
+            body = tk.Frame(dialog, bg=ui.surface, padx=ui.space_xl, pady=ui.space_lg)
             body.pack(fill=tk.BOTH, expand=True)
             tk.Label(body, text=_("Criar novo tipo de mapeamento dinâmico"), font=ui.subtitle_font(), bg=ui.surface, fg=ui.text_native).pack(anchor="w")
             tk.Label(body, text=_("Nome do tipo"), font=ui.font(), bg=ui.surface, fg=ui.text_native).pack(anchor="w", pady=(12, 0))
@@ -4839,38 +5055,50 @@ class Sniptype:
             entry_prefix = ui_widgets.entry(body)
             entry_prefix.pack(fill=tk.X, pady=(4, 8))
             tk.Label(body, text=_("Ex.: tipo 'email' + prefixo 'mail' -> mailtrabalho"), font=ui.caption_font(), fg=ui.text_muted, bg=ui.surface).pack(anchor="w")
+            # Present while empty, so an error does not resize the dialog.
+            type_error = tk.Label(
+                body, text="", font=ui.caption_font(), bg=ui.surface, fg=ui.danger,
+                anchor="w", justify=tk.LEFT, wraplength=ui.px(380),
+            )
+            type_error.pack(fill=tk.X, pady=(ui.space_sm, 0))
+
+            def refuse(message, field):
+                type_error.configure(text=message)
+                field.focus_set()
 
             def save_new_type():
                 type_name = entry_type_name.get().strip().lower()
                 prefix = entry_prefix.get().strip().lower()
 
                 if not type_name or not prefix:
-                    messagebox.showwarning(_("Aviso"), _("Preencha todos os campos."), parent=dialog)
+                    refuse(_("Preencha todos os campos."), entry_prefix if type_name else entry_type_name)
                     return
-                if not type_name.replace("_", "").isalnum() or not prefix.replace("_", "").isalnum():
-                    messagebox.showwarning(_("Aviso"), _("Use apenas letras, números e underscores."), parent=dialog)
+                if not type_name.replace("_", "").isalnum():
+                    refuse(_("Use apenas letras, números e underscores."), entry_type_name)
+                    return
+                if not prefix.replace("_", "").isalnum():
+                    refuse(_("Use apenas letras, números e underscores."), entry_prefix)
                     return
 
                 if any(info.get("prefix") == prefix for info in mappings_info.values()):
-                    messagebox.showwarning(
-                        _("Aviso"),
+                    refuse(
                         _("O prefixo '{prefix}' já está em uso por outro tipo de mapeamento.").format(prefix=prefix),
-                        parent=dialog,
+                        entry_prefix,
                     )
                     return
 
                 map_key = f"_{type_name}_codes"
                 if map_key in self.snippets:
-                    messagebox.showwarning(_("Aviso"), _("Tipo '{type_name}' já existe.").format(type_name=type_name), parent=dialog)
+                    refuse(_("Tipo '{type_name}' já existe.").format(type_name=type_name), entry_type_name)
                     return
 
                 self.snippets[map_key] = {"__prefix__": prefix}
                 if not self.save_snippets(self.snippets):
                     del self.snippets[map_key]
-                    messagebox.showerror(
-                        _("Erro ao salvar"),
+                    ui_widgets.alert(
+                        dialog, _("Erro ao salvar"),
                         _("Não foi possível gravar snippets.json. Verifique os logs; o tipo não foi criado."),
-                        parent=dialog,
+                        tone="danger",
                     )
                     return
                 self.refresh_runtime_indexes()
@@ -4880,9 +5108,10 @@ class Sniptype:
                 self.notify_status(_("Tipo '{type_name}' criado.").format(type_name=type_name), key=f"mapping-type-create:{type_name}")
                 dialog.destroy()
 
-            ui_widgets.button(
-                body, text=_("Criar tipo"), command=save_new_type, variant="accent", width=12,
-            ).pack(anchor="e", pady=(14, 0))
+            # Enter creates and Escape cancels.
+            ui_widgets.dialog_footer(
+                body, (_("Criar tipo"), save_new_type), dialog.destroy, ui=ui,
+            ).pack(fill=tk.X, pady=(ui.space_md, 0))
             center_dialog(dialog, root)
             entry_type_name.focus_set()
 
@@ -4891,20 +5120,33 @@ class Sniptype:
             info = mappings_info.get(current_type, {})
 
             if info.get("builtin", False):
-                messagebox.showwarning(_("Aviso"), _("Não é possível excluir tipos padrão (CPF, CNPJ)."), parent=root)
+                ui_widgets.alert(root, _("Excluir tipo"), _("Não é possível excluir tipos padrão (CPF, CNPJ)."))
                 return
             if current_type not in self.snippets:
                 return
-            if not messagebox.askyesno(_("Confirmar"), _("Excluir o tipo '{type}' e todos os itens?").format(type=info.get('label', current_type)), parent=root):
+            label = info.get("label", current_type)
+            items = self.snippets[current_type]
+            count = sum(1 for name in items if name != "__prefix__") if isinstance(items, dict) else 0
+            # Every item of the type goes with it, so the name has to be typed.
+            if not ui_widgets.confirm(
+                root,
+                _("Excluir tipo"),
+                _("O tipo {type} será excluído com todos os itens ({count}).\n\n"
+                  "A exclusão não pode ser desfeita aqui; a biblioteca anterior "
+                  "continua em Cópias de segurança.").format(type=label, count=count),
+                _("Excluir tipo"),
+                danger=True,
+                typed_word=label,
+            ):
                 return
 
             removed_mapping = self.snippets.pop(current_type)
             if not self.save_snippets(self.snippets):
                 self.snippets[current_type] = removed_mapping
-                messagebox.showerror(
-                    _("Erro ao salvar"),
+                ui_widgets.alert(
+                    root, _("Erro ao salvar"),
                     _("Não foi possível gravar snippets.json. Verifique os logs; o tipo não foi excluído."),
-                    parent=root,
+                    tone="danger",
                 )
                 return
             self.refresh_runtime_indexes()
@@ -4990,19 +5232,18 @@ class Sniptype:
                 )
                 if not self._persist_manager_action(result):
                     mapping_favorite_var.set(not mapping_favorite_var.get())
-                    messagebox.showerror(_("Favorito"), _("Não foi possível salvar a alteração."), parent=root)
+                    ui_widgets.alert(root, _("Favorito"), _("Não foi possível salvar a alteração."), tone="danger")
             except (KeyError, ValueError, MetadataReadOnlyError) as error:
                 mapping_favorite_var.set(not mapping_favorite_var.get())
                 self.logger.warning(f"Mapping favorite update failed: {error}")
-                messagebox.showwarning(
-                    _("Favorito"),
+                ui_widgets.alert(
+                    root, _("Favorito"),
                     _("Os metadados da biblioteca são somente leitura nesta versão.") if getattr(self.library_metadata, "read_only", False) else str(error),
-                    parent=root,
                 )
             except Exception:
                 mapping_favorite_var.set(not mapping_favorite_var.get())
                 self.logger.exception("Mapping favorite update failed unexpectedly")
-                messagebox.showerror(_("Favorito"), _("Não foi possível salvar a alteração."), parent=root)
+                ui_widgets.alert(root, _("Favorito"), _("Não foi possível salvar a alteração."), tone="danger")
 
         def on_edit_mapping_form():
             current_type = mapping_type.get()
@@ -5031,23 +5272,20 @@ class Sniptype:
                     dynamic_triggers=self._manager_dynamic_triggers(),
                 )
                 if not self._persist_manager_action(result):
-                    messagebox.showerror(
-                        _("Formulário"),
-                        _("Não foi possível salvar a alteração."),
-                        parent=root,
+                    ui_widgets.alert(
+                        root, _("Formulário"), _("Não foi possível salvar a alteração."), tone="danger",
                     )
             except (KeyError, ValueError, MetadataReadOnlyError) as error:
                 self.logger.warning(f"Mapping form update failed: {error}")
-                messagebox.showwarning(
-                    _("Formulário"),
+                ui_widgets.alert(
+                    root, _("Formulário"),
                     _("Os metadados da biblioteca são somente leitura nesta versão.")
                     if getattr(self.library_metadata, "read_only", False)
                     else str(error),
-                    parent=root,
                 )
             except Exception:
                 self.logger.exception("Mapping form update failed unexpectedly")
-                messagebox.showerror(_("Formulário"), _("Não foi possível salvar a alteração."), parent=root)
+                ui_widgets.alert(root, _("Formulário"), _("Não foi possível salvar a alteração."), tone="danger")
 
         def on_preview_mapping():
             current_type = mapping_type.get()
@@ -5089,17 +5327,16 @@ class Sniptype:
             value = serialize_text_widget_content(text_value)
 
             if not name:
-                messagebox.showwarning(_("Aviso"), _("Informe um identificador."), parent=root)
+                ui_widgets.alert(root, _("Salvar item"), _("Informe um identificador."))
                 return
             if name == "__prefix__":
-                messagebox.showwarning(
-                    _("Aviso"),
+                ui_widgets.alert(
+                    root, _("Salvar item"),
                     _("'__prefix__' é reservado para o prefixo do tipo de mapeamento."),
-                    parent=root,
                 )
                 return
             if not extract_plain_text(value).strip():
-                messagebox.showwarning(_("Aviso"), _("Informe um valor."), parent=root)
+                ui_widgets.alert(root, _("Salvar item"), _("Informe um valor."))
                 return
 
             previous_mapping = self.snippets.get(current_type, _MISSING)
@@ -5116,10 +5353,10 @@ class Sniptype:
                     self.snippets.pop(current_type, None)
                 else:
                     self.snippets[current_type] = previous_mapping_snapshot
-                messagebox.showerror(
-                    _("Erro ao salvar"),
+                ui_widgets.alert(
+                    root, _("Erro ao salvar"),
                     _("Não foi possível gravar snippets.json. Verifique os logs; o item não foi salvo."),
-                    parent=root,
+                    tone="danger",
                 )
                 return
             self.refresh_runtime_indexes()
@@ -5132,26 +5369,76 @@ class Sniptype:
             name = entry_name.get().strip()
 
             if not name:
-                messagebox.showwarning(_("Aviso"), _("Selecione um item."), parent=root)
+                ui_widgets.alert(root, _("Excluir item"), _("Selecione um item."))
                 return
 
             mapping = self.snippets.get(current_type, {})
-            if isinstance(mapping, dict) and name in mapping and messagebox.askyesno(_("Confirmar"), _("Excluir '{name}'?").format(name=name), parent=root):
-                removed_value = mapping.pop(name)
-                if not self.save_snippets(self.snippets):
-                    mapping[name] = removed_value
-                    messagebox.showerror(
-                        _("Erro ao salvar"),
-                        _("Não foi possível gravar snippets.json. Verifique os logs; a exclusão não foi salva."),
-                        parent=root,
+            if name == "__prefix__":
+                ui_widgets.alert(
+                    root, _("Excluir item"),
+                    _("'__prefix__' é reservado para o prefixo do tipo de mapeamento."),
+                )
+                return
+            if not isinstance(mapping, dict) or name not in mapping:
+                ui_widgets.alert(root, _("Excluir item"), _("Selecione um item."))
+                return
+            # Deleting is reversible for a while (Desfazer), so it asks
+            # nothing; the value and its metadata are kept until then.
+            item_metadata = mapping_item_metadata(self.library_metadata, current_type, name)
+            removed_value = mapping.pop(name)
+            if not self.save_snippets(self.snippets):
+                mapping[name] = removed_value
+                ui_widgets.alert(
+                    root, _("Erro ao salvar"),
+                    _("Não foi possível gravar snippets.json. Verifique os logs; a exclusão não foi salva."),
+                    tone="danger",
+                )
+                return
+            self.refresh_runtime_indexes()
+            entry_name.delete(0, tk.END)
+            load_value_into_text_widget(text_value, "")
+            mapping_favorite_var.set(False)
+            mapping_effective_trigger_var.set(_("Efetivo: —"))
+            update_format_status()
+            refresh_mapping_list()
+
+            def undo():
+                try:
+                    restored = manager_restore_mapping_item(
+                        self.snippets, self.library_metadata, current_type, name,
+                        removed_value, item_metadata,
+                        dynamic_triggers=self._manager_dynamic_triggers(),
+                    )
+                    if not self._persist_manager_action(restored):
+                        ui_widgets.alert(
+                            root, _("Desfazer exclusão"), _("Não foi possível salvar a alteração."),
+                            tone="danger",
+                        )
+                        return
+                except (KeyError, ValueError, MetadataReadOnlyError) as error:
+                    self.logger.warning(f"Mapping item restore failed: {error}")
+                    ui_widgets.alert(
+                        root, _("Desfazer exclusão"),
+                        _("Não foi possível restaurar {name}: {error}").format(name=name, error=error),
                     )
                     return
-                self.refresh_runtime_indexes()
-                entry_name.delete(0, tk.END)
-                load_value_into_text_widget(text_value, "")
-                update_format_status()
-                refresh_mapping_list()
-                self.notify_status(_("Item '{name}' excluído.").format(name=name), key=f"delete-map:{current_type}:{name}")
+                except Exception:
+                    self.logger.exception("Mapping item restore failed unexpectedly")
+                    ui_widgets.alert(
+                        root, _("Desfazer exclusão"), _("Não foi possível salvar a alteração."),
+                        tone="danger",
+                    )
+                    return
+                descriptor = self._manager_target(SnippetRef("mapping", name, current_type))
+                if descriptor is not None and select_mapping_target(descriptor):
+                    tree_map.focus_set()
+                receipt.show(_("Restaurado às {time} · {name}").format(
+                    time=time_format.clock(datetime.now()), name=name))
+
+            receipt.show(
+                _("Excluído às {time} · {name}").format(time=time_format.clock(datetime.now()), name=name),
+                _("Desfazer"), undo,
+            )
 
         mapping_type.trace_add("write", lambda *_: on_type_changed())
         tree_map.bind("<<TreeviewSelect>>", load_selected_mapping)
@@ -5403,13 +5690,14 @@ class Sniptype:
             self.logger.warning(
                 f"Ativar o snippet dinâmico '{trigger}' sobrepõe o snippet estático de mesmo nome."
             )
-            return messagebox.askyesno(
+            return ui_widgets.confirm(
+                parent,
                 _("Trigger em conflito"),
                 _("Já existe um snippet estático com o trigger '{trigger}'.\n\nAo ativar o "
                   "dinâmico, é ele que passa a expandir. O texto estático continua salvo em "
-                  "snippets.json, mas deixa de ser acionado.\n\nAtivar mesmo assim?").format(trigger=trigger),
-                parent=parent,
-            )
+                  "snippets.json, mas deixa de ser acionado.").format(trigger=trigger),
+                _("Ativar mesmo assim"),
+            ) == ui_widgets.PRIMARY
 
         # A mapping-composed trigger (e.g. ``cpffulano`` from the ``_cpf_numbers``
         # container) is never a direct key in ``self.snippets`` — it resolves via
@@ -5420,14 +5708,14 @@ class Sniptype:
             self.logger.warning(
                 f"Ativar o snippet dinâmico '{trigger}' sobrepõe um mapeamento dinâmico de mesmo nome."
             )
-            return messagebox.askyesno(
+            return ui_widgets.confirm(
+                parent,
                 _("Trigger em conflito"),
                 _("Já existe um mapeamento dinâmico com o trigger '{trigger}'.\n\nAo ativar o "
                   "snippet dinâmico, é ele que passa a expandir. O valor mapeado continua "
-                  "salvo no container de mapeamento, mas deixa de ser acionado.\n\nAtivar mesmo "
-                  "assim?").format(trigger=trigger),
-                parent=parent,
-            )
+                  "salvo no container de mapeamento, mas deixa de ser acionado.").format(trigger=trigger),
+                _("Ativar mesmo assim"),
+            ) == ui_widgets.PRIMARY
 
         return True
 
@@ -5449,41 +5737,46 @@ class Sniptype:
 
     def _rename_registry_entry_dialog(self, root, key, current_trigger, refresh):
         """Ask for a new trigger name, validate it, then persist and refresh."""
-        new_trigger = simpledialog.askstring(
-            _("Renomear trigger"),
-            _("Identificador armazenado: {key}\nTrigger efetivo atual: "
-              "{current_trigger}\n\nNovo trigger efetivo:").format(key=key, current_trigger=current_trigger),
-            initialvalue=current_trigger,
-            parent=root,
-        )
-        if new_trigger is None:
-            return
-        new_trigger = new_trigger.strip()
-        if not new_trigger or new_trigger == current_trigger:
-            return
-
         static_snippets = build_saveable_snippets(
             self.snippets,
             self.shadowed_static_snippets,
         )
-        errors, warnings = validate_rename(
-            self.dynamic_registry,
-            key,
-            new_trigger,
-            static_snippets,
-            self.library_metadata,
-        )
-        if errors:
-            messagebox.showerror(_("Trigger inválido"), "\n".join(errors), parent=root)
-            return
-        if warnings:
-            proceed = messagebox.askyesno(
-                _("Confirmar trigger"),
-                _("{warnings}\n\nDeseja continuar mesmo assim?").format(warnings="\n".join(warnings)),
-                parent=root,
+        found = {}
+
+        def problem(value):
+            if not value:
+                return _("Informe um trigger.")
+            if value == current_trigger:
+                return None
+            errors, warnings = validate_rename(
+                self.dynamic_registry,
+                key,
+                value,
+                static_snippets,
+                self.library_metadata,
             )
-            if not proceed:
-                return
+            found["warnings"] = warnings
+            return "\n".join(errors) or None
+
+        new_trigger = ui_widgets.ask_text(
+            root,
+            _("Renomear trigger"),
+            _("Identificador armazenado: {key}\nTrigger efetivo atual: "
+              "{current_trigger}\n\nNovo trigger efetivo:").format(key=key, current_trigger=current_trigger),
+            current_trigger,
+            validate=problem,
+            primary_label=_("Renomear"),
+        )
+        if new_trigger is None or new_trigger == current_trigger:
+            return
+        warnings = found.get("warnings")
+        if warnings and not ui_widgets.confirm(
+            root,
+            _("Confirmar trigger"),
+            "\n".join(warnings),
+            _("Renomear mesmo assim"),
+        ):
+            return
 
         if self._rename_registry_entry(key, new_trigger):
             refresh()

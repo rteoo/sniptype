@@ -12,11 +12,15 @@ from library_metadata import (
     create_group,
     delete_group,
     duplicate_static_item_metadata,
+    mapping_item_metadata,
     merge_metadata,
     normalize_metadata,
     remove_form_metadata,
+    restore_mapping_item_metadata,
+    restore_static_item_metadata,
     set_form_metadata,
     split_library_document,
+    static_item_metadata,
     toggle_favorite,
     unassign_static_item,
     update_group,
@@ -530,6 +534,36 @@ class LibraryMetadataTests(unittest.TestCase):
             with self.subTest(operation=operation):
                 with self.assertRaises(MetadataReadOnlyError):
                     operation()
+
+
+class ItemMetadataSnapshotTests(unittest.TestCase):
+    def _metadata(self):
+        return {
+            "groups": {"g": {"label": "G"}},
+            "items": {
+                "static": {"xola": {"group_id": "g", "favorite": True}},
+                "mappings": {"_codes": {"k": {"favorite": True}}},
+            },
+        }
+
+    def test_a_snapshot_is_detached_and_absent_items_answer_none(self):
+        metadata = self._metadata()
+        snapshot = static_item_metadata(metadata, "xola")
+        snapshot["favorite"] = False
+        self.assertTrue(metadata["items"]["static"]["xola"]["favorite"])
+        self.assertIsNone(static_item_metadata(metadata, "missing"))
+        self.assertIsNone(static_item_metadata(None, "xola"))
+        self.assertEqual({"favorite": True}, mapping_item_metadata(metadata, "_codes", "k"))
+        self.assertIsNone(mapping_item_metadata(metadata, "_other", "k"))
+
+    def test_restoring_a_snapshot_is_copy_on_write(self):
+        metadata = self._metadata()
+        before = copy.deepcopy(metadata)
+        static = restore_static_item_metadata(metadata, "xnew", {"favorite": True})
+        mapping = restore_mapping_item_metadata(metadata, "_new", "k", {"favorite": True})
+        self.assertEqual({"favorite": True}, static["items"]["static"]["xnew"])
+        self.assertEqual({"favorite": True}, mapping["items"]["mappings"]["_new"]["k"])
+        self.assertEqual(before, metadata)
 
 
 if __name__ == "__main__":

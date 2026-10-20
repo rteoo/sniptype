@@ -5,6 +5,7 @@ Timestamps are injected as strings/epoch seconds by callers to keep tests
 deterministic; production callers pass the real time.
 """
 
+from datetime import datetime
 import glob
 import os
 import shutil
@@ -22,6 +23,19 @@ STARTUP_BACKUP_MAX_AGE_SECONDS = 24 * 60 * 60
 def format_timestamp(now=None):
     """Return a filesystem-safe local timestamp (YYYYMMDD-HHMMSS)."""
     return time.strftime("%Y%m%d-%H%M%S", time.localtime(now))
+
+
+def backup_time(path):
+    """When a backup was taken, as a local ``datetime``.
+
+    Read from the name ``create_backup`` gives it; a file named otherwise
+    answers its modification time.
+    """
+    stem = os.path.basename(path)[len(BACKUP_PREFIX):len(BACKUP_PREFIX) + 15]
+    try:
+        return datetime.strptime(stem, "%Y%m%d-%H%M%S")
+    except ValueError:
+        return datetime.fromtimestamp(os.path.getmtime(path))
 
 
 def _dedupe_path(path):

@@ -2,7 +2,7 @@ import copy
 import threading
 import unittest
 
-from library_metadata import split_library_document
+from library_metadata import mapping_item_metadata, split_library_document, static_item_metadata
 from manager_actions import (
     MetadataReadOnlyError,
     TriggerCollisionError,
@@ -10,8 +10,12 @@ from manager_actions import (
     create_group,
     delete_group,
     duplicate_static,
+    group_members,
     remove_form,
     rename_static,
+    restore_group,
+    restore_mapping_item,
+    restore_static,
     set_form,
     set_mapping_form,
     toggle_favorite,
@@ -250,6 +254,105 @@ class ManagerActionTests(unittest.TestCase):
                 with self.assertRaises(MetadataReadOnlyError):
                     operation()
         self.assertEqual({"x": "value"}, snippets)
+
+
+
+class UndoTransactionTests(unittest.TestCase):
+    """Desfazer puts a deleted item back through the ordinary save path."""
+
+    def test_restore_static_brings_back_the_value_and_its_metadata(self):
+        metadata = metadata_with_group()
+        metadata["items"]["static"]["xola"] = {"group_id": "work", "favorite": True, "form": {"fields": []}}
+        saved = static_item_metadata(metadata, "xola")
+        metadata["items"]["static"].pop("xola")
+        snippets = {"other": "x", "_codes": {"item": "1"}}
+        before = copy.deepcopy((snippets, metadata))
+
+        result = restore_static(snippets, metadata, "xola", "Olá", saved)
+
+        self.assertEqual("Olá", result.snippets["xola"])
+        self.assertEqual(
+            {"group_id": "work", "favorite": True, "form": {"fields": []}},
+            result.metadata["items"]["static"]["xola"],
+        )
+        self.assertEqual(before, (snippets, metadata))
+
+    def test_restore_static_is_refused_once_the_name_is_taken_again(self):
+        with self.assertRaises(ValueError):
+            restore_static({"xola": "new"}, {}, "xola", "old")
+        with self.assertRaises(ValueError):
+            restore_static({"xola": lambda: "dynamic"}, {}, "xola", "old")
+        with self.assertRaises(ValueError):
+            restore_static({}, {}, "_codes", "reserved")
+
+    def test_restore_static_is_refused_when_its_effective_trigger_now_collides(self):
+        metadata = metadata_with_group()
+        saved = {"group_id": "work"}
+        # Since the delete, "wxola" became a plain snippet: the restored
+        # "xola" in the "w" group would expand on the same trigger.
+        with self.assertRaises(TriggerCollisionError):
+            restore_static({"wxola": "taken"}, metadata, "xola", "old", saved)
+
+    def test_an_item_whose_group_is_gone_comes_back_ungrouped(self):
+        result = restore_static({}, {}, "xola", "old", {"group_id": "deleted", "favorite": True})
+        self.assertEqual({"favorite": True}, result.metadata["items"]["static"]["xola"])
+
+    def test_restore_mapping_item_needs_its_type_and_a_free_identifier(self):
+        metadata = metadata_with_group()
+        saved = mapping_item_metadata(metadata, "_codes", "item")
+        snippets = {"_codes": {"__prefix__": "c"}}
+
+        result = restore_mapping_item(snippets, metadata, "_codes", "item", "1", saved)
+
+        self.assertEqual("1", result.snippets["_codes"]["item"])
+        self.assertEqual({"favorite": True}, result.metadata["items"]["mappings"]["_codes"]["item"])
+        self.assertNotIn("item", snippets["_codes"])
+        with self.assertRaises(KeyError):
+            restore_mapping_item({}, metadata, "_codes", "item", "1", saved)
+        with self.assertRaises(ValueError):
+            restore_mapping_item({"_codes": {"item": "2"}}, metadata, "_codes", "item", "1")
+
+    def test_restore_group_recreates_it_and_regroups_the_members_left_alone(self):
+        metadata = metadata_with_group()
+        metadata["items"]["static"].update({
+            "a": {"group_id": "work"}, "b": {"group_id": "work"}, "c": {"group_id": "work"},
+        })
+        metadata["items"]["mappings"]["_codes"]["item"]["group_id"] = "work"
+        snippets = {"a": "1", "b": "2", "c": "3", "_codes": {"item": "x"}}
+        definition = copy.deepcopy(metadata["groups"]["work"])
+        static_members, mapping_members = group_members(metadata, "work")
+        self.assertEqual(("a", "b", "c"), static_members)
+        self.assertEqual((("_codes", "item"),), mapping_members)
+
+        deleted = delete_group(snippets, metadata, "work")
+        # Before Desfazer, "b" is deleted and "c" is put in another group.
+        content = dict(deleted.snippets)
+        content.pop("b")
+        regrouped = create_group(content, deleted.metadata, group_id="home", label="Home")
+        regrouped = assign_item(regrouped.snippets, regrouped.metadata, "c", "home")
+
+        result = restore_group(
+            regrouped.snippets, regrouped.metadata, "work", definition,
+            static_items=static_members, mapping_items=mapping_members,
+        )
+
+        self.assertEqual(definition["label"], result.metadata["groups"]["work"]["label"])
+        statics = result.metadata["items"]["static"]
+        self.assertEqual("work", statics["a"]["group_id"])
+        self.assertNotIn("b", statics)
+        self.assertEqual("home", statics["c"]["group_id"])
+        self.assertEqual("work", result.metadata["items"]["mappings"]["_codes"]["item"]["group_id"])
+
+    def test_restore_group_is_refused_when_its_prefix_now_collides(self):
+        metadata = metadata_with_group()
+        metadata["items"]["static"]["hi"] = {"group_id": "work"}
+        definition = copy.deepcopy(metadata["groups"]["work"])
+        members = group_members(metadata, "work")
+        deleted = delete_group({"hi": "x"}, metadata, "work")
+        content = dict(deleted.snippets, whi="taken since")
+        with self.assertRaises(TriggerCollisionError):
+            restore_group(content, deleted.metadata, "work", definition,
+                          static_items=members[0], mapping_items=members[1])
 
 
 if __name__ == "__main__":

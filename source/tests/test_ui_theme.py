@@ -568,20 +568,33 @@ class GuiSourceTests(unittest.TestCase):
                     offenders.append((node.lineno, func.attr, keyword.arg))
         self.assertEqual(offenders, [])
 
-    def test_every_native_prompt_names_its_owner_window(self):
-        """A parent-less prompt belongs to the hidden shared root, not to the
-        window the person acted in, so it is not modal to it and can open
-        behind it."""
+    def test_no_gui_module_opens_a_native_prompt(self):
+        """Win32 drew messagebox and simpledialog light, with buttons in the
+        system language; every prompt goes through the ui_widgets kit."""
+        import re
+        for name in self.UI_MODULES:
+            with self.subTest(name):
+                self.assertEqual(
+                    re.findall(r"\b(?:messagebox|simpledialog)\b", self._source(name)), [])
+
+    def test_every_kit_prompt_names_its_owner_window(self):
+        """A prompt without its owner belongs to the hidden shared root, not
+        to the window the person acted in, so it is not modal to it and can
+        open behind it."""
         import ast
-        orphans = [
-            (node.lineno, f"{node.func.value.id}.{node.func.attr}")
-            for node in ast.walk(ast.parse(self._source()))
-            if isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and isinstance(node.func.value, ast.Name)
-            and node.func.value.id in ("messagebox", "simpledialog")
-            and not any(keyword.arg == "parent" for keyword in node.keywords)
-        ]
+        prompts = {"confirm", "ask_text", "alert"}
+        calls, orphans = 0, []
+        for name in self.UI_MODULES:
+            for node in ast.walk(ast.parse(self._source(name))):
+                if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                        and isinstance(node.func.value, ast.Name)
+                        and node.func.value.id == "ui_widgets" and node.func.attr in prompts):
+                    continue
+                calls += 1
+                owner = node.args[0] if node.args else None
+                if owner is None or (isinstance(owner, ast.Constant) and owner.value is None):
+                    orphans.append((name, node.lineno, node.func.attr))
+        self.assertGreater(calls, 50)
         self.assertEqual(orphans, [])
 
     def test_the_windows_only_ttk_theme_is_no_longer_forced(self):

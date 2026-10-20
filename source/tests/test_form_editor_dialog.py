@@ -5,8 +5,9 @@ import unittest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from form_editor_dialog import FormEditorController
-from form_support import FormValidationError
+import i18n
+from form_editor_dialog import FormEditorController, type_from_label, type_label
+from form_support import FIELD_TYPES, FormValidationError
 
 
 class FormEditorControllerTests(unittest.TestCase):
@@ -86,6 +87,41 @@ class FormEditorControllerTests(unittest.TestCase):
         self.assertEqual(0, controller.move_field(0, 1))
         with self.assertRaises(IndexError):
             controller.update_field(2, name="bad")
+
+    def test_a_date_error_selects_the_field_its_message_names_by_label(self):
+        controller = FormEditorController({"fields": [
+            {"name": "nome"},
+            {"name": "prazo", "type": "date", "label": "Entrega", "default": "31/02/2026"},
+        ]})
+        with self.assertRaises(FormValidationError):
+            controller.save()
+        self.assertEqual(1, controller.invalid_index)
+        self.assertTrue(controller.error.startswith("Entrega: "))
+
+
+class FieldTypeLabelTests(unittest.TestCase):
+    def tearDown(self):
+        i18n.set_language(i18n.DEFAULT_LANGUAGE)
+
+    def test_the_tipo_list_shows_localized_labels_that_map_back_to_the_stored_type(self):
+        labels = [type_label(field_type) for field_type in FIELD_TYPES]
+        self.assertEqual(["Texto", "Texto multilinha", "Escolha", "Data", "Opcional"], labels)
+        self.assertEqual(list(FIELD_TYPES), [type_from_label(label) for label in labels])
+        i18n.set_language("en-US")
+        english = [type_label(field_type) for field_type in FIELD_TYPES]
+        self.assertNotIn("multiline", english)
+        self.assertEqual(list(FIELD_TYPES), [type_from_label(label) for label in english])
+
+    def test_an_unknown_stored_type_round_trips_so_saving_can_reject_it(self):
+        # A hand-edited library must still open in the editor; validation,
+        # not the Tipo list, reports the type it does not support.
+        self.assertEqual("choice", type_from_label("choice"))
+        self.assertEqual("lista", type_label("lista"))
+        self.assertEqual("lista", type_from_label(type_label("lista")))
+        controller = FormEditorController({"fields": [{"name": "x", "type": "lista"}]})
+        with self.assertRaises(FormValidationError):
+            controller.save()
+        self.assertIn("unsupported type", controller.error)
 
 
 if __name__ == "__main__":

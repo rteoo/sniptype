@@ -9,6 +9,7 @@ from snippet_utils import (
     check_dynamic_pattern,
     get_default_snippets,
     get_dynamic_prefixes,
+    library_change_counts,
     load_json_file,
     merge_snippets,
     validate_static_snippets,
@@ -326,6 +327,31 @@ class LoadJsonFileTests(unittest.TestCase):
         path.write_text("{not valid", encoding="utf-8")
         with self.assertRaises(json.JSONDecodeError):
             load_json_file(str(path))
+
+
+
+class LibraryChangeCountsTests(unittest.TestCase):
+    def test_counts_static_and_mapping_items_one_by_one(self):
+        before = {
+            "xa": "a", "xb": "b", "xc": "c",
+            "_cpf_numbers": {"__prefix__": "cpf", "ana": "1", "bia": "2"},
+            "xdyn": lambda: "runtime",
+        }
+        after = {
+            "xa": "a", "xb": "changed", "xd": "d",
+            "_cpf_numbers": {"__prefix__": "cpf", "ana": "1", "caio": "3"},
+        }
+        self.assertEqual(
+            {"new": 2, "overwritten": 1, "removed": 2},
+            library_change_counts(before, after),
+        )
+
+    def test_an_identical_library_changes_nothing(self):
+        library = {"xa": "a", "_codes": {"__prefix__": "c", "k": "v"}}
+        self.assertEqual(
+            {"new": 0, "overwritten": 0, "removed": 0},
+            library_change_counts(library, dict(library)),
+        )
 
 
 if __name__ == "__main__":

@@ -1,4 +1,6 @@
+from datetime import datetime
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -197,6 +199,32 @@ class BackupSupportTests(unittest.TestCase):
         # Shape must be YYYYMMDD-HHMMSS regardless of the local timezone.
         self.assertRegex(bs.format_timestamp(0), r"^\d{8}-\d{6}$")
         self.assertRegex(bs.format_timestamp(), r"^\d{8}-\d{6}$")
+
+
+
+class BackupTimeTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+
+    def test_the_time_comes_from_the_name_create_backup_gives(self):
+        source = os.path.join(self.tmp, "snippets.json")
+        with open(source, "w", encoding="utf-8") as handle:
+            handle.write("{}")
+        path = bs.create_backup(source, os.path.join(self.tmp, "backups"), timestamp="20261014-090512")
+        self.assertEqual(datetime(2026, 10, 14, 9, 5, 12), bs.backup_time(path))
+
+    def test_a_deduplicated_name_keeps_its_time(self):
+        path = os.path.join(self.tmp, bs.BACKUP_PREFIX + "20261014-090512-1.json")
+        open(path, "w", encoding="utf-8").close()
+        self.assertEqual(datetime(2026, 10, 14, 9, 5, 12), bs.backup_time(path))
+
+    def test_another_name_answers_its_modification_time(self):
+        path = os.path.join(self.tmp, "copia-manual.json")
+        open(path, "w", encoding="utf-8").close()
+        stamp = datetime(2025, 3, 2, 8, 0).timestamp()
+        os.utime(path, (stamp, stamp))
+        self.assertEqual(datetime(2025, 3, 2, 8, 0), bs.backup_time(path))
 
 
 if __name__ == "__main__":

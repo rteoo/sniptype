@@ -104,15 +104,16 @@ class HotkeyDialog:
             bg=self.theme.surface, fg=self.theme.text_muted, font=self.theme.caption_font(),
         ).pack(fill="x", pady=(0, self.theme.space_md))
 
-        card = ui_widgets.card(body, padding=(0, self.theme.space_xs), ui=self.theme)
-        card.pack(fill="both", expand=True)
+        # The rows sit on the dialog surface itself, with no card around them.
+        rows = tk.Frame(body, bg=self.theme.surface)
+        rows.pack(fill="both", expand=True)
         normalized, _invalid = normalize_hotkeys(self._bindings)
         for action in ACTIONS:
-            row = tk.Frame(card, bg=self.theme.card)
-            row.pack(fill="x", padx=self.theme.space_md, pady=self.theme.space_sm)
+            row = tk.Frame(rows, bg=self.theme.surface)
+            row.pack(fill="x", pady=self.theme.space_xs)
             tk.Label(
                 row, text=_(ACTION_LABELS[action]), anchor="w", width=24,
-                bg=self.theme.card, fg=self.theme.text, font=self.theme.font(),
+                bg=self.theme.surface, fg=self.theme.text, font=self.theme.font(),
             ).pack(side="left")
             control = ui_widgets.entry(row, ui=self.theme)
             if normalized.get(action):
@@ -126,19 +127,12 @@ class HotkeyDialog:
         )
         self._error_label.pack(fill="x", pady=(self.theme.space_sm, 0))
 
-        buttons = tk.Frame(body, bg=self.theme.surface)
-        buttons.pack(fill="x", pady=(self.theme.space_md, 0))
-        ui_widgets.button(
-            buttons, text=_("Cancelar"), command=self.cancel, width=10, ui=self.theme,
-        ).pack(side="right")
-        ui_widgets.button(
-            buttons, text=_("Salvar"), command=self.save, width=10, variant="accent",
-            icon="save", ui=self.theme,
-        ).pack(side="right", padx=(0, self.theme.space_sm))
+        # Enter saves and Escape cancels.
+        ui_widgets.dialog_footer(
+            body, (_("Salvar"), self.save), self.cancel, ui=self.theme,
+        ).pack(fill="x", pady=(self.theme.space_md, 0))
 
         self.controller = HotkeyDialogController(self._bindings, self._controls)
-        self.window.bind("<Escape>", lambda _event: self.cancel())
-        self.window.bind("<Return>", lambda _event: self.save())
 
     def save(self):
         self._assert_owner()

@@ -15,15 +15,19 @@ literal text rather than a second instruction.
 """
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 import re
 
+from i18n import _
 from snippet_utils import get_dynamic_prefixes
 
 
 VARIABLE_RE = re.compile(r"%%([^%\s]+)%%")
 FIELD_TYPES = ("text", "multiline", "choice", "date", "optional")
 DEFAULT_DATE_FORMAT = "%d/%m/%Y"
+# How a date is typed into a form; ISO is still read, as older definitions
+# store their defaults that way.
+DATE_INPUT_FORMAT = "%d/%m/%Y"
 _NAME_RE = re.compile(r"^[^%\s]+$")
 
 
@@ -150,7 +154,7 @@ def _normalize_field(definition, index):
         if not isinstance(default, str):
             raise FormValidationError(f"Date field {name!r} has a non-text default.")
         if default != "today":
-            _parse_date(default, name)
+            _parse_date(default, name, label)
 
     if label is not None and not isinstance(label, str):
         raise FormValidationError(f"Field {name!r} has a non-text label.")
@@ -223,11 +227,36 @@ def compile_form(template, fields=None, snippets=None):
     return CompiledForm(template, normalized, legacy=False)
 
 
-def _parse_date(value, name):
+def parse_date_input(value):
+    """A typed date: DD/MM/AAAA, or ISO (AAAA-MM-DD). Raises ``ValueError``."""
+    if not isinstance(value, str):
+        raise ValueError(f"a date must be text, not {type(value).__name__}")
+    text = value.strip()
     try:
-        return date.fromisoformat(value)
-    except (TypeError, ValueError) as exc:
-        raise FormValidationError(f"Date field {name!r} needs an ISO date (YYYY-MM-DD).") from exc
+        return datetime.strptime(text, DATE_INPUT_FORMAT).date()
+    except ValueError:
+        return date.fromisoformat(text)
+
+
+def format_date_input(value):
+    """``value`` (a date) as a form shows it for typing."""
+    return value.strftime(DATE_INPUT_FORMAT)
+
+
+def field_label(name, label=None):
+    """The label a form shows for a field: its own, or its name spelled out."""
+    return label or name.replace("_", " ").title()
+
+
+def _parse_date(value, name, label=None):
+    try:
+        return parse_date_input(value)
+    except ValueError as exc:
+        raise FormValidationError(
+            _("{label}: informe uma data válida no formato DD/MM/AAAA.").format(
+                label=field_label(name, label)),
+            errors=(name,),
+        ) from exc
 
 
 def _render_value(field, value):
@@ -248,7 +277,7 @@ def _render_value(field, value):
     if value == "today":
         parsed = date.today()
     else:
-        parsed = _parse_date(value, field.name)
+        parsed = _parse_date(value, field.name, field.label)
     return parsed.strftime(field.output_format)
 
 
@@ -284,12 +313,16 @@ def render_form(compiled, values, inline_values=None):
 
 __all__ = [
     "CompiledForm",
+    "DATE_INPUT_FORMAT",
     "DEFAULT_DATE_FORMAT",
     "FIELD_TYPES",
     "FormField",
     "FormValidationError",
     "compile_form",
+    "field_label",
+    "format_date_input",
     "infer_legacy_fields",
+    "parse_date_input",
     "render_form",
     "render_form_values",
     "validate_form_fields",

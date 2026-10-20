@@ -6,12 +6,15 @@ from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+import i18n
 from form_support import (
     CompiledForm,
     FormField,
     FormValidationError,
     compile_form,
+    format_date_input,
     infer_legacy_fields,
+    parse_date_input,
     render_form,
     validate_form_fields,
 )
@@ -62,6 +65,47 @@ class FormSupportTests(unittest.TestCase):
         )
         self.assertEqual("Vencimento: 2026/09/16", render_form(form, {}))
         self.assertEqual("Vencimento: 2027/01/02", render_form(form, {"vencimento": "2027-01-02"}))
+
+    def test_date_accepts_the_typed_dd_mm_aaaa_form(self):
+        form = compile_form(
+            "Vencimento: %%vencimento%%",
+            [{"name": "vencimento", "type": "date", "default": "2026-09-16", "output_format": "%Y-%m-%d"}],
+        )
+        self.assertEqual("Vencimento: 2026-12-31", render_form(form, {"vencimento": "31/12/2026"}))
+        self.assertEqual("Vencimento: 2026-12-31", render_form(form, {"vencimento": " 31/12/2026 "}))
+
+    def test_an_impossible_date_names_the_field_label_in_the_interface_language(self):
+        form = compile_form(
+            "%%vencimento%%",
+            [{"name": "vencimento", "type": "date", "label": "Data de vencimento", "default": "today"}],
+        )
+        with self.assertRaises(FormValidationError) as caught:
+            render_form(form, {"vencimento": "31/02/2026"})
+        self.assertEqual(
+            "Data de vencimento: informe uma data válida no formato DD/MM/AAAA.",
+            str(caught.exception),
+        )
+        self.assertEqual(("vencimento",), caught.exception.errors)
+
+        i18n.set_language("en-US")
+        self.addCleanup(i18n.set_language, i18n.DEFAULT_LANGUAGE)
+        with self.assertRaises(FormValidationError) as caught:
+            render_form(form, {"vencimento": "31/02/2026"})
+        self.assertEqual("Data de vencimento: enter a valid date as DD/MM/YYYY.", str(caught.exception))
+
+    def test_an_unlabeled_date_field_is_named_as_the_form_shows_it(self):
+        form = compile_form("%%data_fim%%", [{"name": "data_fim", "type": "date", "default": "today"}])
+        with self.assertRaises(FormValidationError) as caught:
+            render_form(form, {"data_fim": "amanhã"})
+        self.assertTrue(str(caught.exception).startswith("Data Fim: "))
+
+    def test_typed_dates_round_trip_through_the_input_format(self):
+        self.assertEqual(date(2026, 12, 31), parse_date_input("31/12/2026"))
+        self.assertEqual(date(2026, 12, 31), parse_date_input("2026-12-31"))
+        self.assertEqual("05/01/2027", format_date_input(date(2027, 1, 5)))
+        for bad in ("31/02/2026", "2026-02-31", "", None):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                parse_date_input(bad)
 
     def test_date_today_default_is_evaluated_when_rendered(self):
         form = compile_form(

@@ -215,6 +215,44 @@ class FactoryTests(unittest.TestCase):
             self.assertEqual(len(glyph), 1, name)
             self.assertTrue(0xE000 <= ord(glyph) <= 0xF8FF, name)
 
+    def test_a_trailing_icon_keeps_its_gap_before_the_glyph(self):
+        # A drop-down chevron follows its text, so the spacing goes before it.
+        artist = _artist()
+        if ui_widgets._icon_font(16) is None:
+            self.skipTest("no icon font on this host")
+        before = ui_widgets._render_icon(artist, ui_widgets.ICONS["chevron_down"], "#FFFFFF", 16, 8)
+        after = ui_widgets._render_icon(
+            artist, ui_widgets.ICONS["chevron_down"], "#FFFFFF", 16, 8, leading=True)
+        self.assertEqual((24, 16), before.size)
+        self.assertEqual((24, 16), after.size)
+        self.assertIsNone(before.crop((16, 0, 24, 16)).getbbox())
+        self.assertIsNone(after.crop((0, 0, 8, 16)).getbbox())
+
+    def test_macos_keeps_the_native_menu(self):
+        with mock.patch.object(ui_widgets.tk, "Menu") as menu:
+            ui_widgets.menu(object(), ui=self.mac)
+        self.assertEqual({"tearoff": False}, menu.call_args.kwargs)
+
+
+class DialogKitContractTests(unittest.TestCase):
+    """The Tk-free half of the dialog kit; the dialogs themselves run on the
+    shared root in test_manager_gui_smoke."""
+
+    def test_a_prompt_without_its_window_fails_loudly(self):
+        # It would belong to the hidden shared root and could open behind
+        # the window the person acted in.
+        for prompt in (
+            lambda: ui_widgets.confirm(None, "t", "b", "Ok"),
+            lambda: ui_widgets.ask_text(None, "t", "l", primary_label="Ok"),
+            lambda: ui_widgets.alert(None, "t", "b"),
+        ):
+            with self.assertRaises(TypeError):
+                prompt()
+
+    def test_an_alert_tone_outside_the_ladder_fails_loudly(self):
+        with self.assertRaises(ValueError):
+            ui_widgets.alert(object(), "t", "b", tone="success")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -32,6 +32,24 @@ _TYPE_LABELS = {
 }
 
 
+def type_label(field_type):
+    """The localized name the Tipo list shows for ``field_type``.
+
+    A type this version does not know (a hand-edited library) shows as
+    stored, so the editor opens and saving names it as unsupported.
+    """
+    name = _TYPE_LABELS.get(field_type)
+    return _(name) if name else field_type
+
+
+def type_from_label(label):
+    """The field type a Tipo list label names, the inverse of :func:`type_label`."""
+    for field_type, name in _TYPE_LABELS.items():
+        if label in (field_type, _(name)):
+            return field_type
+    return label
+
+
 def _field_draft(field):
     if isinstance(field, FormField):
         field = {
@@ -161,7 +179,7 @@ class FormEditorController:
         message = str(error)
         for index, field in enumerate(self.fields):
             name = field.get("name") if isinstance(field, dict) else None
-            if isinstance(name, str) and name and name in message:
+            if isinstance(name, str) and name and (name in paths or name in message):
                 return index
         return 0 if self.fields else None
 
@@ -234,7 +252,7 @@ class FormEditor:
 
     def _label(self, parent, text):
         tk.Label(
-            parent, text=text, anchor="w", bg=self.theme.card,
+            parent, text=text, anchor="w", bg=self.theme.surface,
             fg=self.theme.text, font=self.theme.font(),
         ).pack(fill="x", pady=(self.theme.space_sm, self.theme.space_xs))
 
@@ -256,8 +274,9 @@ class FormEditor:
         content = tk.Frame(body, bg=self.theme.surface)
         content.pack(fill="both", expand=True)
 
-        left = ui_widgets.card(content, padding=self.theme.space_md, ui=self.theme)
-        left.pack(side="left", fill="y", padx=(0, self.theme.space_md))
+        # Both panes sit on the dialog surface itself, with no cards inside.
+        left = tk.Frame(content, bg=self.theme.surface)
+        left.pack(side="left", fill="y", padx=(0, self.theme.space_lg))
         field_list_frame = ui_widgets.field_frame(left, ui=self.theme)
         field_list_frame.pack(fill="both", expand=True)
         self._field_list = tk.Listbox(
@@ -269,7 +288,7 @@ class FormEditor:
         self._field_list.pack(fill="both", expand=True)
         ui_widgets.track_focus(field_list_frame, self._field_list)
         self._field_list.bind("<<ListboxSelect>>", self._on_select)
-        list_buttons = tk.Frame(left, **self.theme.toolbar_frame_colors())
+        list_buttons = tk.Frame(left, bg=self.theme.surface)
         list_buttons.pack(fill="x", pady=(self.theme.space_sm, 0))
         self._button(list_buttons, _("Adicionar"), self._add, icon="add").pack(side="left")
         # Icon-only where the icon font exists; the arrows are the fallback.
@@ -278,10 +297,8 @@ class FormEditor:
         self._button(list_buttons, "" if glyphs else "↓", self._move_down, variant="subtle", icon="down").pack(side="left", padx=(self.theme.space_xs, 0))
         self._button(list_buttons, _("Remover"), self._remove, variant="danger", icon="delete").pack(side="left", padx=(self.theme.space_xs, 0))
 
-        right = ui_widgets.card(content, padding=self.theme.space_lg, ui=self.theme)
-        right.pack(side="left", fill="both", expand=True)
-        editor = tk.Frame(right, bg=self.theme.card)
-        editor.pack(fill="both", expand=True)
+        editor = tk.Frame(content, bg=self.theme.surface)
+        editor.pack(side="left", fill="both", expand=True)
 
         self.name_var = tk.StringVar(self.window)
         self.label_var = tk.StringVar(self.window)
@@ -299,7 +316,10 @@ class FormEditor:
         self.label_entry = ui_widgets.entry(editor, textvariable=self.label_var, ui=self.theme)
         self.label_entry.pack(fill="x")
         self._label(editor, _("Tipo"))
-        self.type_combo = ui_widgets.combobox(editor, textvariable=self.type_var, values=FIELD_TYPES, ui=self.theme)
+        self.type_combo = ui_widgets.combobox(
+            editor, textvariable=self.type_var,
+            values=tuple(type_label(field_type) for field_type in FIELD_TYPES), ui=self.theme,
+        )
         self.type_combo.pack(fill="x")
         self.type_combo.bind("<<ComboboxSelected>>", self._on_type_change)
         self._label(editor, _("Valor padrão"))
@@ -310,25 +330,25 @@ class FormEditor:
             ui=self.theme,
         )
 
-        self._choice_frame = tk.Frame(editor, bg=self.theme.card)
+        self._choice_frame = tk.Frame(editor, bg=self.theme.surface)
         self._label(self._choice_frame, _("Opções (uma por linha)"))
         options_field, self.options_text = ui_widgets.text_area(
             self._choice_frame, height=5, wrap="word",
             padx=self.theme.space_sm, pady=self.theme.space_xs, ui=self.theme,
         )
         options_field.pack(fill="x")
-        self._optional_frame = tk.Frame(editor, bg=self.theme.card)
+        self._optional_frame = tk.Frame(editor, bg=self.theme.surface)
         self._label(self._optional_frame, _("Conteúdo quando selecionado"))
         self.content_entry = ui_widgets.entry(self._optional_frame, textvariable=self.content_var, ui=self.theme)
         self.content_entry.pack(fill="x")
-        self._date_frame = tk.Frame(editor, bg=self.theme.card)
+        self._date_frame = tk.Frame(editor, bg=self.theme.surface)
         self._label(self._date_frame, _("Formato da data"))
         self.format_entry = ui_widgets.entry(self._date_frame, textvariable=self.format_var, ui=self.theme)
         self.format_entry.pack(fill="x")
 
         self.error_label = tk.Label(
             editor, text="", anchor="w", justify="left",
-            bg=self.theme.card, fg=self.theme.danger, font=self.theme.caption_font(),
+            bg=self.theme.surface, fg=self.theme.danger, font=self.theme.caption_font(),
         )
         self.error_label.pack(fill="x", pady=(self.theme.space_md, 0))
         actions = tk.Frame(body, bg=self.theme.surface)
@@ -378,7 +398,7 @@ class FormEditor:
             self.name_var.set(field.get("name", ""))
             self.label_var.set(field.get("label", ""))
             field_type = field.get("type", "text")
-            self.type_var.set(field_type)
+            self.type_var.set(type_label(field_type))
             self.default_var.set(str(field.get("default", "")) if field_type != "optional" else "")
             self.optional_default_var.set(bool(field.get("default", False)))
             self.content_var.set(field.get("content", ""))
@@ -406,7 +426,7 @@ class FormEditor:
         if self._selected is None or self._updating:
             return
         field = self.controller.fields[self._selected]
-        field_type = self.type_var.get() or "text"
+        field_type = type_from_label(self.type_var.get()) if self.type_var.get() else "text"
         field.update({
             "name": self.name_var.get(),
             "label": self.label_var.get(),
@@ -437,7 +457,7 @@ class FormEditor:
         if self._updating:
             return
         self._commit_current()
-        self._render_type_fields(self.type_var.get())
+        self._render_type_fields(type_from_label(self.type_var.get()))
 
     def _add(self):
         self._assert_owner()
@@ -539,4 +559,4 @@ def run_form_editor(
     ).run()
 
 
-__all__ = ["FormEditor", "FormEditorController", "run_form_editor"]
+__all__ = ["FormEditor", "FormEditorController", "run_form_editor", "type_from_label", "type_label"]

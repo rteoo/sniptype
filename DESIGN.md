@@ -131,6 +131,7 @@ shifted so the body role matches the platform's default size.
 | Settings switches and choices | Immediate preference | Written to `settings.json` at once; a failed write restores the control and says so. |
 | Appearance | Immediate preference with a confirmed rebuild | The manager is rebuilt after a warning that unsaved editor text is discarded. |
 | Backups | Explicit restore | Restore and import keep the backup and quarantine guarantees in `AGENTS.md`. |
+| Deletes | Immediate, reversible for 10 s | Deleting a snippet, a mapping item or a group saves at once and offers Desfazer, which puts the item and its metadata back through the same save path. Deleting a mapping type asks for its name instead. |
 
 ## Components and layout
 
@@ -141,8 +142,10 @@ shifted so the body role matches the platform's default size.
   surface. Ctrl+1 to Ctrl+5 switch views, Ctrl+F focuses the list search and
   Ctrl+S saves the active editor.
 - The library and mapping views keep a list/editor split. Empty lists say
-  what to do next. Destructive edits name their target in a confirmation, and
-  persistence failures never claim success.
+  what to do next. Destructive work follows the confirmation ladder below,
+  and persistence failures never claim success.
+- Group management is a labeled **Grupos** button with a drop-down chevron
+  beside the group filter, never an icon-only menu.
 - The supported Windows minimum is 1180 × 760 and the default is 1280 × 800.
   At the minimum, the text editor's actions fit on one row.
 
@@ -184,9 +187,55 @@ Adopted now as a project extension:
 - **No silent failures (§12.7).** Every library command ends in a receipt or
   in an error dialog titled with the action, including errors nobody
   anticipated, which are also logged with their traceback. A bound control
-  (Favorito, Grupo) that fails returns to the saved value. Each native prompt
-  is owned by the window the person acted in, and a source test enforces
-  `parent=` on every one.
+  (Favorito, Grupo) that fails returns to the saved value. In-window
+  receipts exist so far for deletes and their undo; other commands still
+  report success with a tray notification, or with an information dialog in
+  Cópias de segurança, until receipts cover them.
+- **Dialog kit (§12.8, §12.16 Tk).** Every prompt is a themed, owned, modal
+  Toplevel from `ui_widgets`: `confirm(parent, title, body, primary_label,
+  danger=False, typed_word=None, extra=None)`, `ask_text(parent, title,
+  label, initial, validate, primary_label=...)`, `alert(parent, title, body,
+  tone=...)` and `dialog_footer(...)`. The footer is the primary, then any
+  extra choice, then Cancelar, right-aligned; Enter runs the focused button
+  or the primary (never inside a multi-line field), and Escape and the close
+  box cancel. Focus starts on the field, on the primary, or on Cancelar when
+  the primary is destructive, and returns to the control that opened the
+  prompt. Choices are named by outcome, never Sim/Não/OK. Field errors show
+  under the field while the prompt stays open. Prompts take the cached
+  theme of the window they belong to, because the ttk theme is shared by
+  every window. A source test bans `messagebox` and `simpledialog` from the
+  GUI modules and requires an owner window on every kit prompt. Dialog
+  bodies sit on the dialog surface with no card inside (form, group,
+  shortcuts, preview, form editor).
+- **Confirmation ladder (§12.8).** The consequence sets the friction:
+
+  | Action | Friction |
+  | --- | --- |
+  | Delete a snippet, a mapping item or a group | None. It saves at once, and the receipt offers Desfazer for 10 s |
+  | Restore a backup | One confirmation naming the backup's date, age and the counts it changes |
+  | Import: merge | One choice in the import dialog, which shows the counts for both modes |
+  | Import: replace everything | A second confirmation that stays disabled until SUBSTITUIR is typed |
+  | Delete a mapping type and all its items | A confirmation that stays disabled until the type's name is typed |
+
+  Counts read "Novos: N · Sobrescritos: N · Removidos: N", item by item,
+  mapping entries included.
+- **Receipt format (§12.8).** A receipt names the outcome with its time,
+  then the object: "Excluído às 14:02 · xola", then "Restaurado às 14:03 ·
+  xola" after Desfazer. It replaces the editor's hint line and stays until
+  the next receipt; its action expires after 10 s. A delete sends no tray
+  notification: the receipt replaces it.
+- **Time vocabulary (§12.6).** `source/time_format.py` is the one formatter:
+  a 24-hour local clock, record stamps ("Hoje 14:02", "Ontem 09:10", "qua.
+  14/10 09:10", "14/10 09:10", "14/10/2025"; en "Today 14:02", "Wed Oct 14
+  09:10", "Oct 14, 2025"), ages ("agora", "há 4 min", "há 3 h", "há 3 d",
+  "em 4 min"; a week or more is a stamp) and both together for backups
+  ("14/10 09:10 · há 3 h"). Weekday and month names are interface strings.
+  Form dates are typed and shown as DD/MM/AAAA; ISO is still read, and an
+  invalid date names the field's label.
+- **Icons used on their own labels (§12.16).** Segoe Fluent Icons, falling
+  back to Segoe MDL2 Assets: U+E70D chevron after "Grupos" (fallback: the
+  text "Grupos ▾"), and U+E783 error, U+E7BA warning and U+E946 info beside
+  an alert's title (fallback: no icon; the title carries the meaning).
 - **Search ranking.** Library search matches the stored trigger, the
   effective trigger shown after `→`, the group label and the plain content.
   Triggers rank before the group label, and the group label before content;
@@ -226,4 +275,6 @@ satisfy any of them.
 | Keyboard: formatting commands | Failed. Bold, italic, underline, code and strikethrough have shortcuts (Ctrl+B, Ctrl+I, Ctrl+U, Ctrl+Shift+C, Ctrl+Shift+S); clearing the formatting and the three variable inserts are pointer-only. |
 | Accessibility: Narrator roles, values and announcements | Not tested. |
 | Work preservation: drafts across appearance changes and refresh | Failed. Editors do not track dirty state. |
+| Keyboard: Ctrl+Z for Desfazer | Failed. Desfazer is a button in the receipt line, reachable with Tab; no shortcut yet. |
+| Dialogs on macOS main-thread mode | Not tested. The kit's grab and focus handoff were exercised on Windows only. |
 | Physical desktop pass at minimum and default size, keyboard only, close and reopen | Not tested for this adoption. |

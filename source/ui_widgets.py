@@ -38,6 +38,7 @@ from tkinter import ttk
 from PIL import Image, ImageDraw, ImageFont
 
 import ui_theme
+from i18n import _
 
 # Supersampling factor for anti-aliased edges.
 _SS = 4
@@ -51,6 +52,7 @@ ICONS = {
     "add": "\ue710",
     "bell": "\uea8f",
     "bold": "\ue8dd",
+    "chevron_down": "\ue70d",
     "clear_format": "\uea99",
     "code": "\ue943",
     "copy": "\ue8c8",
@@ -58,12 +60,14 @@ ICONS = {
     "down": "\ue74b",
     "document": "\ue8a5",
     "edit": "\ue70f",
+    "error": "\ue783",
     "export": "\ue898",
     "favorite": "\ue734",
     "folder": "\ue838",
     "form": "\ue9d5",
     "history": "\ue81c",
     "import": "\ue896",
+    "info": "\ue946",
     "italic": "\ue8db",
     "keyboard": "\ue765",
     "lightning": "\ue945",
@@ -80,6 +84,7 @@ ICONS = {
     "tag": "\ue8ec",
     "underline": "\ue8dc",
     "up": "\ue74a",
+    "warning": "\ue7ba",
 }
 
 VARIANTS = ("standard", "accent", "danger", "subtle", "nav", "toolbar")
@@ -328,8 +333,9 @@ def _icon_font(size):
     return None
 
 
-def _render_icon(artist, glyph, color, size, gap):
-    """The glyph in a ``size`` square, plus ``gap`` transparent pixels after it.
+def _render_icon(artist, glyph, color, size, gap, leading=False):
+    """The glyph in a ``size`` square, plus ``gap`` transparent pixels after it
+    (before it when ``leading``, for an icon that follows its text).
 
     The gap is how an icon keeps its distance from a button's text: ttk's
     compound label has no spacing option.
@@ -338,7 +344,8 @@ def _render_icon(artist, glyph, color, size, gap):
     if font is None:
         return None
     image = Image.new("RGBA", (size + gap, size), (0, 0, 0, 0))
-    ImageDraw.Draw(image).text((size / 2, size / 2), glyph, font=font, fill=color, anchor="mm")
+    center = (gap if leading else 0) + size / 2
+    ImageDraw.Draw(image).text((center, size / 2), glyph, font=font, fill=color, anchor="mm")
     return artist.photo(image)
 
 
@@ -795,31 +802,34 @@ def has_icons(widget, ui=None):
     return _state(widget, ui) is not None and _icon_font(1) is not None
 
 
-def icon_image(widget, name, color, *, gap=0, ui=None):
-    """A Fluent icon glyph as a PhotoImage in ``color``, or None without the font."""
+def icon_image(widget, name, color, *, gap=0, leading=False, ui=None):
+    """A Fluent icon glyph as a PhotoImage in ``color``, or None without the font.
+
+    ``gap`` pads it after the glyph, or before it when ``leading``.
+    """
     state = _state(widget, ui)
     if state is None:
         return None
     color = resolve_color(widget, color)
-    key = (name, color, gap)
+    key = (name, color, gap, leading)
     if key not in state.icons:
         artist = state.artist
         state.icons[key] = _render_icon(
-            artist, ICONS[name], color, artist.px(16), artist.px(gap) if gap else 0)
+            artist, ICONS[name], color, artist.px(16), artist.px(gap) if gap else 0, leading)
     return state.icons[key]
 
 
-def _icon_option(widget, icon, variant, with_text, ui):
+def _icon_option(widget, icon, variant, with_text, ui, trailing=False):
     """``-image`` spec for a button icon, or None."""
     color = {
         "accent": ui.text_on_accent,
         "danger": ui.danger,
     }.get(variant, ui.text)
     gap = 8 if with_text else 0
-    normal = icon_image(widget, icon, color, gap=gap, ui=ui)
+    normal = icon_image(widget, icon, color, gap=gap, leading=trailing, ui=ui)
     if normal is None:
         return None
-    disabled = icon_image(widget, icon, ui.text_muted, gap=gap, ui=ui)
+    disabled = icon_image(widget, icon, ui.text_muted, gap=gap, leading=trailing, ui=ui)
     return (normal, "disabled", disabled)
 
 
@@ -851,15 +861,20 @@ def button(parent, text="", command=None, *, variant="standard", icon=None,
     return widget
 
 
-def set_icon(widget, icon, *, variant="standard", ui=None):
-    """Show ``icon`` on a :func:`button`; a no-op without Fluent or the font."""
+def set_icon(widget, icon, *, variant="standard", trailing=False, ui=None):
+    """Show ``icon`` on a :func:`button`, before its text or, when ``trailing``,
+    after it (a drop-down chevron). Returns whether it is shown: never without
+    Fluent or the icon font."""
     ui = ui or ui_theme.theme()
     if not isinstance(widget, ttk.Button):
-        return
+        return False
     with_text = bool(str(widget.cget("text")))
-    image = _icon_option(widget, icon, variant, with_text, ui)
-    if image is not None:
-        widget.configure(image=image, compound="left" if with_text else "image")
+    image = _icon_option(widget, icon, variant, with_text, ui, trailing)
+    if image is None:
+        return False
+    compound = ("right" if trailing else "left") if with_text else "image"
+    widget.configure(image=image, compound=compound)
+    return True
 
 
 def nav_item(parent, text, command, *, icon=None, ui=None):
@@ -1059,3 +1074,359 @@ def text_area(parent, *, scroll=False, ui=None, **options):
         bar.pack(side=tk.RIGHT, fill=tk.Y)
     text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
     return container, text
+
+
+def menu(parent, *, ui=None):
+    """A pop-up menu in the palette of ``parent``'s window.
+
+    Windows draws Tk menus itself and honors their colors, so a menu left
+    uncolored opened light over the dark manager. macOS keeps its native
+    menu, which follows the system appearance.
+    """
+    ui = ui or ui_theme.theme()
+    if not uses_fluent(ui):
+        return tk.Menu(parent, tearoff=False)
+    return tk.Menu(
+        parent, tearoff=False, font=ui.font(), bg=ui.card, fg=ui.text,
+        activebackground=ui.select_bg, activeforeground=ui.select_fg,
+        disabledforeground=ui.text_muted, relief=tk.FLAT, borderwidth=1,
+        activeborderwidth=0,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Dialog kit
+# ---------------------------------------------------------------------------
+# Every prompt the GUI shows is an owned, themed Toplevel built here, so it
+# follows the palette, the interface language and the window it belongs to.
+# The native message boxes did none of that: Win32 drew them light, with
+# buttons in the system language, over whichever window was active.
+# The prompts take the cached theme, the one their window was built with,
+# rather than probing the appearance again: the ttk theme belongs to the
+# shared interpreter, so a prompt built from another palette would repaint
+# every open window's controls with it.
+
+# confirm() answers; Cancelar, Escape and closing the window answer None.
+PRIMARY = "primary"
+EXTRA = "extra"
+
+_TONE_ICONS = {"danger": "error", "warning": "warning", "info": "info"}
+# Footer buttons share a minimum width, in characters, so short outcome
+# labels do not shrink to slivers beside Cancelar.
+_FOOTER_BUTTON_WIDTH = 10
+
+
+def _is_disabled(widget):
+    return str(widget.cget("state")) == tk.DISABLED
+
+
+def dialog_footer(parent, primary, secondary, *, extra=None, variant="accent",
+                  extra_variant="standard", ui=None):
+    """A dialog's action row: ``primary``, then ``extra``, then Cancelar, right-aligned.
+
+    ``primary`` and ``extra`` are ``(label, command)``; ``secondary`` is the
+    command of the safe choice, Cancelar, or None for a dialog with nothing to
+    cancel. ``variant`` styles the primary (``"danger"`` for a destructive
+    one) and ``extra_variant`` the extra.
+
+    Enter runs the focused footer button, as Windows does, and otherwise the
+    primary unless a multi-line text field has focus; a disabled target does
+    nothing. Escape runs ``secondary`` (the primary when there is none).
+    Returns the frame, with its buttons in ``frame.buttons`` under
+    ``"primary"``, ``"extra"`` and ``"cancel"``.
+    """
+    ui = ui or ui_theme.theme()
+    frame = tk.Frame(parent, bg=surface_of(parent))
+    label, command = primary
+    buttons = {"primary": button(
+        frame, text=label, command=command, variant=variant,
+        width=_FOOTER_BUTTON_WIDTH, ui=ui)}
+    if extra is not None:
+        buttons["extra"] = button(
+            frame, text=extra[0], command=extra[1], variant=extra_variant,
+            width=_FOOTER_BUTTON_WIDTH, ui=ui)
+    if secondary is not None:
+        buttons["cancel"] = button(
+            frame, text=_("Cancelar"), command=secondary,
+            width=_FOOTER_BUTTON_WIDTH, ui=ui)
+    gap = face_gap(frame, ui.space_sm, ui)
+    for widget in reversed(tuple(buttons.values())):
+        widget.pack(side=tk.RIGHT, padx=(gap, 0))
+    frame.buttons = buttons
+
+    def on_return(event):
+        widget = event.widget
+        if isinstance(widget, tk.Text):
+            return None
+        target = widget if widget in buttons.values() else buttons["primary"]
+        if not _is_disabled(target):
+            target.invoke()
+        return "break"
+
+    def on_escape(_event):
+        (secondary or command)()
+        return "break"
+
+    window = parent.winfo_toplevel()
+    window.bind("<Return>", on_return)
+    window.bind("<KP_Enter>", on_return)
+    window.bind("<Escape>", on_escape)
+    return frame
+
+
+def _require_owner(parent):
+    # A prompt without an owner belongs to the hidden shared root: it is not
+    # modal to the window the person acted in and can open behind it.
+    if parent is None:
+        raise TypeError("a prompt needs the window it belongs to")
+
+
+def _prompt(parent, title, ui):
+    """A withdrawn prompt window owned by ``parent``'s window: ``(window, body)``."""
+    window = tk.Toplevel(parent.winfo_toplevel())
+    window.withdraw()
+    window.title(title)
+    window.resizable(False, False)
+    window.configure(bg=ui.surface)
+    ui_theme.prepare_window(window, ui)
+    # The body sits on the dialog surface itself, with no card inside.
+    body = tk.Frame(window, bg=ui.surface, padx=ui.space_xl, pady=ui.space_lg)
+    body.pack(fill=tk.BOTH, expand=True)
+    return window, body
+
+
+def _heading(body, title, ui, tone=None):
+    glyph = None
+    if tone is not None:
+        glyph = icon_image(body, _TONE_ICONS[tone], getattr(ui, tone), gap=8, ui=ui)
+    tk.Label(
+        body, text=title, image=glyph or "", compound=tk.LEFT, anchor="w",
+        font=ui.subtitle_font(), bg=ui.surface, fg=ui.text,
+    ).pack(fill=tk.X, pady=(0, ui.space_sm))
+
+
+def _message(body, text, ui):
+    label = tk.Label(
+        body, text=text, anchor="w", justify=tk.LEFT, wraplength=ui.px(440),
+        font=ui.font(), bg=ui.surface, fg=ui.text,
+    )
+    label.pack(fill=tk.X)
+    return label
+
+
+def _run_prompt(window, focus):
+    """Show ``window`` modal over its owner until it is destroyed.
+
+    Focus starts on ``focus`` and goes back to the control that had it, so a
+    keyboard user carries on where the prompt interrupted. The grab follows
+    the manager's other dialogs: the window it belongs to cannot be used, or
+    asked a second question, while this one is open. A grab that another
+    dialog held is handed back to it afterwards.
+    """
+    owner = window.master
+    # Both lookups fail on a window Tk made itself, such as a combobox's
+    # drop-down list; there is then nothing to give back.
+    try:
+        opener = owner.focus_get()
+    except (KeyError, tk.TclError):
+        opener = None
+    try:
+        previous_grab = window.grab_current()
+    except (KeyError, tk.TclError):
+        previous_grab = None
+    viewable = bool(owner.winfo_viewable())
+    # A transient of a window that is not viewable stays hidden with it.
+    if viewable:
+        window.transient(owner)
+    window.update_idletasks()
+    width, height = window.winfo_reqwidth(), window.winfo_reqheight()
+    if viewable:
+        x = owner.winfo_rootx() + (owner.winfo_width() - width) // 2
+        y = owner.winfo_rooty() + (owner.winfo_height() - height) // 3
+    else:
+        x = (window.winfo_screenwidth() - width) // 2
+        y = (window.winfo_screenheight() - height) // 3
+    window.geometry(f"+{max(0, x)}+{max(0, y)}")
+    window.deiconify()
+    window.wait_visibility()
+    window.grab_set()
+    focus.focus_force()
+    window.wait_window()
+    if previous_grab is not None and previous_grab.winfo_exists():
+        previous_grab.grab_set()
+    if opener is not None and opener.winfo_exists():
+        opener.focus_set()
+
+
+def confirm(parent, title, body, primary_label, danger=False, typed_word=None, extra=None,
+            *, extra_danger=False, ui=None):
+    """Ask before an action. Returns :data:`PRIMARY`, :data:`EXTRA` or None.
+
+    None means Cancelar, Escape or the window's close box. Every choice is
+    labeled by its outcome. ``extra`` labels a third choice placed between
+    the primary and Cancelar (Descartar beside Salvar; ``extra_danger`` draws
+    it as destructive). ``danger`` draws the primary as destructive and
+    starts focus on Cancelar, so Enter alone never destroys anything.
+    ``typed_word`` keeps the primary disabled until that word is typed
+    exactly, for irreversible work on a collection; focus then starts in its
+    field.
+    """
+    _require_owner(parent)
+    ui = ui or ui_theme.theme()
+    window, frame = _prompt(parent, title, ui)
+    answer = {"value": None}
+
+    def choose(value):
+        answer["value"] = value
+        window.destroy()
+
+    _heading(frame, title, ui)
+    _message(frame, body, ui)
+    word_field = None
+    if typed_word:
+        tk.Label(
+            frame, text=_("Para confirmar, digite {word}").format(word=typed_word),
+            anchor="w", font=ui.font(), bg=ui.surface, fg=ui.text,
+        ).pack(fill=tk.X, pady=(ui.space_md, ui.space_xs))
+        typed = tk.StringVar(window)
+        word_field = entry(frame, textvariable=typed, ui=ui)
+        word_field.pack(fill=tk.X)
+    footer = dialog_footer(
+        frame, (primary_label, lambda: choose(PRIMARY)), lambda: choose(None),
+        extra=(extra, lambda: choose(EXTRA)) if extra else None,
+        variant="danger" if danger else "accent",
+        extra_variant="danger" if extra_danger else "standard", ui=ui,
+    )
+    footer.pack(fill=tk.X, pady=(ui.space_lg, 0))
+    window.protocol("WM_DELETE_WINDOW", lambda: choose(None))
+    if word_field is not None:
+        primary = footer.buttons["primary"]
+
+        def match(*_args):
+            primary.configure(
+                state=tk.NORMAL if typed.get().strip() == typed_word else tk.DISABLED)
+
+        typed.trace_add("write", match)
+        match()
+        focus = word_field
+    else:
+        focus = footer.buttons["cancel" if danger else "primary"]
+    _run_prompt(window, focus)
+    return answer["value"]
+
+
+def ask_text(parent, title, label, initial="", validate=None, *, primary_label, ui=None):
+    """Ask for one line of text. Returns it without surrounding spaces, or None.
+
+    None means Cancelar, Escape or the window's close box. ``validate(value)``
+    answers an error message, which shows under the field while the dialog
+    stays open, or None to accept the value.
+    """
+    _require_owner(parent)
+    ui = ui or ui_theme.theme()
+    window, frame = _prompt(parent, title, ui)
+    answer = {"value": None}
+    _heading(frame, title, ui)
+    _message(frame, label, ui)
+    value = tk.StringVar(window, initial)
+    field = entry(frame, textvariable=value, width=40, ui=ui)
+    field.pack(fill=tk.X, pady=(ui.space_xs, 0))
+    # Present while empty, so an error does not resize the window.
+    error = tk.Label(
+        frame, text="", anchor="w", justify=tk.LEFT, wraplength=ui.px(440),
+        font=ui.caption_font(), bg=ui.surface, fg=ui.danger,
+    )
+    error.pack(fill=tk.X, pady=(ui.space_xs, 0))
+
+    def submit():
+        text = value.get().strip()
+        problem = validate(text) if validate is not None else None
+        if problem:
+            error.configure(text=problem)
+            field.focus_set()
+            field.select_range(0, tk.END)
+            return
+        answer["value"] = text
+        window.destroy()
+
+    footer = dialog_footer(frame, (primary_label, submit), window.destroy, ui=ui)
+    footer.pack(fill=tk.X, pady=(ui.space_md, 0))
+    window.protocol("WM_DELETE_WINDOW", window.destroy)
+    field.select_range(0, tk.END)
+    field.icursor(tk.END)
+    _run_prompt(window, field)
+    return answer["value"]
+
+
+def alert(parent, title, body, *, tone="warning", ui=None):
+    """Tell the person something that leaves no choice: one Fechar button.
+
+    ``tone`` is ``"danger"`` for a failure, ``"warning"`` for a refusal and
+    ``"info"`` otherwise. It sets the icon beside the title; the title and
+    the body carry the meaning.
+    """
+    if tone not in _TONE_ICONS:
+        raise ValueError(f"unknown alert tone: {tone!r}")
+    _require_owner(parent)
+    ui = ui or ui_theme.theme()
+    window, frame = _prompt(parent, title, ui)
+    _heading(frame, title, ui, tone)
+    _message(frame, body, ui)
+    footer = dialog_footer(frame, (_("Fechar"), window.destroy), None, variant="standard", ui=ui)
+    footer.pack(fill=tk.X, pady=(ui.space_lg, 0))
+    window.protocol("WM_DELETE_WINDOW", window.destroy)
+    _run_prompt(window, footer.buttons["primary"])
+
+
+class ReceiptLine:
+    """The status line under an editor: a hint at rest, then the last receipt.
+
+    A receipt may carry one action, such as Desfazer, which stays for
+    ``seconds``; the receipt itself stays until the next one. The row keeps
+    the action's height throughout, so a receipt never moves the editor
+    above it.
+    """
+
+    def __init__(self, parent, hint, *, ui=None):
+        self.ui = ui or ui_theme.theme()
+        background = surface_of(parent)
+        self.frame = tk.Frame(parent, bg=background)
+        self.label = tk.Label(
+            self.frame, text=hint, anchor="w", font=self.ui.caption_font(),
+            bg=background, fg=self.ui.text_muted,
+        )
+        self.label.pack(side=tk.LEFT)
+        self.action = button(self.frame, variant="subtle", ui=self.ui)
+        self.frame.configure(height=self.action.winfo_reqheight())
+        self.frame.pack_propagate(False)
+        self._timer = None
+        self.frame.bind("<Destroy>", self._on_destroy, add="+")
+
+    def show(self, text, action_label=None, action=None, *, seconds=10):
+        """Replace the line with ``text``, plus ``action`` while it lasts."""
+        self._cancel_timer()
+        self.label.configure(text=text, fg=self.ui.text)
+        if action is None:
+            self.action.pack_forget()
+            return
+        self.action.configure(text=action_label, command=lambda: self._act(action))
+        self.action.pack(side=tk.LEFT, padx=(self.ui.space_sm, 0))
+        self._timer = self.frame.after(round(seconds * 1000), self._expire)
+
+    def _act(self, action):
+        self._cancel_timer()
+        self._expire()
+        action()
+
+    def _expire(self):
+        self._timer = None
+        self.action.pack_forget()
+
+    def _cancel_timer(self):
+        if self._timer is not None:
+            self.frame.after_cancel(self._timer)
+            self._timer = None
+
+    def _on_destroy(self, event):
+        if event.widget is self.frame:
+            self._cancel_timer()
