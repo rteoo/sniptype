@@ -22,6 +22,7 @@ import gc
 import os
 import sys
 import shutil
+import types
 import ctypes
 import webbrowser
 
@@ -162,6 +163,16 @@ from variable_support import (
 from form_support import compile_form, render_form
 from form_dialog import FormDialog
 from preview_support import resolve_preview
+from editor_session import (
+    CHANGED as EDITOR_CHANGED,
+    EMPTY as EDITOR_EMPTY,
+    GONE as EDITOR_GONE,
+    MISSING as EDITOR_MISSING,
+    NEW as EDITOR_NEW,
+    EditorSession,
+    mapping_draft_problem,
+    static_draft_problem,
+)
 from preview_dialog import PreviewDialogController
 from manager_actions import (
     MetadataReadOnlyError,
@@ -280,6 +291,26 @@ EDITOR_CONTENT_MIN_HEIGHT = 140
 # Display labels for the persisted notification ``kind`` values.
 NOTIFICATION_KIND_LABELS = {"error": N_("Erro"), "status": N_("Status"), "info": N_("Info")}
 
+# An open manager checks the Windows app theme this often while the
+# appearance is System (see _check_system_appearance). A registry read costs
+# microseconds; the delay is how long a theme switch takes to show.
+SYSTEM_APPEARANCE_POLL_MS = 3000
+
+
+def _set_enabled(widget, enabled):
+    widget.configure(state=tk.NORMAL if enabled else tk.DISABLED)
+
+
+def _move_focus_off(widget, fallback):
+    """Hand the keyboard focus to ``fallback`` if ``widget``, now disabled, has it."""
+    try:
+        focused = widget.focus_get()
+    except (KeyError, tk.TclError):
+        # Focus is in a window Tk made itself, such as a combobox list.
+        return
+    if focused is widget:
+        fallback.focus_set()
+
 
 def get_runtime_base_dir():
     """Resolve the user-visible app directory for source and frozen builds."""
@@ -372,6 +403,11 @@ class Sniptype:
         # List-rebuild callbacks registered by the manager tabs, replayed after
         # a restore/import swaps the whole library out from under them.
         self._manager_refreshers = []
+        # The open manager's editors, asked before anything drops their drafts
+        # (see _resolve_manager_drafts).
+        self._manager_editors = []
+        # The pending System-appearance check of the open manager: (window, after id).
+        self._manager_appearance_poll = None
         # Serializes expansion dialogs; see _run_modal_dialog.
         self._dialog_lock = threading.Lock()
         # Serializes autostart toggles; see _apply_autostart_toggle.
@@ -2611,7 +2647,8 @@ class Sniptype:
             # appearance the user changed while it was closed.
             ui = ui_theme.bind(tk_root)
             root = tk.Toplevel(tk_root)
-            root.title(_("{PRODUCT_NAME} — Biblioteca").format(PRODUCT_NAME=PRODUCT_NAME))
+            root.theme_kind = ui.kind
+            root.title(self._manager_title(dirty=False))
             geometry, min_width, min_height = ui.manager_window_size
             root.geometry(geometry)
             root.minsize(min_width, min_height)
@@ -2709,6 +2746,7 @@ class Sniptype:
             # Tabs are rebuilt with the window; drop the previous window's
             # callbacks so they can't fire against destroyed widgets.
             self._manager_refreshers = []
+            self._manager_editors = []
             self._manager_tab_selectors = {}
             self._manager_search_entries = {}
             self._create_static_snippets_tab(
@@ -2736,6 +2774,9 @@ class Sniptype:
             root.bind("<Control-f>", focus_search)
 
             def on_close():
+                # Closing drops what the editors show, so a draft is settled first.
+                if not self._resolve_manager_drafts(root):
+                    return
                 self._release_manager_ui_refs()
                 root.destroy()
                 # Tk variables must be collected on this
@@ -2744,6 +2785,7 @@ class Sniptype:
 
             root.protocol("WM_DELETE_WINDOW", on_close)
             self.manager_window = root
+            self._start_system_appearance_poll(root)
             root.lift()
             root.focus_force()
 
@@ -2910,6 +2952,9 @@ class Sniptype:
                 _("Restaurar backup"),
             ):
                 return
+            # The editors reload from the restored library; settle drafts first.
+            if not self._resolve_manager_drafts(root):
+                return
             ok, error = self.restore_backup(path)
             if ok:
                 self.notify_status(_("Backup restaurado: {name}").format(name=name), key="restore-backup")
@@ -2959,7 +3004,7 @@ class Sniptype:
             document, error = self.read_import_source(src)
             if not error:
                 mode = self._ask_import_mode(root, os.path.basename(src), document)
-                if mode is None:
+                if mode is None or not self._resolve_manager_drafts(root):
                     return
                 _ok, error = self.apply_import(document, mode)
             if not error:
@@ -3111,15 +3156,9 @@ class Sniptype:
             choice = next((code for code, name in names.items() if name == display.get()), None)
             if choice is None or choice == i18n.language():
                 return
-            # Same trade-off as the appearance switch: the rebuild drops
-            # unsaved editor text, so ask before anything is saved.
-            if not ui_widgets.confirm(
-                root,
-                _("Idioma"),
-                _("O gerenciador será recarregado para aplicar o idioma.\n\n"
-                  "Edições não salvas no editor serão descartadas."),
-                _("Recarregar gerenciador"),
-            ):
+            # The rebuild drops what the editors show: a draft is settled
+            # first, and a clean manager applies without asking.
+            if not self._resolve_manager_drafts(root):
                 display.set(names[i18n.language()])
                 return
             if not self._persist_settings({"language": choice}):
@@ -3127,7 +3166,7 @@ class Sniptype:
                 return
             i18n.set_language(choice)
             self.refresh_tray_menu()
-            root.after_idle(lambda: self._reload_manager_window(root))
+            root.after_idle(lambda: self._reload_manager_window(root, settings_page=True))
 
         ui_widgets.button(
             card, text=_("Aplicar idioma"), command=apply, variant="accent",
@@ -3168,31 +3207,33 @@ class Sniptype:
             if choice == ui_theme.preference():
                 status.set(_(ui_theme.APPEARANCE_STATUS[choice]))
                 return
-            # The editors track no dirty state, so a rebuild would silently
-            # drop typed text; ask before anything is saved.
-            if not ui_widgets.confirm(
-                root,
-                _("Aparência"),
-                _("O gerenciador será recarregado para aplicar a aparência.\n\n"
-                  "Edições não salvas no editor serão descartadas."),
-                _("Recarregar gerenciador"),
-            ):
+            # The rebuild drops what the editors show: a draft is settled
+            # first, and a clean manager applies without asking.
+            if not self._resolve_manager_drafts(root):
                 display.set(labels[ui_theme.preference()])
                 return
             if not self._persist_settings({"appearance": choice}):
                 status.set(_("Não foi possível salvar a aparência."))
                 return
             ui_theme.set_preference(choice)
-            root.after_idle(lambda: self._reload_manager_window(root))
+            root.after_idle(lambda: self._reload_manager_window(root, settings_page=True))
 
         ui_widgets.button(
             card, text=_("Aplicar aparência"), command=apply, variant="accent",
         ).grid(row=2, column=2, sticky="e")
 
-    def _reload_manager_window(self, window):
-        """Rebuild the manager in place so a new appearance or language takes effect. GUI thread."""
+    def _reload_manager_window(self, window, *, settings_page=False):
+        """Rebuild the manager in place so a new appearance or language takes effect. GUI thread.
+
+        The rebuilt window keeps its size, the items its editors had open and
+        its page, or opens on Configurações with ``settings_page``. Callers
+        settle unsaved drafts first (see _resolve_manager_drafts).
+        """
         tk_root = window.master
         geometry = window.geometry()
+        notebook = self._manager_notebook
+        page = notebook.index(notebook.select()) if notebook is not None else None
+        targets = [editor.target() for editor in self._manager_editors]
         self._release_manager_ui_refs()
         window.destroy()
         # Tk variables must be collected on this thread; see on_close.
@@ -3202,9 +3243,16 @@ class Sniptype:
         if rebuilt is None:
             return
         rebuilt.geometry(geometry)
+        for target in targets:
+            descriptor = self._manager_target(target) if target is not None else None
+            selector = self._manager_tab_selectors.get(descriptor.tab) if descriptor else None
+            if selector is not None:
+                selector(descriptor)
         notebook = self._manager_notebook
-        if notebook is not None and self._manager_settings_tab is not None:
+        if settings_page and self._manager_settings_tab is not None:
             notebook.select(self._manager_settings_tab)
+        elif page is not None:
+            notebook.select(notebook.tabs()[page])
 
     def _build_expansion_card(self, parent):
         ui = ui_theme.theme()
@@ -3463,6 +3511,79 @@ class Sniptype:
         """
         self._manager_refreshers.append(refresher)
 
+    def _register_manager_editor(self, editor):
+        """Register an editor tab's draft handle, asked before its draft is dropped.
+
+        ``editor.dirty`` is the state last drawn; ``is_dirty()`` reads the
+        widgets now; ``target()`` is the SnippetRef it shows, or None;
+        ``resolve(owner)`` settles a draft (see _resolve_manager_drafts); and
+        ``hold_rebuild(held)`` says whether its draft is holding back a System
+        appearance change.
+        """
+        self._manager_editors.append(editor)
+
+    def _resolve_manager_drafts(self, owner):
+        """Settle every unsaved editor draft before the manager drops what it shows.
+
+        Each dirty editor asks Salvar · Descartar · Cancelar. True when no
+        draft is left, each one saved or discarded; False when the person
+        cancelled or a save did not go through, and the caller stops.
+        """
+        return all(editor.resolve(owner) for editor in list(self._manager_editors))
+
+    def _manager_title(self, *, dirty):
+        """The manager's window title; a leading "• " says a draft is unsaved."""
+        title = _("{PRODUCT_NAME} — Biblioteca").format(PRODUCT_NAME=PRODUCT_NAME)
+        return f"• {title}" if dirty else title
+
+    def _refresh_manager_title(self):
+        window = self.manager_window
+        if window is None:
+            return
+        window.title(self._manager_title(
+            dirty=any(editor.dirty for editor in self._manager_editors)))
+
+    def _start_system_appearance_poll(self, window):
+        """Follow live Windows theme changes while ``window`` is open.
+
+        Only the System preference follows them (ui_theme.live_system_kind).
+        The check reschedules itself on ``window`` and is cancelled when the
+        window is destroyed, so it never runs against a closed manager.
+        """
+        def tick():
+            self._manager_appearance_poll = (
+                window, window.after(SYSTEM_APPEARANCE_POLL_MS, tick))
+            self._check_system_appearance(window)
+
+        def stop(event):
+            poll = self._manager_appearance_poll
+            if event.widget is window and poll is not None and poll[0] is window:
+                window.after_cancel(poll[1])
+                self._manager_appearance_poll = None
+
+        window.bind("<Destroy>", stop, add="+")
+        self._manager_appearance_poll = (window, window.after(SYSTEM_APPEARANCE_POLL_MS, tick))
+
+    def _check_system_appearance(self, window):
+        """Rebuild ``window`` in the Windows theme that System now resolves to.
+
+        It waits while the window is hidden or a prompt is open, and a dirty
+        editor holds the rebuild, saying so, until its draft is saved or
+        discarded: a rebuild would drop it.
+        """
+        wanted = ui_theme.live_system_kind()
+        pending = wanted is not None and wanted != window.theme_kind
+        held = pending and any(editor.is_dirty() for editor in self._manager_editors)
+        for editor in self._manager_editors:
+            editor.hold_rebuild(held and editor.dirty)
+        if not pending or held:
+            return
+        if window is not self.manager_window or not window.winfo_viewable():
+            return
+        if window.grab_current() is not None:
+            return
+        self._reload_manager_window(window)
+
     def _release_manager_ui_refs(self):
         """Drop widget callbacks while still running on the GUI thread."""
         self._manager_notebook = None
@@ -3473,6 +3594,7 @@ class Sniptype:
         self._manager_settings_sections = None
         self.manager_window = None
         self._manager_refreshers = []
+        self._manager_editors = []
         self._manager_tab_selectors = {}
         self._manager_preview_controller = None
 
@@ -3575,8 +3697,157 @@ class Sniptype:
         center_dialog(history_window, root)
 
 
-    def _create_formatting_toolbar(self, parent, text_widget):
-        """Add basic rich-text controls above a Tk text editor."""
+    def _editor_header(self, parent, on_reveal):
+        """The lines under an editor's title: what it edits, whether that is saved, and why.
+
+        Returns a namespace with ``frame`` (grid it), ``show(target, dirty,
+        detail, reveal)``, where ``reveal`` offers Mostrar na lista
+        (``on_reveal``) for an item the list filter hides, and ``notice(kind,
+        text, actions)``, a warning bar under them with ``(label, command)``
+        actions; ``notice(None)`` hides it and ``notice_kind()`` says which
+        one is up.
+        """
+        ui = ui_theme.theme()
+        background = ui_widgets.surface_of(parent)
+        frame = tk.Frame(parent, bg=background)
+        frame.grid_columnconfigure(2, weight=1)
+        target = tk.Label(frame, font=ui.font(), bg=background, fg=ui.text, anchor="w", justify=tk.LEFT)
+        target.grid(row=0, column=0, sticky="w")
+        state = tk.Label(
+            frame, text=_("• Não salvo"), font=ui.font(10, "bold"), bg=background, fg=ui.text,
+            anchor="w",
+        )
+        state.grid(row=0, column=1, sticky="w", padx=(ui.space_sm, 0))
+        reveal = ui_widgets.button(frame, text=_("Mostrar na lista"), command=on_reveal)
+        reveal.grid(row=0, column=3, sticky="e")
+        # The row keeps the button's height, so revealing it moves nothing below.
+        frame.grid_rowconfigure(0, minsize=reveal.winfo_reqheight())
+        detail = tk.Label(
+            frame, font=ui.caption_font(), bg=background, fg=ui.text_muted, anchor="w",
+            justify=tk.LEFT,
+        )
+        detail.grid(row=1, column=0, columnspan=4, sticky="ew")
+        bar = tk.Frame(frame, bg=ui.warning_bg, padx=ui.space_md, pady=ui.space_sm)
+        bar.grid(row=2, column=0, columnspan=4, sticky="ew", pady=(ui.space_sm, 0))
+        message = tk.Label(
+            bar, font=ui.font(), bg=ui.warning_bg, fg=ui.warning, anchor="w", justify=tk.LEFT,
+        )
+        message.pack(fill=tk.X)
+        actions = tk.Frame(bar, bg=ui.warning_bg)
+        actions.pack(anchor="w", pady=(ui.space_sm, 0))
+        shown = {"notice": None}
+
+        def fit(event):
+            width = event.width
+            target.configure(wraplength=max(
+                ui.px(120), width - state.winfo_reqwidth() - reveal.winfo_reqwidth() - ui.space_sm))
+            detail.configure(wraplength=width)
+            message.configure(wraplength=max(ui.px(120), width - 2 * ui.space_md))
+
+        frame.bind("<Configure>", fit, add="+")
+
+        def show(target_text, dirty, detail_text="", reveal_item=False):
+            target.configure(text=target_text)
+            if dirty:
+                state.grid()
+            else:
+                state.grid_remove()
+            if reveal_item:
+                reveal.grid()
+            else:
+                reveal.grid_remove()
+            detail.configure(text=detail_text)
+
+        def notice(kind, text=None, choices=()):
+            for child in actions.winfo_children():
+                child.destroy()
+            shown["notice"] = kind
+            if kind is None:
+                bar.grid_remove()
+                return
+            message.configure(text=text)
+            gap = ui_widgets.face_gap(actions, ui.space_sm)
+            for index, (label, command) in enumerate(choices):
+                ui_widgets.button(actions, text=label, command=command).pack(
+                    side=tk.LEFT, padx=(0 if index == 0 else gap, 0))
+            bar.grid()
+
+        show("", False)
+        notice(None)
+        return types.SimpleNamespace(
+            frame=frame, show=show, notice=notice, notice_kind=lambda: shown["notice"],
+        )
+
+    def _editor_handle(self, root, header, *, is_dirty, save, revert, question, target):
+        """The draft handle an editor tab registers (see _register_manager_editor).
+
+        ``save()`` answers whether the draft was written, ``revert()`` drops
+        it, ``question()`` names what holds unsaved changes and ``target()``
+        is the SnippetRef the editor shows. The tab keeps ``dirty`` current.
+        """
+        def resolve(owner=root):
+            if not is_dirty():
+                return True
+            choice = ui_widgets.confirm(
+                owner,
+                _("Alterações não salvas"),
+                question() + "\n\n" + _("Salvar grava as alterações e continua; "
+                                        "Descartar continua sem elas."),
+                _("Salvar"),
+                extra=_("Descartar"),
+                extra_danger=True,
+            )
+            if choice == ui_widgets.PRIMARY:
+                return save()
+            if choice == ui_widgets.EXTRA:
+                revert()
+                return True
+            return False
+
+        def apply_appearance_now():
+            window = self.manager_window
+            if window is not None and self._resolve_manager_drafts(window):
+                # Not from inside this button's own command: the rebuild
+                # destroys it.
+                window.after_idle(lambda: self._reload_manager_window(window))
+
+        def hold_rebuild(held):
+            kind = header.notice_kind()
+            if held and kind is None:
+                header.notice(
+                    "appearance",
+                    _("O tema do Windows mudou. O gerenciador troca de tema quando este "
+                      "rascunho for salvo ou descartado."),
+                    ((_("Aplicar agora"), apply_appearance_now),),
+                )
+            elif not held and kind == "appearance":
+                header.notice(None)
+
+        return types.SimpleNamespace(
+            dirty=False, is_dirty=is_dirty, target=target, resolve=resolve,
+            hold_rebuild=hold_rebuild,
+        )
+
+    @staticmethod
+    def _show_library_conflict(header, outcome, name, use_library, keep_draft):
+        """Say that the library changed under an open draft, with both ways out."""
+        if outcome == EDITOR_GONE:
+            text = _("A biblioteca mudou: {name} não existe mais.").format(name=name)
+            first = _("Descartar rascunho")
+        else:
+            text = _("A biblioteca mudou: {name} tem uma versão salva mais nova.").format(name=name)
+            first = _("Usar a versão nova")
+        header.notice(
+            "library", text, ((first, use_library), (_("Manter rascunho"), keep_draft)))
+
+    def _create_formatting_toolbar(self, parent, text_widget, on_change=None):
+        """Add basic rich-text controls above a Tk text editor.
+
+        Returns ``(update, request_update)``: ``update`` re-reads the editor
+        at once, ``request_update`` once the pending events are handled.
+        ``on_change`` receives the serialized content after every update,
+        which covers typing, pasting, formatting and programmatic inserts.
+        """
         configure_rich_text_widget(text_widget)
 
         ui = ui_theme.theme()
@@ -3590,12 +3861,42 @@ class Sniptype:
 
         status_var = tk.StringVar(value=_("Formato: texto simples"))
 
-        def update_status(*_args):
-            payload = serialize_text_widget_content(text_widget)
+        def show_format(payload):
             if isinstance(payload, dict):
                 status_var.set(_("Formato: HTML + RTF"))
             else:
                 status_var.set(_("Formato: texto simples"))
+
+        def update_status(*_args):
+            payload = serialize_text_widget_content(text_widget)
+            show_format(payload)
+            if on_change is not None:
+                on_change(payload)
+
+        # Serializing walks every character, so the events of one keystroke
+        # (the edit, then the key release) share one update at idle time.
+        pending = {"id": None}
+
+        def run_pending():
+            pending["id"] = None
+            update_status()
+
+        def request_update(*_args):
+            if pending["id"] is None:
+                pending["id"] = text_widget.after_idle(run_pending)
+
+        def on_modified(_event):
+            # <<Modified>> fires only when the flag rises, so it is lowered
+            # again to hear the next edit; lowering it fires once more.
+            if not text_widget.edit_modified():
+                return
+            text_widget.edit_modified(False)
+            request_update()
+
+        def cancel_pending(event):
+            if event.widget is text_widget and pending["id"] is not None:
+                text_widget.after_cancel(pending["id"])
+                pending["id"] = None
 
         def apply_style(style_name):
             if not toggle_text_style(text_widget, style_name):
@@ -3798,10 +4099,13 @@ class Sniptype:
         bind_shortcut("<Control-u>", "underline")
         text_widget.bind("<Control-Shift-C>", lambda event: (apply_style("code"), "break")[1])
         text_widget.bind("<Control-Shift-S>", lambda event: (apply_style("strike"), "break")[1])
-        text_widget.bind("<KeyRelease>", update_status)
-        text_widget.bind("<ButtonRelease-1>", update_status)
-        update_status()
-        return update_status
+        text_widget.bind("<KeyRelease>", request_update)
+        text_widget.bind("<ButtonRelease-1>", request_update)
+        text_widget.bind("<<Modified>>", on_modified, add="+")
+        text_widget.bind("<Destroy>", cancel_pending, add="+")
+        # The editor that owns ``on_change`` is still being built here.
+        show_format(serialize_text_widget_content(text_widget))
+        return update_status, request_update
     def _create_static_snippets_tab(self, parent, root, set_count=None):
         """Build the static snippets tab UI.
 
@@ -3945,13 +4249,11 @@ class Sniptype:
             bg=ui.card,
             fg=ui.text,
         ).grid(row=0, column=0, sticky="w")
-        tk.Label(
-            frame_right,
-            text=_("Crie um snippet ou ajuste o item selecionado."),
-            font=ui.caption_font(),
-            bg=ui.card,
-            fg=ui.text_muted,
-        ).grid(row=1, column=0, sticky="w", pady=(ui.space_xs, ui.space_md))
+        # What the editor holds and whether it is saved, where a fixed
+        # caption used to be.
+        header = self._editor_header(frame_right, lambda: reveal_static())
+        header.frame.grid(row=1, column=0, sticky="ew", pady=(ui.space_xs, ui.space_md))
+        session = EditorSession("static")
 
         tk.Label(
             frame_right,
@@ -3960,7 +4262,8 @@ class Sniptype:
             bg=ui.card,
             fg=ui.text_strong,
         ).grid(row=2, column=0, sticky="w")
-        entry_trigger = ui_widgets.entry(frame_right)
+        trigger_var = tk.StringVar(frame_right)
+        entry_trigger = ui_widgets.entry(frame_right, textvariable=trigger_var)
         entry_trigger.grid(row=3, column=0, sticky="ew", pady=(ui.space_xs, ui.space_md))
         effective_trigger_var = tk.StringVar(value=_("Efetivo: —"))
         tk.Label(
@@ -3990,7 +4293,8 @@ class Sniptype:
             padx=ui.space_sm,
             pady=ui.space_sm,
         )
-        update_format_status = self._create_formatting_toolbar(editor_shell, text_value)
+        update_format_status, request_editor_update = self._create_formatting_toolbar(
+            editor_shell, text_value, on_change=lambda payload: render_editor(payload))
         text_field.pack(fill=tk.BOTH, expand=True, pady=(0, 6))
         receipt = ui_widgets.ReceiptLine(
             frame_right, _("Formatação opcional  •  Ctrl+S para salvar"))
@@ -4048,10 +4352,11 @@ class Sniptype:
             variant="subtle", icon="form",
         )
         form_button.pack(side=tk.LEFT)
-        ui_widgets.button(
+        preview_button = ui_widgets.button(
             item_metadata_controls, text=_("Prévia"), command=lambda: on_preview(),
             variant="subtle", icon="preview",
-        ).pack(side=tk.LEFT, padx=(4, 0))
+        )
+        preview_button.pack(side=tk.LEFT, padx=(4, 0))
         layout_wrapping_row(
             item_frame, item_group_controls, item_metadata_controls,
             ui.space_md, ui.space_sm,
@@ -4065,19 +4370,11 @@ class Sniptype:
             anchor="w",
         )
         metadata_warning.grid(row=9, column=0, sticky="ew", pady=(ui.space_xs, 0))
-        metadata_widgets = (
-            group_actions,
-            item_favorite_check,
-            form_button,
-            btn_duplicate,
-            btn_rename,
-        )
 
         def refresh_metadata_controls():
+            # The item's own controls follow the editor (render_editor).
             read_only = bool(getattr(self.library_metadata, "read_only", False))
-            for widget in metadata_widgets:
-                widget.configure(state=tk.DISABLED if read_only else tk.NORMAL)
-            item_group_combo.configure(state=tk.DISABLED if read_only else "readonly")
+            group_actions.configure(state=tk.DISABLED if read_only else tk.NORMAL)
             if read_only:
                 metadata_warning.grid()
             else:
@@ -4086,6 +4383,8 @@ class Sniptype:
         self._bind_mousewheel(text_value, text_value)
 
         visible_rows = {}
+        # Every static row by stored trigger, for the editor's Efetivo.
+        static_rows_by_key = {}
 
         def refresh_group_menu():
             groups = self.library_metadata.get("groups", {}) if isinstance(self.library_metadata, dict) else {}
@@ -4127,9 +4426,13 @@ class Sniptype:
 
         def get_static_visible_snippets():
             """Visible static snippets in display order, best search match first."""
+            all_rows = self._manager_rows()
+            static_rows_by_key.clear()
+            static_rows_by_key.update(
+                (row.stored_trigger, row) for row in all_rows if row.kind == "static")
             rows = filter_static_rows(
                 filter_manager_rows(
-                    self._manager_rows(),
+                    all_rows,
                     filter_var.get(),
                     workflow_state=self.workflow_state,
                     group_id=group_var.get() or None,
@@ -4143,7 +4446,11 @@ class Sniptype:
 
         static_snips = get_static_visible_snippets()
 
-        def refresh_listbox():
+        def refresh_listbox(*, keep_view=True):
+            """Rebuild the list. The editor's item stays selected, the keyboard
+            focus row and, unless the filter changed, the scroll position too."""
+            focus_item = tree.focus()
+            top = tree.yview()[0] if keep_view else 0.0
             tree.delete(*tree.get_children())
             static_snips.clear()
             static_snips.update(get_static_visible_snippets())
@@ -4155,53 +4462,205 @@ class Sniptype:
             (tree if static_snips else empty_label).tkraise()
             if set_count is not None:
                 set_count(len(static_snips))
-            edited_key = entry_trigger.get().strip()
-            edited_row = visible_rows.get(edited_key)
-            effective_trigger_var.set(
-                _("Efetivo: {trigger}").format(trigger=edited_row.effective_trigger)
-                if edited_row else _("Efetivo: —")
-            )
+            if session.ref is not None and tree.exists(session.ref):
+                tree.selection_set(session.ref)
+            if focus_item and tree.exists(focus_item):
+                tree.focus(focus_item)
+            tree.yview_moveto(top)
+            render_editor()
 
-        def load_selected(event=None):
+        def editor_value():
+            return serialize_text_widget_content(text_value)
+
+        def is_dirty():
+            return session.is_dirty(trigger_var.get(), editor_value())
+
+        def stored_value(key):
+            """What the library holds for static ``key``, shadowed or not."""
+            value = self.snippets.get(key, EDITOR_MISSING)
+            if callable(value):
+                value = self.shadowed_static_snippets.get(key, EDITOR_MISSING)
+            return value
+
+        def current_static_key():
+            """The saved snippet the editor's commands act on, or None."""
+            key = session.ref
+            return key if key in self.snippets and not callable(self.snippets.get(key)) else None
+
+        def replaced_name(typed):
+            """The other saved snippet that Salvar would overwrite under ``typed``, or None."""
+            if typed and typed != session.ref and stored_value(typed) is not EDITOR_MISSING:
+                return typed
+            return None
+
+        def render_editor(payload=None):
+            """Draw the editor's target, its draft state and the commands that apply."""
+            if payload is None:
+                payload = editor_value()
+            typed = trigger_var.get().strip()
+            dirty = session.is_dirty(typed, payload)
+            problem = static_draft_problem(typed, extract_plain_text(payload)) if dirty else None
+            item = current_static_key()
+            read_only = bool(getattr(self.library_metadata, "read_only", False))
+            _set_enabled(btn_save, dirty and problem is None)
+            _set_enabled(btn_delete, item is not None)
+            _set_enabled(preview_button, item is not None)
+            for widget in (btn_duplicate, btn_rename, item_favorite_check, form_button):
+                _set_enabled(widget, item is not None and not read_only)
+            item_group_combo.configure(
+                state="readonly" if item is not None and not read_only else tk.DISABLED)
+            hidden = item is not None and not tree.exists(session.ref)
+            if session.ref is not None:
+                target = _("Editando {name}").format(name=session.ref)
+            elif session.mode == EDITOR_NEW or dirty:
+                target = _("Novo snippet")
+            else:
+                target = _("Nenhum snippet aberto")
+            if problem:
+                detail = _(problem)
+            else:
+                notes = []
+                if dirty and replaced_name(typed):
+                    notes.append(_("Salvar substitui {name}.").format(name=typed))
+                elif dirty and item is not None and typed != session.ref:
+                    notes.append(_("Salvar cria {name}; {open} continua salvo.").format(
+                        name=typed, open=session.ref))
+                if hidden:
+                    notes.append(_("Oculto pelo filtro atual."))
+                if not notes and session.mode == EDITOR_EMPTY and not dirty:
+                    notes.append(_("Selecione um snippet na lista ou clique em Novo."))
+                detail = " ".join(notes)
+            header.show(target, dirty, detail, hidden)
+            row = static_rows_by_key.get(typed)
+            effective = row.effective_trigger if row else typed
+            effective_trigger_var.set(
+                _("Efetivo: {trigger}").format(trigger=effective) if effective else _("Efetivo: —"))
+            editor.dirty = dirty
+            self._refresh_manager_title()
+
+        def load_item(key):
+            """Open saved snippet ``key`` in the editor."""
+            value = stored_value(key)
+            trigger_var.set(key)
+            load_value_into_text_widget(text_value, "" if value is EDITOR_MISSING else value)
+            session.load(key, key, editor_value(), copy.deepcopy(value))
+            show_item_metadata(static_row(key))
+            header.notice(None)
+            update_format_status()
+
+        def clear_editor(*, new=False):
+            """Show nothing, or with ``new`` a fresh draft (Novo)."""
+            trigger_var.set("")
+            load_value_into_text_widget(text_value, "")
+            session.reset(new=new)
+            show_item_metadata(None)
+            header.notice(None)
+            if tree.selection():
+                tree.selection_remove(tree.selection())
+            update_format_status()
+
+        def revert_draft():
+            """Descartar: the editor shows the saved snippet again, or nothing."""
+            if current_static_key() is not None:
+                load_item(session.ref)
+            else:
+                clear_editor()
+
+        def draft_question():
+            if session.ref is not None:
+                return _("O snippet {name} tem alterações não salvas.").format(name=session.ref)
+            return _("O novo snippet tem alterações não salvas.")
+
+        def reconcile_editor():
+            """After the library changed: a clean editor follows it; a draft
+            is kept and the editor says what changed under it."""
+            if session.ref is None:
+                render_editor()
+                return
+            outcome = session.reconcile(stored_value(session.ref))
+            if outcome not in (EDITOR_CHANGED, EDITOR_GONE):
+                render_editor()
+                return
+            if not is_dirty():
+                if outcome == EDITOR_GONE:
+                    clear_editor()
+                else:
+                    load_item(session.ref)
+                return
+            name = session.ref
+
+            def use_library():
+                if current_static_key() == name:
+                    load_item(name)
+                else:
+                    clear_editor()
+
+            def keep_draft():
+                session.keep_draft(stored_value(name))
+                header.notice(None)
+                refresh_listbox()
+
+            self._show_library_conflict(header, outcome, name, use_library, keep_draft)
+            render_editor()
+
+        def on_tree_select(_event=None):
             selection = tree.selection()
-            if not selection:
+            if not selection or selection[0] == session.ref:
+                # The list re-selecting the open item after a rebuild, or a
+                # filter hiding it: the editor keeps what it shows.
                 return
             key = selection[0]
-            entry_trigger.delete(0, tk.END)
-            entry_trigger.insert(0, key)
-            load_value_into_text_widget(text_value, static_snips.get(key, ""))
-            row = static_row(key)
-            show_item_metadata(row)
-            effective_trigger_var.set(
-                _("Efetivo: {trigger}").format(trigger=row.effective_trigger) if row else _("Efetivo: —")
-            )
-            update_format_status()
+            if not editor.resolve():
+                # Cancelar: the list goes back to what the editor still shows.
+                if session.ref is not None and tree.exists(session.ref):
+                    tree.selection_set(session.ref)
+                    tree.focus(session.ref)
+                elif tree.exists(key):
+                    tree.selection_remove(key)
+                return
+            load_item(key)
+            if tree.exists(key):
+                tree.selection_set(key)
+                tree.focus(key)
+
+        def reveal_static():
+            """Mostrar na lista: clear what hides the open item and select it."""
+            key = session.ref
+            group_var.set("")
+            filter_var.set(FILTER_ALL)
+            search_var.set("")
+            if key is not None and tree.exists(key):
+                tree.selection_set(key)
+                tree.focus(key)
+                tree.see(key)
+            tree.focus_set()
 
         def select_static_target(descriptor):
             if descriptor.kind != "static":
                 return False
+            key = descriptor.row_id
+            if key != session.ref and not editor.resolve():
+                # The person kept the draft; there is nothing to report.
+                return True
             group_var.set("")
             filter_var.set(FILTER_ALL)
             search_var.set("")
             refresh_listbox()
-            if not tree.exists(descriptor.row_id):
+            if not tree.exists(key):
                 return False
             try:
                 if self._manager_notebook is not None:
                     self._manager_notebook.select(parent)
             except Exception:
                 pass
-            tree.selection_set(descriptor.row_id)
-            tree.focus(descriptor.row_id)
-            tree.see(descriptor.row_id)
-            load_selected()
+            if key != session.ref:
+                load_item(key)
+            tree.selection_set(key)
+            tree.focus(key)
+            tree.see(key)
             return True
 
         self._manager_tab_selectors["static"] = select_static_target
-
-        def current_static_key():
-            key = entry_trigger.get().strip()
-            return key if key in self.snippets and not callable(self.snippets.get(key)) else None
 
         def manager_action_failed(title):
             if getattr(self.library_metadata, "read_only", False):
@@ -4214,12 +4673,13 @@ class Sniptype:
                 ui_widgets.alert(root, title, _("Não foi possível salvar a alteração."), tone="danger")
 
         def show_restored_static(key):
-            refresh_listbox()
-            if tree.exists(key):
+            # Desfazer puts the snippet back; the editor opens it unless it
+            # holds a draft by now.
+            if tree.exists(key) and not is_dirty():
+                load_item(key)
                 tree.selection_set(key)
                 tree.focus(key)
                 tree.see(key)
-                load_selected()
             tree.focus_set()
 
         def on_create_group():
@@ -4421,26 +4881,33 @@ class Sniptype:
             controller.show(result, title=_("Prévia — {key}").format(key=key))
 
         def on_new():
-            entry_trigger.delete(0, tk.END)
-            load_value_into_text_widget(text_value, "")
-            show_item_metadata(None)
-            effective_trigger_var.set(_("Efetivo: —"))
-            update_format_status()
+            if not editor.resolve():
+                return
+            clear_editor(new=True)
             entry_trigger.focus_set()
 
         def on_save():
-            trigger = entry_trigger.get().strip()
-            value = serialize_text_widget_content(text_value)
+            """Salvar and Ctrl+S. True when nothing is left unsaved."""
+            trigger = trigger_var.get().strip()
+            value = editor_value()
+            if not session.is_dirty(trigger, value):
+                return True
+            problem = static_draft_problem(trigger, extract_plain_text(value))
+            if problem:
+                ui_widgets.alert(root, _("Salvar snippet"), _(problem))
+                return False
 
-            if not trigger:
-                ui_widgets.alert(root, _("Salvar snippet"), _("Informe um trigger."))
-                return
-            if trigger.startswith("_"):
-                ui_widgets.alert(root, _("Salvar snippet"), _("Triggers com '_' são reservados."))
-                return
-            if not extract_plain_text(value).strip():
-                ui_widgets.alert(root, _("Salvar snippet"), _("Informe um valor para o snippet."))
-                return
+            # The editor names one snippet, but the trigger field can point at
+            # another saved one; writing over it must be a choice.
+            if replaced_name(trigger) and not ui_widgets.confirm(
+                root,
+                _("Substituir snippet"),
+                _("O snippet {name} já existe. Salvar troca o texto dele pelo que está no editor.").format(
+                    name=trigger),
+                _("Substituir"),
+                danger=True,
+            ):
+                return False
 
             # "Already in self.snippets" is not the same as "editing an existing
             # static": a dynamic trigger occupies the key too, and that is exactly
@@ -4455,27 +4922,46 @@ class Sniptype:
                     ),
                     _("Salvar mesmo assim"),
                 ):
-                    return
+                    return False
 
             # Saving over a live dynamic trigger records the static for disk but
             # leaves the callable in the merged map, so the trigger keeps
             # expanding as the dynamic snippet this session (see helper).
+            previous = self.snippets.get(trigger, EDITOR_MISSING)
+            previous_shadow = self.shadowed_static_snippets.get(trigger, EDITOR_MISSING)
             self._store_static_snippet(trigger, value)
             if not self.save_snippets(self.snippets):
+                # Nothing reached disk, so memory goes back too; the draft
+                # stays in the editor for another try.
+                if previous is EDITOR_MISSING:
+                    self.snippets.pop(trigger, None)
+                else:
+                    self.snippets[trigger] = previous
+                if previous_shadow is EDITOR_MISSING:
+                    self.shadowed_static_snippets.pop(trigger, None)
+                else:
+                    self.shadowed_static_snippets[trigger] = previous_shadow
                 ui_widgets.alert(
                     root, _("Erro ao salvar"),
-                    _("Não foi possível gravar snippets.json. Verifique os logs; suas edições podem não ter sido salvas."),
+                    _("Não foi possível gravar snippets.json, então nada foi salvo. O rascunho "
+                      "continua no editor; verifique os logs e tente de novo."),
                     tone="danger",
                 )
-                return
+                return False
             self.refresh_runtime_indexes()
+            session.mark_saved(trigger, trigger, value, copy.deepcopy(stored_value(trigger)))
+            header.notice(None)
             self.notify_status(_("Snippet '{trigger}' salvo.").format(trigger=trigger), key=f"save-static:{trigger}")
 
             refresh_listbox()
+            if tree.exists(trigger):
+                tree.see(trigger)
             update_format_status()
+            _move_focus_off(btn_save, text_value)
+            return True
 
         def on_delete():
-            trigger = entry_trigger.get().strip()
+            trigger = session.ref
             if not trigger:
                 ui_widgets.alert(root, _("Excluir snippet"), _("Selecione um snippet."))
                 return
@@ -4504,11 +4990,7 @@ class Sniptype:
             if result == "missing":
                 ui_widgets.alert(root, _("Excluir snippet"), _("Selecione um snippet."))
                 return
-            entry_trigger.delete(0, tk.END)
-            load_value_into_text_widget(text_value, "")
-            show_item_metadata(None)
-            effective_trigger_var.set(_("Efetivo: —"))
-            update_format_status()
+            clear_editor()
             refresh_listbox()
 
             def undo():
@@ -4551,6 +5033,9 @@ class Sniptype:
             return None
 
         def on_duplicate():
+            # The copy opens in the editor, so a draft is settled first.
+            if current_static_key() is not None and not editor.resolve():
+                return
             source_key = current_static_key()
             if source_key is None:
                 ui_widgets.alert(root, _("Duplicar snippet"), _("Selecione um snippet salvo."))
@@ -4580,16 +5065,15 @@ class Sniptype:
                 self.logger.exception("Manager duplicate failed unexpectedly")
                 manager_action_failed(_("Duplicar"))
                 return
-            entry_trigger.delete(0, tk.END)
-            entry_trigger.insert(0, destination)
-            refresh_listbox()
+            load_item(destination)
             if tree.exists(destination):
                 tree.selection_set(destination)
-                load_selected()
+                tree.focus(destination)
+                tree.see(destination)
             self.notify_status(_("Snippet '{destination}' duplicado.").format(destination=destination), key=f"duplicate-static:{destination}")
 
         def on_rename():
-            old_trigger = entry_trigger.get().strip()
+            old_trigger = session.ref
             if old_trigger not in self.snippets:
                 ui_widgets.alert(root, _("Renomear snippet"), _("Selecione um snippet salvo para renomear."))
                 return
@@ -4619,6 +5103,15 @@ class Sniptype:
                 _("Renomear mesmo assim"),
             ):
                 return
+            field_followed = trigger_var.get().strip() == old_trigger
+
+            def follow(ref):
+                # The editor, draft and all, follows the rename before the
+                # lists refresh, so the refresh does not read it as deleted.
+                session.retarget(ref, ref)
+                if field_followed:
+                    trigger_var.set(ref)
+
             try:
                 result = manager_rename_static(
                     self.snippets,
@@ -4627,35 +5120,51 @@ class Sniptype:
                     new_trigger,
                     dynamic_triggers=self._manager_dynamic_triggers(),
                 )
+                follow(new_trigger)
                 if not self._persist_manager_action(result):
+                    follow(old_trigger)
                     ui_widgets.alert(
                         root, _("Erro ao salvar"), _("Não foi possível gravar snippets.json."),
                         tone="danger",
                     )
                     return
             except (KeyError, ValueError, MetadataReadOnlyError) as error:
+                if session.ref == new_trigger:
+                    follow(old_trigger)
                 self.logger.warning(f"Manager rename failed: {error}")
                 ui_widgets.alert(root, _("Renomear snippet"), str(error))
                 return
             except Exception:
+                if session.ref == new_trigger:
+                    follow(old_trigger)
                 self.logger.exception("Manager rename failed unexpectedly")
                 manager_action_failed(_("Renomear"))
                 return
-            entry_trigger.delete(0, tk.END)
-            entry_trigger.insert(0, new_trigger)
-            refresh_listbox()
+            if tree.exists(new_trigger):
+                tree.see(new_trigger)
             self.notify_status(_("Snippet renomeado para '{new_trigger}'.").format(new_trigger=new_trigger), key=f"rename-static:{new_trigger}")
 
-        tree.bind("<<TreeviewSelect>>", load_selected)
+        editor = self._editor_handle(
+            root, header,
+            is_dirty=is_dirty,
+            save=on_save,
+            revert=revert_draft,
+            question=draft_question,
+            target=lambda: SnippetRef("static", session.ref) if session.ref else None,
+        )
+        self._register_manager_editor(editor)
+
+        tree.bind("<<TreeviewSelect>>", on_tree_select)
         btn_new.configure(command=on_new)
         btn_save.configure(command=on_save)
         btn_duplicate.configure(command=on_duplicate)
         btn_rename.configure(command=on_rename)
         btn_delete.configure(command=on_delete)
         item_group_combo.bind("<<ComboboxSelected>>", on_group_assignment)
-        search_var.trace_add("write", lambda *_: refresh_listbox())
-        filter_var.trace_add("write", lambda *_: refresh_listbox())
-        group_var.trace_add("write", lambda *_: refresh_listbox())
+        search_var.trace_add("write", lambda *_: refresh_listbox(keep_view=False))
+        filter_var.trace_add("write", lambda *_: refresh_listbox(keep_view=False))
+        group_var.trace_add("write", lambda *_: refresh_listbox(keep_view=False))
+        trigger_var.trace_add("write", lambda *_: request_editor_update())
         # Ctrl+S saves the current static snippet from anywhere in the editor.
         for widget in (entry_trigger, text_value, tree):
             widget.bind("<Control-s>", lambda _event: (on_save(), "break")[1])
@@ -4664,6 +5173,7 @@ class Sniptype:
             refresh_group_menu()
             refresh_metadata_controls()
             refresh_listbox()
+            reconcile_editor()
 
         refresh_static_tab()
         self._register_manager_refresher(refresh_static_tab)
@@ -4730,22 +5240,44 @@ class Sniptype:
             if mapping_type.get() not in type_keys and type_keys:
                 mapping_type.set(type_keys[0])
 
-            current = mapping_type.get()
-            if current in type_keys:
-                index = type_keys.index(current)
-                listbox_types.selection_clear(0, tk.END)
-                listbox_types.selection_set(index)
-                listbox_types.see(index)
+            select_type_row(mapping_type.get())
             update_example_label()
+
+        def select_type_row(key):
+            if key not in type_keys:
+                return
+            index = type_keys.index(key)
+            listbox_types.selection_clear(0, tk.END)
+            listbox_types.selection_set(index)
+            listbox_types.activate(index)
+            listbox_types.see(index)
+
+        def type_label(container):
+            info = mappings_info.get(container)
+            if info:
+                return info["label"]
+            # A type the library no longer has, named the way get_mappings_info names it.
+            return container[1:].replace("_numbers", "").replace("_codes", "").upper()
+
+        def switch_type(key):
+            """Show mapping type ``key``; False when the person kept a draft instead.
+
+            A type change empties the editor, so a draft is settled first.
+            """
+            if key == mapping_type.get():
+                return True
+            if not editor.resolve():
+                return False
+            mapping_type.set(key)
+            select_type_row(key)
+            return True
 
         def on_type_select(_event=None):
             selection = listbox_types.curselection()
             if not selection:
                 return
-            key = type_keys[selection[0]]
-            # Guard the write so the trace only fires on a real change.
-            if key != mapping_type.get():
-                mapping_type.set(key)
+            if not switch_type(type_keys[selection[0]]):
+                select_type_row(mapping_type.get())
 
         def ensure_mapping_dict(current_type):
             mapping = self.snippets.get(current_type)
@@ -4880,13 +5412,10 @@ class Sniptype:
             bg=ui.card,
             fg=ui.text,
         ).grid(row=0, column=0, sticky="w")
-        tk.Label(
-            frame_right,
-            text=_("O prefixo do tipo será combinado com este identificador."),
-            font=ui.caption_font(),
-            bg=ui.card,
-            fg=ui.text_muted,
-        ).grid(row=1, column=0, sticky="w", pady=(ui.space_xs, ui.space_md))
+        # What the editor holds and whether it is saved, as in Textos.
+        header = self._editor_header(frame_right, lambda: reveal_mapping())
+        header.frame.grid(row=1, column=0, sticky="ew", pady=(ui.space_xs, ui.space_md))
+        session = EditorSession("mapping", container=mapping_type.get())
 
         tk.Label(
             frame_right,
@@ -4904,7 +5433,8 @@ class Sniptype:
             fg=ui.text_muted,
             anchor="e",
         ).grid(row=2, column=0, sticky="e")
-        entry_name = ui_widgets.entry(frame_right)
+        name_var = tk.StringVar(frame_right)
+        entry_name = ui_widgets.entry(frame_right, textvariable=name_var)
         entry_name.grid(row=3, column=0, sticky="ew", pady=(ui.space_xs, ui.space_md))
 
         tk.Label(
@@ -4925,7 +5455,8 @@ class Sniptype:
             padx=ui.space_sm,
             pady=ui.space_sm,
         )
-        update_format_status = self._create_formatting_toolbar(editor_shell, text_value)
+        update_format_status, request_editor_update = self._create_formatting_toolbar(
+            editor_shell, text_value, on_change=lambda payload: render_editor(payload))
         text_field.pack(fill=tk.BOTH, expand=True, pady=(0, 6))
         receipt = ui_widgets.ReceiptLine(
             frame_right, _("Formatação opcional  •  Ctrl+S para salvar"))
@@ -4968,24 +5499,19 @@ class Sniptype:
             variant="subtle",
             icon="form",
         )
-        def refresh_mapping_metadata_controls():
-            state = (
-                tk.DISABLED
-                if getattr(self.library_metadata, "read_only", False)
-                else tk.NORMAL
-            )
-            mapping_favorite_check.configure(state=state)
-            mapping_form_button.configure(state=state)
         # Same arrangement as the static editor: Favorito left, the item
         # actions right-aligned.
-        ui_widgets.button(
+        mapping_preview_button = ui_widgets.button(
             mapping_metadata_frame,
             text=_("Prévia"),
             command=lambda: on_preview_mapping(),
             variant="subtle",
             icon="preview",
-        ).pack(side=tk.RIGHT, padx=(4, 0))
+        )
+        mapping_preview_button.pack(side=tk.RIGHT, padx=(4, 0))
         mapping_form_button.pack(side=tk.RIGHT)
+        # The visible type's rows by identifier, for the editor's Efetivo.
+        mapping_rows = {}
 
         def update_total_count():
             """Tab title counts every mapping item, across all types.
@@ -5003,24 +5529,30 @@ class Sniptype:
                     total += sum(1 for name in mapping if name and name != "__prefix__")
             set_count(total)
 
-        def refresh_mapping_list():
+        def refresh_mapping_list(*, keep_view=True):
+            """Rebuild the visible type's items, keeping the editor's item
+            selected, the keyboard focus row and, unless the search changed,
+            the scroll position."""
+            focus_item = tree_map.focus()
+            top = tree_map.yview()[0] if keep_view else 0.0
             tree_map.delete(*tree_map.get_children())
             current_type = mapping_type.get()
             query = map_search_var.get()
             mapping = self.snippets.get(current_type, {})
             if not isinstance(mapping, dict):
                 mapping = {}
-            rows = {
-                row.stored_trigger: row
+            mapping_rows.clear()
+            mapping_rows.update(
+                (row.stored_trigger, row)
                 for row in self._manager_rows()
                 if row.kind == "mapping" and row.container == current_type
-            }
+            )
             has_rows = False
             for key in iter_filtered_mapping_items(mapping, query):
                 if not key:
                     continue  # a blank key cannot be a Treeview row iid
                 values = snippet_tree_values(key, mapping.get(key, ""))
-                row = rows.get(key)
+                row = mapping_rows.get(key)
                 if row is not None:
                     values = (format_trigger_pair(row),) + values[1:]
                 tree_map.insert("", tk.END, iid=key,
@@ -5029,11 +5561,167 @@ class Sniptype:
             (tree_map if has_rows else empty_mapping_label).tkraise()
             update_total_count()
             update_example_label()
-            edited_row = rows.get(entry_name.get().strip())
+            if shows_here(session.ref) and tree_map.exists(session.ref):
+                tree_map.selection_set(session.ref)
+            if focus_item and tree_map.exists(focus_item):
+                tree_map.focus(focus_item)
+            tree_map.yview_moveto(top)
+            render_editor()
+
+        def shows_here(key):
+            """Whether ``key`` of the editor's type belongs in the visible list."""
+            return key is not None and session.container == mapping_type.get()
+
+        def editor_value():
+            return serialize_text_widget_content(text_value)
+
+        def is_dirty():
+            return session.is_dirty(name_var.get(), editor_value())
+
+        def stored_value(container, key):
+            mapping = self.snippets.get(container)
+            if not isinstance(mapping, dict) or key not in mapping:
+                return EDITOR_MISSING
+            return mapping[key]
+
+        def current_mapping_item():
+            """``(type, identifier)`` of the saved item the editor's commands act on, or None."""
+            if session.ref is None or stored_value(session.container, session.ref) is EDITOR_MISSING:
+                return None
+            return session.container, session.ref
+
+        def replaced_name(typed):
+            """The other saved item that Salvar would overwrite under ``typed``, or None."""
+            container = session.container or mapping_type.get()
+            if typed and typed != session.ref and stored_value(container, typed) is not EDITOR_MISSING:
+                return typed
+            return None
+
+        def mapping_row(container, key):
+            return next((candidate for candidate in self._manager_rows()
+                         if candidate.kind == "mapping"
+                         and candidate.container == container
+                         and candidate.stored_trigger == key), None)
+
+        def show_mapping_favorite():
+            item = current_mapping_item()
+            row = mapping_row(*item) if item else None
+            mapping_favorite_var.set(bool(row and row.favorite))
+
+        def render_editor(payload=None):
+            """Draw the editor's target, its draft state and the commands that apply."""
+            if payload is None:
+                payload = editor_value()
+            typed = name_var.get().strip()
+            dirty = session.is_dirty(typed, payload)
+            problem = mapping_draft_problem(typed, extract_plain_text(payload)) if dirty else None
+            item = current_mapping_item()
+            read_only = bool(getattr(self.library_metadata, "read_only", False))
+            _set_enabled(btn_save_map, dirty and problem is None)
+            _set_enabled(btn_delete_map, item is not None)
+            _set_enabled(mapping_preview_button, item is not None)
+            for widget in (mapping_favorite_check, mapping_form_button):
+                _set_enabled(widget, item is not None and not read_only)
+            container = session.container or mapping_type.get()
+            label = type_label(container)
+            hidden = item is not None and shows_here(session.ref) and not tree_map.exists(session.ref)
+            if session.ref is not None:
+                target = _("Editando {name} em {type}").format(name=session.ref, type=label)
+            elif session.mode == EDITOR_NEW or dirty:
+                target = _("Novo item em {type}").format(type=label)
+            else:
+                target = _("Nenhum item aberto")
+            if problem:
+                detail = _(problem)
+            else:
+                notes = []
+                if dirty and replaced_name(typed):
+                    notes.append(_("Salvar substitui {name}.").format(name=typed))
+                elif dirty and item is not None and typed != session.ref:
+                    notes.append(_("Salvar cria {name}; {open} continua salvo.").format(
+                        name=typed, open=session.ref))
+                if hidden:
+                    notes.append(_("Oculto pelo filtro atual."))
+                if not notes and session.mode == EDITOR_EMPTY and not dirty:
+                    notes.append(_("Selecione um item na lista ou clique em Novo."))
+                detail = " ".join(notes)
+            header.show(target, dirty, detail, hidden)
+            row = mapping_rows.get(typed) if shows_here(typed) else None
+            prefix = mappings_info.get(container, {}).get("prefix", "")
+            effective = row.effective_trigger if row else (prefix + typed if typed else "")
             mapping_effective_trigger_var.set(
-                _("Efetivo: {trigger}").format(trigger=edited_row.effective_trigger)
-                if edited_row else _("Efetivo: —")
-            )
+                _("Efetivo: {trigger}").format(trigger=effective) if effective else _("Efetivo: —"))
+            editor.dirty = dirty
+            self._refresh_manager_title()
+
+        def load_item(key):
+            """Open item ``key`` of the visible type in the editor."""
+            container = mapping_type.get()
+            value = stored_value(container, key)
+            name_var.set(key)
+            load_value_into_text_widget(text_value, "" if value is EDITOR_MISSING else value)
+            session.load(key, key, editor_value(), copy.deepcopy(value), container=container)
+            show_mapping_favorite()
+            header.notice(None)
+            update_format_status()
+
+        def clear_editor(*, new=False):
+            """Show nothing, or with ``new`` a fresh draft (Novo), in the visible type."""
+            name_var.set("")
+            load_value_into_text_widget(text_value, "")
+            session.reset(new=new, container=mapping_type.get())
+            mapping_favorite_var.set(False)
+            header.notice(None)
+            if tree_map.selection():
+                tree_map.selection_remove(tree_map.selection())
+            update_format_status()
+
+        def revert_draft():
+            """Descartar: the editor shows the saved item again, or nothing."""
+            item = current_mapping_item()
+            if item is not None and item[0] == mapping_type.get():
+                load_item(item[1])
+            else:
+                clear_editor()
+
+        def draft_question():
+            label = type_label(session.container or mapping_type.get())
+            if session.ref is not None:
+                return _("O item {name} de {type} tem alterações não salvas.").format(
+                    name=session.ref, type=label)
+            return _("O novo item de {type} tem alterações não salvas.").format(type=label)
+
+        def reconcile_editor():
+            """After the library changed: a clean editor follows it; a draft
+            is kept and the editor says what changed under it."""
+            if session.ref is None:
+                render_editor()
+                return
+            container, name = session.container, session.ref
+            outcome = session.reconcile(stored_value(container, name))
+            if outcome not in (EDITOR_CHANGED, EDITOR_GONE):
+                render_editor()
+                return
+            if not is_dirty():
+                if outcome == EDITOR_GONE or container != mapping_type.get():
+                    clear_editor()
+                else:
+                    load_item(name)
+                return
+
+            def use_library():
+                if current_mapping_item() == (container, name) and container == mapping_type.get():
+                    load_item(name)
+                else:
+                    clear_editor()
+
+            def keep_draft():
+                session.keep_draft(stored_value(container, name))
+                header.notice(None)
+                refresh_mapping_list()
+
+            self._show_library_conflict(header, outcome, name, use_library, keep_draft)
+            render_editor()
 
         def add_new_type():
             dialog = tk.Toplevel(root)
@@ -5102,11 +5790,11 @@ class Sniptype:
                     )
                     return
                 self.refresh_runtime_indexes()
-                refresh_type_list()
-                mapping_type.set(map_key)
-                on_type_changed()
-                self.notify_status(_("Tipo '{type_name}' criado.").format(type_name=type_name), key=f"mapping-type-create:{type_name}")
                 dialog.destroy()
+                refresh_type_list()
+                self.notify_status(_("Tipo '{type_name}' criado.").format(type_name=type_name), key=f"mapping-type-create:{type_name}")
+                # The new type opens unless the person keeps a draft of this one.
+                switch_type(map_key)
 
             # Enter creates and Escape cancels.
             ui_widgets.dialog_footer(
@@ -5151,13 +5839,13 @@ class Sniptype:
                 return
             self.refresh_runtime_indexes()
 
+            # The typed confirmation covered the type's items, open draft included.
+            clear_editor()
             refresh_type_list()
             available_keys = list(mappings_info.keys())
             if available_keys:
                 mapping_type.set(available_keys[0])
-            entry_name.delete(0, tk.END)
-            load_value_into_text_widget(text_value, "")
-            update_format_status()
+                select_type_row(available_keys[0])
             refresh_mapping_list()
             self.notify_status(_("Tipo '{type}' excluído.").format(type=info.get('label', current_type)), key=f"mapping-type-delete:{current_type}")
 
@@ -5173,84 +5861,94 @@ class Sniptype:
         self._bind_mousewheel(listbox_types, listbox_types)
         self._bind_mousewheel(text_value, text_value)
 
-        def load_selected_mapping(event=None):
+        def on_tree_select(_event=None):
             selection = tree_map.selection()
-            if not selection:
+            if not selection or (shows_here(session.ref) and selection[0] == session.ref):
+                # The list re-selecting the open item after a rebuild, or a
+                # search hiding it: the editor keeps what it shows.
                 return
-
-            current_type = mapping_type.get()
             key = selection[0]
-            mapping = self.snippets.get(current_type, {})
+            if not editor.resolve():
+                # Cancelar: the list goes back to what the editor still shows.
+                if shows_here(session.ref) and tree_map.exists(session.ref):
+                    tree_map.selection_set(session.ref)
+                    tree_map.focus(session.ref)
+                elif tree_map.exists(key):
+                    tree_map.selection_remove(key)
+                return
+            load_item(key)
+            if tree_map.exists(key):
+                tree_map.selection_set(key)
+                tree_map.focus(key)
 
-            entry_name.delete(0, tk.END)
-            entry_name.insert(0, key)
-            load_value_into_text_widget(text_value, mapping.get(key, ""))
-            row = next((candidate for candidate in self._manager_rows()
-                        if candidate.kind == "mapping"
-                        and candidate.container == current_type
-                        and candidate.stored_trigger == key), None)
-            mapping_favorite_var.set(bool(row and row.favorite))
-            mapping_effective_trigger_var.set(
-                _("Efetivo: {trigger}").format(trigger=row.effective_trigger) if row else _("Efetivo: —")
-            )
-            update_format_status()
+        def reveal_mapping():
+            """Mostrar na lista: clear the search that hides the open item and select it."""
+            map_search_var.set("")
+            if shows_here(session.ref) and tree_map.exists(session.ref):
+                tree_map.selection_set(session.ref)
+                tree_map.focus(session.ref)
+                tree_map.see(session.ref)
+            tree_map.focus_set()
 
         def select_mapping_target(descriptor):
             if descriptor.kind != "mapping" or descriptor.container not in type_keys:
                 return False
-            index = type_keys.index(descriptor.container)
-            listbox_types.selection_clear(0, tk.END)
-            listbox_types.selection_set(index)
-            listbox_types.activate(index)
+            key = descriptor.stored_trigger
+            opened = session.container == descriptor.container and session.ref == key
+            if not opened and not editor.resolve():
+                # The person kept the draft; there is nothing to report.
+                return True
+            select_type_row(descriptor.container)
             mapping_type.set(descriptor.container)
+            map_search_var.set("")
             refresh_mapping_list()
-            if not tree_map.exists(descriptor.stored_trigger):
+            if not tree_map.exists(key):
                 return False
             try:
                 if self._manager_notebook is not None:
                     self._manager_notebook.select(parent)
             except Exception:
                 pass
-            tree_map.selection_set(descriptor.stored_trigger)
-            tree_map.focus(descriptor.stored_trigger)
-            tree_map.see(descriptor.stored_trigger)
-            load_selected_mapping()
+            if not opened:
+                load_item(key)
+            tree_map.selection_set(key)
+            tree_map.focus(key)
+            tree_map.see(key)
             return True
 
         self._manager_tab_selectors["mapping"] = select_mapping_target
 
         def on_toggle_mapping_favorite():
-            current_type = mapping_type.get()
-            key = entry_name.get().strip()
-            mapping = self.snippets.get(current_type, {})
-            if not key or not isinstance(mapping, dict) or key not in mapping:
+            item = current_mapping_item()
+            if item is None:
                 return
+            current_type, key = item
             try:
                 result = manager_toggle_mapping_favorite(
                     self.snippets, self.library_metadata, current_type, key,
                     mapping_favorite_var.get(),
                 )
                 if not self._persist_manager_action(result):
-                    mapping_favorite_var.set(not mapping_favorite_var.get())
+                    show_mapping_favorite()
                     ui_widgets.alert(root, _("Favorito"), _("Não foi possível salvar a alteração."), tone="danger")
             except (KeyError, ValueError, MetadataReadOnlyError) as error:
-                mapping_favorite_var.set(not mapping_favorite_var.get())
+                show_mapping_favorite()
                 self.logger.warning(f"Mapping favorite update failed: {error}")
                 ui_widgets.alert(
                     root, _("Favorito"),
                     _("Os metadados da biblioteca são somente leitura nesta versão.") if getattr(self.library_metadata, "read_only", False) else str(error),
                 )
             except Exception:
-                mapping_favorite_var.set(not mapping_favorite_var.get())
+                show_mapping_favorite()
                 self.logger.exception("Mapping favorite update failed unexpectedly")
                 ui_widgets.alert(root, _("Favorito"), _("Não foi possível salvar a alteração."), tone="danger")
 
         def on_edit_mapping_form():
-            current_type = mapping_type.get()
-            key = entry_name.get().strip()
-            mapping = self.snippets.get(current_type, {})
-            if not key or not isinstance(mapping, dict) or key not in mapping:
+            item = current_mapping_item()
+            if item is None:
                 return
+            current_type, key = item
+            mapping = self.snippets[current_type]
             from form_editor_dialog import run_form_editor
             definition = self._mapping_form_metadata(current_type, key)
             form = run_form_editor(
@@ -5288,13 +5986,12 @@ class Sniptype:
                 ui_widgets.alert(root, _("Formulário"), _("Não foi possível salvar a alteração."), tone="danger")
 
         def on_preview_mapping():
-            current_type = mapping_type.get()
-            key = entry_name.get().strip()
-            mapping = self.snippets.get(current_type, {})
-            if not key or not isinstance(mapping, dict) or key not in mapping:
+            item = current_mapping_item()
+            if item is None:
                 return
+            current_type, key = item
             result = resolve_preview(
-                mapping[key],
+                self.snippets[current_type][key],
                 self.snippets,
                 self._mapping_form_metadata(current_type, key),
             )
@@ -5305,39 +6002,45 @@ class Sniptype:
             controller.show(result, title=_("Prévia — {key}").format(key=key))
 
         def on_type_changed(*args):
-            refresh_mapping_list()
-            entry_name.delete(0, tk.END)
-            load_value_into_text_widget(text_value, "")
-            mapping_favorite_var.set(False)
-            mapping_effective_trigger_var.set(_("Efetivo: —"))
-            update_format_status()
+            refresh_mapping_list(keep_view=False)
+            if is_dirty():
+                # Type changes the person makes settle the draft first, so
+                # only a refresh that dropped the draft's type gets here; the
+                # draft stays and reconcile_editor says why.
+                render_editor()
+                return
+            clear_editor()
 
         def on_new_map():
-            entry_name.delete(0, tk.END)
-            load_value_into_text_widget(text_value, "")
-            mapping_favorite_var.set(False)
-            mapping_effective_trigger_var.set(_("Efetivo: —"))
-            update_format_status()
+            if not editor.resolve():
+                return
+            clear_editor(new=True)
             entry_name.focus_set()
 
         def on_save_map():
-            mappings = get_mappings_info()
-            current_type = mapping_type.get()
-            name = entry_name.get().strip()
-            value = serialize_text_widget_content(text_value)
-
-            if not name:
-                ui_widgets.alert(root, _("Salvar item"), _("Informe um identificador."))
-                return
-            if name == "__prefix__":
-                ui_widgets.alert(
-                    root, _("Salvar item"),
-                    _("'__prefix__' é reservado para o prefixo do tipo de mapeamento."),
-                )
-                return
-            if not extract_plain_text(value).strip():
-                ui_widgets.alert(root, _("Salvar item"), _("Informe um valor."))
-                return
+            """Salvar and Ctrl+S. True when nothing is left unsaved."""
+            name = name_var.get().strip()
+            value = editor_value()
+            if not session.is_dirty(name, value):
+                return True
+            problem = mapping_draft_problem(name, extract_plain_text(value))
+            if problem:
+                ui_widgets.alert(root, _("Salvar item"), _(problem))
+                return False
+            # The item goes where the draft belongs, which is the visible type
+            # unless the library dropped that type under a kept draft.
+            current_type = session.container or mapping_type.get()
+            # The editor names one item, but the identifier field can point at
+            # another saved one; writing over it must be a choice.
+            if replaced_name(name) and not ui_widgets.confirm(
+                root,
+                _("Substituir item"),
+                _("O item {name} de {type} já existe. Salvar troca o texto dele pelo que está no editor.").format(
+                    name=name, type=type_label(current_type)),
+                _("Substituir"),
+                danger=True,
+            ):
+                return False
 
             previous_mapping = self.snippets.get(current_type, _MISSING)
             previous_mapping_snapshot = (
@@ -5355,33 +6058,30 @@ class Sniptype:
                     self.snippets[current_type] = previous_mapping_snapshot
                 ui_widgets.alert(
                     root, _("Erro ao salvar"),
-                    _("Não foi possível gravar snippets.json. Verifique os logs; o item não foi salvo."),
+                    _("Não foi possível gravar snippets.json, então nada foi salvo. O rascunho "
+                      "continua no editor; verifique os logs e tente de novo."),
                     tone="danger",
                 )
-                return
+                return False
             self.refresh_runtime_indexes()
-            self.notify_status(_("Item '{name}' salvo em {type}.").format(name=name, type=mappings.get(current_type, {}).get('label', current_type)), key=f"save-map:{current_type}:{name}")
+            session.mark_saved(name, name, value, copy.deepcopy(value), container=current_type)
+            header.notice(None)
+            self.notify_status(_("Item '{name}' salvo em {type}.").format(name=name, type=type_label(current_type)), key=f"save-map:{current_type}:{name}")
+            refresh_type_list()
             refresh_mapping_list()
+            if shows_here(name) and tree_map.exists(name):
+                tree_map.see(name)
             update_format_status()
+            _move_focus_off(btn_save_map, text_value)
+            return True
 
         def on_delete_map():
-            current_type = mapping_type.get()
-            name = entry_name.get().strip()
-
-            if not name:
+            item = current_mapping_item()
+            if item is None:
                 ui_widgets.alert(root, _("Excluir item"), _("Selecione um item."))
                 return
-
-            mapping = self.snippets.get(current_type, {})
-            if name == "__prefix__":
-                ui_widgets.alert(
-                    root, _("Excluir item"),
-                    _("'__prefix__' é reservado para o prefixo do tipo de mapeamento."),
-                )
-                return
-            if not isinstance(mapping, dict) or name not in mapping:
-                ui_widgets.alert(root, _("Excluir item"), _("Selecione um item."))
-                return
+            current_type, name = item
+            mapping = self.snippets[current_type]
             # Deleting is reversible for a while (Desfazer), so it asks
             # nothing; the value and its metadata are kept until then.
             item_metadata = mapping_item_metadata(self.library_metadata, current_type, name)
@@ -5395,11 +6095,7 @@ class Sniptype:
                 )
                 return
             self.refresh_runtime_indexes()
-            entry_name.delete(0, tk.END)
-            load_value_into_text_widget(text_value, "")
-            mapping_favorite_var.set(False)
-            mapping_effective_trigger_var.set(_("Efetivo: —"))
-            update_format_status()
+            clear_editor()
             refresh_mapping_list()
 
             def undo():
@@ -5429,8 +6125,9 @@ class Sniptype:
                         tone="danger",
                     )
                     return
+                # The editor opens the item again unless it holds a draft by now.
                 descriptor = self._manager_target(SnippetRef("mapping", name, current_type))
-                if descriptor is not None and select_mapping_target(descriptor):
+                if descriptor is not None and not is_dirty() and select_mapping_target(descriptor):
                     tree_map.focus_set()
                 receipt.show(_("Restaurado às {time} · {name}").format(
                     time=time_format.clock(datetime.now()), name=name))
@@ -5440,21 +6137,37 @@ class Sniptype:
                 _("Desfazer"), undo,
             )
 
+        def mapping_target():
+            if session.ref is None:
+                return None
+            return SnippetRef("mapping", session.ref, session.container)
+
+        editor = self._editor_handle(
+            root, header,
+            is_dirty=is_dirty,
+            save=on_save_map,
+            revert=revert_draft,
+            question=draft_question,
+            target=mapping_target,
+        )
+        self._register_manager_editor(editor)
+
         mapping_type.trace_add("write", lambda *_: on_type_changed())
-        tree_map.bind("<<TreeviewSelect>>", load_selected_mapping)
+        tree_map.bind("<<TreeviewSelect>>", on_tree_select)
         btn_new_map.configure(command=on_new_map)
         btn_save_map.configure(command=on_save_map)
         btn_delete_map.configure(command=on_delete_map)
-        map_search_var.trace_add("write", lambda *_: refresh_mapping_list())
+        map_search_var.trace_add("write", lambda *_: refresh_mapping_list(keep_view=False))
+        name_var.trace_add("write", lambda *_: request_editor_update())
         for widget in (entry_name, text_value, tree_map):
             widget.bind("<Control-s>", lambda _event: (on_save_map(), "break")[1])
 
         def refresh_all_mappings():
             # A restore/import can drop the selected type entirely, so the type
             # list has to be rebuilt before the items are.
-            refresh_mapping_metadata_controls()
             refresh_type_list()
             refresh_mapping_list()
+            reconcile_editor()
 
         refresh_all_mappings()
         self._register_manager_refresher(refresh_all_mappings)
@@ -5912,19 +6625,41 @@ class Sniptype:
     
     
     def reload_snippets(self, icon, item):
-        """Reload snippets from the file."""
+        """Tray Atualizar biblioteca: read the library from disk again."""
+        if self.manager_window is not None:
+            # An open manager may hold drafts; it settles them on the GUI
+            # thread, never from a tray callback (see gui_thread).
+            self.gui.submit(self._reload_snippets_in_manager)
+            return
+        if self._reload_snippets() and self.manager_window is not None:
+            # The manager opened while the library was being read and shows
+            # the snapshot from before; its refresh reconciles any draft.
+            self.gui.submit(self._refresh_manager_lists)
+
+    def _reload_snippets_in_manager(self, _root=None):
+        """Atualizar biblioteca with the manager open. GUI thread."""
+        window = self.manager_window
+        if window is not None and not self._resolve_manager_drafts(window):
+            return
+        self._reload_snippets(refresh_manager=True)
+
+    def _reload_snippets(self, *, refresh_manager=False):
+        """Read the library again. True when it was read."""
         try:
             self.snippets = self.load_snippets()
             self.refresh_runtime_indexes()
-            if self.manager_window is not None:
-                self.gui.submit(self._refresh_manager_lists)
-            self.notify_status(_("Snippets recarregados com sucesso."), key="reload-snippets")
         except Exception as e:
             self.notify_error(
-                _("Erro ao recarregar snippets: {error}").format(error=e),
+                _("Erro ao atualizar a biblioteca: {error}").format(error=e),
                 key="reload-snippets-error",
                 cooldown_seconds=5,
             )
+            return False
+        if refresh_manager:
+            self._refresh_manager_lists()
+        self.notify_status(_("Biblioteca atualizada."), key="reload-snippets")
+        return True
+
     def tray_backup_now(self, icon, item):
         """Tray action: create an immediate backup of the library."""
         created = self.backup_now()
@@ -6424,7 +7159,7 @@ class Sniptype:
             pystray.MenuItem(lazy("Gerenciar Snippets"), self.manage_snippets_gui, default=True),
             pystray.MenuItem(lazy("Editar último snippet"), self.edit_last_snippet),
             pystray.MenuItem(lazy("Configurar atalhos"), self.configure_hotkeys),
-            pystray.MenuItem(lazy("Recarregar Snippets"), self.reload_snippets),
+            pystray.MenuItem(lazy("Atualizar biblioteca"), self.reload_snippets),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(lazy("Backup agora"), self.tray_backup_now),
             pystray.MenuItem(lazy("Abrir pasta de dados"), self.tray_open_data_folder),

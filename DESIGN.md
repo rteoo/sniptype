@@ -127,9 +127,9 @@ shifted so the body role matches the platform's default size.
 
 | Surface | Model | Behavior |
 | --- | --- | --- |
-| Text and mapping editors | Explicit save (Salvar, Ctrl+S) | Every save takes a rotating backup and writes atomically. A failure is reported, and the in-memory library rolls back. Drafts are not tracked as dirty yet. |
+| Text and mapping editors | Explicit save (Salvar, Ctrl+S) | Every save takes a rotating backup and writes atomically. A failure is reported, the in-memory library rolls back and the draft stays for a retry. The editor tracks its draft (see Drafts and saving). |
 | Settings switches and choices | Immediate preference | Written to `settings.json` at once; a failed write restores the control and says so. |
-| Appearance | Immediate preference with a confirmed rebuild | The manager is rebuilt after a warning that unsaved editor text is discarded. |
+| Appearance and language | Immediate preference with a rebuild | Applied at once when no editor holds a draft; a draft asks Salvar · Descartar · Cancelar first. System follows a live Windows switch while the manager is shown. |
 | Backups | Explicit restore | Restore and import keep the backup and quarantine guarantees in `AGENTS.md`. |
 | Deletes | Immediate, reversible for 10 s | Deleting a snippet, a mapping item or a group saves at once and offers Desfazer, which puts the item and its metadata back through the same save path. Deleting a mapping type asks for its name instead. |
 
@@ -236,6 +236,47 @@ Adopted now as a project extension:
   back to Segoe MDL2 Assets: U+E70D chevron after "Grupos" (fallback: the
   text "Grupos ▾"), and U+E783 error, U+E7BA warning and U+E946 info beside
   an alert's title (fallback: no icon; the title carries the meaning).
+- **Drafts and saving (OPS-11).** The Textos and Mapeamentos editors keep
+  an `EditorSession` (`source/editor_session.py`): the saved item they
+  show and whether the editor holds unsaved changes.
+  - The line under the editor's title names the target: "Editando xola",
+    "Editando alice em CPF", "Novo snippet", or "Nenhum snippet aberto"
+    with "Selecione um snippet na lista ou clique em Novo." A draft adds
+    "• Não salvo" there and a "• " in front of the window title.
+  - Salvar is enabled only for a dirty, valid draft; the line names what
+    is missing ("Informe um valor para o snippet."). Ctrl+S runs the same
+    command and says why it does not save. Duplicar, Renomear, Excluir,
+    Favorito, Grupo, Formulário and Prévia act on the editor's saved item
+    and are disabled when there is none.
+  - Salvar writes the name in the trigger or identifier field, which can
+    differ from the open item, so the line under the title says what it
+    will do: "Salvar cria xnova; xola continua salvo." for a free name,
+    "Salvar substitui xbye." for another saved item. Replacing one asks
+    first ("Substituir snippet" or "Substituir item", the destructive
+    Substituir beside Cancelar, which has the focus); Cancelar keeps the
+    draft and writes nothing.
+  - Every exit that would drop a draft asks Salvar · Descartar · Cancelar,
+    with Salvar as the default: another list row (Cancelar re-selects the
+    open one), Novo, Duplicar, Editar último and the other cross-tab
+    jumps, a mapping type change, the close box, Restaurar, Importar,
+    Atualizar biblioteca and an appearance or language rebuild. Nothing
+    asks when nothing is unsaved.
+  - When the library changes under the editor (restore, import, Atualizar
+    biblioteca, another view), a clean editor follows it. A draft stays,
+    and a warning bar says "A biblioteca mudou: xola tem uma versão salva
+    mais nova." with Usar a versão nova and Manter rascunho, or "… não
+    existe mais." with Descartar rascunho and Manter rascunho. A kept
+    draft stays unsaved until it is saved or discarded.
+  - Refreshes and saves keep the list's selection on the editor's item,
+    its keyboard focus row and its scroll position; a new filter starts
+    at the top. When the filter hides an open item that is still in the
+    library the editor says "Oculto pelo filtro atual." and offers Mostrar
+    na lista; an item the library dropped is reported only by the warning
+    bar ("… não existe mais."). Efetivo is computed from the trigger the
+    editor holds.
+  - The tray's "Recarregar Snippets" is now "Atualizar biblioteca"
+    (glossary: Atualizar re-reads data). A manager that opens while the
+    library is being read is refreshed once the read ends.
 - **Search ranking.** Library search matches the stored trigger, the
   effective trigger shown after `→`, the group label and the plain content.
   Triggers rank before the group label, and the group label before content;
@@ -267,14 +308,14 @@ satisfy any of them.
 
 | Gate | Status |
 | --- | --- |
-| Appearance: live System change while the manager is open | Failed. The new appearance applies when the manager is reopened, because a rebuild could discard an unsaved draft. |
+| Appearance: live System change while the manager is open | Implemented: checked every 3 s while the manager is shown; a draft holds the switch and says so. Verified in the smoke test and the harness with the registry read mocked, not by switching the real Windows setting. |
 | Appearance: Windows contrast themes | Not tested. Drawn faces ignore system colors. |
 | Density: Comfortable and Touch | Not applicable until a density setting exists. |
 | Display: 125/150/200% DPI and mixed monitors | Not tested on hardware. Window minimums and spacing are still unscaled pixels. |
 | Keyboard: visible focus on list rows | Failed. A focused Treeview row is not drawn differently from a selected one. The light selection fill is faint without a marker: 1.14:1 on the panel and 1.02:1 on the navigation surface, where the copper pill and the semibold label carry the current page. |
 | Keyboard: formatting commands | Failed. Bold, italic, underline, code and strikethrough have shortcuts (Ctrl+B, Ctrl+I, Ctrl+U, Ctrl+Shift+C, Ctrl+Shift+S); clearing the formatting and the three variable inserts are pointer-only. |
 | Accessibility: Narrator roles, values and announcements | Not tested. |
-| Work preservation: drafts across appearance changes and refresh | Failed. Editors do not track dirty state. |
+| Work preservation: drafts across appearance changes and refresh | Passed in the smoke tests and the harness (row change, Novo, Editar último, type change, close, restore, rebuild). Open: quitting from the tray does not ask yet (the close box does), and Excluir on an item with a draft deletes it without asking; Desfazer brings back the saved version, not the draft. |
 | Keyboard: Ctrl+Z for Desfazer | Failed. Desfazer is a button in the receipt line, reachable with Tab; no shortcut yet. |
 | Dialogs on macOS main-thread mode | Not tested. The kit's grab and focus handoff were exercised on Windows only. |
 | Physical desktop pass at minimum and default size, keyboard only, close and reopen | Not tested for this adoption. |

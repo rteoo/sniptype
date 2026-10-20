@@ -354,8 +354,12 @@ class ManagerGuiSmokeTests(unittest.TestCase):
         self.assertEqual("xsig", trigger)
         self.assertEqual("Assinatura principal", value)
 
-    def _save_static_from_editor(self, trigger, value):
-        """Type trigger/value into the static editor and click Salvar."""
+    def _save_static_from_editor(self, trigger, value, *, open_item=None):
+        """Type trigger/value into the static editor and click Salvar.
+
+        ``open_item`` opens that saved snippet first, so the save edits it
+        instead of naming it from a new draft (which asks before replacing).
+        """
 
         def build(shared_root):
             root = tk.Toplevel(shared_root)
@@ -366,8 +370,16 @@ class ManagerGuiSmokeTests(unittest.TestCase):
 
             entries = [w for w in _descendants(frame) if _is_text_entry(w)]
             text = [w for w in _descendants(frame) if isinstance(w, tk.Text)][0]
+            if open_item:
+                tree = [w for w in _descendants(frame) if isinstance(w, ttk.Treeview)][0]
+                tree.selection_set(open_item)
+                root.update()
+            entries[1].delete(0, tk.END)
+            text.delete("1.0", tk.END)
             entries[1].insert(0, trigger)
             text.insert("1.0", value)
+            # The edit events make the draft dirty, which enables Salvar.
+            root.update()
             button = [w for w in _descendants(frame)
                       if isinstance(w, BUTTONS) and w.cget("text") == "Salvar"][0]
             button.invoke()
@@ -773,16 +785,27 @@ class ManagerGuiSmokeTests(unittest.TestCase):
             text = [w for w in _descendants(frame) if isinstance(w, tk.Text)][0]
             entries[1].insert(0, "__prefix__")
             text.insert("1.0", "must not replace metadata")
+            # Shown: Tk drops a generated key aimed at an unmapped window.
+            frame.pack(fill=tk.BOTH, expand=True)
+            frame.winfo_toplevel().deiconify()
+            frame.winfo_toplevel().update()
             button = next(
                 widget for widget in _descendants(frame)
                 if isinstance(widget, BUTTONS) and str(widget.cget("text")) == "Salvar"
             )
-            button.invoke()
+            # Salvar waits for a valid draft and the editor names the problem;
+            # Ctrl+S, the same command, says why it does not save.
+            state = str(button.cget("state"))
+            shown = [str(w.cget("text")) for w in _descendants(frame) if isinstance(w, tk.Label)]
+            _press(entries[1], "<Control-s>")
+            return state, shown
 
         with mock.patch.object(tx.ui_widgets, "alert") as warning, \
                 mock.patch.object(self.app, "save_snippets", return_value=True) as save:
-            self._on_gui(build)
+            state, shown = self._on_gui(build)
 
+        self.assertEqual("disabled", state)
+        self.assertIn("'__prefix__' é reservado para o prefixo do tipo de mapeamento.", shown)
         warning.assert_called_once()
         self.assertIn("__prefix__", warning.call_args.args[2])
         save.assert_not_called()
@@ -834,10 +857,15 @@ class ManagerGuiSmokeTests(unittest.TestCase):
 
         def build(shared_root):
             frame = self._build_mappings_tab(shared_root)
-            entries = [w for w in _descendants(frame) if _is_text_entry(w)]
+            tree = [w for w in _descendants(frame) if isinstance(w, ttk.Treeview)][0]
             text = [w for w in _descendants(frame) if isinstance(w, tk.Text)][0]
-            entries[1].insert(0, "alice")
+            # Open alice: naming a saved identifier from a new draft would ask
+            # before replacing it.
+            tree.selection_set("alice")
+            frame.winfo_toplevel().update()
+            text.delete("1.0", tk.END)
             text.insert("1.0", "new")
+            frame.winfo_toplevel().update()
             button = next(
                 widget for widget in _descendants(frame)
                 if isinstance(widget, BUTTONS) and str(widget.cget("text")) == "Salvar"
@@ -909,7 +937,7 @@ class ManagerGuiSmokeTests(unittest.TestCase):
         self.app.refresh_runtime_indexes()
 
         with mock.patch.object(tx.ui_widgets, "confirm", return_value=tx.ui_widgets.PRIMARY) as ask:
-            self._save_static_from_editor("cpfalice", "updated static")
+            self._save_static_from_editor("cpfalice", "updated static", open_item="cpfalice")
 
         ask.assert_not_called()
         self.assertEqual("updated static", self.app.snippets["cpfalice"])
@@ -962,8 +990,10 @@ class ManagerGuiSmokeTests(unittest.TestCase):
             combo.set(tx.ui_theme.APPEARANCE_LABELS["light"])
             apply, = self._settings_widgets(
                 BUTTONS, lambda w: w.cget("text") == "Aplicar aparência")
-            with mock.patch.object(tx.ui_widgets, "confirm", return_value=tx.ui_widgets.PRIMARY):
+            # Nothing is unsaved, so nothing asks.
+            with mock.patch.object(tx.ui_widgets, "confirm") as confirm:
                 apply.invoke()
+            confirm.assert_not_called()
             first.update()
             rebuilt = self.app.manager_window
             self.assertIsNot(rebuilt, first)
@@ -976,21 +1006,36 @@ class ManagerGuiSmokeTests(unittest.TestCase):
 
         self._on_gui(run)
 
+    def _start_a_static_draft(self, window):
+        """Open xhi in the manager's Textos editor and change it, unsaved."""
+        tab = self.app._manager_notebook.nametowidget(self.app._manager_notebook.tabs()[0])
+        tree = next(w for w in _descendants(tab) if isinstance(w, ttk.Treeview))
+        text = next(w for w in _descendants(tab) if isinstance(w, tk.Text))
+        tree.selection_set("xhi")
+        window.update()
+        text.insert("end", " (rascunho)")
+        window.update()
+        return text
+
     def test_declining_the_reload_changes_nothing(self):
         self.addCleanup(tx.ui_theme.set_preference, None)
 
         def run(shared_root):
             self.app._build_manager_window(shared_root)
             first = self.app.manager_window
+            text = self._start_a_static_draft(first)
             combo, = self._settings_widgets(
                 ttk.Combobox, lambda w: tx.ui_theme.APPEARANCE_LABELS["light"] in w.cget("values"))
             combo.set(tx.ui_theme.APPEARANCE_LABELS["light"])
             apply, = self._settings_widgets(
                 BUTTONS, lambda w: w.cget("text") == "Aplicar aparência")
-            with mock.patch.object(tx.ui_widgets, "confirm", return_value=None):
+            # The draft asks Salvar · Descartar · Cancelar; Cancelar keeps everything.
+            with mock.patch.object(tx.ui_widgets, "confirm", return_value=None) as confirm:
                 apply.invoke()
+            self.assertEqual("Alterações não salvas", confirm.call_args.args[1])
             first.update()
             self.assertIs(self.app.manager_window, first)
+            self.assertEqual("hello (rascunho)", text.get("1.0", "end-1c"))
             self.assertEqual(tx.ui_theme.preference(), "dark")
             self.assertNotIn("appearance", tx.load_settings(self.app.settings_file))
             self.assertEqual(combo.get(), tx.ui_theme.APPEARANCE_LABELS["dark"])
@@ -1181,9 +1226,10 @@ class ManagerGuiSmokeTests(unittest.TestCase):
             combo.set(i18n.LANGUAGES["en-US"])
             apply, = self._settings_widgets(
                 BUTTONS, lambda w: w.cget("text") == "Aplicar idioma")
-            with mock.patch.object(tx.ui_widgets, "confirm", return_value=tx.ui_widgets.PRIMARY), \
+            with mock.patch.object(tx.ui_widgets, "confirm") as confirm, \
                     mock.patch.object(self.app, "refresh_tray_menu") as refresh_tray:
                 apply.invoke()
+            confirm.assert_not_called()
             first.update()
             rebuilt = self.app.manager_window
             self.assertIsNot(rebuilt, first)
@@ -1205,6 +1251,7 @@ class ManagerGuiSmokeTests(unittest.TestCase):
         def run(shared_root):
             self.app._build_manager_window(shared_root)
             first = self.app.manager_window
+            self._start_a_static_draft(first)
             combo, = self._settings_widgets(
                 ttk.Combobox, lambda w: i18n.LANGUAGES["en-US"] in w.cget("values"))
             combo.set(i18n.LANGUAGES["en-US"])
@@ -1894,6 +1941,710 @@ class DestructiveActionTests(unittest.TestCase):
         self.assertEqual(
             [["Duplicar snippet", ["Cancelar", "Duplicar"], True, True]], answered)
         self.assertEqual("hello", self._on_disk()["xcopia"])
+
+
+@unittest.skipUnless(TK_AVAILABLE, TK_SKIP_REASON)
+class WorkPreservationTests(unittest.TestCase):
+    """Drafts survive row changes, refreshes, restores, closes and rebuilds."""
+
+    def setUp(self):
+        home = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        self.addCleanup(_close_log_handlers, home)
+        self.app = _make_app(home)
+        self.app.snippets["xola"] = "Olá, tudo bem?"
+        self.assertTrue(self.app.save_snippets(self.app.snippets))
+        self.app.gui.ensure_started()
+
+    def tearDown(self):
+        _reset_shared_root(self.app)
+
+    def _on_disk(self):
+        with open(self.app.snippets_file, encoding="utf-8") as handle:
+            return json.load(handle)
+
+    @staticmethod
+    def _visible_window(root):
+        # Shown, not withdrawn: Tk drops generated events (keys, virtual
+        # events) aimed at an unmapped window.
+        window = tk.Toplevel(root)
+        tx.ui_theme.prepare_window(window, tx.ui_theme.bind(window))
+        window.geometry("1180x760+40+40")
+        return window
+
+    def _static_tab(self, root):
+        window = self._visible_window(root)
+        frame = tk.Frame(window)
+        frame.pack(fill=tk.BOTH, expand=True)
+        self.app._create_static_snippets_tab(frame, window)
+        window.update()
+        return window, frame
+
+    @staticmethod
+    def _parts(frame):
+        tree = next(w for w in _descendants(frame) if isinstance(w, ttk.Treeview))
+        text = next(w for w in _descendants(frame) if isinstance(w, tk.Text))
+        trigger = [w for w in _descendants(frame) if _is_text_entry(w)][1]
+        return tree, text, trigger
+
+    @staticmethod
+    def _shown(frame):
+        """Labels on screen: an unmapped label (a hidden marker) does not count."""
+        return [str(w.cget("text")) for w in _descendants(frame)
+                if isinstance(w, tk.Label) and w.winfo_manager()
+                and all(a.winfo_manager() for a in _ancestors(w, frame))]
+
+    def test_selecting_another_row_asks_and_cancelar_keeps_the_draft(self):
+        def run(root):
+            window, frame = self._static_tab(root)
+            tree, text, _trigger = self._parts(frame)
+            tree.selection_set("xola")
+            window.update()
+            text.insert("end", " (rascunho)")
+            window.update()
+            seen = {"dirty_header": "• Não salvo" in self._shown(frame)}
+            with mock.patch.object(tx.ui_widgets, "confirm", return_value=None) as ask:
+                tree.selection_set("xhi")
+                window.update()
+            seen["asked"] = ask.call_args.args[1:4] if ask.called else None
+            seen["extra"] = ask.call_args.kwargs.get("extra") if ask.called else None
+            seen["after_cancel"] = (tuple(tree.selection()), text.get("1.0", "end-1c"))
+            with mock.patch.object(tx.ui_widgets, "confirm", return_value=tx.ui_widgets.EXTRA):
+                tree.selection_set("xhi")
+                window.update()
+            seen["after_discard"] = (tuple(tree.selection()), text.get("1.0", "end-1c"))
+            seen["clean_header"] = "• Não salvo" in self._shown(frame)
+            return seen
+
+        seen = self.app.gui.call(run, timeout=60)
+        self.assertTrue(seen["dirty_header"])
+        self.assertEqual(
+            ("Alterações não salvas",
+             "O snippet xola tem alterações não salvas.\n\n"
+             "Salvar grava as alterações e continua; Descartar continua sem elas.",
+             "Salvar"),
+            seen["asked"])
+        self.assertEqual("Descartar", seen["extra"])
+        self.assertEqual((("xola",), "Olá, tudo bem? (rascunho)"), seen["after_cancel"])
+        self.assertEqual((("xhi",), "hello"), seen["after_discard"])
+        self.assertFalse(seen["clean_header"])
+        self.assertEqual("Olá, tudo bem?", self._on_disk()["xola"], "Descartar writes nothing")
+
+    def test_salvar_in_the_prompt_saves_then_opens_the_other_row(self):
+        def run(root):
+            window, frame = self._static_tab(root)
+            tree, text, _trigger = self._parts(frame)
+            tree.selection_set("xola")
+            window.update()
+            text.insert("end", "!")
+            window.update()
+            with mock.patch.object(tx.ui_widgets, "confirm", return_value=tx.ui_widgets.PRIMARY):
+                tree.selection_set("xhi")
+                window.update()
+            return tuple(tree.selection()), text.get("1.0", "end-1c")
+
+        self.assertEqual((("xhi",), "hello"), self.app.gui.call(run, timeout=60))
+        self.assertEqual("Olá, tudo bem?!", self._on_disk()["xola"])
+
+    def test_novo_and_editar_ultimo_ask_before_dropping_a_draft(self):
+        def run(root):
+            window, frame = self._static_tab(root)
+            tree, text, trigger = self._parts(frame)
+            tree.selection_set("xola")
+            window.update()
+            text.insert("end", "!")
+            window.update()
+            with mock.patch.object(tx.ui_widgets, "confirm", return_value=None) as ask:
+                _buttons(frame)["Novo"].invoke()
+                kept_after_new = (trigger.get(), text.get("1.0", "end-1c"))
+                # Editar último goes through the tab selector.
+                handled = self.app._select_manager_target(SnippetRef("static", "xhi"))
+                window.update()
+            return ask.call_count, kept_after_new, handled, trigger.get(), tuple(tree.selection())
+
+        asked, kept, handled, trigger, selection = self.app.gui.call(run, timeout=60)
+        self.assertEqual(2, asked)
+        self.assertEqual(("xola", "Olá, tudo bem?!"), kept)
+        self.assertTrue(handled, "a kept draft is not reported as a missing item")
+        self.assertEqual(("xola", ("xola",)), (trigger, selection))
+
+    def test_a_clean_editor_follows_a_restore(self):
+        backup = self._backup_with(xola="Restaurado do backup")
+
+        def run(root):
+            window, frame = self._static_tab(root)
+            tree, text, _trigger = self._parts(frame)
+            tree.selection_set("xola")
+            window.update()
+            ok, error = self.app.restore_backup(backup)
+            self.assertTrue(ok, error)
+            self.app._refresh_manager_lists()
+            window.update()
+            return text.get("1.0", "end-1c"), [t for t in self._shown(frame) if t.startswith("A biblioteca")]
+
+        value, notices = self.app.gui.call(run, timeout=60)
+        self.assertEqual("Restaurado do backup", value)
+        self.assertEqual([], notices)
+
+    def test_a_dirty_editor_keeps_its_draft_over_a_restore_and_says_so(self):
+        backup = self._backup_with(xola="Restaurado do backup")
+
+        def run(root):
+            window, frame = self._static_tab(root)
+            tree, text, _trigger = self._parts(frame)
+            tree.selection_set("xola")
+            window.update()
+            text.insert("end", " (rascunho)")
+            window.update()
+            ok, error = self.app.restore_backup(backup)
+            self.assertTrue(ok, error)
+            self.app._refresh_manager_lists()
+            window.update()
+            seen = {
+                "draft": text.get("1.0", "end-1c"),
+                "notice": [t for t in self._shown(frame) if t.startswith("A biblioteca")],
+                "actions": [label for label in ("Usar a versão nova", "Manter rascunho")
+                            if label in _buttons(frame)],
+            }
+            _buttons(frame)["Manter rascunho"].invoke()
+            window.update()
+            seen["after_keep"] = (
+                [t for t in self._shown(frame) if t.startswith("A biblioteca")],
+                "• Não salvo" in self._shown(frame),
+            )
+            # The kept draft is saved over the restored value only on purpose.
+            _press(text, "<Control-s>")
+            window.update()
+            seen["saved"] = "• Não salvo" in self._shown(frame)
+            return seen
+
+        seen = self.app.gui.call(run, timeout=60)
+        self.assertEqual("Olá, tudo bem? (rascunho)", seen["draft"])
+        self.assertEqual(["A biblioteca mudou: xola tem uma versão salva mais nova."], seen["notice"])
+        self.assertEqual(["Usar a versão nova", "Manter rascunho"], seen["actions"])
+        self.assertEqual(([], True), seen["after_keep"])
+        self.assertFalse(seen["saved"])
+        self.assertEqual("Olá, tudo bem? (rascunho)", self._on_disk()["xola"])
+
+    def test_usar_a_versao_nova_drops_the_draft_for_the_library(self):
+        backup = self._backup_with(xola="Restaurado do backup")
+
+        def run(root):
+            window, frame = self._static_tab(root)
+            tree, text, _trigger = self._parts(frame)
+            tree.selection_set("xola")
+            window.update()
+            text.insert("end", " (rascunho)")
+            window.update()
+            self.assertTrue(self.app.restore_backup(backup)[0])
+            self.app._refresh_manager_lists()
+            window.update()
+            _buttons(frame)["Usar a versão nova"].invoke()
+            window.update()
+            return text.get("1.0", "end-1c"), "• Não salvo" in self._shown(frame)
+
+        self.assertEqual(("Restaurado do backup", False), self.app.gui.call(run, timeout=60))
+
+    def _backup_with(self, **values):
+        document = dict(self._on_disk())
+        document.update(values)
+        path = os.path.join(self.app.data_dir, "restore-source.json")
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(document, handle)
+        return path
+
+    def test_restaurar_with_a_draft_asks_and_cancelar_restores_nothing(self):
+        def run(root):
+            self.app._build_manager_window(root)
+            window = self.app.manager_window
+            notebook = self.app._manager_notebook
+            static_tab = notebook.nametowidget(notebook.tabs()[0])
+            tree, text, _trigger = self._parts(static_tab)
+            tree.selection_set("xola")
+            window.update()
+            text.insert("end", "!")
+            window.update()
+            before = self._on_disk()
+            backups = notebook.nametowidget(notebook.tabs()[3])
+            backup_tree = next(w for w in _descendants(backups) if isinstance(w, ttk.Treeview))
+            backup_tree.selection_set(backup_tree.get_children()[0])
+            # Restaurar backup? yes. The draft? Cancelar.
+            with mock.patch.object(
+                    tx.ui_widgets, "confirm", side_effect=[tx.ui_widgets.PRIMARY, None]) as ask:
+                _buttons(backups)["Restaurar"].invoke()
+            window.update()
+            return before, [call.args[1] for call in ask.call_args_list], text.get("1.0", "end-1c")
+
+        before, asked, draft = self.app.gui.call(run, timeout=60)
+        self.assertEqual(["Restaurar backup", "Alterações não salvas"], asked)
+        self.assertEqual(before, self._on_disk())
+        self.assertEqual("Olá, tudo bem?!", draft)
+
+    def test_ctrl_s_keeps_the_selection_and_the_scroll(self):
+        for index in range(40):
+            self.app.snippets[f"note{index:02d}"] = f"Synthetic note {index}"
+        self.assertTrue(self.app.save_snippets(self.app.snippets))
+
+        def run(root):
+            self.app._build_manager_window(root)
+            window = self.app.manager_window
+            window.geometry("1280x800")
+            window.update()
+            notebook = self.app._manager_notebook
+            tab = notebook.nametowidget(notebook.tabs()[0])
+            tree, text, _trigger = self._parts(tab)
+            save = _buttons(tab)["Salvar"]
+            tree.see("note30")
+            tree.selection_set("note30")
+            window.update()
+            seen = {"clean": str(save.cget("state"))}
+            yview = tree.yview()
+            text.insert("end", " editada")
+            window.update()
+            seen["dirty"] = str(save.cget("state"))
+            seen["title_dirty"] = window.title()
+            _press(text, "<Control-s>")
+            window.update()
+            seen["after"] = (tuple(tree.selection()), tree.yview() == yview, str(save.cget("state")))
+            seen["title_clean"] = window.title()
+            return seen
+
+        seen = self.app.gui.call(run, timeout=60)
+        self.assertEqual("disabled", seen["clean"], "Salvar waits for a change")
+        self.assertEqual("normal", seen["dirty"])
+        self.assertTrue(seen["title_dirty"].startswith("• "), seen["title_dirty"])
+        self.assertEqual((("note30",), True, "disabled"), seen["after"])
+        self.assertFalse(seen["title_clean"].startswith("• "))
+        self.assertEqual("Synthetic note 30 editada", self._on_disk()["note30"])
+
+    def test_closing_with_a_draft_asks_first(self):
+        def run(root):
+            self.app._build_manager_window(root)
+            window = self.app.manager_window
+            notebook = self.app._manager_notebook
+            tab = notebook.nametowidget(notebook.tabs()[0])
+            tree, text, _trigger = self._parts(tab)
+            tree.selection_set("xola")
+            window.update()
+            text.insert("end", "!")
+            window.update()
+            close = window.protocol("WM_DELETE_WINDOW")
+            with mock.patch.object(tx.ui_widgets, "confirm", return_value=None):
+                window.tk.call(close)
+            kept = window.winfo_exists() and self.app.manager_window is window
+            with mock.patch.object(tx.ui_widgets, "confirm", return_value=tx.ui_widgets.EXTRA):
+                window.tk.call(close)
+            return kept, window.winfo_exists(), self.app._manager_appearance_poll
+
+        kept, exists, poll = self.app.gui.call(run, timeout=60)
+        self.assertTrue(kept, "Cancelar keeps the window open")
+        self.assertFalse(exists, "Descartar closes it")
+        self.assertIsNone(poll, "the System appearance check stops with the window")
+        self.assertEqual("Olá, tudo bem?", self._on_disk()["xola"])
+
+    def test_the_editor_names_its_target_and_offers_only_what_applies(self):
+        self.app.snippets["sig"] = "Atenciosamente"
+        self.assertTrue(self.app.save_snippets(self.app.snippets))
+        self.assertTrue(self.app._persist_manager_action(manager_actions.create_group(
+            self.app.snippets, self.app.library_metadata,
+            group_id="mail", label="Correio", prefix="as")))
+        self.assertTrue(self.app._persist_manager_action(manager_actions.assign_item(
+            self.app.snippets, self.app.library_metadata, "sig", "mail")))
+
+        def states(frame):
+            buttons = _buttons(frame)
+            return {label: str(buttons[label].cget("state"))
+                    for label in ("Salvar", "Duplicar", "Renomear", "Excluir", "Prévia")}
+
+        def run(root):
+            window, frame = self._static_tab(root)
+            tree, text, trigger = self._parts(frame)
+            search = [w for w in _descendants(frame) if _is_text_entry(w)][0]
+            seen = {"empty": (states(frame), self._shown(frame))}
+            tree.selection_set("sig")
+            window.update()
+            seen["open"] = (states(frame), self._shown(frame))
+            search.insert(0, "nada-casa")
+            window.update()
+            seen["hidden"] = (self._shown(frame), _buttons(frame)["Mostrar na lista"].winfo_manager() == "grid")
+            _buttons(frame)["Mostrar na lista"].invoke()
+            window.update()
+            seen["revealed"] = (search.get(), tuple(tree.selection()))
+            _buttons(frame)["Novo"].invoke()
+            window.update()
+            seen["new"] = (states(frame), self._shown(frame), tuple(tree.selection()))
+            trigger.insert(0, "xnovo")
+            window.update()
+            seen["typed"] = (states(frame), self._shown(frame))
+            return seen
+
+        seen = self.app.gui.call(run, timeout=60)
+        disabled = {"Salvar": "disabled", "Duplicar": "disabled", "Renomear": "disabled",
+                    "Excluir": "disabled", "Prévia": "disabled"}
+        empty_states, empty_labels = seen["empty"]
+        self.assertEqual(disabled, empty_states)
+        self.assertIn("Nenhum snippet aberto", empty_labels)
+        self.assertIn("Selecione um snippet na lista ou clique em Novo.", empty_labels)
+        open_states, open_labels = seen["open"]
+        self.assertEqual({**disabled, "Duplicar": "normal", "Renomear": "normal",
+                          "Excluir": "normal", "Prévia": "normal"}, open_states)
+        self.assertIn("Editando sig", open_labels)
+        self.assertIn("Efetivo: assig", open_labels, "Efetivo comes from the editor")
+        hidden_labels, reveal_mapped = seen["hidden"]
+        self.assertIn("Oculto pelo filtro atual.", hidden_labels)
+        self.assertIn("Editando sig", hidden_labels, "the editor keeps its target")
+        self.assertTrue(reveal_mapped)
+        self.assertEqual(("", ("sig",)), seen["revealed"])
+        new_states, new_labels, new_selection = seen["new"]
+        self.assertEqual(disabled, new_states)
+        self.assertIn("Novo snippet", new_labels)
+        self.assertEqual((), new_selection, "no row claims to be the new draft")
+        typed_states, typed_labels = seen["typed"]
+        self.assertEqual("disabled", typed_states["Salvar"], "a draft with no value cannot be saved")
+        self.assertIn("• Não salvo", typed_labels)
+        self.assertIn("Informe um valor para o snippet.", typed_labels)
+        self.assertIn("Efetivo: xnovo", typed_labels)
+
+    def test_renaming_keeps_the_draft_on_the_renamed_snippet(self):
+        def run(root):
+            window, frame = self._static_tab(root)
+            tree, text, trigger = self._parts(frame)
+            tree.selection_set("xola")
+            window.update()
+            text.insert("end", " (rascunho)")
+            window.update()
+            with mock.patch.object(tx.ui_widgets, "ask_text", return_value="xoi"):
+                _buttons(frame)["Renomear"].invoke()
+            window.update()
+            return (trigger.get(), text.get("1.0", "end-1c"), tuple(tree.selection()),
+                    [t for t in self._shown(frame) if t.startswith(("Editando", "A biblioteca", "•"))])
+
+        trigger, draft, selection, labels = self.app.gui.call(run, timeout=60)
+        self.assertEqual("xoi", trigger)
+        self.assertEqual("Olá, tudo bem? (rascunho)", draft)
+        self.assertEqual(("xoi",), selection)
+        self.assertEqual(["Editando xoi", "• Não salvo"], labels)
+        saved = self._on_disk()
+        self.assertEqual("Olá, tudo bem?", saved["xoi"], "the rename writes the saved text")
+        self.assertNotIn("xola", saved)
+
+    def test_a_failed_save_keeps_the_draft_and_the_library(self):
+        def run(root):
+            window, frame = self._static_tab(root)
+            tree, text, _trigger = self._parts(frame)
+            tree.selection_set("xola")
+            window.update()
+            text.insert("end", "!")
+            window.update()
+            with mock.patch.object(self.app, "save_snippets", return_value=False), \
+                    mock.patch.object(tx.ui_widgets, "alert") as alert:
+                _buttons(frame)["Salvar"].invoke()
+            window.update()
+            return (alert.call_args.kwargs.get("tone"), self.app.snippets["xola"],
+                    str(_buttons(frame)["Salvar"].cget("state")), "• Não salvo" in self._shown(frame))
+
+        tone, in_memory, save_state, dirty = self.app.gui.call(run, timeout=60)
+        # Regression: memory kept the unsaved value, so the editor looked saved.
+        self.assertEqual("danger", tone)
+        self.assertEqual("Olá, tudo bem?", in_memory)
+        self.assertEqual("normal", save_state, "Salvar stays available to retry")
+        self.assertTrue(dirty)
+
+    def _save_notes(self, frame):
+        """What the header says Salvar will do with a draft whose name differs."""
+        return [t for t in self._shown(frame) if t.startswith("Salvar ")]
+
+    def test_a_trigger_that_names_another_snippet_asks_before_replacing_it(self):
+        # Regression: typing a saved trigger over the open snippet and pressing
+        # Salvar wrote over that other snippet without a word, while the header
+        # still named the snippet that was open.
+        def run(root):
+            window, frame = self._static_tab(root)
+            tree, text, trigger = self._parts(frame)
+            tree.selection_set("xola")
+            window.update()
+            trigger.delete(0, tk.END)
+            trigger.insert(0, "xhi")
+            window.update()
+            seen = {"note": self._save_notes(frame),
+                    "header": [t for t in self._shown(frame) if t.startswith("Editando")]}
+            with mock.patch.object(tx.ui_widgets, "confirm", return_value=None) as ask:
+                _buttons(frame)["Salvar"].invoke()
+            window.update()
+            seen["asked"] = (ask.call_args.args[1:4], ask.call_args.kwargs.get("danger"))
+            seen["cancelled"] = (self._on_disk()["xhi"], trigger.get(),
+                                 "• Não salvo" in self._shown(frame))
+            with mock.patch.object(tx.ui_widgets, "confirm", return_value=tx.ui_widgets.PRIMARY):
+                _buttons(frame)["Salvar"].invoke()
+            window.update()
+            seen["confirmed"] = (self._on_disk(), "• Não salvo" in self._shown(frame),
+                                 [t for t in self._shown(frame) if t.startswith("Editando")])
+            return seen
+
+        seen = self.app.gui.call(run, timeout=60)
+        self.assertEqual(["Salvar substitui xhi."], seen["note"])
+        self.assertEqual(["Editando xola"], seen["header"])
+        self.assertEqual(
+            (("Substituir snippet",
+              "O snippet xhi já existe. Salvar troca o texto dele pelo que está no editor.",
+              "Substituir"), True),
+            seen["asked"])
+        self.assertEqual(("hello", "xhi", True), seen["cancelled"], "Cancelar keeps the draft")
+        confirmed, dirty, header = seen["confirmed"]
+        self.assertEqual("Olá, tudo bem?", confirmed["xhi"])
+        self.assertEqual("Olá, tudo bem?", confirmed["xola"], "the snippet that was open stays saved")
+        self.assertFalse(dirty)
+        self.assertEqual(["Editando xhi"], header)
+
+    def test_a_new_trigger_says_it_creates_and_keeps_the_open_snippet(self):
+        def run(root):
+            window, frame = self._static_tab(root)
+            tree, text, trigger = self._parts(frame)
+            tree.selection_set("xola")
+            window.update()
+            trigger.delete(0, tk.END)
+            trigger.insert(0, "xnova")
+            window.update()
+            note = self._save_notes(frame)
+            with mock.patch.object(tx.ui_widgets, "confirm", return_value=tx.ui_widgets.PRIMARY) as ask:
+                _buttons(frame)["Salvar"].invoke()
+            window.update()
+            return note, [call.args[1] for call in ask.call_args_list]
+
+        note, asked = self.app.gui.call(run, timeout=60)
+        self.assertEqual(["Salvar cria xnova; xola continua salvo."], note)
+        self.assertNotIn("Substituir snippet", asked, "a free name replaces nothing")
+        saved = self._on_disk()
+        self.assertEqual(("Olá, tudo bem?", "Olá, tudo bem?"), (saved["xola"], saved["xnova"]))
+
+    def test_a_new_draft_over_a_saved_trigger_asks_too(self):
+        def run(root):
+            window, frame = self._static_tab(root)
+            _tree, text, trigger = self._parts(frame)
+            _buttons(frame)["Novo"].invoke()
+            window.update()
+            trigger.insert(0, "xhi")
+            text.insert("end", "outro texto")
+            window.update()
+            note = self._save_notes(frame)
+            with mock.patch.object(tx.ui_widgets, "confirm", return_value=None) as ask:
+                _buttons(frame)["Salvar"].invoke()
+            return note, ask.call_count, self._on_disk()["xhi"]
+
+        note, asked, on_disk = self.app.gui.call(run, timeout=60)
+        self.assertEqual(["Salvar substitui xhi."], note)
+        self.assertEqual(1, asked)
+        self.assertEqual("hello", on_disk)
+
+    def test_a_deleted_open_snippet_is_gone_not_hidden_by_the_filter(self):
+        # Regression: the library dropping the open snippet under a draft
+        # showed "Oculto pelo filtro atual." and a dead Mostrar na lista above
+        # the "does not exist any more" bar.
+        def run(root):
+            window, frame = self._static_tab(root)
+            tree, text, _trigger = self._parts(frame)
+            tree.selection_set("xola")
+            window.update()
+            text.insert("end", " (rascunho)")
+            window.update()
+            del self.app.snippets["xola"]
+            self.assertTrue(self.app.save_snippets(self.app.snippets))
+            self.app._refresh_manager_lists()
+            window.update()
+            return self._shown(frame), _buttons(frame)["Mostrar na lista"].winfo_manager()
+
+        shown, reveal = self.app.gui.call(run, timeout=60)
+        self.assertIn("A biblioteca mudou: xola não existe mais.", shown)
+        self.assertNotIn("Oculto pelo filtro atual.", shown)
+        self.assertEqual("", reveal, "there is nothing in the list to show")
+
+    def test_a_mapping_identifier_that_names_another_item_asks_before_replacing_it(self):
+        self.app.snippets["_cpf_numbers"] = {"__prefix__": "cpf", "alice": "1", "bruno": "2"}
+        self.assertTrue(self.app.save_snippets(self.app.snippets))
+
+        def run(root):
+            window = self._visible_window(root)
+            frame = tk.Frame(window)
+            frame.pack(fill=tk.BOTH, expand=True)
+            self.app._create_dynamic_mappings_tab(frame, window)
+            window.update()
+            tree, _text, name = self._parts(frame)
+            types = next(w for w in _descendants(frame) if isinstance(w, tk.Listbox))
+            types.selection_set(list(types.get(0, tk.END)).index("CPF"))
+            types.event_generate("<<ListboxSelect>>")
+            window.update()
+            tree.selection_set("alice")
+            window.update()
+            name.delete(0, tk.END)
+            name.insert(0, "bruno")
+            window.update()
+            seen = {"note": self._save_notes(frame)}
+            with mock.patch.object(tx.ui_widgets, "confirm", return_value=None) as ask:
+                _buttons(frame)["Salvar"].invoke()
+            window.update()
+            seen["asked"] = (ask.call_args.args[1:4], ask.call_args.kwargs.get("danger"))
+            seen["cancelled"] = (self._on_disk()["_cpf_numbers"]["bruno"], name.get(),
+                                 "• Não salvo" in self._shown(frame))
+            name.delete(0, tk.END)
+            name.insert(0, "carla")
+            window.update()
+            seen["free_note"] = self._save_notes(frame)
+            with mock.patch.object(tx.ui_widgets, "confirm") as free_ask:
+                _buttons(frame)["Salvar"].invoke()
+            window.update()
+            seen["free_asked"] = free_ask.called
+            name.delete(0, tk.END)
+            name.insert(0, "bruno")
+            window.update()
+            with mock.patch.object(tx.ui_widgets, "confirm", return_value=tx.ui_widgets.PRIMARY):
+                _buttons(frame)["Salvar"].invoke()
+            window.update()
+            seen["confirmed"] = self._on_disk()["_cpf_numbers"]
+            return seen
+
+        seen = self.app.gui.call(run, timeout=60)
+        self.assertEqual(["Salvar substitui bruno."], seen["note"])
+        self.assertEqual(
+            (("Substituir item",
+              "O item bruno de CPF já existe. Salvar troca o texto dele pelo que está no editor.",
+              "Substituir"), True),
+            seen["asked"])
+        self.assertEqual(("2", "bruno", True), seen["cancelled"], "Cancelar keeps the draft")
+        self.assertEqual(["Salvar cria carla; alice continua salvo."], seen["free_note"])
+        self.assertFalse(seen["free_asked"], "a free identifier replaces nothing")
+        self.assertEqual({"__prefix__": "cpf", "alice": "1", "bruno": "1", "carla": "1"},
+                         seen["confirmed"])
+
+    def test_a_deleted_open_mapping_item_is_gone_not_hidden_by_the_filter(self):
+        self.app.snippets["_cpf_numbers"] = {"__prefix__": "cpf", "alice": "1", "bruno": "2"}
+        self.assertTrue(self.app.save_snippets(self.app.snippets))
+
+        def run(root):
+            window = self._visible_window(root)
+            frame = tk.Frame(window)
+            frame.pack(fill=tk.BOTH, expand=True)
+            self.app._create_dynamic_mappings_tab(frame, window)
+            window.update()
+            tree, text, _name = self._parts(frame)
+            types = next(w for w in _descendants(frame) if isinstance(w, tk.Listbox))
+            types.selection_set(list(types.get(0, tk.END)).index("CPF"))
+            types.event_generate("<<ListboxSelect>>")
+            window.update()
+            tree.selection_set("alice")
+            window.update()
+            text.insert("end", "23")
+            window.update()
+            del self.app.snippets["_cpf_numbers"]["alice"]
+            self.assertTrue(self.app.save_snippets(self.app.snippets))
+            self.app._refresh_manager_lists()
+            window.update()
+            return self._shown(frame), _buttons(frame)["Mostrar na lista"].winfo_manager()
+
+        shown, reveal = self.app.gui.call(run, timeout=60)
+        self.assertIn("A biblioteca mudou: alice não existe mais.", shown)
+        self.assertNotIn("Oculto pelo filtro atual.", shown)
+        self.assertEqual("", reveal, "there is nothing in the list to show")
+
+    def test_a_mapping_draft_guards_rows_and_type_changes(self):
+        self.app.snippets["_cpf_numbers"] = {"__prefix__": "cpf", "alice": "1", "bruno": "2"}
+        self.assertTrue(self.app.save_snippets(self.app.snippets))
+
+        def run(root):
+            window = self._visible_window(root)
+            frame = tk.Frame(window)
+            frame.pack(fill=tk.BOTH, expand=True)
+            self.app._create_dynamic_mappings_tab(frame, window)
+            window.update()
+            tree, text, _name = self._parts(frame)
+            types = next(w for w in _descendants(frame) if isinstance(w, tk.Listbox))
+            labels = list(types.get(0, tk.END))
+            types.selection_set(labels.index("CPF"))
+            types.event_generate("<<ListboxSelect>>")
+            window.update()
+            tree.selection_set("alice")
+            window.update()
+            text.insert("end", "23")
+            window.update()
+            seen = {"header": [t for t in self._shown(frame) if t.startswith("Editando")]}
+            with mock.patch.object(tx.ui_widgets, "confirm", return_value=None) as ask:
+                tree.selection_set("bruno")
+                window.update()
+                seen["row"] = (tuple(tree.selection()), text.get("1.0", "end-1c"))
+                types.selection_clear(0, tk.END)
+                types.selection_set(labels.index("CNPJ"))
+                types.event_generate("<<ListboxSelect>>")
+                window.update()
+                seen["type"] = (types.get(types.curselection()[0]), text.get("1.0", "end-1c"))
+            seen["asked"] = [call.args[2] for call in ask.call_args_list]
+            return seen
+
+        seen = self.app.gui.call(run, timeout=60)
+        self.assertEqual(["Editando alice em CPF"], seen["header"])
+        self.assertEqual((("alice",), "123"), seen["row"])
+        self.assertEqual(("CPF", "123"), seen["type"])
+        self.assertEqual(2, len(seen["asked"]))
+        self.assertTrue(seen["asked"][0].startswith("O item alice de CPF tem alterações não salvas."))
+
+    @unittest.skipUnless(tx.IS_WINDOWS, "System follows the Windows app theme")
+    def test_system_appearance_follows_windows_unless_a_draft_holds_it(self):
+        self.addCleanup(tx.ui_theme.set_preference, None)
+        tx.ui_theme.set_preference("system")
+        apps_use_light = {"value": False}
+        patcher = mock.patch.object(
+            tx.ui_theme, "_windows_apps_use_light_theme", side_effect=lambda: apps_use_light["value"])
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+        def run(root):
+            self.app._build_manager_window(root)
+            first = self.app.manager_window
+            first.update()
+            seen = {"first": first.theme_kind}
+            self.app._check_system_appearance(first)
+            seen["unchanged"] = self.app.manager_window is first
+            # Windows switches apps to light while Textos holds a draft.
+            apps_use_light["value"] = True
+            notebook = self.app._manager_notebook
+            tab = notebook.nametowidget(notebook.tabs()[0])
+            tree, text, _trigger = self._parts(tab)
+            tree.selection_set("xola")
+            first.update()
+            text.insert("end", "!")
+            first.update()
+            self.app._check_system_appearance(first)
+            first.update()
+            seen["held"] = (self.app.manager_window is first,
+                            [t for t in self._shown(tab) if t.startswith("O tema do Windows")])
+            _press(text, "<Control-s>")
+            first.update()
+            notebook.select(notebook.tabs()[1])
+            self.app._check_system_appearance(first)
+            rebuilt = self.app.manager_window
+            rebuilt.update()
+            rebuilt_notebook = self.app._manager_notebook
+            seen["rebuilt"] = (
+                rebuilt is not first, first.winfo_exists(), rebuilt.theme_kind,
+                ttk.Style(rebuilt).theme_use(),
+                rebuilt_notebook.index(rebuilt_notebook.select()),
+            )
+            return seen
+
+        seen = self.app.gui.call(run, timeout=60)
+        self.assertEqual("dark", seen["first"])
+        self.assertTrue(seen["unchanged"])
+        self.assertEqual(
+            (True, ["O tema do Windows mudou. O gerenciador troca de tema quando este rascunho "
+                    "for salvo ou descartado."]),
+            seen["held"])
+        self.assertEqual((True, False, "windows", "sniptype-fluent-light", 1), seen["rebuilt"])
+        self.assertEqual("Olá, tudo bem?!", self._on_disk()["xola"])
+
+
+def _ancestors(widget, stop):
+    while widget is not stop and widget is not None:
+        widget = widget.master
+        if widget is not None and widget is not stop:
+            yield widget
 
 
 # GuiThread's own marshaling contract (call/submit/stop, exceptions, reentrancy,

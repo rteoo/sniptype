@@ -742,6 +742,19 @@ class AppearancePreferenceTests(unittest.TestCase):
             self.assertEqual(theme.is_dark, dark)
             self.assertEqual(theme.preference, "system")
 
+    def test_only_system_on_windows_follows_a_live_change(self):
+        for apps_use_light, kind in ((False, "dark"), (True, "windows"), (None, "windows")):
+            with self.subTest(apps_use_light=apps_use_light), mock.patch.object(
+                    ui_theme, "_windows_apps_use_light_theme", return_value=apps_use_light):
+                ui_theme.set_preference("system")
+                self.assertEqual(kind, ui_theme.live_system_kind("windows"))
+                # Aqua redraws its own controls; Linux has no OS switch to read.
+                self.assertIsNone(ui_theme.live_system_kind("darwin"))
+                self.assertIsNone(ui_theme.live_system_kind("linux"))
+                for fixed in ("light", "dark"):
+                    ui_theme.set_preference(fixed)
+                    self.assertIsNone(ui_theme.live_system_kind("windows"), fixed)
+
     def test_bind_scales_the_type_roles_to_the_widget(self):
         with mock.patch.object(ui_theme, "_probe_default_size", return_value=None), \
                 mock.patch.object(ui_theme, "display_scale", return_value=2.0):

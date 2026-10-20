@@ -802,6 +802,20 @@ def _probe_kind(widget, system):
         return "light"
 
 
+def live_system_kind(system=None):
+    """The palette kind System resolves to now, when open windows follow the OS.
+
+    Only the System preference on Windows follows a live change: a fixed
+    choice never changes, and Aqua redraws its own controls in the OS
+    appearance. Read from the registry, so it needs no window. None when
+    open windows keep the palette they were built with.
+    """
+    system = system or current_os()
+    if _preference != "system" or system != "windows":
+        return None
+    return _probe_kind(None, system)
+
+
 def display_scale(widget):
     """Display pixels per DS pixel for ``widget``'s interpreter: 1.0 at 96 DPI.
 

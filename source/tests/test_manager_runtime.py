@@ -126,9 +126,25 @@ class ManagerRuntimeTests(unittest.TestCase):
         app.refresh_runtime_indexes.assert_called_once_with()
         app._refresh_manager_lists.assert_called_once_with()
 
-    def test_tray_reload_queues_open_manager_refresh_on_gui_thread(self):
+    def test_tray_reload_with_the_manager_open_runs_on_the_gui_thread(self):
+        # The open manager may hold drafts, which it settles on the GUI
+        # thread before the library is read again.
         app = self._app()
         app.manager_window = object()
+        app.gui = mock.Mock()
+        app.load_snippets = mock.Mock(return_value={"updated": "value"})
+        app.notify_status = mock.Mock()
+        before = app.snippets
+
+        tx.Sniptype.reload_snippets(app, None, None)
+
+        app.gui.submit.assert_called_once_with(app._reload_snippets_in_manager)
+        app.load_snippets.assert_not_called()
+        self.assertIs(before, app.snippets)
+
+    def test_tray_reload_with_the_manager_closed_reads_the_library_at_once(self):
+        app = self._app()
+        app.manager_window = None
         app.gui = mock.Mock()
         app.load_snippets = mock.Mock(return_value={"updated": "value"})
         app.notify_status = mock.Mock()
@@ -137,13 +153,55 @@ class ManagerRuntimeTests(unittest.TestCase):
 
         self.assertEqual({"updated": "value"}, app.snippets)
         app.refresh_runtime_indexes.assert_called_once_with()
+        app.gui.submit.assert_not_called()
+        app._refresh_manager_lists.assert_not_called()
+        app.notify_status.assert_called_once_with("Biblioteca atualizada.", key="reload-snippets")
+
+    def test_tray_reload_refreshes_a_manager_that_opened_while_it_read(self):
+        # Regression: the manager built from the snapshot taken before the
+        # reload and nothing refreshed it afterwards.
+        app = self._app()
+        app.manager_window = None
+        app.gui = mock.Mock()
+
+        def read_library():
+            app.manager_window = object()
+            return {"updated": "value"}
+
+        app.load_snippets = mock.Mock(side_effect=read_library)
+        app.notify_status = mock.Mock()
+
+        tx.Sniptype.reload_snippets(app, None, None)
+
+        self.assertEqual({"updated": "value"}, app.snippets)
         app.gui.submit.assert_called_once_with(app._refresh_manager_lists)
+        app.notify_status.assert_called_once_with("Biblioteca atualizada.", key="reload-snippets")
+
+    def test_a_failed_tray_reload_leaves_the_manager_alone(self):
+        app = self._app()
+        app.manager_window = None
+        app.gui = mock.Mock()
+
+        def fail_after_the_manager_opened():
+            app.manager_window = object()
+            raise OSError("unreadable")
+
+        app.load_snippets = mock.Mock(side_effect=fail_after_the_manager_opened)
+        app.notify_status = mock.Mock()
+        app.notify_error = mock.Mock()
+
+        tx.Sniptype.reload_snippets(app, None, None)
+
+        app.notify_error.assert_called_once()
+        app.notify_status.assert_not_called()
+        app.gui.submit.assert_not_called()
 
     def test_release_manager_ui_refs_drops_widget_callbacks_and_controllers(self):
         app = self._app()
         app._manager_notebook = object()
         app.manager_window = object()
         app._manager_refreshers = [object()]
+        app._manager_editors = [object()]
         app._manager_tab_selectors = {"static": object()}
         app._manager_preview_controller = object()
 
@@ -152,6 +210,7 @@ class ManagerRuntimeTests(unittest.TestCase):
         self.assertIsNone(app._manager_notebook)
         self.assertIsNone(app.manager_window)
         self.assertEqual([], app._manager_refreshers)
+        self.assertEqual([], app._manager_editors)
         self.assertEqual({}, app._manager_tab_selectors)
         self.assertIsNone(app._manager_preview_controller)
 
@@ -311,8 +370,27 @@ class BundledRegistryManagerTests(unittest.TestCase):
         refresher.assert_called_once_with()
         app.notify_error.assert_not_called()
         app.notify_status.assert_called_once_with(
-            "Snippets recarregados com sucesso.", key="reload-snippets",
+            "Biblioteca atualizada.", key="reload-snippets",
         )
+
+    def test_tray_reload_keeps_the_library_when_a_draft_is_kept(self):
+        app = self.app
+        app.gui = InlineGui()
+        app.manager_window = object()
+        refresher = mock.Mock()
+        app._manager_refreshers = [refresher]
+        draft = mock.Mock()
+        draft.resolve.return_value = False
+        app._manager_editors = [draft]
+        app.load_snippets = mock.Mock()
+        app.notify_status = mock.Mock()
+
+        app.reload_snippets(None, None)
+
+        draft.resolve.assert_called_once_with(app.manager_window)
+        app.load_snippets.assert_not_called()
+        refresher.assert_not_called()
+        app.notify_status.assert_not_called()
 
 
 if __name__ == "__main__":
