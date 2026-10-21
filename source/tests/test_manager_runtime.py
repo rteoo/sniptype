@@ -405,6 +405,36 @@ class ReceiptRoutingTests(unittest.TestCase):
 
         self.assertEqual(2, len(self.line.shown))
 
+    def test_fast_manager_pause_and_resume_show_the_latest_receipt_without_toasts(self):
+        self.app.enabled = True
+        self.app.capture_error = None
+        self.app.typed_text = "partial trigger"
+        self.app.refresh_tray_state = mock.Mock()
+        self.app._refresh_manager_status = mock.Mock()
+
+        with mock.patch.object(tx.time, "time", return_value=100):
+            self.app.toggle_enabled(self.app.icon, None, in_manager=True)
+            self.app.toggle_enabled(self.app.icon, None, in_manager=True)
+
+        self.assertTrue(self.app.enabled)
+        self.assertEqual("", self.app.typed_text)
+        self.assertEqual(2, len(self.line.shown))
+        self.assertRegex(self.line.shown[0], r"^Expansão pausada às \d\d:\d\d$")
+        self.assertRegex(self.line.shown[1], r"^Expansão retomada às \d\d:\d\d$")
+        self.assertEqual([], self.app.icon.toasts)
+
+    def test_replacing_the_library_resets_every_page_receipt(self):
+        self.app._request_health_refresh = mock.Mock()
+        self.line.reset = mock.Mock()
+        another_line = mock.Mock()
+        self.app._manager_receipts[".manager.another-page"] = another_line
+
+        self.app._library_replaced()
+
+        self.app._request_health_refresh.assert_called_once_with()
+        self.line.reset.assert_called_once_with()
+        another_line.reset.assert_called_once_with()
+
     def test_a_status_that_can_still_toast_keeps_its_cooldown(self):
         self.app.manager_window.focused = False
 
@@ -651,7 +681,7 @@ class HealthFactsTests(unittest.TestCase):
                        health_support.RETRY_SYNC, health_support.OPEN_DYNAMIC):
             with self.subTest(action):
                 app._run_health_action(action)
-        app.toggle_enabled.assert_called_once_with(app.icon, None)
+        app.toggle_enabled.assert_called_once_with(app.icon, None, in_manager=True)
         app.open_data_folder.assert_called_once_with()
         app.open_log.assert_called_once_with()
         app.retry_sync.assert_called_once_with()

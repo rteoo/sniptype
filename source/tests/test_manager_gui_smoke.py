@@ -2846,9 +2846,9 @@ class StatusAndAttentionTests(unittest.TestCase):
 
         self.assertTrue(self._on_gui(run), "a refresh must not cost a button its focus")
 
-    def test_more_issues_than_rows_say_how_many_wait(self):
+    def test_multiple_issues_keep_one_band_and_the_editor_inside_the_minimum_window(self):
         def run(root):
-            self._manager(root)
+            window = self._manager(root)
             record = {"ok": False, "at": "2026-10-20T10:00:00", "error": "x", "path": "p"}
             self.app.enabled = False
             self.app.last_save_error = {"at": record["at"], "error": "x"}
@@ -2856,15 +2856,44 @@ class StatusAndAttentionTests(unittest.TestCase):
             self.app.last_mirror = record
             self.app.last_sync = record
             self.app._refresh_manager_health()
-            return self._bar(self.app)[0]
+            window.update()
+            frame = self._static_tab_of(window)
+            editor = self.app._manager_receipts[str(frame)].frame.master
+            texts, _buttons_shown, bands = self._bar(self.app)
+            return {
+                "texts": texts,
+                "bands": len(bands),
+                "editor_bottom": editor.winfo_rooty() + editor.winfo_height(),
+                "window_bottom": window.winfo_rooty() + window.winfo_height(),
+            }
 
-        texts = self._on_gui(run)
-        # Two rows, the most severe first, so a window at its minimum height
-        # keeps its editor; the rest are counted, not hidden silently.
+        seen = self._on_gui(run)
+        texts = seen["texts"]
+        # One full issue and a compact summary preserve the editor's height.
         self.assertIn("Não foi possível salvar a biblioteca", texts)
-        self.assertIn("Expansão pausada", texts)
-        self.assertNotIn("Triggers em conflito com ações dinâmicas", texts)
-        self.assertIn("Mais itens aguardando atenção: 3", texts)
+        self.assertEqual(1, seen["bands"])
+        summary = next(text for text in texts if text.startswith("Também aguardando atenção:"))
+        for title in ("Expansão pausada", "Triggers em conflito com ações dinâmicas",
+                      "Cópia espelho não gravada", "Pacote de sincronização não exportado"):
+            self.assertIn(title, summary)
+        self.assertLessEqual(seen["editor_bottom"], seen["window_bottom"])
+
+    def test_library_recovery_clears_receipts_for_items_that_are_no_longer_loaded(self):
+        def run(root):
+            window = self._manager(root)
+            for receipt in self.app._manager_receipts.values():
+                receipt.show("Salvo às 10:00 · xhi", "Desfazer", lambda: None)
+            self._corrupt_library(with_backup=False)
+            window.update()
+            return [(str(receipt.label.cget("text")), receipt._hint,
+                     receipt.action.winfo_manager())
+                    for receipt in self.app._manager_receipts.values()]
+
+        receipts = self._on_gui(run)
+        self.assertTrue(receipts)
+        for text, resting_text, action_manager in receipts:
+            self.assertEqual(resting_text, text)
+            self.assertFalse(action_manager, "an undo for the replaced library must disappear")
 
     def test_a_library_refresh_redraws_the_infobar_with_the_new_state(self):
         # A dynamic toggle, a reload, a restore and an import all end in
