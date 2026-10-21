@@ -22,6 +22,7 @@ import gc
 import os
 import sys
 import shutil
+import traceback
 import types
 import ctypes
 import webbrowser
@@ -80,7 +81,9 @@ from runtime_support import (
     load_notification_history,
     save_notification_history,
     truncate_notification_text,
+    LOG_FILE_NAME,
     NOTIFICATION_HISTORY_LIMIT,
+    notification_stamp,
 )
 from backup_support import (
     backup_time,
@@ -103,9 +106,11 @@ from settings_support import load_settings, normalize_runtime_settings, save_set
 from hotkey_support import ACTIONS, HotkeyRouter, normalize_hotkeys
 from workflow_support import SnippetRef, WorkflowState
 from validation_support import validate_trigger
+import health_support
 import i18n
 import macos_permissions
 import time_format
+import tray_support
 import ui_theme
 import ui_widgets
 import win_input
@@ -140,7 +145,12 @@ from dynamic_registry import (
     validate_rename,
 )
 from group_policy import validate_effective_triggers
-from sync_export import STATE_FILENAME as SYNC_STATE_FILENAME, export_bundle
+from sync_export import (
+    EXPORT_FAILED,
+    EXPORT_UNAVAILABLE,
+    STATE_FILENAME as SYNC_STATE_FILENAME,
+    export_bundle_outcome,
+)
 from whatsapp_support import normalize_phone_number
 from whatsapp_runtime_support import ACTION_COMPLETED, execute_whatsapp_action
 from rich_text_support import (
@@ -357,6 +367,30 @@ def show_already_running_message():
 
 
 class Sniptype:
+    # Facts the health projection reads (health_support.build_health), recorded
+    # where they happen; None means nothing to report. Declared on the class so
+    # that anything that runs before ``__init__`` ends, or a headless fixture
+    # that skips it, reads "nothing to report".
+    # How a corrupt snippets.json came back, until the person replaces the
+    # library (restore or import):
+    library_recovery = None
+    # The last failed save, until a save goes through:
+    last_save_error = None
+    # The last mirror copy and sync export of this session, each
+    # {"ok", "at", "error", "path"}:
+    last_mirror = None
+    last_sync = None
+    # The open manager's status widgets; None while it is closed.
+    _manager_status_label = None
+    _manager_status_icon = None
+    # The InfoBar above the pages (ui_widgets.InfoBar):
+    _manager_health = None
+    # Redraws the Dados card's copy and export lines:
+    _manager_data_refresh = None
+    # True while the manager is mapped: routine receipts then go to its
+    # status line instead of the tray (see notify). Read from any thread.
+    _manager_visible = False
+
     def __init__(self, snippets_file: str = 'snippets.json'):
         self.keyboard_controller = Controller()
         self.typed_text = ""
@@ -391,6 +425,12 @@ class Sniptype:
         self._manager_notebook = None
         self._manager_status_var = None
         self._manager_toggle_button = None
+        # Page path -> the ReceiptLine at the bottom of that page.
+        self._manager_receipts = {}
+        # Page name -> notebook page, for the InfoBar's actions.
+        self._manager_pages = {}
+        # Info issues dismissed this session (health ids).
+        self._dismissed_health = set()
         self._manager_search_entries = {}
         self._manager_settings_tab = None
         self._manager_settings_sections = None
@@ -651,11 +691,18 @@ class Sniptype:
         aside for forensics, the newest backup is restored when one exists, and
         only a truly unrecoverable state falls back to sample defaults.
         """
+        quarantined = None
         try:
             quarantined = quarantine_corrupt_file(self.snippets_file)
             self.logger.error(f"⚠ snippets.json corrompido ({reason}); movido para {quarantined}")
         except OSError as e:
             self.logger.error(f"⚠ Não foi possível isolar snippets.json corrompido: {e}")
+        recovery = {
+            "kind": health_support.SAMPLE_DEFAULTS,
+            "at": self._now_iso(),
+            "backup_at": None,
+            "quarantined": os.path.basename(quarantined) if quarantined else None,
+        }
 
         # Try each backup newest-first; a single unreadable backup must not skip
         # the older valid ones (a corrupt file can be copied into a fresh backup
@@ -670,6 +717,12 @@ class Sniptype:
                 shutil.copyfile(backup, self.snippets_file)
                 backup_name = os.path.basename(backup)
                 self.logger.info(f"✓ snippets.json restaurado do backup {backup_name}")
+                self.library_recovery = {
+                    **recovery,
+                    "kind": health_support.RECOVERED_FROM_BACKUP,
+                    "backup_at": backup_time(backup).isoformat(timespec="seconds"),
+                }
+                self._library_replaced()
                 self.notify_error(
                     _("snippets.json estava corrompido; restaurado do backup {backup_name}.").format(backup_name=backup_name),
                     key="snippets-restored",
@@ -677,6 +730,8 @@ class Sniptype:
                 return data
 
         self.logger.warning("⚠ Sem backup válido; usando snippets de exemplo.")
+        self.library_recovery = recovery
+        self._library_replaced()
         self.notify_error(
             _("snippets.json estava corrompido e não havia backup; usando snippets de exemplo."),
             key="snippets-restored",
@@ -734,6 +789,7 @@ class Sniptype:
                 create_backup(self.snippets_file, self.backups_dir)
         except Exception as e:
             self.logger.error(f"Falha ao criar backup antes de salvar: {e}")
+            self._record_save_failure(e)
             return False
         try:
             prune_backups(self.backups_dir)
@@ -748,7 +804,11 @@ class Sniptype:
             self.logger.info("✓ snippets.json salvo com sucesso.")
         except Exception as e:
             self.logger.error(f"Erro ao salvar snippets: {e}")
+            self._record_save_failure(e)
             return False
+        if self.last_save_error is not None:
+            self.last_save_error = None
+            self._request_health_refresh()
 
         # Mirroring is best-effort redundancy: it must never turn a persisted
         # save into a reported failure, so it runs after the write succeeded.
@@ -764,6 +824,7 @@ class Sniptype:
         """
         mirror_dir = self.settings.get("mirror_dir")
         if not mirror_dir:
+            self._record_mirror(None)
             return
         try:
             os.makedirs(mirror_dir, exist_ok=True)
@@ -772,6 +833,9 @@ class Sniptype:
             # Broad guard: a bad mirror_dir value (e.g. hand-edited to a non-path)
             # must not disturb the already-successful save.
             self.logger.warning(f"Falha ao espelhar snippets para {mirror_dir}: {e}")
+            self._record_mirror({"ok": False, "error": str(e), "path": str(mirror_dir)})
+            return
+        self._record_mirror({"ok": True, "error": None, "path": str(mirror_dir)})
 
     def export_sync_bundle(self):
         """Write the compiled mobile bundle when ``sync_export_dir`` is configured.
@@ -783,20 +847,25 @@ class Sniptype:
         ``self.dynamic_registry`` is likewise reassigned only *after* the registry
         writers persist, so reading it here would compile the pre-toggle state.
 
-        Best-effort: any failure logs and returns, never turning a persisted save
-        into a reported failure.
+        Best-effort: any failure logs, is recorded in ``last_sync`` for the
+        health projection and returns, never turning a persisted save into a
+        reported failure.
         """
         export_dir = self.settings.get("sync_export_dir")
         if not export_dir:
+            self._record_sync(None)
             return
+        failure = {"ok": False, "path": str(export_dir)}
 
         try:
             document = validate_static_snippets(load_json_file(self.snippets_file))
         except Exception as e:
             self.logger.warning(f"Bundle de sincronização ignorado: falha ao ler snippets.json ({e}).")
+            self._record_sync({**failure, "error": str(e)})
             return
         if document is None:
             self.logger.warning("Bundle de sincronização ignorado: snippets.json com formato inválido.")
+            self._record_sync({**failure, "error": _("snippets.json com formato inválido")})
             return
         static_snippets, _metadata = split_library_document(document)
 
@@ -806,7 +875,7 @@ class Sniptype:
                 self.dynamic_registry_file,
                 logger=self.logger,
             )
-            export_bundle(
+            outcome = export_bundle_outcome(
                 static_snippets,
                 registry,
                 export_dir,
@@ -819,6 +888,41 @@ class Sniptype:
             # Broad guard for the same reason as mirror_snippets_file: a bad
             # hand-edited value must not disturb an already-successful save.
             self.logger.warning(f"Falha ao gerar o bundle de sincronização: {e}")
+            self._record_sync({**failure, "error": str(e)})
+            return
+        if outcome.status == EXPORT_UNAVAILABLE:
+            self._record_sync({
+                **failure,
+                "error": _("a pasta não existe, não é absoluta ou não está acessível"),
+            })
+        elif outcome.status == EXPORT_FAILED:
+            self._record_sync({**failure, "error": outcome.error})
+        else:
+            self._record_sync({"ok": True, "error": None, "path": str(export_dir)})
+
+    @staticmethod
+    def _now_iso():
+        return datetime.now().isoformat(timespec="seconds")
+
+    def _record_save_failure(self, error):
+        """Remember that the library did not reach disk; health shows it until a save does."""
+        self.last_save_error = {"at": self._now_iso(), "error": str(error)}
+        self._request_health_refresh()
+
+    def _record_mirror(self, result):
+        """Store the outcome of a mirror copy (None: no mirror is configured)."""
+        self.last_mirror = None if result is None else {"at": self._now_iso(), **result}
+        self._request_health_refresh()
+
+    def _record_sync(self, result):
+        """Store the outcome of a sync export (None: no export is configured)."""
+        self.last_sync = None if result is None else {"at": self._now_iso(), **result}
+        self._request_health_refresh()
+
+    def retry_sync(self):
+        """Mirror the library and export the bundle again, as a save does."""
+        self.mirror_snippets_file()
+        self.export_sync_bundle()
 
     # =====================================================================
     # BACKUP / RESTORE / EXPORT / IMPORT
@@ -912,6 +1016,9 @@ class Sniptype:
         self.mirror_snippets_file()
         self.export_sync_bundle()
         self.reload_snippets_from_disk()
+        # The person chose the library now in place; a recovery no longer applies.
+        self.library_recovery = None
+        self._library_replaced()
         return True, None
 
     def export_library(self, dest_path):
@@ -999,6 +1106,9 @@ class Sniptype:
         self.mirror_snippets_file()
         self.export_sync_bundle()
         self.reload_snippets_from_disk()
+        # The person chose the library now in place; a recovery no longer applies.
+        self.library_recovery = None
+        self._library_replaced()
         return True, None
 
     @staticmethod
@@ -1029,14 +1139,32 @@ class Sniptype:
 
     def open_data_folder(self):
         """Open the user data directory in the OS file manager."""
+        self._open_in_shell(self.data_dir, make_dir=True)
+
+    def open_log(self):
+        """Open the app log, or its folder when no log has been written yet."""
+        path = os.path.join(self.logs_dir, LOG_FILE_NAME)
+        if os.path.exists(path):
+            self._open_in_shell(path)
+        else:
+            self._open_in_shell(self.logs_dir, make_dir=True)
+
+    def _open_in_shell(self, path, *, make_dir=False):
+        """Open a file or folder with the OS; a failure is logged and told, never silent.
+
+        ``make_dir`` creates our own folder first. A folder the person
+        configured (a mirror) is never created: a typo would make one.
+        """
         try:
-            os.makedirs(self.data_dir, exist_ok=True)
+            if make_dir:
+                os.makedirs(path, exist_ok=True)
             # ceiling: Windows-only shell open; a platform adapter replaces this in
             # the cross-platform phase (audit §6). Broad guard so a click never
             # raises out of the GUI/tray callback on other OSes.
-            os.startfile(self.data_dir)  # noqa: WPS421
+            os.startfile(path)  # noqa: WPS421
         except Exception as e:
-            self.logger.error(f"Falha ao abrir a pasta de dados: {e}")
+            self.logger.error(f"Falha ao abrir {path}: {e}")
+            self.notify_error(_("Não foi possível abrir a pasta ou o arquivo."), key="open-shell")
 
     # =====================================================================
     # DATE / TEXT / INPUT UTILITIES
@@ -1832,8 +1960,16 @@ class Sniptype:
         self.refresh_runtime_indexes()
         return "ok"
 
-    def notify(self, message: str, title: str = PRODUCT_NAME, key: str = None, cooldown_seconds: float = 0, kind: str = "info"):
-        """Send a tray notification when the icon is available, with optional cooldown.
+    def notify(self, message: str, title: str = PRODUCT_NAME, key: str = None, cooldown_seconds: float = 0, kind: str = "info", in_manager: bool = False):
+        """Tell the person something: a receipt in the manager, or a tray notification.
+
+        Routine success (``kind="status"``) is quiet while the person is in the
+        window: it becomes a receipt on the manager's status line, never a
+        toast. ``in_manager`` says the person just did it there; any other
+        status becomes a receipt only while the manager has the input focus,
+        and is a toast when they are working elsewhere. Errors, and everything
+        else, are always tray notifications. Every message is kept in the
+        history either way.
 
         The cooldown check and the history append are done under
         ``_notification_lock`` so concurrent callers (listener + workers) cannot
@@ -1843,19 +1979,24 @@ class Sniptype:
         """
         with self._notification_lock:
             icon = self.icon
-        if not icon:
+        in_window = kind == "status" and self._manager_visible
+        if not icon and not in_window:
             return False
 
         text = truncate_notification_text(message)
+        moment = datetime.now()
         entry = {
-            "time": time.strftime("%H:%M:%S"),
+            "time": moment.strftime("%H:%M:%S"),
+            "at": moment.isoformat(timespec="seconds"),
             "title": title,
             "message": text,
             "kind": kind,
         }
 
         with self._notification_lock:
-            if key:
+            # A receipt for what the person just did replaces the line, so it
+            # needs no cooldown; anything that can still become a toast keeps it.
+            if key and not (in_window and in_manager):
                 now = time.time()
                 last_sent = self.notification_timestamps.get(key, 0)
                 if (now - last_sent) < cooldown_seconds:
@@ -1868,6 +2009,14 @@ class Sniptype:
 
         save_notification_history(self.notification_history_file, history_snapshot)
 
+        if in_window:
+            # The window is Tk's: the receipt is drawn on the GUI thread, which
+            # also sees whether the person is looking at it.
+            self.gui.submit(lambda _root: self._show_receipt(text, title, in_manager))
+            return True
+        return self._toast(icon, text, title)
+
+    def _toast(self, icon, text, title):
         try:
             icon.notify(text, title)
             return True
@@ -1875,8 +2024,55 @@ class Sniptype:
             self.logger.warning(f"Falha ao exibir notificação: {e}")
             return False
 
-    def notify_status(self, message: str, key: str = None):
-        return self.notify(message, key=key, cooldown_seconds=2, kind="status")
+    def _manager_has_focus(self):
+        """True while one of the app's windows has the input focus. GUI thread."""
+        window = self.manager_window
+        try:
+            return window is not None and window.focus_displayof() is not None
+        except tk.TclError:
+            return False
+
+    def _current_receipt(self):
+        """The status line of the page the manager shows, or None. GUI thread."""
+        notebook = self._manager_notebook
+        if notebook is None:
+            return None
+        try:
+            return self._manager_receipts.get(str(notebook.select()))
+        except tk.TclError:
+            return None
+
+    def _show_receipt(self, text, title, in_manager):
+        """Write ``text`` on the manager's status line, or toast it. GUI thread.
+
+        The window can close between the check that chose the receipt and
+        here, and a status from the tray or a hotkey reaches a manager the
+        person is not looking at; both fall back to the tray.
+        """
+        receipt = self._current_receipt()
+        if receipt is not None and (in_manager or self._manager_has_focus()):
+            receipt.show(text)
+            return
+        icon = self.icon
+        if icon:
+            self._toast(icon, text, title)
+
+    def notify_status(self, message: str, key: str = None, *, in_manager: bool = False):
+        return self.notify(
+            message, key=key, cooldown_seconds=2, kind="status", in_manager=in_manager)
+
+    def receipt(self, outcome: str, name: str = None, key: str = None, *, in_manager: bool = True):
+        """Receipt of a command: "Salvo às 14:32 · xola".
+
+        ``outcome`` is the interface string, marked with ``N_``, with a
+        ``{time}`` slot ("Salvo às {time}"); ``name`` is the object it was
+        done to, when the outcome does not already say. ``in_manager`` is
+        False for a command given outside the window (tray, hotkey), whose
+        receipt reaches the status line only while the window has the focus.
+        """
+        text = _(outcome).format(time=time_format.clock(datetime.now()))
+        return self.notify_status(
+            text if name is None else f"{text} · {name}", key=key, in_manager=in_manager)
 
     def _notify_or_queue(self, message: str, key: str, kind: str, cooldown_seconds: float):
         """Notify now, or queue for tray startup when the icon is not up yet."""
@@ -2482,7 +2678,8 @@ class Sniptype:
         if result is None:
             return
         if self._save_hotkey_bindings(result):
-            self.notify_status(_("Atalhos salvos."), key="hotkeys-saved")
+            self.notify_status(
+                _("Atalhos salvos."), key="hotkeys-saved", in_manager=parent is manager)
         else:
             self.notify_error(_("Não foi possível salvar os atalhos."), key="hotkeys-save")
 
@@ -2675,20 +2872,23 @@ class Sniptype:
             )
             # Tk keeps no reference to a PhotoImage; the label must hold it.
             brand.image = brand_icon
-            brand.pack(fill=tk.X, padx=(ui.space_xs, 0))
-            tk.Label(
-                sidebar, text=_("Sua biblioteca de textos e ações rápidas"),
-                font=ui.caption_font(), bg=sidebar_bg, fg=ui.text_muted,
-                anchor="w", justify="left", wraplength=170,
-            ).pack(fill=tk.X, padx=(ui.space_sm, 0), pady=(ui.space_xs, ui.space_md))
+            brand.pack(fill=tk.X, padx=(ui.space_xs, 0), pady=(0, ui.space_md))
 
+            # The first thing the window says: is expansion working. A quiet dot
+            # and a muted word while it is; a tone, an icon and a written state
+            # when it is not (_refresh_manager_status).
+            status_row = tk.Frame(sidebar, bg=sidebar_bg)
+            status_row.pack(fill=tk.X, padx=(ui.space_sm, 0))
+            self._manager_status_icon = tk.Label(status_row, bg=sidebar_bg)
+            self._manager_status_icon.pack(side=tk.LEFT)
             self._manager_status_var = tk.StringVar(root)
-            tk.Label(
-                sidebar, textvariable=self._manager_status_var,
-                font=ui.font(10, "bold"), bg=sidebar_bg, fg=ui.text, anchor="w",
-            ).pack(fill=tk.X, padx=(ui.space_sm, 0))
+            self._manager_status_label = tk.Label(
+                status_row, textvariable=self._manager_status_var,
+                font=ui.font(10), bg=sidebar_bg, fg=ui.text_muted, anchor="w",
+            )
+            self._manager_status_label.pack(side=tk.LEFT, fill=tk.X, expand=True)
             self._manager_toggle_button = ui_widgets.button(
-                sidebar, command=lambda: self.toggle_enabled(self.icon, None),
+                sidebar, command=lambda: self.toggle_enabled(self.icon, None, in_manager=True),
             )
             self._manager_toggle_button.pack(fill=tk.X, pady=(ui.space_xs, ui.space_lg))
             self._refresh_manager_status()
@@ -2714,8 +2914,17 @@ class Sniptype:
                 bg=sidebar_bg, fg=ui.text_muted, anchor="w",
             ).pack(fill=tk.X, padx=(ui.space_sm, 0), pady=(ui.space_xs, 0))
 
-            notebook = ttk.Notebook(root, style="Pages.TNotebook")
-            notebook.grid(row=0, column=2, sticky="nsew")
+            # The InfoBar slot sits above the pages: trouble that stays true
+            # until it is resolved, written once for every page.
+            content = tk.Frame(root, bg=ui.surface)
+            content.grid(row=0, column=2, sticky="nsew")
+            content.grid_columnconfigure(0, weight=1)
+            content.grid_rowconfigure(1, weight=1)
+            self._manager_health = ui_widgets.InfoBar(content, ui=ui)
+            self._manager_health.frame.grid(row=0, column=0, sticky="ew")
+
+            notebook = ttk.Notebook(content, style="Pages.TNotebook")
+            notebook.grid(row=1, column=0, sticky="nsew")
             self._manager_notebook = notebook
 
             tab_static = tk.Frame(notebook, bg=ui.surface)
@@ -2733,6 +2942,9 @@ class Sniptype:
             tab_settings = tk.Frame(notebook, bg=ui.surface)
             notebook.add(tab_settings, text=_("Configurações"))
             self._manager_settings_tab = tab_settings
+            self._manager_pages = {
+                "dynamic": tab_builtin, "backups": tab_backups, "settings": tab_settings,
+            }
 
             nav_items = self._build_manager_nav(ui, nav, notebook)
 
@@ -2749,6 +2961,7 @@ class Sniptype:
             self._manager_editors = []
             self._manager_tab_selectors = {}
             self._manager_search_entries = {}
+            self._manager_receipts = {}
             self._create_static_snippets_tab(
                 tab_static, root, set_count=tab_counter(tab_static, _("Textos")))
             self._create_dynamic_mappings_tab(
@@ -2756,6 +2969,7 @@ class Sniptype:
             self._create_dynamic_snippets_tab(tab_builtin, root)
             self._create_backups_tab(tab_backups, root)
             self._create_settings_tab(tab_settings, root)
+            self._refresh_manager_health()
 
             tabs = notebook.tabs()
             for index, tab_id in enumerate(tabs, 1):
@@ -2785,6 +2999,7 @@ class Sniptype:
 
             root.protocol("WM_DELETE_WINDOW", on_close)
             self.manager_window = root
+            self._track_manager_visibility(root)
             self._start_system_appearance_poll(root)
             root.lift()
             root.focus_force()
@@ -2845,6 +3060,7 @@ class Sniptype:
     def _create_backups_tab(self, parent, root):
         """Backups tab: list backups and expose restore/export/import actions."""
         ui = ui_theme.theme()
+        self._page_receipt(parent)
         main = tk.Frame(parent, bg=ui.surface, padx=ui.space_lg, pady=ui.space_lg)
         main.pack(fill=tk.BOTH, expand=True)
         main.grid_columnconfigure(0, weight=1)
@@ -2936,7 +3152,6 @@ class Sniptype:
             path = selected_backup()
             if not path:
                 return
-            name = os.path.basename(path)
             counts, error = self.preview_restore(path)
             if error:
                 ui_widgets.alert(root, _("Restaurar backup"), error, tone="danger")
@@ -2957,13 +3172,13 @@ class Sniptype:
                 return
             ok, error = self.restore_backup(path)
             if ok:
-                self.notify_status(_("Backup restaurado: {name}").format(name=name), key="restore-backup")
-                ui_widgets.alert(
-                    root, _("Restaurar backup"),
-                    _("Backup restaurado: {name}").format(name=taken), tone="info",
-                )
                 refresh_backups()
                 self._refresh_manager_lists()
+                self.receipt(
+                    N_("Backup restaurado às {time}"),
+                    time_format.absolute_stamp(backup_time(path), datetime.now()),
+                    key="restore-backup",
+                )
             else:
                 ui_widgets.alert(
                     root, _("Restaurar backup"), _("Falha ao restaurar: {error}").format(error=error),
@@ -2982,9 +3197,9 @@ class Sniptype:
                 return
             ok, error = self.export_library(dest)
             if ok:
-                ui_widgets.alert(
-                    root, _("Exportar biblioteca"), _("Biblioteca exportada com sucesso."),
-                    tone="info",
+                self.receipt(
+                    N_("Biblioteca exportada às {time}"), os.path.basename(dest),
+                    key="export-library",
                 )
             else:
                 ui_widgets.alert(
@@ -3008,13 +3223,12 @@ class Sniptype:
                     return
                 _ok, error = self.apply_import(document, mode)
             if not error:
-                self.notify_status(_("Biblioteca importada."), key="import-library")
-                ui_widgets.alert(
-                    root, _("Importar biblioteca"), _("Biblioteca importada com sucesso."),
-                    tone="info",
-                )
                 refresh_backups()
                 self._refresh_manager_lists()
+                self.receipt(
+                    N_("Biblioteca importada às {time}"), os.path.basename(src),
+                    key="import-library",
+                )
             else:
                 ui_widgets.alert(
                     root, _("Importar biblioteca"),
@@ -3024,11 +3238,8 @@ class Sniptype:
         def on_backup_now():
             created = self.backup_now()
             if created:
-                ui_widgets.alert(
-                    root, _("Criar backup"),
-                    _("Backup criado: {name}").format(name=os.path.basename(created)), tone="info",
-                )
                 refresh_backups()
+                self.receipt(N_("Backup criado às {time}"), key="manual-backup")
             else:
                 ui_widgets.alert(
                     root, _("Criar backup"), _("Falha ao criar backup. Verifique os logs."),
@@ -3056,6 +3267,19 @@ class Sniptype:
 
         refresh_backups()
 
+    def _page_receipt(self, parent):
+        """The status line at the bottom of a page that has no editor.
+
+        Packed before the page's content, so its row is always reserved and a
+        receipt never moves anything. It is the same line the editors have.
+        """
+        ui = ui_theme.theme()
+        receipt = ui_widgets.ReceiptLine(parent, "")
+        receipt.frame.pack(
+            side=tk.BOTTOM, fill=tk.X, padx=ui.space_lg, pady=(0, ui.space_sm))
+        self._manager_receipts[str(parent)] = receipt
+        return receipt
+
     def _persist_settings(self, updates):
         """Save settings.json with ``updates`` applied; publish only on success."""
         updated = {**self.settings, **updates}
@@ -3067,6 +3291,7 @@ class Sniptype:
     def _create_settings_tab(self, parent, root):
         """Configurações tab: one section at a time, chosen from a side nav."""
         ui = ui_theme.theme()
+        self._page_receipt(parent)
         main = tk.Frame(parent, bg=ui.surface, padx=ui.space_lg, pady=ui.space_lg)
         main.pack(fill=tk.BOTH, expand=True)
         tk.Label(
@@ -3342,12 +3567,18 @@ class Sniptype:
             _("Biblioteca, configurações, backups e logs ficam nesta pasta. Os "
             "backups são gerenciados em Cópias de segurança."),
         )
+        mirror_dir = self.settings.get("mirror_dir")
+        export_dir = self.settings.get("sync_export_dir")
+        # (label, value, kind): the kind is the health vocabulary of what
+        # happens there, "copy" for the mirror and "export" for the bundle.
         rows = (
-            (_("Pasta de dados"), self.data_dir),
-            (_("Cópia espelho"), self.settings.get("mirror_dir") or _("Desativada")),
-            (_("Pacote de sincronização"), self.settings.get("sync_export_dir") or _("Desativado")),
+            (_("Pasta de dados"), self.data_dir, None),
+            (_("Cópia espelho"), mirror_dir or _("Desativada"), "copy" if mirror_dir else None),
+            (_("Pacote de sincronização"), export_dir or _("Desativado"), "export" if export_dir else None),
         )
-        for row, (label, value) in enumerate(rows, 2):
+        transfers = []
+        row = 2
+        for label, value, kind in rows:
             tk.Label(
                 card,
                 text=label,
@@ -3360,6 +3591,13 @@ class Sniptype:
             field.insert(0, value)
             field.configure(state="readonly")
             field.grid(row=row, column=1, columnspan=2, sticky="ew", pady=2)
+            row += 1
+            if kind is not None:
+                transfer = self._transfer_status(card, kind, value)
+                transfer.frame.grid(
+                    row=row, column=1, columnspan=2, sticky="ew", pady=(0, ui.space_xs))
+                transfers.append(transfer.refresh)
+                row += 1
         tk.Label(
             card,
             text=_("A cópia espelho e o pacote de sincronização são definidos em settings.json."),
@@ -3367,10 +3605,71 @@ class Sniptype:
             bg=ui.card,
             fg=ui.text_muted,
             anchor="w",
-        ).grid(row=2 + len(rows), column=0, columnspan=3, sticky="w", pady=(ui.space_xs, 0))
+        ).grid(row=row, column=0, columnspan=3, sticky="w", pady=(ui.space_xs, 0))
         ui_widgets.button(
             card, text=_("Abrir pasta"), command=self.open_data_folder, icon="folder",
-        ).grid(row=3 + len(rows), column=0, sticky="w", pady=(ui.space_sm, 0))
+        ).grid(row=row + 1, column=0, sticky="w", pady=(ui.space_sm, 0))
+
+        def refresh():
+            for refresh_transfer in transfers:
+                refresh_transfer()
+
+        self._manager_data_refresh = refresh
+
+    def _transfer_status(self, card, kind, directory):
+        """One line under a destination: what the last copy or export did.
+
+        A good result is a quiet caption; a failure is a warning band that
+        offers Abrir pasta (the destination, never created) and Tentar agora.
+        Returns a namespace with ``frame`` and ``refresh()``.
+        """
+        ui = ui_theme.theme()
+        frame = tk.Frame(card, bg=ui.card)
+        frame.grid_columnconfigure(0, weight=1)
+        quiet = tk.Label(
+            frame, font=ui.caption_font(), bg=ui.card, fg=ui.text_muted, anchor="w",
+            justify=tk.LEFT,
+        )
+        quiet.grid(row=0, column=0, sticky="ew")
+        band = tk.Frame(frame, bg=ui.warning_bg, padx=ui.space_md, pady=ui.space_sm)
+        band.grid(row=1, column=0, sticky="ew")
+        message = tk.Label(
+            band, font=ui.caption_font(), bg=ui.warning_bg, fg=ui.warning, anchor="w",
+            justify=tk.LEFT,
+        )
+        message.pack(fill=tk.X)
+        actions = tk.Frame(band, bg=ui.warning_bg)
+        actions.pack(anchor="w", pady=(ui.space_sm, 0))
+        gap = ui_widgets.face_gap(actions, ui.space_sm)
+        ui_widgets.button(
+            actions, text=_("Abrir pasta"), icon="folder",
+            command=lambda: self._open_in_shell(os.path.expanduser(directory)),
+        ).pack(side=tk.LEFT)
+        ui_widgets.button(
+            actions, text=_("Tentar agora"), icon="refresh",
+            command=lambda: (self.retry_sync(), self._refresh_manager_health()),
+        ).pack(side=tk.LEFT, padx=(gap, 0))
+
+        def fit(event):
+            message.configure(wraplength=max(ui.px(160), event.width - 2 * ui.space_md))
+            quiet.configure(wraplength=event.width)
+
+        frame.bind("<Configure>", fit, add="+")
+
+        def refresh():
+            record = self.last_mirror if kind == "copy" else self.last_sync
+            text, failed = health_support.describe_transfer(kind, record, datetime.now())
+            if failed:
+                quiet.grid_remove()
+                message.configure(text=text)
+                band.grid()
+            else:
+                band.grid_remove()
+                quiet.configure(text=text)
+                quiet.grid()
+
+        refresh()
+        return types.SimpleNamespace(frame=frame, refresh=refresh)
 
     def _manager_brand_icon(self, window):
         """The app icon sized beside the sidebar title, or None if unavailable."""
@@ -3588,7 +3887,14 @@ class Sniptype:
         """Drop widget callbacks while still running on the GUI thread."""
         self._manager_notebook = None
         self._manager_status_var = None
+        self._manager_status_label = None
+        self._manager_status_icon = None
         self._manager_toggle_button = None
+        self._manager_health = None
+        self._manager_data_refresh = None
+        self._manager_visible = False
+        self._manager_receipts = {}
+        self._manager_pages = {}
         self._manager_search_entries = {}
         self._manager_settings_tab = None
         self._manager_settings_sections = None
@@ -3599,8 +3905,11 @@ class Sniptype:
         self._manager_preview_controller = None
 
     def _refresh_manager_lists(self, _root=None):
-        """Rebuild every registered list. ``_root`` is the arg the GuiThread pump passes."""
-        for refresher in list(self._manager_refreshers):
+        """Rebuild every registered list and the InfoBar, which reads the library's state.
+
+        ``_root`` is the arg the GuiThread pump passes.
+        """
+        for refresher in [*self._manager_refreshers, self._refresh_manager_health]:
             try:
                 refresher()
             except Exception as e:
@@ -3632,8 +3941,8 @@ class Sniptype:
     def _open_notification_history(self, root):
         ui = ui_theme.theme()
         history_window = tk.Toplevel(root)
-        history_window.title(_("Histórico de Notificações"))
-        history_window.geometry("680x360")
+        history_window.title(_("Histórico de notificações"))
+        history_window.geometry("720x380")
         history_window.minsize(560, 280)
         history_window.configure(bg=ui.surface)
         history_window.transient(root)
@@ -3645,13 +3954,22 @@ class Sniptype:
         outer.grid_columnconfigure(0, weight=1)
         outer.grid_rowconfigure(1, weight=1)
 
+        header = tk.Frame(outer, bg=ui.surface)
+        header.grid(row=0, column=0, sticky="ew")
+        header.grid_columnconfigure(0, weight=1)
         tk.Label(
-            outer,
+            header,
             text=_("Últimas notificações"),
             font=ui.subtitle_font(),
             bg=ui.surface,
             fg=ui.text,
+            anchor="w",
         ).grid(row=0, column=0, sticky="w")
+        only_errors = tk.BooleanVar(history_window, False)
+        ui_widgets.checkbox(
+            header, text=_("Somente erros"), variable=only_errors,
+            command=lambda: fill(),
+        ).grid(row=0, column=1, sticky="e")
 
         table_card = ui_widgets.card(outer, padding=ui.space_sm)
         table_card.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
@@ -3663,35 +3981,61 @@ class Sniptype:
         frame.grid_rowconfigure(0, weight=1)
 
         columns = ("time", "kind", "message")
-        tree = ttk.Treeview(frame, columns=columns, show="headings", height=12)
-        tree.heading("time", text=_("Hora"))
-        tree.heading("kind", text=_("Tipo"))
-        tree.heading("message", text=_("Mensagem"))
-        tree.column("time", width=90, anchor="center", stretch=False)
-        tree.column("kind", width=110, anchor="center", stretch=False)
-        tree.column("message", width=440, anchor="w")
+        # The icon column carries the error mark, so a failure is told apart by
+        # shape and the word "Erro" as well as by its color.
+        tree = ttk.Treeview(
+            frame, columns=columns, show="tree headings", height=12, style="Manager.Treeview")
+        tree.heading("#0", text="")
+        tree.heading("time", text=_("Quando"), anchor="w")
+        tree.heading("kind", text=_("Tipo"), anchor="w")
+        tree.heading("message", text=_("Mensagem"), anchor="w")
+        tree.column("#0", width=ui.px(32), minwidth=ui.px(32), anchor="w", stretch=False)
+        tree.column("time", width=ui.px(140), anchor="w", stretch=False)
+        tree.column("kind", width=ui.px(80), anchor="w", stretch=False)
+        tree.column("message", width=ui.px(400), anchor="w")
+        tree.tag_configure("error", foreground=ui.danger)
+        error_icon = ui_widgets.signal_image(history_window, ui.danger, "error", ui=ui)
+        history_window.error_icon = error_icon
 
         scrollbar = ui_widgets.scrollbar(frame, command=tree.yview)
         tree.configure(yscrollcommand=scrollbar.set)
         tree.grid(row=0, column=0, sticky="nsew")
         scrollbar.grid(row=0, column=1, sticky="ns")
+        empty_label = tk.Label(
+            frame, font=ui.caption_font(), bg=ui.card, fg=ui.text_muted, justify="center")
+        empty_label.grid(row=0, column=0, sticky="nsew")
 
         entries = list(reversed(self.notification_history))
-        if not entries:
-            tree.insert("", tk.END, values=("--:--:--", "", _("Nenhuma notificação registrada ainda.")))
-        else:
+
+        def fill():
+            tree.delete(*tree.get_children())
+            errors_only = bool(only_errors.get())
+            now = datetime.now()
             for entry in entries:
                 kind = entry.get("kind", "info")
+                if errors_only and kind != "error":
+                    continue
+                is_error = kind == "error"
                 tree.insert(
                     "",
                     tk.END,
+                    image=error_icon if is_error else "",
                     values=(
-                        entry.get("time", "--:--:--"),
+                        notification_stamp(entry, now),
                         _(NOTIFICATION_KIND_LABELS.get(kind, kind)),
                         entry.get("message", ""),
                     ),
+                    tags=("error",) if is_error else (),
                 )
+            if tree.get_children():
+                tree.tkraise()
+                return
+            empty_label.configure(
+                text=_("Nenhum erro registrado.") if errors_only
+                else _("Nenhuma notificação registrada ainda."))
+            empty_label.tkraise()
 
+        fill()
         self._bind_mousewheel(tree, tree)
         history_window.bind("<Escape>", lambda _event: history_window.destroy())
         center_dialog(history_window, root)
@@ -4109,8 +4453,9 @@ class Sniptype:
     def _create_static_snippets_tab(self, parent, root, set_count=None):
         """Build the static snippets tab UI.
 
-        ``set_count`` receives the visible snippet count whenever the list is
-        rebuilt, so the notebook tab title can show it.
+        ``set_count`` receives the library's snippet count whenever the list is
+        rebuilt, so the navigation can show it; a search or filter narrows the
+        list, not that count.
         """
         ui = ui_theme.theme()
 
@@ -4136,9 +4481,12 @@ class Sniptype:
             bg=ui.card,
             fg=ui.text,
         ).grid(row=0, column=0, sticky="w")
+        # How many the list shows of how many there are: the navigation counts
+        # the library, the list counts what the search and filters leave.
+        count_var = tk.StringVar(frame_left)
         tk.Label(
             frame_left,
-            text=_("Encontre um snippet pelo trigger ou conteúdo."),
+            textvariable=count_var,
             font=ui.caption_font(),
             bg=ui.card,
             fg=ui.text_muted,
@@ -4296,9 +4644,11 @@ class Sniptype:
         update_format_status, request_editor_update = self._create_formatting_toolbar(
             editor_shell, text_value, on_change=lambda payload: render_editor(payload))
         text_field.pack(fill=tk.BOTH, expand=True, pady=(0, 6))
-        receipt = ui_widgets.ReceiptLine(
-            frame_right, _("Formatação opcional  •  Ctrl+S para salvar"))
+        # The editor's status line: the hint at rest, then the receipt of
+        # what was just done (notify_status writes here while the window shows).
+        receipt = ui_widgets.ReceiptLine(frame_right, _("Ctrl+S para salvar"))
         receipt.frame.grid(row=6, column=0, sticky="ew", pady=(ui.space_xs, ui.space_sm))
+        self._manager_receipts[str(parent)] = receipt
 
         btn_frame = tk.Frame(frame_right, bg=ui.card)
         btn_frame.grid(row=7, column=0, sticky="ew")
@@ -4460,8 +4810,14 @@ class Sniptype:
                 tree.insert("", tk.END, iid=key,
                             values=(display_trigger,) + snippet_tree_values(key, static_snips[key])[1:])
             (tree if static_snips else empty_label).tkraise()
+            total = len(static_rows_by_key)
+            if len(static_snips) == total:
+                count_var.set(_("Snippets: {total}").format(total=total))
+            else:
+                count_var.set(
+                    _("Snippets: {shown} de {total}").format(shown=len(static_snips), total=total))
             if set_count is not None:
-                set_count(len(static_snips))
+                set_count(total)
             if session.ref is not None and tree.exists(session.ref):
                 tree.selection_set(session.ref)
             if focus_item and tree.exists(focus_item):
@@ -4695,7 +5051,9 @@ class Sniptype:
                 )
                 if self._persist_manager_action(result):
                     refresh_group_menu()
-                    self.notify_status(_("Grupo criado."), key="manager-group-create")
+                    self.receipt(
+                        N_("Grupo criado às {time}"), definition.get("label") or _("Sem nome"),
+                        key="manager-group-create")
                 else:
                     manager_action_failed(_("Criar grupo"))
             except (KeyError, ValueError, MetadataReadOnlyError) as error:
@@ -4722,7 +5080,9 @@ class Sniptype:
                 )
                 if self._persist_manager_action(result):
                     refresh_group_menu()
-                    self.notify_status(_("Grupo atualizado."), key=f"manager-group-edit:{group_id}")
+                    self.receipt(
+                        N_("Grupo atualizado às {time}"), definition.get("label") or _("Sem nome"),
+                        key=f"manager-group-edit:{group_id}")
                 else:
                     manager_action_failed(_("Editar grupo"))
             except (KeyError, ValueError, MetadataReadOnlyError) as error:
@@ -4951,7 +5311,7 @@ class Sniptype:
             self.refresh_runtime_indexes()
             session.mark_saved(trigger, trigger, value, copy.deepcopy(stored_value(trigger)))
             header.notice(None)
-            self.notify_status(_("Snippet '{trigger}' salvo.").format(trigger=trigger), key=f"save-static:{trigger}")
+            self.receipt(N_("Salvo às {time}"), trigger, key=f"save-static:{trigger}")
 
             refresh_listbox()
             if tree.exists(trigger):
@@ -5070,7 +5430,7 @@ class Sniptype:
                 tree.selection_set(destination)
                 tree.focus(destination)
                 tree.see(destination)
-            self.notify_status(_("Snippet '{destination}' duplicado.").format(destination=destination), key=f"duplicate-static:{destination}")
+            self.receipt(N_("Duplicado às {time}"), destination, key=f"duplicate-static:{destination}")
 
         def on_rename():
             old_trigger = session.ref
@@ -5142,7 +5502,7 @@ class Sniptype:
                 return
             if tree.exists(new_trigger):
                 tree.see(new_trigger)
-            self.notify_status(_("Snippet renomeado para '{new_trigger}'.").format(new_trigger=new_trigger), key=f"rename-static:{new_trigger}")
+            self.receipt(N_("Renomeado às {time}"), new_trigger, key=f"rename-static:{new_trigger}")
 
         editor = self._editor_handle(
             root, header,
@@ -5458,9 +5818,11 @@ class Sniptype:
         update_format_status, request_editor_update = self._create_formatting_toolbar(
             editor_shell, text_value, on_change=lambda payload: render_editor(payload))
         text_field.pack(fill=tk.BOTH, expand=True, pady=(0, 6))
-        receipt = ui_widgets.ReceiptLine(
-            frame_right, _("Formatação opcional  •  Ctrl+S para salvar"))
+        # The editor's status line: the hint at rest, then the receipt of
+        # what was just done (notify_status writes here while the window shows).
+        receipt = ui_widgets.ReceiptLine(frame_right, _("Ctrl+S para salvar"))
         receipt.frame.grid(row=6, column=0, sticky="ew", pady=(ui.space_xs, ui.space_sm))
+        self._manager_receipts[str(parent)] = receipt
 
         btn_frame = tk.Frame(frame_right, bg=ui.card)
         btn_frame.grid(row=7, column=0, sticky="ew")
@@ -5792,7 +6154,7 @@ class Sniptype:
                 self.refresh_runtime_indexes()
                 dialog.destroy()
                 refresh_type_list()
-                self.notify_status(_("Tipo '{type_name}' criado.").format(type_name=type_name), key=f"mapping-type-create:{type_name}")
+                self.receipt(N_("Tipo criado às {time}"), type_name, key=f"mapping-type-create:{type_name}")
                 # The new type opens unless the person keeps a draft of this one.
                 switch_type(map_key)
 
@@ -5847,7 +6209,9 @@ class Sniptype:
                 mapping_type.set(available_keys[0])
                 select_type_row(available_keys[0])
             refresh_mapping_list()
-            self.notify_status(_("Tipo '{type}' excluído.").format(type=info.get('label', current_type)), key=f"mapping-type-delete:{current_type}")
+            self.receipt(
+                N_("Tipo excluído às {time}"), info.get("label", current_type),
+                key=f"mapping-type-delete:{current_type}")
 
         ui_widgets.button(
             btn_types_frame, text=_("Novo tipo"), command=add_new_type, icon="add",
@@ -6066,7 +6430,9 @@ class Sniptype:
             self.refresh_runtime_indexes()
             session.mark_saved(name, name, value, copy.deepcopy(value), container=current_type)
             header.notice(None)
-            self.notify_status(_("Item '{name}' salvo em {type}.").format(name=name, type=type_label(current_type)), key=f"save-map:{current_type}:{name}")
+            self.receipt(
+                N_("Salvo às {time}"), _("{name} em {type}").format(name=name, type=type_label(current_type)),
+                key=f"save-map:{current_type}:{name}")
             refresh_type_list()
             refresh_mapping_list()
             if shows_here(name) and tree_map.exists(name):
@@ -6176,6 +6542,7 @@ class Sniptype:
         self, parent, root, section_title, subtitle, sections, footer_text
     ):
         ui = ui_theme.theme()
+        self._page_receipt(parent)
         main = tk.Frame(
             parent, bg=ui.surface, padx=ui.space_lg, pady=ui.space_lg
         )
@@ -6362,11 +6729,9 @@ class Sniptype:
             self.gui.submit(self._refresh_manager_lists)
         self.export_sync_bundle()
         trigger = effective_trigger(key, self.dynamic_registry.get(key, {}))
-        if enabled:
-            message = _("Snippet dinâmico '{trigger}' ativado.").format(trigger=trigger)
-        else:
-            message = _("Snippet dinâmico '{trigger}' desativado.").format(trigger=trigger)
-        self.notify_status(message, key=f"registry-toggle:{key}")
+        self.receipt(
+            N_("Ativado às {time}") if enabled else N_("Desativado às {time}"),
+            trigger, key=f"registry-toggle:{key}")
         return True
 
     def _confirm_dynamic_shadows_static(self, key, *, parent=None):
@@ -6527,10 +6892,7 @@ class Sniptype:
         )
         self.reload_snippets_from_disk()
         self.export_sync_bundle()
-        self.notify_status(
-            _("Snippet dinâmico renomeado para '{new_trigger}'.").format(new_trigger=new_trigger),
-            key=f"registry-rename:{key}",
-        )
+        self.receipt(N_("Renomeado às {time}"), new_trigger, key=f"registry-rename:{key}")
         return True
 
     # =====================================================================
@@ -6538,19 +6900,11 @@ class Sniptype:
     # =====================================================================
 
     def create_icon_image(self):
-        """Create a modern icon for the system tray."""
+        """The tray icon drawn from scratch, for a build without ``sniptype.ico``."""
         size = 64
-
-        if self.enabled:
-            ring_color = (38, 92, 255, 255)
-            accent_color = (27, 43, 65, 255)
-            mark_color = (255, 255, 255, 255)
-            dot_color = (76, 217, 100, 255)
-        else:
-            ring_color = (168, 176, 185, 255)
-            accent_color = (108, 117, 125, 255)
-            mark_color = (243, 245, 247, 255)
-            dot_color = (196, 200, 205, 255)
+        ring_color = (38, 92, 255, 255)
+        accent_color = (27, 43, 65, 255)
+        mark_color = (255, 255, 255, 255)
 
         image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
         dc = ImageDraw.Draw(image)
@@ -6565,24 +6919,83 @@ class Sniptype:
         dc.rounded_rectangle((29, 29, 44, 36), radius=4, fill=mark_color)
         dc.rounded_rectangle((29, 41, 40, 48), radius=4, fill=mark_color)
 
-        # Small status dot keeps enabled/disabled state obvious.
-        dc.ellipse((42, 42, 52, 52), fill=dot_color)
-
         return image
 
     def load_tray_icon(self):
-        """Prefer the packaged ICO file when available for better tray compatibility."""
+        """The tray icon for the current expansion state.
+
+        The shipped ICO (better tray compatibility) while expansion is on;
+        while it is paused or the capture failed, the same icon with a state
+        badge drawn at runtime (tray_support), so no asset ships per state.
+        """
+        base = None
         icon_path = self.resolve_resource_path("sniptype.ico")
         if icon_path:
             try:
                 with Image.open(icon_path) as image:
-                    return image.copy()
+                    base = image.copy()
             except Exception as e:
                 self.logger.warning(f"Falha ao carregar icone do tray: {e}")
-        return self.create_icon_image()
+        if base is None:
+            base = self.create_icon_image()
+        return tray_support.state_icon(base, self._expansion_state())
 
-    def toggle_enabled(self, icon, item):
-        """Enable/disable snippet expansion."""
+    def _expansion_state(self):
+        """``ok``, ``paused`` or ``down`` (health_support.expansion_state)."""
+        return health_support.expansion_state(self.enabled, self.capture_error)
+
+    def _apply_tray_state(self, _root=None):
+        """Draw the tray icon, tooltip and menu for the current state.
+
+        Redrawn only when the state changes (toggle, capture failure), never
+        on a timer. ``_root`` is the arg the GuiThread pump passes.
+        """
+        icon = self.icon
+        if icon is None:
+            return
+        try:
+            icon.icon = self.load_tray_icon()
+            icon.title = tray_support.tooltip(APP_DISPLAY_NAME, self._expansion_state())
+        except Exception as e:
+            self.logger.warning(f"Falha ao atualizar o ícone da bandeja: {e}")
+        self._update_tray_menu()
+
+    def refresh_tray_state(self):
+        """Show the current expansion state in the tray, from any thread.
+
+        macOS may only touch its status item on the main thread, so there the
+        redraw goes through the GuiThread pump, as ``refresh_tray_menu`` does.
+        """
+        if not self.icon:
+            return
+        if platform_support.tray_menu_updates_on_gui_thread():
+            self.gui.submit(self._apply_tray_state)
+            return
+        self._apply_tray_state()
+
+    def tray_toggle_label(self, item=None):
+        """The first tray line: "Expansão ativa", with the native check as its
+        only mark (unchecked is paused), or "Captura falhou"."""
+        down = self._expansion_state() == health_support.EXPANSION_DOWN
+        return health_support.expansion_label(
+            health_support.EXPANSION_DOWN if down else health_support.EXPANSION_OK)
+
+    def tray_toggle_checked(self, item=None):
+        return self._expansion_state() == health_support.EXPANSION_OK
+
+    def tray_toggle_enabled(self, item=None):
+        # Nothing resumes a failed capture; the line only reports it.
+        return self.capture_error is None
+
+    def toggle_enabled(self, icon, item, *, in_manager=False):
+        """Pause or resume snippet expansion.
+
+        The tray menu and the hotkey call it with pystray's ``(icon, item)``.
+        ``in_manager`` says the person did it in the window, whose receipt
+        replaces the status line at once: a pause and the resume that follows
+        within the toast cooldown must both be written, or the line keeps
+        saying "pausada" over a sidebar that says "ativa".
+        """
         if not self.enabled and self.capture_error is not None:
             # No listener runs after a capture failure, so "Expansão ativa"
             # would claim an expansion that cannot happen.
@@ -6595,29 +7008,182 @@ class Sniptype:
         # A partial trigger typed before the toggle must not complete after it.
         self.typed_text = ""
         self.enabled = not self.enabled
-        if icon is not None:
-            icon.icon = self.load_tray_icon()
-        if self.enabled:
-            message = _("Expansão de snippets ativada.")
-        else:
-            message = _("Expansão de snippets desativada.")
-        self.notify_status(message, key="toggle-enabled")
+        self.refresh_tray_state()
+        self.receipt(
+            N_("Expansão retomada às {time}") if self.enabled else N_("Expansão pausada às {time}"),
+            key="toggle-enabled", in_manager=in_manager)
         self.gui.submit(self._refresh_manager_status)
 
     def _refresh_manager_status(self, _root=None):
-        """Refresh the visible manager state on the GUI thread."""
+        """Refresh the visible manager state on the GUI thread.
+
+        The sidebar names the expansion state in one of three ways (health
+        support): a quiet dot with a muted word while it is on, and a toned
+        icon with a bold written state while it is paused or the capture
+        failed. The InfoBar above the pages carries the same news with its
+        recovery action.
+        """
         status = self._manager_status_var
         button = self._manager_toggle_button
         if status is None or button is None:
             return
-        if self.capture_error is not None:
-            status.set(_("Captura de teclado falhou"))
+        ui = ui_theme.theme()
+        state = self._expansion_state()
+        status.set(health_support.expansion_label(state))
+        label, icon = self._manager_status_label, self._manager_status_icon
+        if state == health_support.EXPANSION_DOWN:
+            tone, glyph, weight = ui.danger, "error", "bold"
             button.configure(text=_("Reinicie o SnipType"), state=tk.DISABLED)
             ui_widgets.set_icon(button, "refresh")
+        elif state == health_support.EXPANSION_PAUSED:
+            tone, glyph, weight = ui.warning, "pause", "bold"
+            button.configure(text=_("Retomar expansão"))
+            ui_widgets.set_icon(button, "play")
+        else:
+            tone, glyph, weight = ui.text_muted, None, None
+            button.configure(text=_("Pausar expansão"))
+            ui_widgets.set_icon(button, "pause")
+        if label is not None:
+            label.configure(
+                fg=tone, font=ui.font(ui_theme.BODY_FONT_SIZE, weight))
+        if icon is not None:
+            # The quiet state is the dot in the success tone, whose word stays muted.
+            picture = ui_widgets.signal_image(
+                icon, ui.success if glyph is None else tone, glyph, ui=ui)
+            icon.configure(image=picture)
+            icon.image = picture
+        self._refresh_manager_health()
+
+    def _install_callback_hook(self, root):
+        """Make an exception in any Tk callback visible instead of lost. GUI thread.
+
+        Tk prints it to stderr, which the windowed build never shows, so a
+        failing button would simply do nothing.
+        """
+        root.report_callback_exception = self._report_callback_exception
+
+    def _report_callback_exception(self, exc_type, exc, tb):
+        """A Tk callback raised: keep the traceback in the log and tell the person."""
+        self.logger.error(
+            "Exceção em um callback da GUI:\n"
+            + "".join(traceback.format_exception(exc_type, exc, tb)))
+        self.notify_error(
+            _("Erro inesperado: {error}").format(error=exc),
+            key="gui-callback-error",
+            cooldown_seconds=5,
+        )
+
+    def _health_facts(self):
+        """What the health projection reads, from the state the app holds."""
+        metadata = self.library_metadata
+        return health_support.HealthFacts(
+            enabled=self.enabled,
+            capture_error=self.capture_error,
+            library_recovery=self.library_recovery,
+            metadata_read_only=bool(getattr(metadata, "read_only", False)),
+            metadata_malformed=bool(getattr(metadata, "malformed", False)),
+            shadowed=tuple(sorted(self.shadowed_static_snippets)),
+            last_save_error=self.last_save_error,
+            last_mirror=self.last_mirror,
+            last_sync=self.last_sync,
+        )
+
+    def _manager_issues(self):
+        """The open issues the person has not dismissed, most severe first."""
+        return [
+            issue for issue in health_support.build_health(self._health_facts())
+            if issue.id not in self._dismissed_health
+        ]
+
+    def _refresh_manager_health(self, _root=None):
+        """Redraw the InfoBar, and the Dados card's lines, for what is open now. GUI thread."""
+        bar = self._manager_health
+        if bar is None:
             return
-        status.set(_("Expansão ativa") if self.enabled else _("Expansão pausada"))
-        button.configure(text=_("Pausar expansão") if self.enabled else _("Retomar expansão"))
-        ui_widgets.set_icon(button, "pause" if self.enabled else "play")
+        if self._manager_data_refresh is not None:
+            self._manager_data_refresh()
+        tones = {
+            health_support.ERROR: "danger",
+            health_support.WARNING: "warning",
+            health_support.INFO: "info",
+        }
+        bar.show([
+            ui_widgets.InfoRow(
+                tones[issue.severity], issue.title, issue.body,
+                (issue.action_label,
+                 lambda action=issue.action_id: self._run_health_action(action)
+                 ) if issue.action_id else None,
+                (lambda issue_id=issue.id: self._dismiss_health(issue_id))
+                if issue.dismissible else None,
+            )
+            for issue in self._manager_issues()
+        ])
+
+    def _request_health_refresh(self):
+        """Redraw an open manager's InfoBar; safe from any thread, a no-op when closed."""
+        if self._manager_health is not None:
+            self.gui.submit(self._refresh_manager_health)
+
+    def _library_replaced(self):
+        """Another library is in place (recovery, restore, import). Any thread.
+
+        The InfoBar reads the new state, and every status line returns to rest:
+        a receipt describes what the person did to the library that was there,
+        and would otherwise keep naming an item that may no longer exist, or
+        offer Desfazer on it.
+        """
+        self._request_health_refresh()
+        if self._manager_receipts:
+            self.gui.submit(self._reset_manager_receipts)
+
+    def _reset_manager_receipts(self, _root=None):
+        """Return every status line of the open manager to its resting text. GUI thread."""
+        for receipt in self._manager_receipts.values():
+            receipt.reset()
+
+    def _dismiss_health(self, issue_id):
+        """Hide an info issue for the rest of the session."""
+        self._dismissed_health.add(issue_id)
+        self._refresh_manager_health()
+
+    def _show_manager_page(self, name):
+        notebook, page = self._manager_notebook, self._manager_pages.get(name)
+        if notebook is not None and page is not None:
+            notebook.select(page)
+
+    def _run_health_action(self, action_id):
+        """The one recovery action an issue offers. GUI thread."""
+        if action_id == health_support.RESUME:
+            self.toggle_enabled(self.icon, None, in_manager=True)
+        elif action_id == health_support.OPEN_BACKUPS:
+            self._show_manager_page("backups")
+        elif action_id == health_support.OPEN_DYNAMIC:
+            self._show_manager_page("dynamic")
+        elif action_id == health_support.OPEN_FOLDER:
+            self.open_data_folder()
+        elif action_id == health_support.OPEN_LOG:
+            self.open_log()
+        elif action_id == health_support.RETRY_SYNC:
+            self.retry_sync()
+            self._refresh_manager_health()
+        else:
+            raise ValueError(f"unknown health action: {action_id!r}")
+
+    def _track_manager_visibility(self, window):
+        """Keep ``_manager_visible`` true exactly while ``window`` is mapped.
+
+        Receipts are written on the status line only while the person can see
+        it; a minimized or closed manager leaves them to the tray.
+        """
+        def set_visible(visible):
+            def handler(event):
+                if event.widget is window:
+                    self._manager_visible = visible
+            return handler
+
+        window.bind("<Map>", set_visible(True), add="+")
+        window.bind("<Unmap>", set_visible(False), add="+")
+        self._manager_visible = False
 
     def edit_last_snippet(self, icon=None, item=None):
         """Queue the manager at the most recently successful snippet."""
@@ -7064,6 +7630,8 @@ class Sniptype:
                   "Sniptype. Detalhes: {e}").format(e=error),
                 key="input-capture-error",
             )
+            # The tray says it too; one built after this point reads the state.
+            self.refresh_tray_state()
             # A manager built after this check reads capture_error right after
             # it creates the status variable, so it cannot miss the failure.
             if self._manager_status_var is not None:
@@ -7131,6 +7699,9 @@ class Sniptype:
             # Dock. Logged rather than raised for exactly that reason.
             self.logger.warning("Não foi possível ocultar o ícone do Dock.")
 
+        if gui_started:
+            self.gui.submit(self._install_callback_hook)
+
         if gui_started and IS_WINDOWS:
             # Default icon for every window, including a dialog opened before
             # the manager (which otherwise sets it) ever has been.
@@ -7146,9 +7717,10 @@ class Sniptype:
 
         menu = pystray.Menu(
             pystray.MenuItem(
-                lambda text: f"{'✓' if self.enabled else '✗'} {_('Ativado')}",
+                self.tray_toggle_label,
                 self.toggle_enabled,
-                checked=lambda item: self.enabled
+                checked=self.tray_toggle_checked,
+                enabled=self.tray_toggle_enabled,
             ),
             pystray.MenuItem(
                 lazy("⚠ Permissões do macOS"),
@@ -7156,7 +7728,7 @@ class Sniptype:
                 visible=self.macos_permissions_pending,
             ),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem(lazy("Gerenciar Snippets"), self.manage_snippets_gui, default=True),
+            pystray.MenuItem(lazy("Gerenciar snippets"), self.manage_snippets_gui, default=True),
             pystray.MenuItem(lazy("Editar último snippet"), self.edit_last_snippet),
             pystray.MenuItem(lazy("Configurar atalhos"), self.configure_hotkeys),
             pystray.MenuItem(lazy("Atualizar biblioteca"), self.reload_snippets),
@@ -7182,7 +7754,7 @@ class Sniptype:
         self.icon = pystray.Icon(
             "sniptype",
             self.load_tray_icon(),
-            APP_DISPLAY_NAME,
+            tray_support.tooltip(APP_DISPLAY_NAME, self._expansion_state()),
             menu,
             **platform_support.tray_icon_options()
         )

@@ -680,6 +680,23 @@ class ContrastTests(unittest.TestCase):
                     self.assertGreaterEqual(
                         _contrast(theme.accent_border, theme.surface_alt), 3)
 
+    def test_tray_badges_are_the_dark_state_colors_and_their_glyph_reads_on_them(self):
+        dark = ui_theme.palette("dark", "windows")
+        for state, tone in (("paused", "warning"), ("down", "danger")):
+            fill, glyph, ring = ui_theme.tray_badge_colors(state)
+            with self.subTest(state):
+                self.assertEqual(dark[tone], fill)
+                # The pause bars and the alert mark, and the ring that parts
+                # the badge from the tile, against the fill.
+                self.assertGreaterEqual(_contrast(glyph, fill), 7)
+                self.assertGreaterEqual(_contrast(ring, fill), 7)
+
+    def test_tray_badge_colors_refuse_a_state_with_no_badge(self):
+        for state in ("ok", "unknown", None):
+            with self.subTest(state):
+                with self.assertRaises(ValueError):
+                    ui_theme.tray_badge_colors(state)
+
     def test_each_state_reads_on_its_own_tint(self):
         for name, colors in self._palettes().items():
             for state in ("danger", "warning", "success", "info"):

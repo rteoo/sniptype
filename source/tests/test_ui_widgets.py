@@ -191,6 +191,31 @@ class FactoryTests(unittest.TestCase):
                 ui_widgets.set_selected(widget, False, theme)
                 widget.marker.configure.assert_called_with(bg=theme.surface_alt)
 
+    def test_a_signal_is_a_drawn_dot_without_a_glyph_and_when_no_icon_font_exists(self):
+        # The quiet state is an 8 px dot in its own color, drawn rather than
+        # typed, and a glyph that cannot be drawn degrades to the same dot
+        # (the word beside it carries the meaning).
+        import base64
+        import io
+        from PIL import Image
+
+        widget = mock.Mock()
+        widget.winfo_rgb.return_value = (0x16 << 8, 0x64 << 8, 0x3B << 8)
+        with mock.patch.object(ui_widgets.tk, "PhotoImage", side_effect=lambda **kw: kw), \
+                mock.patch.object(ui_widgets, "icon_image", return_value=None) as icon:
+            plain = ui_widgets.signal_image(widget, "#16643B", ui=self.windows)
+            no_font = ui_widgets.signal_image(widget, "#16643B", "pause", ui=self.windows)
+        icon.assert_called_once()
+        for label, photo in (("no glyph", plain), ("no icon font", no_font)):
+            with self.subTest(label):
+                dot = Image.open(io.BytesIO(base64.b64decode(photo["data"]))).convert("RGBA")
+                size = self.windows.px(16)
+                self.assertEqual((size, size), dot.size)
+                self.assertEqual("#16643B", _hex(dot.getpixel((size // 2, size // 2))))
+                self.assertEqual(0, dot.getpixel((0, 0))[3])
+                row = [dot.getpixel((x, size // 2))[3] for x in range(size)]
+                self.assertEqual(self.windows.px(8), sum(1 for alpha in row if alpha > 127))
+
     def test_gaps_between_fluent_faces_count_their_focus_margins(self):
         widget = mock.Mock(**{"tk.interpaddr.return_value": "face-gap-test"})
         # No installed theme (macOS, or before install): the padding is the gap.

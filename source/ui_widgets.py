@@ -31,6 +31,7 @@ collection on a thread other than the GUI thread can abort Tcl (see the
 
 import base64
 import io
+from collections import namedtuple
 import tkinter as tk
 from tkinter import font as tkfont
 from tkinter import ttk
@@ -1389,6 +1390,7 @@ class ReceiptLine:
 
     def __init__(self, parent, hint, *, ui=None):
         self.ui = ui or ui_theme.theme()
+        self._hint = hint
         background = surface_of(parent)
         self.frame = tk.Frame(parent, bg=background)
         self.label = tk.Label(
@@ -1413,6 +1415,16 @@ class ReceiptLine:
         self.action.pack(side=tk.LEFT, padx=(self.ui.space_sm, 0))
         self._timer = self.frame.after(round(seconds * 1000), self._expire)
 
+    def reset(self):
+        """Back to the resting hint with no action.
+
+        For when what the last receipt described is gone, such as the library
+        it was written about: the line must not keep naming it.
+        """
+        self._cancel_timer()
+        self.action.pack_forget()
+        self.label.configure(text=self._hint, fg=self.ui.text_muted)
+
     def _act(self, action):
         self._cancel_timer()
         self._expire()
@@ -1430,3 +1442,154 @@ class ReceiptLine:
     def _on_destroy(self, event):
         if event.widget is self.frame:
             self._cancel_timer()
+
+
+# ---------------------------------------------------------------------------
+# Status: the signal beside a state word, and the InfoBar
+# ---------------------------------------------------------------------------
+
+def signal_image(widget, color, glyph=None, *, ui=None):
+    """The picture beside a state word: ``glyph`` (an :data:`ICONS` name) in
+    ``color``, or a filled dot where no glyph is asked for or no icon font
+    exists. The caller keeps the reference (``label.image = image``).
+
+    The dot is drawn, never typed as a character: a typed bullet takes the
+    text's font and baseline and cannot be sized or recolored apart from it.
+    """
+    ui = ui or ui_theme.theme()
+    if glyph is not None:
+        image = icon_image(widget, glyph, color, ui=ui)
+        if image is not None:
+            return image
+    size = ui.px(16)
+    diameter = ui.px(8)
+    canvas = Image.new("RGBA", (size * _SS, size * _SS), _CLEAR)
+    inset = (size - diameter) * _SS // 2
+    ImageDraw.Draw(canvas).ellipse(
+        (inset, inset, size * _SS - inset - 1, size * _SS - inset - 1),
+        fill=_rgba(resolve_color(widget, color)),
+    )
+    buffer = io.BytesIO()
+    canvas.resize((size, size), Image.LANCZOS).save(buffer, "PNG")
+    return tk.PhotoImage(master=widget, data=base64.b64encode(buffer.getvalue()).decode("ascii"))
+
+
+# A row of the InfoBar: ``tone`` is "danger", "warning" or "info"; ``action``
+# is ``(label, command)`` or None; ``dismiss`` is a command or None.
+InfoRow = namedtuple("InfoRow", "tone title body action dismiss", defaults=(None, None))
+
+
+class InfoBar:
+    """Persistent written trouble above a page: the most severe issue in full.
+
+    The band is state-colored (the DS state fill and text) with the tone's
+    icon, a written title, what it means and one action; a row that can be
+    dismissed says so in a labeled button, never an icon alone. The bar is for
+    what stays true until it is resolved, so nothing here times out.
+
+    Only the first row gets a band, so the bar costs a page one row's height
+    however much is wrong. That bound is what keeps the Textos editor's
+    toolbar, content box and buttons inside the window at its minimum size
+    with every kind of trouble open at once. The other issues are named in one
+    line under it and take the band when the first is resolved.
+
+    Grid ``frame`` where the bar belongs, then call :meth:`show`: it hides
+    itself when there is nothing to say and keeps the widgets it already has
+    when the rows have not changed, so a refresh never costs a button its
+    keyboard focus.
+    """
+
+    def __init__(self, parent, *, ui=None):
+        self.ui = ui or ui_theme.theme()
+        self.frame = tk.Frame(parent, bg=self.ui.surface)
+        self._signature = None
+
+    def show(self, rows):
+        """Draw the first of ``rows`` (:class:`InfoRow`), most severe first, and name the rest."""
+        rows = list(rows)
+        signature = tuple(
+            (r.tone, r.title, r.body, r.action and r.action[0], r.dismiss is not None)
+            for r in rows)
+        if signature == self._signature:
+            return
+        self._signature = signature
+        self._release_focus()
+        for child in self.frame.winfo_children():
+            child.destroy()
+        if not rows:
+            self.frame.grid_remove()
+            return
+        self._row(rows[0])
+        tk.Frame(self.frame, bg=self.ui.divider, height=1).pack(fill=tk.X)
+        if len(rows) > 1:
+            self._also(rows[1:])
+        self.frame.grid()
+
+    def _also(self, rows):
+        """One line naming the issues that wait behind the band."""
+        ui = self.ui
+        also = tk.Label(
+            self.frame,
+            text=_("Também aguardando atenção: {titles}").format(
+                titles=" · ".join(row.title for row in rows)),
+            font=ui.caption_font(), bg=ui.surface, fg=ui.text_muted,
+            anchor="w", justify=tk.LEFT, padx=ui.space_lg, pady=ui.space_xs,
+        )
+        also.pack(fill=tk.X)
+        also.bind(
+            "<Configure>",
+            lambda event: also.configure(wraplength=max(ui.px(160), event.width - 2 * ui.space_lg)),
+            add="+")
+
+    def _release_focus(self):
+        """Hand the focus to the window before the button that holds it is destroyed."""
+        try:
+            focused = self.frame.focus_get()
+        except (KeyError, tk.TclError):
+            return
+        if focused is not None and str(focused).startswith(str(self.frame)):
+            self.frame.winfo_toplevel().focus_set()
+
+    def _row(self, row):
+        ui = self.ui
+        background = getattr(ui, f"{row.tone}_bg")
+        tone = getattr(ui, row.tone)
+        band = tk.Frame(self.frame, bg=background, padx=ui.space_lg, pady=ui.space_sm)
+        band.pack(fill=tk.X)
+        band.grid_columnconfigure(1, weight=1)
+        glyph = icon_image(band, _TONE_ICONS[row.tone], tone, gap=8, ui=ui)
+        icon = tk.Label(band, image=glyph or "", bg=background)
+        icon.image = glyph
+        icon.grid(row=0, column=0, sticky="n", pady=ui.px(2))
+        text = tk.Frame(band, bg=background)
+        text.grid(row=0, column=1, sticky="ew")
+        title = tk.Label(
+            text, text=row.title, font=ui.font(ui_theme.BODY_FONT_SIZE, "bold"),
+            bg=background, fg=tone, anchor="w", justify=tk.LEFT,
+        )
+        title.pack(fill=tk.X)
+        body = tk.Label(
+            text, text=row.body, font=ui.caption_font(), bg=background, fg=ui.text,
+            anchor="w", justify=tk.LEFT,
+        )
+        body.pack(fill=tk.X)
+        buttons = tk.Frame(band, bg=background)
+        buttons.grid(row=0, column=2, sticky="ne", padx=(ui.space_md, 0))
+        gap = face_gap(buttons, ui.space_sm, ui)
+        if row.action:
+            label, command = row.action
+            button(buttons, text=label, command=command, ui=ui).pack(side=tk.LEFT)
+        if row.dismiss is not None:
+            button(
+                buttons, text=_("Dispensar"), command=row.dismiss, variant="subtle", ui=ui,
+            ).pack(side=tk.LEFT, padx=(gap if row.action else 0, 0))
+
+        def fit(event):
+            # The text takes what the icon and the buttons leave, and wraps there.
+            room = (event.width - icon.winfo_reqwidth() - buttons.winfo_reqwidth()
+                    - 2 * ui.space_lg - ui.space_md)
+            wrap = max(ui.px(160), room)
+            title.configure(wraplength=wrap)
+            body.configure(wraplength=wrap)
+
+        band.bind("<Configure>", fit, add="+")

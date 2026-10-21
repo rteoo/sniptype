@@ -32,6 +32,7 @@ def make_startup_app():
     app.task_runner = mock.Mock()
     app.snippets = {}
     app.enabled = True
+    app.capture_error = None
     app.icon = None
     app._autostart_lock = threading.Lock()
     app._autostart_state = tx.AUTOSTART_ABSENT
@@ -344,6 +345,158 @@ class StartupAndSingleInstanceCompatibilityTests(unittest.TestCase):
         # Reading sharedApplication() with no root would mint a bare
         # NSApplication nobody runs; the early return must precede it.
         options.assert_not_called()
+
+
+SOURCE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+
+
+class TrayStateTests(unittest.TestCase):
+    """The tray tells the sidebar's story: icon shape and tooltip per expansion state."""
+
+    def _app(self, *, enabled=True, capture_error=None):
+        app = tx.Sniptype.__new__(tx.Sniptype)
+        app.logger = mock.Mock()
+        app.enabled = enabled
+        app.capture_error = capture_error
+        app.icon = types.SimpleNamespace(icon=None, title=None, update_menu=mock.Mock())
+        app.gui = mock.Mock()
+        # The shipped icon, found where the packaged app finds it.
+        app.resolve_resource_path = lambda name: os.path.join(SOURCE_DIR, name)
+        return app
+
+    @staticmethod
+    def _pixels(image):
+        return hash(image.convert("RGBA").tobytes())
+
+    def test_each_state_draws_a_different_icon(self):
+        with tx.Image.open(os.path.join(SOURCE_DIR, "sniptype.ico")) as icon_file:
+            shipped = icon_file.convert("RGBA")
+        active = self._app().load_tray_icon()
+        paused = self._app(enabled=False).load_tray_icon()
+        failed = self._app(enabled=False, capture_error=OSError("hook")).load_tray_icon()
+
+        self.assertEqual(self._pixels(shipped), self._pixels(active), "on is the shipped icon")
+        hashes = {self._pixels(image) for image in (active, paused, failed)}
+        self.assertEqual(3, len(hashes))
+        for image in (paused, failed):
+            self.assertEqual(shipped.size, image.size)
+
+    def test_a_failed_capture_is_down_even_if_the_flag_says_enabled(self):
+        app = self._app(enabled=True, capture_error=OSError("hook"))
+
+        self.assertEqual(
+            self._pixels(self._app(enabled=False, capture_error=OSError("x")).load_tray_icon()),
+            self._pixels(app.load_tray_icon()),
+        )
+
+    def test_the_tooltip_follows_the_state_and_stays_plain_when_expansion_is_on(self):
+        for label, kwargs, expected in (
+            ("on", {}, tx.APP_DISPLAY_NAME),
+            ("paused", {"enabled": False}, f"{tx.APP_DISPLAY_NAME} · Expansão pausada"),
+            ("failed", {"enabled": False, "capture_error": OSError("x")},
+             f"{tx.APP_DISPLAY_NAME} · Captura falhou"),
+        ):
+            with self.subTest(label):
+                app = self._app(**kwargs)
+                app._update_tray_menu = mock.Mock()
+
+                app._apply_tray_state()
+
+                self.assertEqual(expected, app.icon.title)
+                self.assertEqual(self._pixels(app.load_tray_icon()), self._pixels(app.icon.icon))
+                app._update_tray_menu.assert_called_once_with()
+
+    def test_pausing_and_resuming_redraws_the_tray(self):
+        app = self._app()
+        app.notify_status = mock.Mock()
+        app._update_tray_menu = mock.Mock()
+        with mock.patch.object(tx.platform_support, "tray_menu_updates_on_gui_thread",
+                               return_value=False):
+            app.toggle_enabled(app.icon, None)
+            paused = (app.icon.title, self._pixels(app.icon.icon))
+            app.toggle_enabled(app.icon, None)
+            resumed = (app.icon.title, self._pixels(app.icon.icon))
+
+        self.assertEqual(f"{tx.APP_DISPLAY_NAME} · Expansão pausada", paused[0])
+        self.assertEqual(tx.APP_DISPLAY_NAME, resumed[0])
+        self.assertNotEqual(paused[1], resumed[1])
+
+    def test_a_capture_failure_redraws_the_tray_from_the_listener_thread(self):
+        app = self._app()
+        app.listener = None
+        app.mouse_monitor = mock.Mock()
+        app.notify_error = mock.Mock()
+        app._update_tray_menu = mock.Mock()
+        app._manager_status_var = None
+        with mock.patch.object(tx.keyboard, "Listener", side_effect=OSError("hook")), \
+                mock.patch.object(tx.platform_support, "tray_menu_updates_on_gui_thread",
+                                  return_value=False):
+            app.run_keyboard_listener()
+
+        self.assertEqual(f"{tx.APP_DISPLAY_NAME} · Captura falhou", app.icon.title)
+
+    def test_where_the_menu_belongs_to_the_gui_thread_the_redraw_is_queued(self):
+        # macOS may only touch its status item from the main thread.
+        app = self._app(enabled=False)
+        with mock.patch.object(tx.platform_support, "tray_menu_updates_on_gui_thread",
+                               return_value=True):
+            app.refresh_tray_state()
+
+        app.gui.submit.assert_called_once_with(app._apply_tray_state)
+        self.assertIsNone(app.icon.title)
+
+    def test_no_icon_yet_means_nothing_to_redraw(self):
+        app = self._app(enabled=False)
+        app.icon = None
+
+        app.refresh_tray_state()
+
+        app.gui.submit.assert_not_called()
+
+    def test_the_first_menu_line_names_the_state_with_the_native_check_only(self):
+        items = []
+
+        def menu_item(*args, **kwargs):
+            items.append((args, kwargs))
+            return object()
+
+        app = make_startup_app()
+        with mock.patch.object(tx.pystray, "Icon", return_value=mock.Mock()), \
+                mock.patch.object(tx.pystray, "Menu", return_value=object()), \
+                mock.patch.object(tx.pystray, "MenuItem", side_effect=menu_item), \
+                mock.patch.object(tx.platform_support, "tk_runs_on_main_thread", return_value=False), \
+                mock.patch("builtins.print"):
+            app.run()
+        (text, action), kwargs = items[0]
+
+        self.assertEqual(app.toggle_enabled, action)
+        for label, enabled, capture_error, shown, checked, usable in (
+            ("on", True, None, "Expansão ativa", True, True),
+            ("paused", False, None, "Expansão ativa", False, True),
+            ("failed", False, OSError("hook"), "Captura falhou", False, False),
+        ):
+            with self.subTest(label):
+                app.enabled, app.capture_error = enabled, capture_error
+                self.assertEqual(shown, text(None))
+                self.assertEqual(checked, kwargs["checked"](None))
+                self.assertEqual(usable, kwargs["enabled"](None))
+                self.assertNotIn("✓", text(None))
+                self.assertNotIn("✗", text(None))
+
+    def test_tray_labels_are_sentence_case(self):
+        labels = []
+        app = make_startup_app()
+        with mock.patch.object(tx.pystray, "Icon", return_value=mock.Mock()), \
+                mock.patch.object(tx.pystray, "Menu", return_value=object()), \
+                mock.patch.object(tx.pystray, "MenuItem",
+                                  side_effect=lambda *a, **k: labels.append(a[0]) or object()), \
+                mock.patch.object(tx.platform_support, "tk_runs_on_main_thread", return_value=False), \
+                mock.patch("builtins.print"):
+            app.run()
+
+        texts = [label(None) for label in labels if callable(label)]
+        self.assertIn("Gerenciar snippets", texts)
+        self.assertNotIn("Gerenciar Snippets", texts)
 
 
 class AppVersionFormattingTests(unittest.TestCase):

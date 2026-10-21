@@ -81,7 +81,7 @@ The installer is currently unsigned, so Windows SmartScreen may show
 ## First use
 
 1. Start SnipType and find its icon in the system tray or macOS menu bar.
-2. Open **Gerenciar Snippets** from the tray menu.
+2. Open **Gerenciar snippets** from the tray menu.
 3. Add a trigger and its replacement text, then save.
 4. Type the trigger in another application.
 
@@ -89,7 +89,7 @@ The interface starts in English when Windows is in English and in Brazilian
 Portuguese otherwise. To change it, open **Settings > General** (**Configurações
 > Geral**), choose a language under **Language** (**Idioma**) and apply it; the
 choice is remembered from then on. The tray menu item above reads **Manage
-Snippets** in English.
+snippets** in English.
 
 The bundled sample library includes examples such as:
 

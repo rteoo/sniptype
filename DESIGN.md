@@ -175,22 +175,59 @@ Adopted now as a project extension:
 - **State vocabulary (§12.1), expansion glossary.** The sidebar names one
   canonical state, and the states never collapse into each other:
 
-  | Key | pt-BR | en | Command |
-  | --- | --- | --- | --- |
-  | `ok` | Expansão ativa | Expansion on | Pausar expansão |
-  | `paused` | Expansão pausada | Expansion paused | Retomar expansão |
-  | `down` | Captura de teclado falhou | Keyboard capture failed | Reinicie o SnipType, disabled |
+  | Key | pt-BR | en | Command | Sidebar mark |
+  | --- | --- | --- | --- | --- |
+  | `ok` | Expansão ativa | Expansion on | Pausar expansão | 8 px `success` dot, muted word |
+  | `paused` | Expansão pausada | Expansion paused | Retomar expansão | `warning` pause icon, bold word |
+  | `down` | Captura falhou | Capture failed | Reinicie o SnipType, disabled | `danger` alert icon, bold word |
 
-  After a capture failure, resuming is refused with the reason, from the
-  window, the tray and the hotkey alike. The tone, the signal dot and the tray
-  state are not drawn yet.
+  `source/health_support.py` owns the three states and their words, and the
+  sidebar, the InfoBar and the tray all read them from there. The sidebar has
+  no tagline: its first line is the state. After a capture failure, resuming
+  is refused with the reason, from the window, the tray and the hotkey alike.
+  The tray tells the same story (see Tray state).
+- **Attention: the InfoBar slot (OPS-02, §12.5, §12.7).** A row band above
+  the pages, written once for every page, shows what stays true until it is
+  resolved. `health_support.build_health(facts)` is the pure projection
+  behind it, most severe first, one recovery action per issue:
+
+  | Issue | Severity | Action |
+  | --- | --- | --- |
+  | Captura falhou | error | Abrir log |
+  | Usando a biblioteca de exemplo (names the quarantined file) | error | Abrir pasta |
+  | Não foi possível salvar a biblioteca | error | Abrir log |
+  | Expansão pausada | warning | Retomar |
+  | Metadados da biblioteca somente leitura | warning | Abrir pasta |
+  | Triggers em conflito com ações dinâmicas | warning | Ver ações dinâmicas |
+  | Cópia espelho não gravada · Pacote de sincronização não exportado | warning | Tentar agora |
+  | Biblioteca restaurada do backup · {when} | info | Ver cópias de segurança, Dispensar |
+
+  A band uses the DS state fill and text, the tone's icon, a written title,
+  what it means and its action. Only `info` can be dismissed (Dispensar, for
+  the session, as a labeled button); an error or warning stays until the
+  fact stops being true. Only the most severe issue gets the band; the rest
+  are named in one line under it ("Também aguardando atenção: Expansão
+  pausada · Cópia espelho não gravada") and take the band as each is
+  resolved. The bar therefore costs a page one row however much is wrong,
+  which keeps the Textos editor's toolbar, content box and buttons inside the
+  window at its 1180x760 minimum with every kind of trouble open at once. The
+  named line stands in for the shared "Ver tudo (N)" list, which a Tk page has
+  no height for; the sidebar's Retomar expansão and the Dados card's Tentar
+  agora stay reachable while their issue waits. The producer sets the severity; the view never softens or raises it. A
+  failed capture is never also reported as a pause. The facts are session
+  memory, recorded where they happen (`library_recovery`, `last_save_error`,
+  `last_mirror`, `last_sync`, plus the app's live flags), and nothing is
+  persisted. Replacing the library (restore, import) ends a recovery; a
+  successful save ends a save failure.
 - **No silent failures (§12.7).** Every library command ends in a receipt or
   in an error dialog titled with the action, including errors nobody
-  anticipated, which are also logged with their traceback. A bound control
-  (Favorito, Grupo) that fails returns to the saved value. In-window
-  receipts exist so far for deletes and their undo; other commands still
-  report success with a tray notification, or with an information dialog in
-  Cópias de segurança, until receipts cover them.
+  anticipated, which are also logged with their traceback. An exception in
+  any Tk callback is logged with its traceback and shown as an error
+  notification ("Erro inesperado: …") through `report_callback_exception`,
+  so a failing button never does nothing silently. A bound control
+  (Favorito, Grupo) that fails returns to the saved value. A mirror or sync
+  export that fails is recorded and shown in the InfoBar and the Dados card
+  instead of only in the log.
 - **Dialog kit (§12.8, §12.16 Tk).** Every prompt is a themed, owned, modal
   Toplevel from `ui_widgets`: `confirm(parent, title, body, primary_label,
   danger=False, typed_word=None, extra=None)`, `ask_text(parent, title,
@@ -219,11 +256,54 @@ Adopted now as a project extension:
 
   Counts read "Novos: N · Sobrescritos: N · Removidos: N", item by item,
   mapping entries included.
-- **Receipt format (§12.8).** A receipt names the outcome with its time,
-  then the object: "Excluído às 14:02 · xola", then "Restaurado às 14:03 ·
-  xola" after Desfazer. It replaces the editor's hint line and stays until
-  the next receipt; its action expires after 10 s. A delete sends no tray
-  notification: the receipt replaces it.
+- **Receipt format and routing (§12.8, §12.9).** A receipt names the outcome
+  with its time, then the object: "Salvo às 14:32 · xola", "Excluído às
+  14:02 · xola", then "Restaurado às 14:03 · xola" after Desfazer. Every page
+  has one status line at the bottom: the editors' rests on "Ctrl+S para
+  salvar" until the first receipt, and the other pages' is empty. A receipt
+  stays until the next one; its action (Desfazer) expires after 10 s. A
+  restore, an import or a recovery replaces the library, so every status line
+  returns to rest and drops its Desfazer: a receipt never names an item of a
+  library that is gone. Pausing or resuming expansion is a command too, with a
+  timed receipt ("Expansão pausada às 14:32") that is never held back by the
+  toast cooldown, so the line and the sidebar always say the same thing.
+  Routine success is quiet:
+
+  | Event | Where it goes |
+  | --- | --- |
+  | A command the person ran in the manager (save, duplicate, rename, group, mapping type, enable, pause or resume, backup, export, import, shortcuts) | The status line of the page they are on. No toast, no dialog |
+  | Another status (tray, hotkey) while the manager is mapped and has the focus | The status line |
+  | The same while the manager is minimized, closed or not focused | A tray notification |
+  | An error | Always a tray notification, and a dialog where the person is waiting on the answer |
+
+  Success dialogs in Cópias de segurança are gone. Every message, whichever
+  way it was shown, is kept in the history with its ISO time (`at`) next to
+  the clock (`time`), so history written before `at` existed still renders.
+- **Notification history.** "Histórico de notificações" lists the newest
+  first with a record stamp in the "Quando" column ("Hoje 11:15", "Ontem
+  09:40", "17/10 09:40"; an old entry with only a clock shows the clock). An
+  error row has the alert icon, the danger text and the word "Erro", so it
+  is told apart by shape and word as well as color. "Somente erros" filters
+  to them. An empty list, and an empty filter, say so in a label instead of
+  a fake row. Headings are left-aligned.
+- **Tray state.** The tray shows the sidebar's state: the shipped icon while
+  expansion is on, and the same icon with a corner badge while it is paused
+  (two bars, `warning`) or the capture failed (an alert mark, `danger`). The
+  badge is drawn at runtime with Pillow in `source/tray_support.py`, so no
+  asset ships per state; its colors come from `ui_theme.tray_badge_colors`
+  and are the dark palette's, with a ring, because the taskbar is not a
+  window of either theme. The tooltip adds the state ("SnipType · Expansão
+  pausada"). The first menu line is "Expansão ativa" with the native check
+  as its only mark, or a disabled "Captura falhou"; menu labels are sentence
+  case ("Gerenciar snippets"). The tray redraws when the state changes, not
+  on a timer.
+- **Navigation counts and freshness.** The navigation counts the library
+  ("Textos (5)") and a search or filter never changes it; the list header
+  says how many the list shows ("Snippets: 1 de 5"). The Dados card says what
+  the last mirror copy and sync export of this session did ("Última
+  exportação Ontem 09:10 · OK", "Nenhuma exportação nesta sessão ainda.");
+  after a failure it turns into a warning band with Abrir pasta (the
+  destination, which is never created) and Tentar agora.
 - **Time vocabulary (§12.6).** `source/time_format.py` is the one formatter:
   a 24-hour local clock, record stamps ("Hoje 14:02", "Ontem 09:10", "qua.
   14/10 09:10", "14/10 09:10", "14/10/2025"; en "Today 14:02", "Wed Oct 14
@@ -317,5 +397,8 @@ satisfy any of them.
 | Accessibility: Narrator roles, values and announcements | Not tested. |
 | Work preservation: drafts across appearance changes and refresh | Passed in the smoke tests and the harness (row change, Novo, Editar último, type change, close, restore, rebuild). Open: quitting from the tray does not ask yet (the close box does), and Excluir on an item with a draft deletes it without asking; Desfazer brings back the saved version, not the draft. |
 | Keyboard: Ctrl+Z for Desfazer | Failed. Desfazer is a button in the receipt line, reachable with Tab; no shortcut yet. |
+| Status: tray badge on real taskbars | Not tested. The badge is drawn at runtime and differs by shape as well as color, but it was checked as a Pillow render at 16 to 32 px on simulated light and dark taskbar colors, not on a real taskbar. |
+| Status: Narrator announcements of a state change | Not tested. The InfoBar and the status line are plain Tk labels, which expose nothing to UI Automation. |
+| Status: macOS tray redraw | Not tested. The redraw is queued onto the GUI thread there, as the menu refresh is, but no Aqua run has seen it. |
 | Dialogs on macOS main-thread mode | Not tested. The kit's grab and focus handoff were exercised on Windows only. |
 | Physical desktop pass at minimum and default size, keyboard only, close and reopen | Not tested for this adoption. |

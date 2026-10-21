@@ -6,6 +6,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -603,6 +604,47 @@ class ExportBundleTests(unittest.TestCase):
         self.assertTrue(self.export({"xa": "A"}, app_version="1.0.0"))
         self.assertFalse(self.export({"xa": "A"}, app_version="2.0.0"))
         self.assertEqual(self.read_bundle()["generator"]["version"], "1.0.0")
+
+    def outcome(self, static, export_dir=_DEFAULT_DIR, **kwargs):
+        return se.export_bundle_outcome(
+            static,
+            {},
+            self.dest_dir if export_dir is self._DEFAULT_DIR else export_dir,
+            self.state_path,
+            logger=self.logger,
+            **kwargs,
+        )
+
+    def test_the_outcome_tells_written_from_unchanged(self):
+        first = self.outcome({"xa": "A"})
+        second = self.outcome({"xa": "A"})
+
+        self.assertEqual((se.EXPORT_WRITTEN, self.bundle_path, None), first)
+        # Skipping an up-to-date bundle is a success that wrote nothing, not a failure.
+        self.assertEqual((se.EXPORT_UNCHANGED, self.bundle_path, None), second)
+
+    def test_the_outcome_says_a_directory_that_cannot_be_used_is_unavailable(self):
+        missing = os.path.join(self.tmp.name, "gone")
+
+        outcome = self.outcome({"xa": "A"}, export_dir=missing)
+
+        self.assertEqual((se.EXPORT_UNAVAILABLE, missing), outcome[:2])
+        self.assertFalse(os.path.exists(missing), "the directory is never created")
+
+    def test_the_outcome_carries_the_error_of_a_write_that_failed(self):
+        with mock.patch.object(se, "write_json_atomic", side_effect=OSError("disk full")):
+            outcome = self.outcome({"xa": "A"})
+
+        self.assertEqual((se.EXPORT_FAILED, self.bundle_path, "disk full"), outcome)
+        self.assertFalse(os.path.exists(self.state_path), "a failed write is not remembered")
+        # The next attempt is a real one, not "unchanged".
+        self.assertEqual(se.EXPORT_WRITTEN, self.outcome({"xa": "A"}).status)
+
+    def test_export_bundle_still_answers_only_whether_it_wrote(self):
+        self.assertTrue(self.export({"xa": "A"}))
+        self.assertFalse(self.export({"xa": "A"}))
+        with mock.patch.object(se, "write_json_atomic", side_effect=OSError("x")):
+            self.assertFalse(self.export({"xa": "B"}))
 
     def test_deleted_bundle_is_rewritten(self):
         self.export({"xa": "A"})

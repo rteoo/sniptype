@@ -17,6 +17,7 @@ import tempfile
 import threading
 import time
 import unittest
+from datetime import datetime, timedelta
 from unittest import mock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -731,7 +732,7 @@ class ManagerGuiSmokeTests(unittest.TestCase):
             )
 
         status, text, state = self._on_gui(run)
-        self.assertEqual("Captura de teclado falhou", status)
+        self.assertEqual("Captura falhou", status)
         self.assertEqual("Reinicie o SnipType", text)
         self.assertEqual("disabled", state)
 
@@ -1768,16 +1769,17 @@ class DestructiveActionTests(unittest.TestCase):
             _press(field, "<Return>")
             return True
 
-        answered = self._import(imported, _click("Substituir tudo…"), type_the_word, _click("Fechar"))
-        self.assertEqual([True, True, True], answered)
+        # The import ends in a receipt on the page, not in a dialog to close.
+        answered = self._import(imported, _click("Substituir tudo…"), type_the_word)
+        self.assertEqual([True, True], answered)
         saved = self._on_disk()
         saved.pop("__sniptype__", None)
         self.assertEqual(imported, saved)
 
     def test_merging_keeps_the_library_and_lets_the_file_win(self):
         imported = self._seed_import_library()
-        answered = self._import(imported, _click("Mesclar"), _click("Fechar"))
-        self.assertEqual([True, True], answered)
+        answered = self._import(imported, _click("Mesclar"))
+        self.assertEqual([True], answered)
         saved = self._on_disk()
         self.assertEqual(("mudou", "novo", "velho"), (saved["xhi"], saved["xnew"], saved["xold"]))
 
@@ -2645,6 +2647,500 @@ def _ancestors(widget, stop):
         widget = widget.master
         if widget is not None and widget is not stop:
             yield widget
+
+
+class _FakeTrayIcon:
+    """Records the toasts and the tray redraws a real pystray icon would show."""
+
+    visible = True
+    icon = None
+    title = None
+
+    def __init__(self):
+        self.toasts = []
+
+    def notify(self, text, title=None):
+        self.toasts.append(text)
+
+    def update_menu(self):
+        pass
+
+
+@unittest.skipUnless(TK_AVAILABLE, TK_SKIP_REASON)
+class StatusAndAttentionTests(unittest.TestCase):
+    """The InfoBar, the sidebar signal, receipts in the window and the dated history."""
+
+    def setUp(self):
+        home = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        self.addCleanup(_close_log_handlers, home)
+        self.app = _make_app(home)
+        self.tray = _FakeTrayIcon()
+        self.app.icon = self.tray
+        self.app.gui.ensure_started()
+
+    def tearDown(self):
+        _reset_shared_root(self.app)
+
+    def _manager(self, root):
+        """The real manager, mapped, as the person sees it."""
+        self.app._build_manager_window(root)
+        window = self.app.manager_window
+        window.geometry("1180x760+40+40")
+        window.deiconify()
+        window.update()
+        return window
+
+    @staticmethod
+    def _bar(app):
+        """``(texts, buttons, bands)`` of the InfoBar as drawn, or None when hidden."""
+        bar = app._manager_health
+        if not bar.frame.winfo_manager():
+            return None
+        bands = [w for w in bar.frame.winfo_children()
+                 if isinstance(w, tk.Frame) and str(w.cget("bg")) != str(bar.frame.cget("bg"))
+                 and w.winfo_height() > 2]
+        return _labels(bar.frame), _buttons(bar.frame), bands
+
+    def _on_gui(self, func):
+        return self.app.gui.call(func, timeout=60)
+
+    def test_a_healthy_manager_is_quiet_and_has_no_tagline(self):
+        def run(root):
+            window = self._manager(root)
+            ui = tx.ui_theme.theme()
+            status = self.app._manager_status_label
+            return {
+                "bar": self._bar(self.app),
+                "status": self.app._manager_status_var.get(),
+                "status_fg": str(status.cget("fg")),
+                "dot": bool(str(self.app._manager_status_icon.cget("image"))),
+                "muted": ui.text_muted,
+                "labels": _labels(window),
+                "button": str(self.app._manager_toggle_button.cget("text")),
+            }
+
+        seen = self._on_gui(run)
+        self.assertIsNone(seen["bar"], "a healthy app has nothing to say")
+        self.assertEqual("Expansão ativa", seen["status"])
+        self.assertEqual(seen["muted"], seen["status_fg"])
+        self.assertTrue(seen["dot"], "the quiet state is a drawn dot")
+        self.assertNotIn("Sua biblioteca de textos e ações rápidas", seen["labels"])
+        self.assertEqual("Pausar expansão", seen["button"])
+
+    def test_a_pause_is_a_written_warning_with_retomar_and_resuming_clears_it(self):
+        def run(root):
+            window = self._manager(root)
+            ui = tx.ui_theme.theme()
+            self.app.toggle_enabled(self.tray, None)
+            window.update()
+            texts, buttons, bands = self._bar(self.app)
+            seen = {
+                "texts": texts,
+                "actions": sorted(buttons),
+                "fill": str(bands[0].cget("bg")),
+                "warning_bg": ui.warning_bg,
+                "status": self.app._manager_status_var.get(),
+                "status_fg": str(self.app._manager_status_label.cget("fg")),
+                "warning": ui.warning,
+                "sidebar_button": str(self.app._manager_toggle_button.cget("text")),
+                "tray_title": self.tray.title,
+            }
+            buttons["Retomar"].invoke()
+            window.update()
+            seen["after"] = (self.app.enabled, self._bar(self.app), self.tray.title)
+            return seen
+
+        seen = self._on_gui(run)
+        self.assertIn("Expansão pausada", seen["texts"])
+        self.assertEqual(["Retomar"], seen["actions"])
+        self.assertEqual(seen["warning_bg"], seen["fill"])
+        self.assertEqual(("Expansão pausada", seen["warning"]), (seen["status"], seen["status_fg"]))
+        self.assertEqual("Retomar expansão", seen["sidebar_button"])
+        self.assertEqual(f"{tx.APP_DISPLAY_NAME} · Expansão pausada", seen["tray_title"])
+        self.assertEqual((True, None, tx.APP_DISPLAY_NAME), seen["after"])
+
+    def test_a_failed_capture_is_a_danger_infobar_and_the_sidebar_says_so(self):
+        def run(root):
+            window = self._manager(root)
+            ui = tx.ui_theme.theme()
+            self.app.capture_error = OSError("hook unavailable")
+            self.app.enabled = False
+            self.app._refresh_manager_status()
+            window.update()
+            texts, buttons, bands = self._bar(self.app)
+            return {
+                "texts": texts, "actions": sorted(buttons), "fill": str(bands[0].cget("bg")),
+                "danger_bg": ui.danger_bg, "status": self.app._manager_status_var.get(),
+                "status_fg": str(self.app._manager_status_label.cget("fg")), "danger": ui.danger,
+                "button": (str(self.app._manager_toggle_button.cget("text")),
+                           str(self.app._manager_toggle_button.cget("state"))),
+            }
+
+        seen = self._on_gui(run)
+        self.assertIn("Captura falhou", seen["texts"])
+        self.assertNotIn("Expansão pausada", seen["texts"], "a failed capture is not a pause")
+        self.assertEqual(["Abrir log"], seen["actions"])
+        self.assertEqual(seen["danger_bg"], seen["fill"])
+        self.assertEqual(("Captura falhou", seen["danger"]), (seen["status"], seen["status_fg"]))
+        self.assertEqual(("Reinicie o SnipType", "disabled"), seen["button"])
+
+    def _corrupt_library(self, *, with_backup):
+        if not with_backup:
+            shutil.rmtree(self.app.backups_dir)
+        with open(self.app.snippets_file, "w", encoding="utf-8") as handle:
+            handle.write("{ not json")
+        self.app.reload_snippets_from_disk()
+
+    def test_sample_defaults_are_a_danger_infobar_naming_the_quarantined_file(self):
+        self._corrupt_library(with_backup=False)
+        quarantined = self.app.library_recovery["quarantined"]
+
+        def run(root):
+            window = self._manager(root)
+            ui = tx.ui_theme.theme()
+            texts, buttons, bands = self._bar(self.app)
+            with mock.patch.object(self.app, "open_data_folder") as open_folder:
+                buttons["Abrir pasta"].invoke()
+            return texts, str(bands[0].cget("bg")), ui.danger_bg, open_folder.called, sorted(buttons)
+
+        texts, fill, danger_bg, opened, actions = self._on_gui(run)
+        self.assertIn("Usando a biblioteca de exemplo", texts)
+        self.assertTrue(any(quarantined in text for text in texts), texts)
+        self.assertEqual(danger_bg, fill)
+        self.assertEqual(["Abrir pasta"], actions, "an error cannot be dismissed")
+        self.assertTrue(opened)
+
+    def test_a_restore_from_backup_is_info_that_can_be_dismissed_or_followed(self):
+        self._corrupt_library(with_backup=True)
+        self.assertEqual("backup", self.app.library_recovery["kind"])
+
+        def run(root):
+            window = self._manager(root)
+            texts, buttons, bands = self._bar(self.app)
+            seen = {"texts": texts, "actions": sorted(buttons)}
+            buttons["Ver cópias de segurança"].invoke()
+            window.update()
+            notebook = self.app._manager_notebook
+            seen["page"] = notebook.select() == str(self.app._manager_pages["backups"])
+            buttons = self._bar(self.app)[1]
+            buttons["Dispensar"].invoke()
+            window.update()
+            seen["after"] = self._bar(self.app)
+            return seen
+
+        seen = self._on_gui(run)
+        self.assertTrue(any(t.startswith("Biblioteca restaurada do backup · ") for t in seen["texts"]))
+        self.assertEqual(["Dispensar", "Ver cópias de segurança"], seen["actions"])
+        self.assertTrue(seen["page"], "the action opens the exact place")
+        self.assertIsNone(seen["after"], "a dismissed info stays gone")
+
+    def test_the_infobar_keeps_its_widgets_when_nothing_changed(self):
+        def run(root):
+            self._manager(root)
+            self.app.enabled = False
+            self.app._refresh_manager_health()
+            before = list(self.app._manager_health.frame.winfo_children())
+            self.app._refresh_manager_health()
+            return before == list(self.app._manager_health.frame.winfo_children())
+
+        self.assertTrue(self._on_gui(run), "a refresh must not cost a button its focus")
+
+    def test_more_issues_than_rows_say_how_many_wait(self):
+        def run(root):
+            self._manager(root)
+            record = {"ok": False, "at": "2026-10-20T10:00:00", "error": "x", "path": "p"}
+            self.app.enabled = False
+            self.app.last_save_error = {"at": record["at"], "error": "x"}
+            self.app.shadowed_static_snippets = {"xdup": "t"}
+            self.app.last_mirror = record
+            self.app.last_sync = record
+            self.app._refresh_manager_health()
+            return self._bar(self.app)[0]
+
+        texts = self._on_gui(run)
+        # Two rows, the most severe first, so a window at its minimum height
+        # keeps its editor; the rest are counted, not hidden silently.
+        self.assertIn("Não foi possível salvar a biblioteca", texts)
+        self.assertIn("Expansão pausada", texts)
+        self.assertNotIn("Triggers em conflito com ações dinâmicas", texts)
+        self.assertIn("Mais itens aguardando atenção: 3", texts)
+
+    def test_a_library_refresh_redraws_the_infobar_with_the_new_state(self):
+        # A dynamic toggle, a reload, a restore and an import all end in
+        # _refresh_manager_lists; the shadowed triggers they change must show.
+        def run(root):
+            self._manager(root)
+            before = self._bar(self.app)
+            self.app.shadowed_static_snippets = {"xdup": "text"}
+            self.app._refresh_manager_lists()
+            shown = self._bar(self.app)
+            self.app.shadowed_static_snippets = {}
+            self.app._refresh_manager_lists()
+            return before, shown, self._bar(self.app)
+
+        before, shown, after = self._on_gui(run)
+        self.assertIsNone(before)
+        self.assertIsNotNone(shown, "the bar must show the state a refresh just read")
+        self.assertIn("Triggers em conflito com ações dinâmicas", shown[0])
+        self.assertIsNone(after, "resolved trouble leaves the bar")
+
+    def _static_tab_of(self, window):
+        notebook = self.app._manager_notebook
+        notebook.select(notebook.tabs()[0])
+        window.update()
+        return notebook.nametowidget(notebook.tabs()[0])
+
+    @staticmethod
+    def _status_line(frame, start):
+        return [t for t in _labels(frame) if t.startswith(start)]
+
+    def test_a_save_with_the_manager_open_writes_a_receipt_and_sends_no_toast(self):
+        def run(root):
+            window = self._manager(root)
+            frame = self._static_tab_of(window)
+            tree = next(w for w in _descendants(frame) if isinstance(w, ttk.Treeview))
+            text = next(w for w in _descendants(frame) if isinstance(w, tk.Text))
+            tree.selection_set("xhi")
+            window.update()
+            text.insert("end", "!")
+            window.update()
+            _buttons(frame)["Salvar"].invoke()
+            window.update()
+            return self._status_line(frame, "Salvo às")
+
+        receipt = self._on_gui(run)
+        self.assertEqual([], self.tray.toasts, "success is quiet while the window is up")
+        self.assertEqual(1, len(receipt))
+        self.assertRegex(receipt[0], r"^Salvo às \d\d:\d\d · xhi$")
+        with open(self.app.snippets_file, encoding="utf-8") as handle:
+            self.assertEqual("hello!", json.load(handle)["xhi"])
+        # The record keeps it, dated.
+        self.assertEqual(receipt[0], self.app.notification_history[-1]["message"])
+        self.assertIn("at", self.app.notification_history[-1])
+
+    def test_the_editor_status_line_rests_on_the_save_shortcut_not_on_a_format_caption(self):
+        def run(root):
+            window = self._manager(root)
+            return _labels(self._static_tab_of(window))
+
+        labels = self._on_gui(run)
+        self.assertIn("Ctrl+S para salvar", labels)
+        self.assertFalse([t for t in labels if t.startswith("Formatação opcional")])
+
+    def test_the_backups_page_confirms_in_its_status_line_and_opens_no_dialog(self):
+        def run(root):
+            window = self._manager(root)
+            notebook = self.app._manager_notebook
+            page = self.app._manager_pages["backups"]
+            notebook.select(page)
+            window.update()
+            seen = {}
+            with mock.patch.object(tx.ui_widgets, "alert") as alert, \
+                    mock.patch.object(tx.ui_widgets, "confirm", return_value=tx.ui_widgets.PRIMARY):
+                _buttons(page)["Criar backup"].invoke()
+                window.update()
+                seen["created"] = self._status_line(page, "Backup criado às")
+                tree = next(w for w in _descendants(page) if isinstance(w, ttk.Treeview))
+                tree.selection_set(tree.get_children()[0])
+                _buttons(page)["Restaurar"].invoke()
+                window.update()
+                seen["restored"] = self._status_line(page, "Backup restaurado às")
+                destination = os.path.join(self.app.data_dir, "export.json")
+                with mock.patch.object(tx.filedialog, "asksaveasfilename", return_value=destination):
+                    _buttons(page)["Exportar…"].invoke()
+                window.update()
+                seen["exported"] = self._status_line(page, "Biblioteca exportada às")
+                source = os.path.join(self.app.data_dir, "import-source.json")
+                with open(source, "w", encoding="utf-8") as handle:
+                    json.dump({"xnew": "novo"}, handle)
+                with mock.patch.object(tx.filedialog, "askopenfilename", return_value=source),                         mock.patch.object(self.app, "_ask_import_mode", return_value="merge"):
+                    _buttons(page)["Importar…"].invoke()
+                window.update()
+                seen["imported"] = self._status_line(page, "Biblioteca importada às")
+            seen["alerts"] = alert.call_args_list
+            return seen
+
+        seen = self._on_gui(run)
+        self.assertEqual([], seen["alerts"], "a success is never a modal")
+        self.assertRegex(seen["created"][0], r"^Backup criado às \d\d:\d\d$")
+        self.assertRegex(seen["restored"][0], r"^Backup restaurado às \d\d:\d\d · ")
+        self.assertRegex(seen["exported"][0], r"^Biblioteca exportada às \d\d:\d\d · export\.json$")
+        self.assertRegex(
+            seen["imported"][0], r"^Biblioteca importada às \d\d:\d\d · import-source\.json$")
+        self.assertEqual([], self.tray.toasts)
+
+    def test_a_failure_on_the_backups_page_is_still_told_with_a_dialog(self):
+        def run(root):
+            window = self._manager(root)
+            page = self.app._manager_pages["backups"]
+            self.app._manager_notebook.select(page)
+            window.update()
+            with mock.patch.object(self.app, "backup_now", return_value=None), \
+                    mock.patch.object(tx.ui_widgets, "alert") as alert:
+                _buttons(page)["Criar backup"].invoke()
+            return alert.call_args
+
+        call = self._on_gui(run)
+        self.assertEqual("Criar backup", call.args[1])
+        self.assertEqual("danger", call.kwargs["tone"])
+
+    def _history(self, root, parent):
+        before = set(parent.winfo_children())
+        self.app._open_notification_history(parent)
+        parent.update()
+        window = next(w for w in parent.winfo_children() if w not in before)
+        tree = next(w for w in _descendants(window) if isinstance(w, ttk.Treeview))
+        return window, tree
+
+    @staticmethod
+    def _rows(tree):
+        return [(tree.item(i, "values"), tuple(tree.item(i, "tags"))) for i in tree.get_children()]
+
+    def test_the_history_shows_dates_tags_errors_and_filters_to_them(self):
+        now = datetime.now()
+        today = now.replace(hour=11, minute=15, second=3, microsecond=0)
+        yesterday = today - timedelta(days=1)
+        self.app.notification_history = [
+            {"time": "10:05:00", "title": "SnipType", "message": "legacy status", "kind": "status"},
+            {"time": yesterday.strftime("%H:%M:%S"), "at": yesterday.isoformat(timespec="seconds"),
+             "title": "SnipType", "message": "yesterday status", "kind": "status"},
+            {"time": today.strftime("%H:%M:%S"), "at": today.isoformat(timespec="seconds"),
+             "title": "SnipType", "message": "boom", "kind": "error"},
+        ]
+
+        def run(root):
+            parent = self._manager(root)
+            window, tree = self._history(root, parent)
+            seen = {"title": window.title(), "rows": self._rows(tree)}
+            seen["headings"] = [str(tree.heading(c, "anchor")) for c in ("time", "kind", "message")]
+            seen["columns"] = [str(tree.column(c, "anchor")) for c in ("time", "kind", "message")]
+            toggle = _buttons_or_checks(window)["Somente erros"]
+            toggle.invoke()
+            window.update()
+            seen["errors_only"] = self._rows(tree)
+            return seen
+
+        seen = self._on_gui(run)
+        self.assertEqual("Histórico de notificações", seen["title"])
+        self.assertEqual(
+            [(("Hoje 11:15", "Erro", "boom"), ("error",)),
+             ((yesterday_label(yesterday), "Status", "yesterday status"), ()),
+             (("10:05:00", "Status", "legacy status"), ())],
+            [(values, tags) for values, tags in seen["rows"]],
+        )
+        self.assertEqual(["w", "w", "w"], seen["headings"])
+        self.assertEqual(["w", "w", "w"], seen["columns"])
+        self.assertEqual([(("Hoje 11:15", "Erro", "boom"), ("error",))], seen["errors_only"])
+
+    def test_an_empty_history_says_so_instead_of_inventing_a_row(self):
+        self.app.notification_history = []
+
+        def run(root):
+            parent = self._manager(root)
+            window, tree = self._history(root, parent)
+            empty = next(w for w in _descendants(window)
+                         if isinstance(w, tk.Label) and str(w.cget("text")).startswith("Nenhuma"))
+            at_rest = str(empty.cget("text"))
+            _buttons_or_checks(window)["Somente erros"].invoke()
+            window.update()
+            return self._rows(tree), at_rest, str(empty.cget("text"))
+
+        rows, empty, filtered = self._on_gui(run)
+        self.assertEqual([], rows)
+        self.assertEqual("Nenhuma notificação registrada ainda.", empty)
+        self.assertEqual("Nenhum erro registrado.", filtered)
+
+    def test_the_dados_card_reports_each_destination_and_offers_a_retry_on_failure(self):
+        mirror = os.path.join(self.app.data_dir, "mirror")
+        cloud = os.path.join(self.app.data_dir, "cloud")
+        self.app.settings.update({"mirror_dir": mirror, "sync_export_dir": cloud})
+
+        def run(root):
+            window = self._manager(root)
+            self.app._manager_settings_sections.select("data")
+            self.app._manager_notebook.select(self.app._manager_settings_tab)
+            window.update()
+            page = self.app._manager_settings_tab
+            seen = {"first": [t for t in _labels(page) if "nesta sessão" in t]}
+            exported = datetime.now() - timedelta(days=30)
+            seen["stamp"] = tx.time_format.absolute_stamp(exported, datetime.now())
+            self.app.last_sync = {
+                "ok": True, "at": exported.isoformat(timespec="seconds"), "error": None, "path": cloud}
+            self.app.last_mirror = {
+                "ok": False, "at": datetime.now().isoformat(timespec="seconds"),
+                "error": "denied", "path": mirror}
+            self.app._refresh_manager_health()
+            window.update()
+            seen["lines"] = [t for t in _labels(page) if t.startswith("Última")]
+            retries = [w for w in _descendants(page)
+                       if isinstance(w, BUTTONS) and str(w.cget("text")) == "Tentar agora"
+                       and w.winfo_ismapped()]
+            seen["retry_buttons"] = len(retries)
+            with mock.patch.object(self.app, "retry_sync") as retry:
+                retries[0].invoke()
+            seen["retried"] = retry.called
+            bar = self._bar(self.app)
+            seen["bar"] = bar[0] if bar else None
+            return seen
+
+        seen = self._on_gui(run)
+        self.assertEqual(
+            ["Nenhuma cópia nesta sessão ainda.", "Nenhuma exportação nesta sessão ainda."],
+            seen["first"])
+        self.assertIn(f"Última exportação {seen['stamp']} · OK", seen["lines"])
+        self.assertTrue(any(l.startswith("Última cópia falhou") and l.endswith("· denied")
+                            for l in seen["lines"]), seen["lines"])
+        self.assertEqual(1, seen["retry_buttons"], "only the failed destination offers a retry")
+        self.assertTrue(seen["retried"])
+        self.assertIn("Cópia espelho não gravada", seen["bar"])
+
+    def test_nav_counts_are_totals_and_the_list_header_shows_how_many_the_filter_leaves(self):
+        self.app.snippets.update({"xola": "Olá", "xbye": "Tchau"})
+        self.assertTrue(self.app.save_snippets(self.app.snippets))
+
+        def run(root):
+            window = self._manager(root)
+            frame = self._static_tab_of(window)
+            search = self.app._manager_search_entries[str(frame)]
+            before = (self._status_line(frame, "Snippets:"), self._nav_text(window))
+            search.insert(0, "xola")
+            window.update()
+            after = (self._status_line(frame, "Snippets:"), self._nav_text(window))
+            return before, after
+
+        before, after = self._on_gui(run)
+        self.assertEqual((["Snippets: 3"], "Textos (3)"), before)
+        self.assertEqual((["Snippets: 1 de 3"], "Textos (3)"), after)
+
+    def test_an_exception_in_a_tk_callback_is_logged_and_told_not_lost(self):
+        self.app.logger = mock.Mock()
+
+        def run(root):
+            self.app._install_callback_hook(root)
+            try:
+                root.after(0, lambda: 1 / 0)
+                root.update()
+            finally:
+                del root.report_callback_exception
+
+        self._on_gui(run)
+
+        self.assertIn("ZeroDivisionError", self.app.logger.error.call_args.args[0])
+        self.assertEqual(["Erro inesperado: division by zero"], self.tray.toasts)
+
+    @staticmethod
+    def _nav_text(window):
+        return next(str(b.cget("text")) for b in _buttons(window).values()
+                    if str(b.cget("text")).startswith("Textos ("))
+
+
+def _buttons_or_checks(window):
+    return {str(w.cget("text")): w for w in _descendants(window) if isinstance(w, BUTTONS + CHECKBOXES)}
+
+
+def yesterday_label(moment):
+    return f"Ontem {moment.strftime('%H:%M')}"
 
 
 # GuiThread's own marshaling contract (call/submit/stop, exceptions, reentrancy,

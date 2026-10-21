@@ -6,7 +6,9 @@ import time
 from logging.handlers import RotatingFileHandler
 
 import json
+from datetime import datetime
 
+import time_format
 from clipboard_support import Clipboard
 from platform_support import default_insertion_timings
 from rich_text_support import extract_plain_text
@@ -39,6 +41,20 @@ def save_notification_history(path, history, limit=NOTIFICATION_HISTORY_LIMIT):
         return True
     except Exception:
         return False
+
+
+def notification_stamp(entry, now):
+    """When a history entry happened, as a record stamp ("Hoje 11:15").
+
+    An entry carries ``at`` (ISO) next to ``time`` (the clock only). History
+    written before ``at`` existed has the clock alone, and that is all it can
+    say: the date was never kept.
+    """
+    try:
+        return time_format.absolute_stamp(datetime.fromisoformat(entry["at"]), now)
+    except (KeyError, TypeError, ValueError):
+        return str(entry.get("time") or "--:--")
+
 LOG_FILE_NAME = "sniptype.log"
 _LOG_FORMAT = "%(asctime)s %(levelname)s %(message)s"
 _LOG_MAX_BYTES = 1_000_000

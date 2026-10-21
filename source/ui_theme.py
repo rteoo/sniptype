@@ -535,6 +535,24 @@ def palette(kind, system=None):
     return colors
 
 
+def tray_badge_colors(state):
+    """``(fill, glyph, ring)`` of the badge drawn on the tray icon for ``state``.
+
+    ``state`` is ``"paused"`` (the warning tone) or ``"down"`` (the danger
+    tone). The tray sits on the taskbar, not on a window, so the badge always
+    takes the dark palette's state colors: they read on dark and light
+    taskbars alike because the ring separates them from the tile, and the
+    glyph is the primary-label ink, at least 8:1 on both fills. The shape
+    carries the state as well (pause bars, an alert mark), never the color
+    alone.
+    """
+    try:
+        fill = {"paused": _DARK["warning"], "down": _DARK["danger"]}[state]
+    except KeyError:
+        raise ValueError(f"no tray badge for state {state!r}") from None
+    return fill, _DARK["text_on_accent"], _DARK["field"]
+
+
 def windows_font_families(available=None):
     """The Segoe faces for each text role, picked from the installed families.
 

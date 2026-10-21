@@ -20,6 +20,7 @@ import json
 import os
 import sys
 import time
+from collections import namedtuple
 
 from dynamic_registry import (
     BCB_METHODS,
@@ -53,6 +54,15 @@ SIZE_WARN_BYTES = 5 * 1024 * 1024
 PERMISSION_RETRY_DELAY = 0.5
 
 LOCAL_PROVIDERS = ("datetime",)
+
+# What one export attempt did. ``unchanged`` is a success that wrote nothing;
+# ``unavailable`` means the configured directory cannot be used (it is never
+# created), ``failed`` that the write itself did not go through.
+EXPORT_WRITTEN = "written"
+EXPORT_UNCHANGED = "unchanged"
+EXPORT_UNAVAILABLE = "unavailable"
+EXPORT_FAILED = "failed"
+ExportOutcome = namedtuple("ExportOutcome", "status path error", defaults=(None, None))
 
 EXTENSO_PATTERN = "EEEE, dd' de 'MMMM' de 'yyyy"
 RENDER_LOCALE = "pt-BR"
@@ -510,25 +520,26 @@ def _warn_on_shared_directory(export_path, mirror_dir, logger):
 
 
 def _write_bundle(dest_path, bundle, logger):
-    """Atomic write with a single PermissionError retry. Returns success."""
+    """Atomic write with a single PermissionError retry. Returns None on
+    success, otherwise the text of the error that stopped it."""
     try:
         write_json_atomic(dest_path, bundle)
-        return True
+        return None
     except PermissionError:
         time.sleep(PERMISSION_RETRY_DELAY)
     except Exception as e:
         _warn(logger, f"Falha ao gravar o bundle de sincronização em {dest_path}: {e}")
-        return False
+        return str(e)
 
     try:
         write_json_atomic(dest_path, bundle)
-        return True
+        return None
     except Exception as e:
         _warn(logger, f"Falha ao gravar o bundle de sincronização em {dest_path}: {e}")
-        return False
+        return str(e)
 
 
-def export_bundle(
+def export_bundle_outcome(
     static_snippets,
     registry,
     export_dir,
@@ -538,11 +549,12 @@ def export_bundle(
     now=None,
     logger=None,
 ):
-    """Compile and write the bundle. Best-effort: never raises, returns whether
-    the file was written (False also means "skipped because unchanged")."""
+    """Compile and write the bundle, and say what happened. Best-effort: never
+    raises. The outcome tells a skipped-because-unchanged export (a success)
+    from one that could not run."""
     dest_dir = resolve_export_dir(export_dir, logger)
     if dest_dir is None:
-        return False
+        return ExportOutcome(EXPORT_UNAVAILABLE, export_dir or None)
 
     dest_path = os.path.join(dest_dir, BUNDLE_FILENAME)
     _warn_on_shared_directory(dest_dir, mirror_dir, logger)
@@ -559,14 +571,21 @@ def export_bundle(
         and state.get("path") == dest_path
         and os.path.exists(dest_path)
     ):
-        return False
+        return ExportOutcome(EXPORT_UNCHANGED, dest_path)
 
     size = len(json.dumps(bundle, ensure_ascii=False, indent=2).encode("utf-8"))
     if size > SIZE_WARN_BYTES:
         _warn(logger, f"Bundle de sincronização grande ({size // 1024} KB); o app iOS pode não suportar.")
 
-    if not _write_bundle(dest_path, bundle, logger):
-        return False
+    error = _write_bundle(dest_path, bundle, logger)
+    if error is not None:
+        return ExportOutcome(EXPORT_FAILED, dest_path, error)
 
     _save_state(state_path, dest_path, digest, logger)
-    return True
+    return ExportOutcome(EXPORT_WRITTEN, dest_path)
+
+
+def export_bundle(*args, **kwargs):
+    """Compile and write the bundle. Best-effort: never raises, returns whether
+    the file was written (False also means "skipped because unchanged")."""
+    return export_bundle_outcome(*args, **kwargs).status == EXPORT_WRITTEN
