@@ -10,6 +10,12 @@ import gui_support
 
 
 class GuiSupportTests(unittest.TestCase):
+    def test_cell_ellipsis_respects_measured_width(self):
+        measure = lambda value: sum(9 if char == "W" else 3 for char in value)
+        self.assertEqual("Wi…", gui_support.ellipsize_text("WiWWW", 15, measure))
+        self.assertEqual("Wi", gui_support.ellipsize_text("Wi", 12, measure))
+        self.assertEqual("", gui_support.ellipsize_text("WWW", 2, measure))
+
     def test_modal_input_reveals_and_focuses_only_after_activation(self):
         events = []
         dialog = mock.Mock()

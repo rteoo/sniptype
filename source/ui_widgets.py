@@ -912,6 +912,97 @@ def set_selected(widget, selected, ui=None):
         marker.configure(bg=ui.accent_border if selected else marker.master.cget("background"))
 
 
+def set_button_variant(widget, variant, *, icon=None, ui=None):
+    """Change emphasis without replacing a focused button or its label."""
+    ui = ui or ui_theme.theme()
+    if isinstance(widget, ttk.Button):
+        widget.configure(style=_surface_style(widget.master, _BUTTON_STYLES[variant], ui))
+        if icon:
+            set_icon(widget, icon, variant=variant, ui=ui)
+
+
+def flat_pane(parent, *, padding=None, ui=None):
+    """A collection/editor plane with no rounded card or outside gutter."""
+    ui = ui or ui_theme.theme()
+    padding = ui.space_sm if padding is None else padding
+    return tk.Frame(parent, bg=ui.card, padx=padding, pady=padding)
+
+
+def search_hint(widget, text):
+    """Show a search cue without putting placeholder text in the query."""
+    ui = ui_theme.theme()
+    cue = tk.Label(widget.master, text="⌕  " + text, bg=ui.field,
+                   fg=ui.text_muted, font=ui.font(), anchor="w", cursor="xterm")
+    widget.accessible_name = text
+    variable = str(widget.cget("textvariable"))
+
+    def refresh(*_args):
+        if not widget.get() and widget.focus_get() is not widget:
+            cue.place(in_=widget, x=ui.px(10), rely=0.5, anchor="w",
+                      relwidth=0.85, height=ui.px(20))
+        else:
+            cue.place_forget()
+
+    cue.bind("<Button-1>", lambda _event: widget.focus_set())
+    widget.bind("<FocusIn>", refresh, add="+")
+    widget.bind("<FocusOut>", refresh, add="+")
+    callback = widget.register(refresh)
+    widget.tk.call("trace", "add", "variable", variable, "write", callback)
+
+    def cleanup(event):
+        if event.widget is widget:
+            cue.destroy()
+            widget.tk.call("trace", "remove", "variable", variable, "write", callback)
+
+    widget.bind("<Destroy>", cleanup, add="+")
+    refresh()
+    return cue
+
+
+def tree_list(parent, *, columns=(), headings=False, ui=None, **options):
+    """The shared collection primitive; #0 reserves the copper selection pill."""
+    ui = ui or ui_theme.theme()
+    install(parent, ui)
+    style = ttk.Style(parent)
+    style.configure("Manager.Treeview", background=ui.card, fieldbackground=ui.card,
+                    foreground=ui.text, font=ui.font(), borderwidth=0,
+                    rowheight=ui.tree_row_height, indent=0, padding=0)
+    style.layout("Manager.Treeview.Item", [("Treeitem.padding", {"sticky": "nsew", "children": [
+        ("Treeitem.image", {"side": "left", "sticky": ""}),
+        ("Treeitem.text", {"side": "left", "sticky": ""}),
+    ]})])
+    style.map("Manager.Treeview", background=[("selected", "focus", ui.select_bg),
+                                               ("selected", "!focus", ui.surface_alt)],
+              foreground=[("selected", ui.select_fg)])
+    tree = ttk.Treeview(parent, columns=columns, show="tree headings" if headings else "tree",
+                        selectmode="browse", style="Manager.Treeview", **options)
+    tree.column("#0", width=ui.px(6) if columns else ui.px(210), minwidth=0,
+                stretch=not bool(columns))
+    image = Image.new("RGBA", (ui.px(3) * _SS, ui.px(16) * _SS), _CLEAR)
+    ImageDraw.Draw(image).rounded_rectangle((0, 0, image.width - 1, image.height - 1),
+                                          radius=ui.px(1.5) * _SS,
+                                          fill=_rgba(resolve_color(tree, ui.accent_border)))
+    buffer = io.BytesIO()
+    image.resize((ui.px(3), ui.px(16)), Image.LANCZOS).save(buffer, "PNG")
+    tree.selection_pill = tk.PhotoImage(master=tree, data=base64.b64encode(buffer.getvalue()))
+    previous = {"item": None}
+
+    def mark_selection(_event=None):
+        old = previous["item"]
+        if old and tree.exists(old):
+            tree.item(old, image="")
+        selected = tree.selection()
+        previous["item"] = selected[0] if selected else None
+        if selected:
+            tree.item(selected[0], image=tree.selection_pill)
+
+    tree.bind("<<TreeviewSelect>>", mark_selection, add="+")
+    tree.bind("<FocusIn>", lambda _event: tree.state(["focus"]), add="+")
+    tree.bind("<FocusOut>", lambda _event: tree.state(["!focus"]), add="+")
+    tree.tag_configure("unavailable", foreground=ui.text_muted)
+    return tree
+
+
 def entry(parent, *, font=None, ui=None, **options):
     """A single-line text field."""
     ui = ui or ui_theme.theme()

@@ -37,6 +37,23 @@ def snippet_tree_values(key, value, preview_chars=PREVIEW_CHARS):
     return key, f"{markers}  ·  {preview}" if markers else preview
 
 
+def ellipsize_text(value, width, measure):
+    """Fit a display cell to its measured pixels without changing its data."""
+    value = str(value)
+    if measure(value) <= width:
+        return value
+    if width < measure("…"):
+        return ""
+    low, high = 0, len(value)
+    while low < high:
+        middle = (low + high + 1) // 2
+        if measure(value[:middle] + "…") <= width:
+            low = middle
+        else:
+            high = middle - 1
+    return value[:low] + "…"
+
+
 def iter_filtered_mapping_items(mapping, query):
     lowered = query.strip().lower()
     if not isinstance(mapping, dict):

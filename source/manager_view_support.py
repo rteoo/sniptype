@@ -21,6 +21,8 @@ from workflow_support import SnippetRef
 FILTER_ALL = "all"
 FILTER_FAVORITES = "favorites"
 FILTER_RECENT = "recent"
+FILTER_DISABLED = "disabled"
+FILTER_PROBLEMS = "problems"
 UNGROUPED_FILTER = "ungrouped"
 
 
@@ -35,6 +37,7 @@ class ManagerRow:
     group_label: str = "Ungrouped"
     favorite: bool = False
     enabled: bool = True
+    shadowed: bool = False
 
     @property
     def kind(self):
@@ -191,7 +194,7 @@ def _append_dynamic_rows(rows, snippets, dynamic_registry):
         )
 
 
-def build_manager_rows(snippets, metadata=None, dynamic_registry=None):
+def build_manager_rows(snippets, metadata=None, dynamic_registry=None, shadowed_statics=None):
     """Build ordered immutable rows from local runtime/library projections.
 
     Ordering is static snippets, mapping items, then registry dynamics.  Static
@@ -201,9 +204,16 @@ def build_manager_rows(snippets, metadata=None, dynamic_registry=None):
     """
     runtime = _as_mapping(snippets)
     rows = []
-    _append_static_rows(rows, runtime, metadata)
+    _append_static_rows(rows, {**runtime, **_as_mapping(shadowed_statics)}, metadata)
     _append_mapping_rows(rows, runtime, metadata)
     _append_dynamic_rows(rows, runtime, dynamic_registry)
+    dynamic_triggers = {row.effective_trigger for row in rows if row.kind == "dynamic" and row.enabled}
+    rows = [
+        ManagerRow(row.ref, row.stored_trigger, row.effective_trigger, row.group_id,
+                   row.group_label, row.favorite, row.enabled,
+                   row.kind == "static" and row.effective_trigger in dynamic_triggers)
+        for row in rows
+    ]
     return tuple(rows)
 
 
@@ -234,6 +244,10 @@ def filter_manager_rows(rows, filter_name=FILTER_ALL, *, workflow_state=None, gr
             for item in workflow_state.recent_items()
             if item in by_ref
         )
+    if filter_name == FILTER_DISABLED:
+        return tuple(row for row in rows if not row.enabled)
+    if filter_name == FILTER_PROBLEMS:
+        return tuple(row for row in rows if row.shadowed)
 
     if filter_name == UNGROUPED_FILTER:
         return tuple(
@@ -360,6 +374,8 @@ __all__ = [
     "FILTER_ALL",
     "FILTER_FAVORITES",
     "FILTER_RECENT",
+    "FILTER_DISABLED",
+    "FILTER_PROBLEMS",
     "ManagerRow",
     "NavigationTarget",
     "UNGROUPED_FILTER",

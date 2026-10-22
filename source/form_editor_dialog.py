@@ -277,17 +277,13 @@ class FormEditor:
         # Both panes sit on the dialog surface itself, with no cards inside.
         left = tk.Frame(content, bg=self.theme.surface)
         left.pack(side="left", fill="y", padx=(0, self.theme.space_lg))
-        field_list_frame = ui_widgets.field_frame(left, ui=self.theme)
+        field_list_frame = ui_widgets.list_frame(left, ui=self.theme)
         field_list_frame.pack(fill="both", expand=True)
-        self._field_list = tk.Listbox(
-            field_list_frame, width=27, height=16, exportselection=False,
-            activestyle="none", relief="flat", borderwidth=0,
-            **ui_widgets.listbox_colors(self.theme),
-            font=self.theme.font(),
-        )
+        self._field_list = ui_widgets.tree_list(field_list_frame, height=16, ui=self.theme)
+        self._field_list.column("#0", width=self.theme.px(230))
         self._field_list.pack(fill="both", expand=True)
         ui_widgets.track_focus(field_list_frame, self._field_list)
-        self._field_list.bind("<<ListboxSelect>>", self._on_select)
+        self._field_list.bind("<<TreeviewSelect>>", self._on_select, add="+")
         list_buttons = tk.Frame(left, bg=self.theme.surface)
         list_buttons.pack(fill="x", pady=(self.theme.space_sm, 0))
         self._button(list_buttons, _("Adicionar"), self._add, icon="add").pack(side="left")
@@ -360,11 +356,12 @@ class FormEditor:
     def _refresh_list(self):
         self._updating = True
         try:
-            self._field_list.delete(0, "end")
-            for field in self.controller.fields:
+            self._field_list.delete(*self._field_list.get_children())
+            for index, field in enumerate(self.controller.fields):
                 name = field.get("name") if isinstance(field, dict) else ""
                 field_type = field.get("type", "text") if isinstance(field, dict) else "text"
-                self._field_list.insert("end", f"{name or _('(sem nome)')} — {_(_TYPE_LABELS.get(field_type, field_type))}")
+                self._field_list.insert("", "end", iid=str(index),
+                                        text=f"{name or _('(sem nome)')} — {_(_TYPE_LABELS.get(field_type, field_type))}")
             if self._selected is not None and self.controller.fields:
                 self._selected = max(0, min(self._selected, len(self.controller.fields) - 1))
                 self._field_list.selection_set(self._selected)
@@ -373,23 +370,23 @@ class FormEditor:
             self._updating = False
 
     def _current_index(self):
-        selected = self._field_list.curselection()
-        return selected[0] if selected else self._selected
+        selected = self._field_list.selection()
+        return int(selected[0]) if selected else self._selected
 
     def _select(self, index):
         self._commit_current()
         self._selected = index
-        self._field_list.selection_clear(0, "end")
-        self._field_list.selection_set(index)
+        if self._field_list.selection() != (str(index),):
+            self._field_list.selection_set(index)
         self._field_list.see(index)
         self._load_current()
 
     def _on_select(self, _event=None):
         if self._updating:
             return
-        selected = self._field_list.curselection()
+        selected = self._field_list.selection()
         if selected:
-            self._select(selected[0])
+            self._select(int(selected[0]))
 
     def _load_current(self):
         field = self.controller.fields[self._selected]

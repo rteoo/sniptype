@@ -130,6 +130,260 @@ class ManagerGuiSmokeTests(unittest.TestCase):
         """Run func(root) on the GUI thread, propagating assertion failures."""
         return self.app.gui.call(func, timeout=30)
 
+    def test_library_selection_pill_moves_and_focus_preserves_its_neutral_fill(self):
+        self.app.snippets["xother"] = "Synthetic second response"
+
+        def run(root):
+            self.app._build_manager_window(root)
+            window = self.app.manager_window
+            window.update()
+            tab = self.app._manager_notebook.nametowidget(self.app._manager_notebook.tabs()[0])
+            tree = next(w for w in _descendants(tab) if isinstance(w, ttk.Treeview))
+            tree.selection_set("xhi")
+            window.update()
+            self.assertTrue(tree.item("xhi", "image"))
+            tree.selection_set("xother")
+            tree.focus_force()
+            window.update()
+            self.assertFalse(tree.item("xhi", "image"))
+            self.assertTrue(tree.item("xother", "image"))
+            ui = tx.ui_theme.theme()
+            self.assertEqual((ui.px(3), ui.px(16)),
+                             (tree.selection_pill.width(), tree.selection_pill.height()))
+            self.assertEqual(ui.px(6), tree.column("#0", "width"))
+            style = ttk.Style(tree)
+            self.assertEqual(ui.select_bg, style.lookup("Manager.Treeview", "background", ("selected", "focus")))
+            self.assertEqual(ui.surface_alt, style.lookup("Manager.Treeview", "background", ("selected", "!focus")))
+            text = next(w for w in _descendants(tab) if isinstance(w, tk.Text))
+            text.focus_force()
+            window.update()
+            self.assertTrue(tree.item("xother", "image"), "losing focus keeps the selection marker")
+
+        self._on_gui(run)
+
+    def test_disabled_filter_shows_only_disabled_group_rows_and_written_state(self):
+        self.app.snippets.update({"xoff": "Synthetic disabled response", "xon": "Synthetic active response"})
+        self.app.library_metadata = LibraryMetadata({
+            "groups": {"off": {"label": "Disabled", "enabled": False}},
+            "items": {"static": {"xoff": {"group_id": "off"}}},
+        })
+
+        def run(root):
+            self.app._build_manager_window(root)
+            window = self.app.manager_window
+            window.update()
+            tab = self.app._manager_notebook.nametowidget(self.app._manager_notebook.tabs()[0])
+            next(w for w in _descendants(tab) if isinstance(w, BUTTONS)
+                 and w.cget("text") == "Desativados").invoke()
+            window.update()
+            tree = next(w for w in _descendants(tab) if isinstance(w, ttk.Treeview))
+            self.assertEqual(("xoff",), tree.get_children())
+            self.assertIn("Desativado (grupo)", tree.item("xoff", "values")[1])
+            self.assertIn("unavailable", tree.item("xoff", "tags"))
+            self.assertEqual("Textos (3)", self.app._manager_notebook.tab(tab, "text"))
+
+        self._on_gui(run)
+
+    @unittest.skipUnless(tx.IS_WINDOWS, "Windows compact density")
+    def test_minimum_library_shows_sixteen_complete_rows_and_one_primary(self):
+        self.app.snippets.update({f"xsynth{i:02}": "Synthetic response" for i in range(40)})
+
+        def run(root):
+            self.app._build_manager_window(root)
+            window = self.app.manager_window
+            window.geometry("1180x760")
+            window.update()
+            tab = self.app._manager_notebook.nametowidget(self.app._manager_notebook.tabs()[0])
+            tree = next(w for w in _descendants(tab) if isinstance(w, ttk.Treeview))
+            visible = [tree.bbox(item) for item in tree.get_children() if tree.bbox(item)]
+            complete = [box for box in visible if box[1] + box[3] <= tree.winfo_height()]
+            self.assertGreaterEqual(len(complete), 16)
+            buttons = [w for w in _descendants(tab) if isinstance(w, ttk.Button) and w.winfo_ismapped()]
+            primaries = lambda: [w for w in buttons if str(w["style"]).endswith("Accent.TButton")]
+            self.assertEqual(["Novo snippet"], [str(w["text"]) for w in primaries()])
+            tree.selection_set("xhi")
+            window.update()
+            text = next(w for w in _descendants(tab) if isinstance(w, tk.Text))
+            text.insert("end", " Synthetic edit")
+            window.update()
+            self.assertEqual(["Salvar"], [str(w["text"]) for w in primaries()])
+            delete = next(w for w in buttons if w["text"] == "Excluir")
+            save = next(w for w in buttons if w["text"] == "Salvar")
+            self.assertGreaterEqual(save.winfo_rootx() - delete.winfo_rootx() - delete.winfo_width()
+                                    + 2 * tx.ui_theme.theme().px(3), tx.ui_theme.theme().space_lg)
+
+        self._on_gui(run)
+
+    def test_empty_library_and_no_results_have_distinct_recovery_actions(self):
+        def run(root):
+            self.app._build_manager_window(root)
+            window = self.app.manager_window
+            window.update()
+            tab = self.app._manager_notebook.nametowidget(self.app._manager_notebook.tabs()[0])
+            search = self.app._manager_search_entries[str(tab)]
+            clear = next(w for w in _descendants(tab) if isinstance(w, BUTTONS) and w.cget("text") == "Limpar busca")
+            self.assertFalse(clear.winfo_ismapped(), "healthy rows must unmap empty-state actions")
+            search.insert(0, "synthetic-no-match")
+            window.update()
+            visible_text = lambda: [str(w.cget("text")) for w in _descendants(tab)
+                                    if isinstance(w, (tk.Label, *BUTTONS)) and w.winfo_ismapped()]
+            self.assertIn("Nenhum snippet corresponde à busca ou aos filtros.", visible_text())
+            self.assertTrue(clear.winfo_ismapped())
+            clear.invoke()
+            self.assertEqual("", search.get())
+            window.update()
+            self.assertFalse(clear.winfo_ismapped())
+            self.app.snippets.clear()
+            self.app.shadowed_static_snippets.clear()
+            self.app._refresh_manager_lists()
+            window.update()
+            self.assertIn("Sua biblioteca está vazia.", visible_text())
+            self.assertIn("Importar…", visible_text())
+            self.assertNotIn("Limpar busca", visible_text())
+
+        self._on_gui(run)
+
+    def test_form_fields_use_the_shared_tree_and_keep_each_field_draft(self):
+        from form_editor_dialog import FormEditor
+
+        def run(root):
+            dialog = FormEditor(root, {"fields": [
+                {"name": "first", "type": "text", "default": "Synthetic first"},
+                {"name": "second", "type": "text", "default": "Synthetic second"},
+            ]})
+            try:
+                dialog.window.update()
+                self.assertIsInstance(dialog._field_list, ttk.Treeview)
+                self.assertEqual("Manager.Treeview", dialog._field_list["style"])
+                dialog.default_var.set("Synthetic changed")
+                dialog._field_list.selection_set("1")
+                dialog.window.update()
+                self.assertEqual("second", dialog.name_var.get())
+                self.assertTrue(dialog._field_list.item("1", "image"))
+                self.assertFalse(dialog._field_list.item("0", "image"))
+                self.assertEqual("Synthetic changed", dialog.controller.fields[0]["default"])
+                dialog._field_list.selection_set("0")
+                dialog.window.update()
+                self.assertEqual("Synthetic changed", dialog.default_var.get())
+            finally:
+                dialog.cancel()
+
+        self._on_gui(run)
+
+    def _shadowed_library(self):
+        provider = mock.Mock(return_value="Synthetic dynamic output")
+        self.app.snippets["xshadow"] = provider
+        self.app.shadowed_static_snippets["xshadow"] = "Synthetic preserved static"
+        self.app.library_metadata = LibraryMetadata({
+            "items": {"static": {"xshadow": {"favorite": True}}},
+        })
+        self.assertTrue(self.app.save_snippets(self.app.snippets))
+        return provider
+
+    def test_shadowed_static_discard_cancel_and_rename_keep_the_live_provider(self):
+        provider = self._shadowed_library()
+
+        def run(root):
+            self.app._build_manager_window(root)
+            window = self.app.manager_window
+            window.update()
+            tab = self.app._manager_notebook.nametowidget(self.app._manager_notebook.tabs()[0])
+            tree = next(w for w in _descendants(tab) if isinstance(w, ttk.Treeview))
+            tree.selection_set("xshadow")
+            window.update()
+            text = next(w for w in _descendants(tab) if isinstance(w, tk.Text))
+            self.assertEqual("Synthetic preserved static", text.get("1.0", "end-1c"))
+            for label in ("Duplicar", "Renomear", "Excluir", "Formulário", "Prévia"):
+                self.assertFalse(_buttons(tab)[label].instate(["disabled"]))
+            text.insert("end", " dirty")
+            window.update()
+            with mock.patch.object(tx.ui_widgets, "confirm", return_value=None):
+                tree.selection_set("xhi")
+                window.update()
+            self.assertEqual(("xshadow",), tree.selection())
+            self.assertEqual("Synthetic preserved static dirty", text.get("1.0", "end-1c"))
+            with mock.patch.object(tx.ui_widgets, "confirm", return_value=tx.ui_widgets.EXTRA):
+                tree.selection_set("xhi")
+                window.update()
+            tree.selection_set("xshadow")
+            window.update()
+            self.assertEqual("Synthetic preserved static", text.get("1.0", "end-1c"))
+            with mock.patch.object(tx.ui_widgets, "ask_text", return_value="xresolved"), \
+                    mock.patch.object(tx.ui_widgets, "confirm", return_value=True):
+                _buttons(tab)["Renomear"].invoke()
+            window.update()
+            self.assertIs(provider, self.app.snippets["xshadow"])
+            self.assertNotIn("xshadow", self.app.shadowed_static_snippets)
+            self.assertEqual("Synthetic preserved static", self.app.snippets["xresolved"])
+            self.assertEqual(("xresolved",), tree.selection())
+
+        self._on_gui(run)
+        with open(self.app.snippets_file, encoding="utf-8") as handle:
+            document = json.load(handle)
+        self.assertNotIn("xshadow", document)
+        self.assertEqual("Synthetic preserved static", document["xresolved"])
+        self.assertTrue(document["__sniptype__"]["items"]["static"]["xresolved"]["favorite"])
+        provider.assert_not_called()
+
+    def test_shadowed_static_delete_and_undo_change_only_the_persisted_static(self):
+        provider = self._shadowed_library()
+
+        def run(root):
+            self.app._build_manager_window(root)
+            window = self.app.manager_window
+            window.update()
+            tab = self.app._manager_notebook.nametowidget(self.app._manager_notebook.tabs()[0])
+            tree = next(w for w in _descendants(tab) if isinstance(w, ttk.Treeview))
+            tree.selection_set("xshadow")
+            window.update()
+            _buttons(tab)["Excluir"].invoke()
+            window.update()
+            self.assertIs(provider, self.app.snippets["xshadow"])
+            self.assertNotIn("xshadow", self.app.shadowed_static_snippets)
+            with open(self.app.snippets_file, encoding="utf-8") as handle:
+                self.assertNotIn("xshadow", json.load(handle))
+            self.app._manager_receipts[str(tab)].action.invoke()
+            window.update()
+            self.assertIs(provider, self.app.snippets["xshadow"])
+            self.assertEqual("Synthetic preserved static", self.app.shadowed_static_snippets["xshadow"])
+            self.assertEqual(("xshadow",), tree.selection())
+
+        self._on_gui(run)
+        with open(self.app.snippets_file, encoding="utf-8") as handle:
+            self.assertEqual("Synthetic preserved static", json.load(handle)["xshadow"])
+        provider.assert_not_called()
+
+    def test_shadowed_static_failed_rename_and_delete_roll_back_both_maps(self):
+        provider = self._shadowed_library()
+
+        def run(root):
+            self.app._build_manager_window(root)
+            window = self.app.manager_window
+            window.update()
+            tab = self.app._manager_notebook.nametowidget(self.app._manager_notebook.tabs()[0])
+            tree = next(w for w in _descendants(tab) if isinstance(w, ttk.Treeview))
+            tree.selection_set("xshadow")
+            window.update()
+            with mock.patch.object(self.app, "save_snippets", return_value=False), \
+                    mock.patch.object(tx.ui_widgets, "alert"), \
+                    mock.patch.object(tx.ui_widgets, "ask_text", return_value="xresolved"), \
+                    mock.patch.object(tx.ui_widgets, "confirm", return_value=True):
+                _buttons(tab)["Renomear"].invoke()
+                window.update()
+                self.assertIs(provider, self.app.snippets["xshadow"])
+                self.assertNotIn("xresolved", self.app.snippets)
+                self.assertEqual("Synthetic preserved static", self.app.shadowed_static_snippets["xshadow"])
+                _buttons(tab)["Excluir"].invoke()
+                window.update()
+                self.assertIs(provider, self.app.snippets["xshadow"])
+                self.assertEqual("Synthetic preserved static", self.app.shadowed_static_snippets["xshadow"])
+            self.assertEqual(("xshadow",), tree.selection())
+
+        self._on_gui(run)
+        with open(self.app.snippets_file, encoding="utf-8") as handle:
+            self.assertEqual("Synthetic preserved static", json.load(handle)["xshadow"])
+        provider.assert_not_called()
+
     @unittest.skipUnless(tx.IS_WINDOWS, "the Segoe faces are Windows-only")
     def test_every_windows_text_face_is_the_face_tk_renders(self):
         # Regression: Tk silently substitutes Arial for a family it does not
@@ -148,6 +402,7 @@ class ManagerGuiSmokeTests(unittest.TestCase):
 
     def test_manager_minimum_size_keeps_editor_controls_and_mapping_columns_visible(self):
         """The smallest supported manager window must not clip its controls."""
+        self.app.snippets["_cpf_numbers"] = {"__prefix__": "cpf", "synthetic": "Synthetic mapping value"}
         def build(shared_root):
             self.app._build_manager_window(shared_root)
             window = self.app.manager_window
@@ -176,7 +431,7 @@ class ManagerGuiSmokeTests(unittest.TestCase):
                 tab = notebook.nametowidget(tab_id)
                 editor_label = next(
                     widget for widget in _descendants(tab)
-                    if isinstance(widget, tk.Label) and widget.cget("text") == "Editor"
+                    if isinstance(widget, tk.Label) and widget.cget("text") in ("Trigger armazenado", "Identificador")
                 )
                 editor_pane = editor_label.master
                 buttons = {
@@ -219,11 +474,17 @@ class ManagerGuiSmokeTests(unittest.TestCase):
                 self.assertGreaterEqual(
                     content.winfo_height(), 60, "the content box collapsed"
                 )
+                format_label = next(widget for widget in _descendants(editor_pane)
+                                    if isinstance(widget, tk.Label)
+                                    and str(widget.cget("textvariable"))
+                                    and str(widget.getvar(widget.cget("textvariable"))).startswith("Formato:"))
+                self.assertGreaterEqual(format_label.winfo_width(), format_label.winfo_reqwidth())
 
             notebook.select(tab_ids[1])
             window.update()
             mapping_tab = notebook.nametowidget(tab_ids[1])
-            tree = next(widget for widget in _descendants(mapping_tab) if isinstance(widget, ttk.Treeview))
+            tree = next(widget for widget in _descendants(mapping_tab)
+                        if isinstance(widget, ttk.Treeview) and "trigger" in widget["columns"])
             configured_width = sum(tree.column(column, "width") for column in tree["columns"])
             self.assertLessEqual(
                 configured_width,
@@ -294,9 +555,9 @@ class ManagerGuiSmokeTests(unittest.TestCase):
             frame = tk.Frame(root)
             self.app._create_dynamic_mappings_tab(frame, root)
             root.update_idletasks()
-            listboxes = [w for w in _descendants(frame) if isinstance(w, tk.Listbox)]
-            self.assertTrue(listboxes, "expected a types listbox")
-            return listboxes[0].get(0, tk.END)
+            listboxes = [w for w in _descendants(frame) if isinstance(w, ttk.Treeview) and not w["columns"]]
+            self.assertTrue(listboxes, "expected the shared types Treeview")
+            return [listboxes[0].item(item, "text") for item in listboxes[0].get_children()]
 
         labels = self._on_gui(build)
         self.assertIn("MAIL", labels)
@@ -307,7 +568,7 @@ class ManagerGuiSmokeTests(unittest.TestCase):
         trees = [w for w in _descendants(frame) if isinstance(w, ttk.Treeview)]
         self.assertTrue(trees, "expected a snippet Treeview")
         tree = trees[0]
-        return {iid: tuple(tree.item(iid, "values"))[1:] for iid in tree.get_children()}
+        return {iid: tree.full_values[iid][1:] for iid in tree.get_children()}
 
     def test_static_tree_shows_preview_and_markers(self):
         self.app.snippets["xsig"] = {
@@ -326,9 +587,9 @@ class ManagerGuiSmokeTests(unittest.TestCase):
             return self._static_rows(frame)
 
         rows = self._on_gui(build)
-        self.assertEqual(("RT  ·  Assinatura principal",), rows["xsig"])
-        self.assertEqual(("%%  ·  Olá %%nome%%, tudo bem?",), rows["xgreet"])
-        self.assertEqual(("hello",), rows["xhi"])
+        self.assertEqual(("Assinatura principal", "A", ""), rows["xsig"])
+        self.assertEqual(("Olá %%nome%%, tudo bem?", "ƒ", ""), rows["xgreet"])
+        self.assertEqual(("hello", "", ""), rows["xhi"])
 
     def test_selecting_a_tree_row_loads_the_editor(self):
         self.app.snippets["xsig"] = {
@@ -441,7 +702,7 @@ class ManagerGuiSmokeTests(unittest.TestCase):
             return self._static_rows(frame)
 
         rows = self._on_gui(refresh)
-        self.assertEqual({"ximported": ("from backup",)}, rows)
+        self.assertEqual({"ximported": ("from backup", "", "")}, rows)
 
     def _build_mappings_tab(self, shared_root, set_count=None):
         root = tk.Toplevel(shared_root)
@@ -453,17 +714,17 @@ class ManagerGuiSmokeTests(unittest.TestCase):
 
     def _tree_rows(self, frame):
         """{key: (value cell,)} from the only Treeview in a tab."""
-        trees = [w for w in _descendants(frame) if isinstance(w, ttk.Treeview)]
+        trees = [w for w in _descendants(frame) if isinstance(w, ttk.Treeview) and "trigger" in w["columns"]]
         self.assertTrue(trees, "expected a snippet Treeview")
         tree = trees[0]
-        return {iid: tuple(tree.item(iid, "values"))[1:] for iid in tree.get_children()}
+        return {iid: tree.full_values[iid][1:] for iid in tree.get_children()}
 
     def _tree_trigger_values(self, frame):
-        trees = [w for w in _descendants(frame) if isinstance(w, ttk.Treeview)]
+        trees = [w for w in _descendants(frame) if isinstance(w, ttk.Treeview) and "trigger" in w["columns"]]
         self.assertTrue(trees, "expected a snippet Treeview")
         tree = trees[0]
         return {
-            iid: tuple(tree.item(iid, "values"))[0]
+            iid: tree.full_values[iid][0]
             for iid in tree.get_children()
         }
 
@@ -482,9 +743,9 @@ class ManagerGuiSmokeTests(unittest.TestCase):
         rows, triggers = self._on_gui(build)
 
         self.assertNotIn("__prefix__", rows, "prefix metadata is not an item")
-        self.assertEqual(("123.456.789-00",), rows["alice"])
-        self.assertEqual(("RT  ·  CPF oficial",), rows["assinada"])
-        self.assertEqual(("%%  ·  CPF de %%titular%%",), rows["modelo"])
+        self.assertEqual(("123.456.789-00", "", ""), rows["alice"])
+        self.assertEqual(("CPF oficial", "A", ""), rows["assinada"])
+        self.assertEqual(("CPF de %%titular%%", "ƒ", ""), rows["modelo"])
         with self.subTest("test_mapping_tree_shows_stored_and_effective_triggers"):
             self.assertEqual("alice → cpfalice", triggers["alice"])
 
@@ -711,7 +972,7 @@ class ManagerGuiSmokeTests(unittest.TestCase):
             search.insert(0, "assig")
             root.update()
             tree = next(w for w in _descendants(frame) if isinstance(w, ttk.Treeview))
-            return [(iid, tree.item(iid, "values")[0]) for iid in tree.get_children()]
+            return [(iid, tree.full_values[iid][0]) for iid in tree.get_children()]
 
         self.assertEqual(
             [("sig", "sig → assig"), ("xnota", "xnota")], self._on_gui(run)
@@ -858,7 +1119,7 @@ class ManagerGuiSmokeTests(unittest.TestCase):
 
         def build(shared_root):
             frame = self._build_mappings_tab(shared_root)
-            tree = [w for w in _descendants(frame) if isinstance(w, ttk.Treeview)][0]
+            tree = [w for w in _descendants(frame) if isinstance(w, ttk.Treeview) and "trigger" in w["columns"]][0]
             text = [w for w in _descendants(frame) if isinstance(w, tk.Text)][0]
             # Open alice: naming a saved identifier from a new draft would ask
             # before replacing it.
@@ -1828,7 +2089,7 @@ class DestructiveActionTests(unittest.TestCase):
 
         def run(root):
             window, frame = self._tab(root, self.app._create_dynamic_mappings_tab)
-            tree = next(w for w in _descendants(frame) if isinstance(w, ttk.Treeview))
+            tree = next(w for w in _descendants(frame) if isinstance(w, ttk.Treeview) and "trigger" in w["columns"])
             tree.selection_set("alice")
             window.update()
             _buttons(frame)["Excluir"].invoke()
@@ -1984,7 +2245,7 @@ class WorkPreservationTests(unittest.TestCase):
 
     @staticmethod
     def _parts(frame):
-        tree = next(w for w in _descendants(frame) if isinstance(w, ttk.Treeview))
+        tree = next(w for w in _descendants(frame) if isinstance(w, ttk.Treeview) and "trigger" in w["columns"])
         text = next(w for w in _descendants(frame) if isinstance(w, tk.Text))
         trigger = [w for w in _descendants(frame) if _is_text_entry(w)][1]
         return tree, text, trigger
@@ -2471,9 +2732,9 @@ class WorkPreservationTests(unittest.TestCase):
             self.app._create_dynamic_mappings_tab(frame, window)
             window.update()
             tree, _text, name = self._parts(frame)
-            types = next(w for w in _descendants(frame) if isinstance(w, tk.Listbox))
-            types.selection_set(list(types.get(0, tk.END)).index("CPF"))
-            types.event_generate("<<ListboxSelect>>")
+            types = next(w for w in _descendants(frame) if isinstance(w, ttk.Treeview) and not w["columns"])
+            types.selection_set("_cpf_numbers")
+            types.event_generate("<<TreeviewSelect>>")
             window.update()
             tree.selection_set("alice")
             window.update()
@@ -2528,9 +2789,9 @@ class WorkPreservationTests(unittest.TestCase):
             self.app._create_dynamic_mappings_tab(frame, window)
             window.update()
             tree, text, _name = self._parts(frame)
-            types = next(w for w in _descendants(frame) if isinstance(w, tk.Listbox))
-            types.selection_set(list(types.get(0, tk.END)).index("CPF"))
-            types.event_generate("<<ListboxSelect>>")
+            types = next(w for w in _descendants(frame) if isinstance(w, ttk.Treeview) and not w["columns"])
+            types.selection_set("_cpf_numbers")
+            types.event_generate("<<TreeviewSelect>>")
             window.update()
             tree.selection_set("alice")
             window.update()
@@ -2558,10 +2819,9 @@ class WorkPreservationTests(unittest.TestCase):
             self.app._create_dynamic_mappings_tab(frame, window)
             window.update()
             tree, text, _name = self._parts(frame)
-            types = next(w for w in _descendants(frame) if isinstance(w, tk.Listbox))
-            labels = list(types.get(0, tk.END))
-            types.selection_set(labels.index("CPF"))
-            types.event_generate("<<ListboxSelect>>")
+            types = next(w for w in _descendants(frame) if isinstance(w, ttk.Treeview) and not w["columns"])
+            types.selection_set("_cpf_numbers")
+            types.event_generate("<<TreeviewSelect>>")
             window.update()
             tree.selection_set("alice")
             window.update()
@@ -2572,11 +2832,10 @@ class WorkPreservationTests(unittest.TestCase):
                 tree.selection_set("bruno")
                 window.update()
                 seen["row"] = (tuple(tree.selection()), text.get("1.0", "end-1c"))
-                types.selection_clear(0, tk.END)
-                types.selection_set(labels.index("CNPJ"))
-                types.event_generate("<<ListboxSelect>>")
+                types.selection_set("_cnpj_numbers")
+                types.event_generate("<<TreeviewSelect>>")
                 window.update()
-                seen["type"] = (types.get(types.curselection()[0]), text.get("1.0", "end-1c"))
+                seen["type"] = (types.item(types.selection()[0], "text"), text.get("1.0", "end-1c"))
             seen["asked"] = [call.args[2] for call in ask.call_args_list]
             return seen
 
@@ -3132,15 +3391,15 @@ class StatusAndAttentionTests(unittest.TestCase):
             window = self._manager(root)
             frame = self._static_tab_of(window)
             search = self.app._manager_search_entries[str(frame)]
-            before = (self._status_line(frame, "Snippets:"), self._nav_text(window))
+            before = (self._status_line(frame, "3 de"), self._nav_text(window))
             search.insert(0, "xola")
             window.update()
-            after = (self._status_line(frame, "Snippets:"), self._nav_text(window))
+            after = (self._status_line(frame, "1 de"), self._nav_text(window))
             return before, after
 
         before, after = self._on_gui(run)
-        self.assertEqual((["Snippets: 3"], "Textos (3)"), before)
-        self.assertEqual((["Snippets: 1 de 3"], "Textos (3)"), after)
+        self.assertEqual((["3 de 3"], "Textos (3)"), before)
+        self.assertEqual((["1 de 3"], "Textos (3)"), after)
 
     def test_an_exception_in_a_tk_callback_is_logged_and_told_not_lost(self):
         self.app.logger = mock.Mock()

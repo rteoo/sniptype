@@ -2,6 +2,8 @@ import unittest
 
 from manager_view_support import (
     FILTER_FAVORITES,
+    FILTER_DISABLED,
+    FILTER_PROBLEMS,
     FILTER_RECENT,
     UNGROUPED_FILTER,
     build_manager_rows,
@@ -14,6 +16,18 @@ from workflow_support import SnippetRef, WorkflowState
 
 
 class ManagerRowBuildTests(unittest.TestCase):
+    def test_direct_statics_win_mapping_routes_and_only_live_dynamics_shadow(self):
+        rows = build_manager_rows(
+            {"codeitem": "Static wins", "_codes": {"__prefix__": "code", "item": "Mapping"},
+             "xdisabled": "Still active", "xlive": lambda: "Runtime"},
+            dynamic_registry={"xdisabled": {"provider": "datetime", "enabled": False}},
+            shadowed_statics={"xlive": "Preserved"},
+        )
+        static = {row.key: row for row in rows if row.kind == "static"}
+        self.assertFalse(static["codeitem"].shadowed)
+        self.assertFalse(static["xdisabled"].shadowed)
+        self.assertTrue(static["xlive"].shadowed)
+
     def test_builds_ordered_immutable_rows_for_static_mapping_and_dynamic_items(self):
         snippets = {
             "xhello": "Hello",
@@ -66,6 +80,17 @@ class ManagerRowBuildTests(unittest.TestCase):
 
 
 class ManagerFilterTests(unittest.TestCase):
+    def test_disabled_and_conflicting_rows_keep_their_distinct_causes(self):
+        rows = build_manager_rows(
+            {"off": "saved", "collision": lambda: "runtime", "normal": "saved"},
+            {"groups": {"off-group": {"label": "Disabled", "enabled": False}},
+             "items": {"static": {"off": {"group_id": "off-group"}}}},
+            shadowed_statics={"collision": "preserved"},
+        )
+        self.assertEqual(["off"], [row.key for row in filter_manager_rows(rows, FILTER_DISABLED)])
+        self.assertEqual(["collision"], [row.key for row in filter_manager_rows(rows, FILTER_PROBLEMS)])
+        self.assertTrue(next(row for row in rows if row.kind == "dynamic").enabled)
+
     def setUp(self):
         self.rows = build_manager_rows(
             {

@@ -203,7 +203,9 @@ from manager_actions import (
 )
 from manager_view_support import (
     FILTER_ALL,
+    FILTER_DISABLED,
     FILTER_FAVORITES,
+    FILTER_PROBLEMS,
     FILTER_RECENT,
     UNGROUPED_FILTER,
     build_manager_rows,
@@ -215,11 +217,12 @@ from manager_view_support import (
 from gui_support import (
     center_dialog,
     center_on_screen,
+    ellipsize_text,
     focus_modal_input,
     iter_filtered_mapping_items,
     layout_wrapping_row,
     SectionSwitcher,
-    snippet_tree_values,
+    snippet_row_values,
     split_tree_columns,
 )
 from gui_thread import GuiThread
@@ -1933,15 +1936,27 @@ class Sniptype:
         else:
             self.snippets[trigger] = value
 
-    def _delete_static_snippet(self, trigger):
+    def _delete_static_snippet(self, trigger, *, include_shadowed=False):
         """Delete a static snippet by trigger, guarding shadowed dynamics.
 
-        It asks nothing: the manager offers Desfazer instead. Returns one of
+        A selected persisted row may explicitly include a shadowed static;
+        free-form callers keep the dynamic-route refusal. It asks nothing:
+        the manager offers Desfazer instead. Returns one of
         ``"missing"``, ``"dynamic"`` (a dynamic trigger owns the name — refused
         so the preserved static is not lost, and the caller directs the user
         to Ações dinâmicas), ``"error"`` (save failed, in-memory state rolled
         back) or ``"ok"``.
         """
+        if (include_shadowed and trigger in self.shadowed_static_snippets
+                and (trigger not in self.snippets or callable(self.snippets[trigger]))):
+            # A selected library row names the persisted static, not the
+            # provider that owns expansion. Keep that callable in place.
+            value = self.shadowed_static_snippets.pop(trigger)
+            if not self.save_snippets(self.snippets):
+                self.shadowed_static_snippets[trigger] = value
+                return "error"
+            self.refresh_runtime_indexes()
+            return "ok"
         if trigger not in self.snippets:
             return "missing"
         if callable(self.snippets[trigger]):
@@ -2701,6 +2716,7 @@ class Sniptype:
             self.snippets,
             getattr(self, "library_metadata", None),
             getattr(self, "dynamic_registry", None),
+            getattr(self, "shadowed_static_snippets", None),
         )
 
     def _manager_target(self, target):
@@ -2739,6 +2755,34 @@ class Sniptype:
         self._refresh_manager_lists()
         return True
 
+    def _manager_static_projection(self):
+        """Values the static manager owns, alongside untouched dynamic routes."""
+        return {**self.snippets, **self.shadowed_static_snippets}
+
+    def _persist_manager_static_action(self, result):
+        """Persist static-manager changes while retaining live provider identity."""
+        providers = {key: value for key, value in self.snippets.items() if callable(value)}
+        old_shadows = self.shadowed_static_snippets
+        self.shadowed_static_snippets = {
+            key: value for key, value in result.snippets.items()
+            if key in providers and not callable(value)
+        }
+        try:
+            if not self.save_snippets(result.snippets, metadata=result.metadata):
+                self.shadowed_static_snippets = old_shadows
+                return False
+        except MetadataReadOnlyError:
+            self.shadowed_static_snippets = old_shadows
+            return False
+        except Exception:
+            self.shadowed_static_snippets = old_shadows
+            raise
+        self.snippets = {**result.snippets, **providers}
+        self.library_metadata = result.metadata
+        self.refresh_runtime_indexes()
+        self._refresh_manager_lists()
+        return True
+
     def _select_manager_target(self, target):
         """Select a pending target in its tab, returning whether it was found."""
         if target is None:
@@ -2770,35 +2814,27 @@ class Sniptype:
         ui_theme.prepare_window(dialog, ui)
         body = tk.Frame(dialog, bg=ui.surface, padx=ui.space_lg, pady=ui.space_lg)
         body.pack(fill="both", expand=True)
-        list_field = ui_widgets.field_frame(body)
-        listbox = tk.Listbox(
-            list_field,
-            exportselection=False,
-            activestyle="none",
-            relief=tk.FLAT,
-            borderwidth=0,
-            **ui_widgets.listbox_colors(ui),
-            font=ui.font(),
-        )
+        list_field = ui_widgets.list_frame(body)
+        listbox = ui_widgets.tree_list(list_field)
         listbox.pack(fill="both", expand=True)
         ui_widgets.track_focus(list_field, listbox)
         kind_labels = {"static": _("Snippet"), "mapping": _("Mapeamento"), "dynamic": _("Dinâmico")}
-        for row in rows:
+        for index, row in enumerate(rows):
             listbox.insert(
-                tk.END,
-                f"{kind_labels.get(row.kind, row.kind)}  •  {row.effective_trigger}",
+                "", tk.END, iid=str(index),
+                text=f"{kind_labels.get(row.kind, row.kind)}  •  {row.effective_trigger}",
             )
         if rows:
             listbox.selection_set(0)
         else:
-            listbox.insert(tk.END, _("Nenhum item disponível."))
-            listbox.configure(state=tk.DISABLED)
+            listbox.insert("", tk.END, text=_("Nenhum item disponível."))
+            listbox.state(["disabled"])
 
         def activate(_event=None):
-            selection = listbox.curselection()
+            selection = listbox.selection()
             if not selection or not rows:
                 return
-            if self._select_manager_target(rows[selection[0]].ref):
+            if self._select_manager_target(rows[int(selection[0])].ref):
                 dialog.destroy()
 
         listbox.bind("<Double-Button-1>", activate)
@@ -3246,6 +3282,7 @@ class Sniptype:
                     tone="danger",
                 )
 
+        self._manager_import_action = on_import
         buttons = tk.Frame(main, bg=ui.surface)
         buttons.grid(row=3, column=0, sticky="ew", pady=(ui.space_md, 0))
         ui_widgets.button(
@@ -3747,7 +3784,8 @@ class Sniptype:
         )
         style.map(
             "Manager.Treeview",
-            background=[("selected", ui.select_bg)],
+            background=[("selected", "focus", ui.select_bg),
+                        ("selected", "!focus", ui.surface_alt)],
             foreground=[("selected", ui.select_fg)],
         )
         style.configure(
@@ -3764,23 +3802,22 @@ class Sniptype:
         """Build the trigger/preview Treeview used by the snippet lists.
 
         ``shell`` must be a grid container whose row 0 / column 0 expands.
-        The trigger and preview columns are resized to fill the visible tree
-        on every resize, so no column is ever clipped past the right edge;
-        ``trigger_share`` is per-tab because mapping identifiers carry the
-        composed trigger and need more of the row. Rich-text and variable
-        markers lead the preview (see ``snippet_tree_values``): a column of
-        their own stood empty for most libraries.
+        Measured cells fit the visible tree on every resize. Capabilities have
+        their own marker column; groups appear when the manager has room.
+        Mapping identifiers reserve more space for the composed trigger.
         """
-        columns = ("trigger", "preview")
-        tree = ttk.Treeview(
+        columns = ("trigger", "preview", "markers", "group")
+        tree = ui_widgets.tree_list(
             shell,
             columns=columns,
-            show="headings",
-            selectmode="browse",
-            style="Manager.Treeview",
+            headings=True,
         )
         tree.heading("trigger", text=trigger_heading, anchor="w")
         tree.heading("preview", text=_("Valor"), anchor="w")
+        tree.heading("markers", text=_("Recursos"), anchor="w")
+        tree.heading("group", text=_("Grupo:"), anchor="w")
+        tree.column("markers", width=ui_theme.theme().px(62), minwidth=0, stretch=False)
+        tree.column("group", width=100, minwidth=0, stretch=False)
         tree.column("trigger", width=trigger_min, minwidth=0, anchor="w", stretch=False)
         tree.column("preview", width=100, minwidth=0, anchor="w", stretch=False)
         tree.grid(row=0, column=0, sticky="nsew")
@@ -3788,12 +3825,23 @@ class Sniptype:
         def fit_columns(event):
             # A couple of pixels for the tree's own border keep the last
             # column from spilling into a horizontal overflow.
-            trigger, preview = split_tree_columns(
-                event.width - 4, 0, trigger_share, trigger_min, 60,
-            )
+            ui = ui_theme.theme()
+            group_width = ui.px(100) if tree.winfo_toplevel().winfo_width() >= ui.px(1400) else 0
+            tree.configure(displaycolumns=columns if group_width else columns[:3])
+            fixed = ui.px(6) + ui.px(62) + group_width
+            trigger, preview = split_tree_columns(event.width - 4, fixed, trigger_share, trigger_min, 60)
             tree.column("trigger", width=trigger)
             tree.column("preview", width=preview)
+            tree.column("group", width=group_width)
+            measure = tkfont.Font(root=tree, font=ui.font()).measure
+            for item, values in list(tree.full_values.items()):
+                if tree.exists(item):
+                    tree.item(item, values=tuple(
+                        ellipsize_text(value, max(0, tree.column(column, "width") - ui.px(10)), measure)
+                        for column, value in zip(columns, values)))
 
+        tree.full_values = {}
+        tree.fit_cells = lambda: fit_columns(types.SimpleNamespace(width=tree.winfo_width()))
         tree.bind("<Configure>", fit_columns, add="+")
 
         scrollbar = ui_widgets.scrollbar(shell, command=tree.yview)
@@ -3801,6 +3849,32 @@ class Sniptype:
         scrollbar.grid(row=0, column=1, sticky="ns")
         self._bind_mousewheel(tree, tree)
         return tree
+
+    def _insert_snippet_row(self, tree, key, value, row=None):
+        """Project row capabilities and written runtime restrictions into cells."""
+        _trigger, preview, _markers = snippet_row_values(key, value)
+        markers = []
+        if is_rich_text_payload(value):
+            markers.append("A")
+        if find_variable_names(extract_plain_text(value)):
+            markers.append("ƒ")
+        form = self._static_form_metadata(key) if row and row.kind == "static" else (
+            self._mapping_form_metadata(row.container, key) if row and row.kind == "mapping" else None)
+        if form:
+            markers.append("▤")
+        if row and row.favorite:
+            markers.append("★")
+        notes = []
+        if row and not row.enabled:
+            notes.append(_("Desativado (grupo)"))
+        if row and row.shadowed:
+            notes.append(_("Sobreposto por dinâmico"))
+        if notes:
+            preview = " · ".join(notes + [preview])
+        values = (format_trigger_pair(row) if row else key, preview, " ".join(markers),
+                  row.group_label if row and row.group_id else "")
+        tree.full_values[key] = values
+        tree.insert("", tk.END, iid=key, values=values, tags=("unavailable",) if notes else ())
 
     def _register_manager_refresher(self, refresher):
         """Register a list-rebuild callback invoked after restore/import.
@@ -4199,9 +4273,8 @@ class Sniptype:
         toolbar.pack(fill=tk.X, pady=(0, 6))
         # Where the buttons alone fill the row, the status gets its own line
         # below rather than pushing the last button off the pane.
-        status_row = tk.Frame(parent, **ui.toolbar_frame_colors()) if ui.stacked_toolbar_status else toolbar
-        if status_row is not toolbar:
-            status_row.pack(fill=tk.X, pady=(0, 4))
+        status_row = tk.Frame(parent, **ui.toolbar_frame_colors())
+        status_row.pack(fill=tk.X, pady=(0, 4))
 
         status_var = tk.StringVar(value=_("Formato: texto simples"))
 
@@ -4360,9 +4433,7 @@ class Sniptype:
             lf.grid_columnconfigure(0, weight=1)
             lf.grid_rowconfigure(0, weight=1)
 
-            listbox = tk.Listbox(lf, font=ui.font(10), selectmode=tk.SINGLE,
-                                 relief=tk.FLAT, borderwidth=0, activestyle="none",
-                                 **ui_widgets.listbox_colors(ui))
+            listbox = ui_widgets.tree_list(lf)
             scrollbar = ui_widgets.scrollbar(lf, command=listbox.yview)
             listbox.config(yscrollcommand=scrollbar.set)
             listbox.grid(row=0, column=0, sticky="nsew")
@@ -4375,9 +4446,9 @@ class Sniptype:
                 nonlocal displayed
                 query = search_var.get().strip().lower()
                 displayed = [c for c in choices if query in c.lower()] if query else list(choices)
-                listbox.delete(0, tk.END)
-                for c in displayed:
-                    listbox.insert(tk.END, c)
+                listbox.delete(*listbox.get_children())
+                for index, choice in enumerate(displayed):
+                    listbox.insert("", tk.END, iid=str(index), text=choice)
 
             search_var.trace_add("write", refresh_list)
             refresh_list()
@@ -4385,10 +4456,10 @@ class Sniptype:
                 listbox.selection_set(0)
 
             def confirm(*_args):
-                sel = listbox.curselection()
+                sel = listbox.selection()
                 if not sel:
                     return
-                chosen = displayed[sel[0]]
+                chosen = displayed[int(sel[0])]
                 picker.destroy()
                 _insert_variable_text(chosen)
 
@@ -4434,9 +4505,30 @@ class Sniptype:
         add_toolbar_button("%%cb", insert_clipboard_var, 1, _("Variável: colar clipboard (%%clipboard-paste%%)"), "var")
         add_toolbar_button("%%?", insert_form_field, 1, _("Variável: campo de formulário (%%campo%%)"), "var")
 
-        tk.Label(status_row, textvariable=status_var, bg=toolbar_bg,
-                 **ui.status_label_options()).pack(
-                     side=tk.LEFT if status_row is not toolbar else tk.RIGHT)
+        format_label = tk.Label(parent, textvariable=status_var, bg=toolbar_bg,
+                                **ui.status_label_options())
+        format_label.pack(in_=status_row, side=tk.LEFT)
+        format_state = {"stacked": True}
+
+        def fit_format_status(*_args):
+            controls = sum(widget.winfo_reqwidth() + sum(map(int, widget.pack_info().get("padx", (0, 0))))
+                           if isinstance(widget.pack_info().get("padx", 0), tuple)
+                           else widget.winfo_reqwidth() + 2 * int(widget.pack_info().get("padx", 0))
+                           for widget in toolbar.winfo_children())
+            stacked = ui.stacked_toolbar_status or controls + format_label.winfo_reqwidth() + ui.space_md > toolbar.winfo_width()
+            if stacked == format_state["stacked"]:
+                return
+            format_state["stacked"] = stacked
+            format_label.pack_forget()
+            if stacked:
+                status_row.pack(fill=tk.X, pady=(0, 4), after=toolbar)
+                format_label.pack(in_=status_row, side=tk.LEFT)
+            else:
+                status_row.pack_forget()
+                format_label.pack(in_=toolbar, side=tk.RIGHT)
+
+        toolbar.bind("<Configure>", fit_format_status, add="+")
+        status_var.trace_add("write", fit_format_status)
 
         bind_shortcut("<Control-b>", "bold")
         bind_shortcut("<Control-i>", "italic")
@@ -4467,54 +4559,48 @@ class Sniptype:
         # requested width and the editor's toolbars starve the list.
         main.grid_columnconfigure(0, weight=2, minsize=300, uniform="panes")
         main.grid_columnconfigure(1, weight=3, minsize=440, uniform="panes")
-        main.grid_rowconfigure(0, weight=1)
+        main.grid_rowconfigure(2, weight=1)
+        page_header = tk.Frame(main, bg=ui.surface)
+        page_header.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, ui.space_sm))
+        tk.Label(page_header, text=_("Textos"), font=ui.title_font(),
+                 bg=ui.surface, fg=ui.text).pack(side=tk.LEFT)
+        page_new = ui_widgets.button(page_header, text=_("Novo snippet"), icon="add", variant="accent")
+        page_new.pack(side=tk.RIGHT)
 
-        frame_left = ui_widgets.card(main)
-        frame_left.grid(row=0, column=0, sticky="nsew", padx=(0, ui.space_md))
+        frame_left = ui_widgets.flat_pane(main)
+        frame_left.grid(row=2, column=0, sticky="nsew", padx=(0, 1))
+        tk.Frame(main, bg=ui.divider, width=1).grid(row=2, column=0, sticky="nse")
         frame_left.grid_columnconfigure(0, weight=1)
         frame_left.grid_rowconfigure(5, weight=1)
 
-        tk.Label(
-            frame_left,
-            text=_("Biblioteca"),
-            font=ui.subtitle_font(),
-            bg=ui.card,
-            fg=ui.text,
-        ).grid(row=0, column=0, sticky="w")
         # How many the list shows of how many there are: the navigation counts
         # the library, the list counts what the search and filters leave.
         count_var = tk.StringVar(frame_left)
-        tk.Label(
-            frame_left,
-            textvariable=count_var,
-            font=ui.caption_font(),
-            bg=ui.card,
-            fg=ui.text_muted,
-        ).grid(row=1, column=0, sticky="w", pady=(ui.space_xs, 0))
-
+        count_row = tk.Frame(frame_left, bg=ui.card)
+        count_row.grid(row=0, column=0, sticky="ew")
         search_var = tk.StringVar()
-        tk.Label(
-            frame_left,
-            text=_("Pesquisar"),
-            font=ui.font(),
-            bg=ui.card,
-            fg=ui.text_strong,
-        ).grid(row=2, column=0, sticky="w", pady=(ui.space_md, 0))
-        search_entry = ui_widgets.entry(frame_left, textvariable=search_var)
-        search_entry.grid(row=3, column=0, sticky="ew", pady=(ui.space_xs, ui.space_sm))
+        search_entry = ui_widgets.entry(count_row, textvariable=search_var, width=12)
+        search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, ui.space_xs))
+        ui_widgets.search_hint(search_entry, _("Pesquisar snippets"))
+        tk.Label(count_row, textvariable=count_var, font=ui.caption_font(),
+                 bg=ui.card, fg=ui.text_muted).pack(side=tk.LEFT)
+        clear_filter = ui_widgets.button(count_row, text=_("Limpar"), variant="subtle",
+                                         command=lambda: clear_search())
+        clear_filter.pack(side=tk.RIGHT)
+
         self._manager_search_entries[str(parent)] = search_entry
 
         filter_var = tk.StringVar(value=FILTER_ALL)
         group_var = tk.StringVar(value="")
-        filter_frame = tk.Frame(frame_left, bg=ui.card)
-        filter_frame.grid(row=4, column=0, sticky="ew", pady=(0, ui.space_sm))
+        filter_frame = tk.Frame(page_header, bg=ui.surface)
+        filter_frame.pack(side=tk.RIGHT, padx=(ui.space_md, ui.space_lg))
         filter_frame.grid_columnconfigure(0, weight=1)
         # One drop-down picks the group filter; each label maps back to its
         # (filter, group id). Group management lives behind the Grupos menu
         # so its Novo/Excluir are never confused with the editor's.
         group_choices = {}
         group_choice_var = tk.StringVar()
-        group_filter = ui_widgets.combobox(filter_frame, textvariable=group_choice_var)
+        group_filter = ui_widgets.combobox(filter_frame, textvariable=group_choice_var, width=18)
         group_filter.grid(row=0, column=0, sticky="ew")
 
         def on_group_filter(_event=None):
@@ -4552,20 +4638,24 @@ class Sniptype:
         if not ui_widgets.set_icon(group_actions, "chevron_down", trailing=True):
             group_actions.configure(text=_("Grupos") + " ▾")
         group_actions.grid(row=0, column=1, padx=(ui.space_xs, 0))
-        view_buttons = tk.Frame(filter_frame, bg=ui.card)
-        view_buttons.grid(row=1, column=0, columnspan=2, sticky="w", pady=(ui.space_xs, 0))
-        ui_widgets.button(
-            view_buttons, text=_("Favoritos"), variant="subtle", icon="favorite",
-            command=lambda: self._show_manager_filter_dialog(
-                root, FILTER_FAVORITES, _("Favoritos")
-            ),
-        ).pack(side=tk.LEFT, padx=(0, ui.space_xs))
-        ui_widgets.button(
-            view_buttons, text=_("Recentes"), variant="subtle", icon="history",
-            command=lambda: self._show_manager_filter_dialog(
-                root, FILTER_RECENT, _("Recentes")
-            ),
-        ).pack(side=tk.LEFT)
+        view_buttons = tk.Frame(main, bg=ui.surface)
+        view_buttons.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, ui.space_xs))
+        segments = {}
+        for index, (value, label) in enumerate((
+            (FILTER_ALL, _("Todos")), (FILTER_FAVORITES, _("Favoritos")),
+            (FILTER_RECENT, _("Recentes")), (FILTER_DISABLED, _("Desativados")),
+            (FILTER_PROBLEMS, _("Com problema")),
+        )):
+            segment = ui_widgets.button(view_buttons, text=label, variant="nav",
+                                         command=lambda value=value: filter_var.set(value))
+            segment.grid(row=0, column=index, sticky="ew", padx=(0, ui.space_xs))
+            segments[value] = segment
+
+        def clear_search():
+            group_var.set("")
+            filter_var.set(FILTER_ALL)
+            search_var.set("")
+            search_entry.focus_set()
 
         listbox_shell = ui_widgets.list_frame(frame_left)
         listbox_shell.grid(row=5, column=0, sticky="nsew")
@@ -4573,30 +4663,29 @@ class Sniptype:
         listbox_shell.grid_rowconfigure(0, weight=1)
 
         tree = self._create_snippet_tree(listbox_shell, trigger_heading="Trigger")
-        empty_label = tk.Label(
-            listbox_shell,
-            text=_("Nenhum snippet encontrado.\nCrie um novo ou ajuste a pesquisa."),
-            font=ui.caption_font(),
+        empty_label = tk.Frame(listbox_shell, bg=ui.card)
+        empty_message = tk.Label(
+            empty_label,
+            text=_("Sua biblioteca está vazia."),
+            font=ui.font(),
             bg=ui.card,
             fg=ui.text_muted,
             justify="center",
         )
+        empty_message.pack(pady=(ui.space_lg, ui.space_sm))
+        empty_new = ui_widgets.button(empty_label, text=_("Novo snippet"), command=lambda: on_new())
+        empty_import = ui_widgets.button(empty_label, text=_("Importar…"),
+                                         command=lambda: self._manager_import_action())
+        empty_clear = ui_widgets.button(empty_label, text=_("Limpar busca"), command=clear_search)
         empty_label.grid(row=0, column=0, sticky="nsew")
 
-        frame_right = ui_widgets.card(main)
-        frame_right.grid(row=0, column=1, sticky="nsew")
+        frame_right = ui_widgets.flat_pane(main)
+        frame_right.grid(row=2, column=1, sticky="nsew")
         frame_right.grid_columnconfigure(0, weight=1)
         # Toolbar plus ~4 lines of text: without a floor the fixed rows took
         # every pixel at the minimum window size and the content box vanished.
         frame_right.grid_rowconfigure(5, weight=1, minsize=EDITOR_CONTENT_MIN_HEIGHT)
 
-        tk.Label(
-            frame_right,
-            text=_("Editor"),
-            font=ui.subtitle_font(),
-            bg=ui.card,
-            fg=ui.text,
-        ).grid(row=0, column=0, sticky="w")
         # What the editor holds and whether it is saved, where a fixed
         # caption used to be.
         header = self._editor_header(frame_right, lambda: reveal_static())
@@ -4623,13 +4712,6 @@ class Sniptype:
             anchor="e",
         ).grid(row=2, column=0, sticky="e")
 
-        tk.Label(
-            frame_right,
-            text=_("Conteúdo"),
-            font=ui.font(),
-            bg=ui.card,
-            fg=ui.text_strong,
-        ).grid(row=4, column=0, sticky="w")
         editor_shell = tk.Frame(frame_right, bg=ui.card)
         editor_shell.grid(row=5, column=0, sticky="nsew", pady=(ui.space_xs, 0))
         editor_shell.grid_columnconfigure(0, weight=1)
@@ -4670,7 +4752,7 @@ class Sniptype:
         btn_new.pack(side=tk.LEFT, padx=(0, button_gap))
         btn_duplicate.pack(side=tk.LEFT, padx=(0, button_gap))
         btn_rename.pack(side=tk.LEFT)
-        btn_delete.pack(side=tk.LEFT, padx=(0, button_gap))
+        btn_delete.pack(side=tk.LEFT, padx=(0, ui_widgets.face_gap(btn_frame, ui.space_lg)))
         btn_save.pack(side=tk.LEFT)
         layout_wrapping_row(
             btn_frame, primary_actions, secondary_actions,
@@ -4684,7 +4766,7 @@ class Sniptype:
         item_group_var = tk.StringVar(value=_("Sem grupo"))
         item_favorite_var = tk.BooleanVar(value=False)
         item_frame = tk.Frame(frame_right, bg=ui.card)
-        item_frame.grid(row=8, column=0, sticky="ew", pady=(ui.space_md, 0))
+        item_frame.grid(row=4, column=0, sticky="ew", pady=(0, ui.space_sm))
         item_group_controls = tk.Frame(item_frame, bg=ui.card)
         tk.Label(item_group_controls, text=_("Grupo:"), bg=ui.card, fg=ui.text_muted, font=ui.caption_font()).pack(side=tk.LEFT)
         item_group_combo = ui_widgets.combobox(item_group_controls, textvariable=item_group_var, width=16)
@@ -4776,6 +4858,7 @@ class Sniptype:
 
         def get_static_visible_snippets():
             """Visible static snippets in display order, best search match first."""
+            projection = self._manager_static_projection()
             all_rows = self._manager_rows()
             static_rows_by_key.clear()
             static_rows_by_key.update(
@@ -4788,11 +4871,11 @@ class Sniptype:
                     group_id=group_var.get() or None,
                 ),
                 search_var.get(),
-                self.snippets,
+                projection,
             )
             visible_rows.clear()
             visible_rows.update((row.stored_trigger, row) for row in rows)
-            return {row.stored_trigger: self.snippets[row.stored_trigger] for row in rows}
+            return {row.stored_trigger: projection[row.stored_trigger] for row in rows}
 
         static_snips = get_static_visible_snippets()
 
@@ -4802,20 +4885,32 @@ class Sniptype:
             focus_item = tree.focus()
             top = tree.yview()[0] if keep_view else 0.0
             tree.delete(*tree.get_children())
+            tree.full_values.clear()
             static_snips.clear()
             static_snips.update(get_static_visible_snippets())
             for key in static_snips:
                 row = visible_rows.get(key)
-                display_trigger = format_trigger_pair(row) if row else key
-                tree.insert("", tk.END, iid=key,
-                            values=(display_trigger,) + snippet_tree_values(key, static_snips[key])[1:])
-            (tree if static_snips else empty_label).tkraise()
-            total = len(static_rows_by_key)
-            if len(static_snips) == total:
-                count_var.set(_("Snippets: {total}").format(total=total))
+                self._insert_snippet_row(tree, key, static_snips[key], row)
+            tree.fit_cells()
+            if static_snips:
+                empty_label.grid_remove()
+                tree.grid()
             else:
-                count_var.set(
-                    _("Snippets: {shown} de {total}").format(shown=len(static_snips), total=total))
+                tree.grid_remove()
+                empty_label.grid()
+            total = len(static_rows_by_key)
+            count_var.set(_("{shown} de {total}").format(shown=len(static_snips), total=total))
+            for value, segment in segments.items():
+                ui_widgets.set_selected(segment, filter_var.get() == value)
+            for widget in (empty_new, empty_import, empty_clear):
+                widget.pack_forget()
+            if total:
+                empty_message.configure(text=_("Nenhum snippet corresponde à busca ou aos filtros."))
+                empty_clear.pack()
+            else:
+                empty_message.configure(text=_("Sua biblioteca está vazia."))
+                empty_new.pack(pady=(0, ui.space_xs))
+                empty_import.pack()
             if set_count is not None:
                 set_count(total)
             if session.ref is not None and tree.exists(session.ref):
@@ -4833,15 +4928,15 @@ class Sniptype:
 
         def stored_value(key):
             """What the library holds for static ``key``, shadowed or not."""
-            value = self.snippets.get(key, EDITOR_MISSING)
+            value = self.shadowed_static_snippets.get(key, self.snippets.get(key, EDITOR_MISSING))
             if callable(value):
-                value = self.shadowed_static_snippets.get(key, EDITOR_MISSING)
+                return EDITOR_MISSING
             return value
 
         def current_static_key():
             """The saved snippet the editor's commands act on, or None."""
             key = session.ref
-            return key if key in self.snippets and not callable(self.snippets.get(key)) else None
+            return key if stored_value(key) is not EDITOR_MISSING else None
 
         def replaced_name(typed):
             """The other saved snippet that Salvar would overwrite under ``typed``, or None."""
@@ -4859,6 +4954,8 @@ class Sniptype:
             item = current_static_key()
             read_only = bool(getattr(self.library_metadata, "read_only", False))
             _set_enabled(btn_save, dirty and problem is None)
+            ui_widgets.set_button_variant(btn_save, "accent" if dirty and problem is None else "standard", icon="save")
+            ui_widgets.set_button_variant(page_new, "standard" if dirty and problem is None else "accent", icon="add")
             _set_enabled(btn_delete, item is not None)
             _set_enabled(preview_button, item is not None)
             for widget in (btn_duplicate, btn_rename, item_favorite_check, form_button):
@@ -5045,11 +5142,11 @@ class Sniptype:
                 return
             try:
                 result = manager_create_group(
-                    self.snippets, self.library_metadata,
+                    self._manager_static_projection(), self.library_metadata,
                     definition=definition,
                     dynamic_triggers=self._manager_dynamic_triggers(),
                 )
-                if self._persist_manager_action(result):
+                if self._persist_manager_static_action(result):
                     refresh_group_menu()
                     self.receipt(
                         N_("Grupo criado às {time}"), definition.get("label") or _("Sem nome"),
@@ -5075,10 +5172,10 @@ class Sniptype:
                 return
             try:
                 result = manager_update_group(
-                    self.snippets, self.library_metadata, group_id, definition,
+                    self._manager_static_projection(), self.library_metadata, group_id, definition,
                     dynamic_triggers=self._manager_dynamic_triggers(),
                 )
-                if self._persist_manager_action(result):
+                if self._persist_manager_static_action(result):
                     refresh_group_menu()
                     self.receipt(
                         N_("Grupo atualizado às {time}"), definition.get("label") or _("Sem nome"),
@@ -5105,10 +5202,10 @@ class Sniptype:
             label = definition.get("label") or _("Sem nome")
             try:
                 result = manager_delete_group(
-                    self.snippets, self.library_metadata, group_id,
+                    self._manager_static_projection(), self.library_metadata, group_id,
                     dynamic_triggers=self._manager_dynamic_triggers(),
                 )
-                if not self._persist_manager_action(result):
+                if not self._persist_manager_static_action(result):
                     manager_action_failed(_("Excluir grupo"))
                     return
             except (KeyError, ValueError, MetadataReadOnlyError) as error:
@@ -5125,11 +5222,11 @@ class Sniptype:
             def undo():
                 try:
                     restored = manager_restore_group(
-                        self.snippets, self.library_metadata, group_id, definition,
+                        self._manager_static_projection(), self.library_metadata, group_id, definition,
                         static_items=static_members, mapping_items=mapping_members,
                         dynamic_triggers=self._manager_dynamic_triggers(),
                     )
-                    if not self._persist_manager_action(restored):
+                    if not self._persist_manager_static_action(restored):
                         manager_action_failed(_("Desfazer exclusão"))
                         return
                 except (KeyError, ValueError, MetadataReadOnlyError) as error:
@@ -5158,11 +5255,11 @@ class Sniptype:
                 return
             try:
                 result = manager_toggle_favorite(
-                    self.snippets, self.library_metadata, key,
+                    self._manager_static_projection(), self.library_metadata, key,
                     item_favorite_var.get(),
                     dynamic_triggers=self._manager_dynamic_triggers(),
                 )
-                if not self._persist_manager_action(result):
+                if not self._persist_manager_static_action(result):
                     show_item_metadata(static_row(key))
                     manager_action_failed(_("Favorito"))
             except (KeyError, ValueError, MetadataReadOnlyError) as error:
@@ -5182,16 +5279,16 @@ class Sniptype:
             try:
                 if group_id:
                     result = manager_assign_item(
-                        self.snippets, self.library_metadata, key, group_id,
+                        self._manager_static_projection(), self.library_metadata, key, group_id,
                         dynamic_triggers=self._manager_dynamic_triggers(),
                     )
                 else:
                     from manager_actions import unassign_item as manager_unassign_item
                     result = manager_unassign_item(
-                        self.snippets, self.library_metadata, key,
+                        self._manager_static_projection(), self.library_metadata, key,
                         dynamic_triggers=self._manager_dynamic_triggers(),
                     )
-                if not self._persist_manager_action(result):
+                if not self._persist_manager_static_action(result):
                     show_item_metadata(static_row(key))
                     manager_action_failed(_("Grupo"))
             except (KeyError, ValueError, MetadataReadOnlyError) as error:
@@ -5211,16 +5308,16 @@ class Sniptype:
             definition = self._static_form_metadata(key)
             form = run_form_editor(
                 root, definition, self.snippets,
-                template=extract_plain_text(self.snippets[key]),
+                template=extract_plain_text(stored_value(key)),
             )
             if form is None:
                 return
             try:
                 result = manager_set_form(
-                    self.snippets, self.library_metadata, key, form,
+                    self._manager_static_projection(), self.library_metadata, key, form,
                     dynamic_triggers=self._manager_dynamic_triggers(),
                 )
-                if not self._persist_manager_action(result):
+                if not self._persist_manager_static_action(result):
                     manager_action_failed(_("Formulário"))
             except (KeyError, ValueError, MetadataReadOnlyError) as error:
                 self.logger.warning(f"Manager form update failed: {error}")
@@ -5233,7 +5330,7 @@ class Sniptype:
             key = current_static_key()
             if key is None:
                 return
-            result = resolve_preview(self.snippets[key], self.snippets, self._static_form_metadata(key))
+            result = resolve_preview(stored_value(key), self.snippets, self._static_form_metadata(key))
             controller = getattr(self, "_manager_preview_controller", None)
             if controller is None or controller.shared_root is not root:
                 controller = PreviewDialogController(root)
@@ -5328,9 +5425,10 @@ class Sniptype:
 
             # Deleting is reversible for a while (Desfazer), so it asks
             # nothing; the value and its metadata are kept until then.
-            value = copy.deepcopy(self.snippets.get(trigger))
+            value = copy.deepcopy(stored_value(trigger))
+            provider = self.snippets.get(trigger) if trigger in self.shadowed_static_snippets else None
             item_metadata = static_item_metadata(self.library_metadata, trigger)
-            result = self._delete_static_snippet(trigger)
+            result = self._delete_static_snippet(trigger, include_shadowed=True)
             if result == "dynamic":
                 # A dynamic trigger owns the name; the free-text box let the user
                 # type it. Deleting would discard the shadowed static from disk,
@@ -5355,11 +5453,16 @@ class Sniptype:
 
             def undo():
                 try:
+                    if provider is not None and self.snippets.get(trigger) is not provider:
+                        raise ValueError(_("A ação dinâmica mudou desde a exclusão do snippet."))
+                    projection = self._manager_static_projection()
+                    if provider is not None:
+                        projection.pop(trigger, None)
                     restored = manager_restore_static(
-                        self.snippets, self.library_metadata, trigger, value, item_metadata,
-                        dynamic_triggers=self._manager_dynamic_triggers(),
+                        projection, self.library_metadata, trigger, value, item_metadata,
+                        dynamic_triggers=self._manager_dynamic_triggers() - ({trigger} if provider is not None else set()),
                     )
-                    if not self._persist_manager_action(restored):
+                    if not self._persist_manager_static_action(restored):
                         manager_action_failed(_("Desfazer exclusão"))
                         return
                 except (KeyError, ValueError, MetadataReadOnlyError) as error:
@@ -5411,10 +5514,10 @@ class Sniptype:
                 return
             try:
                 result = manager_duplicate_static(
-                    self.snippets, self.library_metadata, source_key, destination,
+                    self._manager_static_projection(), self.library_metadata, source_key, destination,
                     dynamic_triggers=self._manager_dynamic_triggers(),
                 )
-                if not self._persist_manager_action(result):
+                if not self._persist_manager_static_action(result):
                     manager_action_failed(_("Duplicar"))
                     return
             except (KeyError, ValueError, MetadataReadOnlyError) as error:
@@ -5434,10 +5537,11 @@ class Sniptype:
 
         def on_rename():
             old_trigger = session.ref
-            if old_trigger not in self.snippets:
+            projection = self._manager_static_projection()
+            if old_trigger not in projection:
                 ui_widgets.alert(root, _("Renomear snippet"), _("Selecione um snippet salvo para renomear."))
                 return
-            if callable(self.snippets[old_trigger]):
+            if callable(projection[old_trigger]):
                 ui_widgets.alert(
                     root, _("Renomear snippet"),
                     _("'{old_trigger}' é um snippet dinâmico. Renomeie-o em Ações dinâmicas.").format(old_trigger=old_trigger),
@@ -5474,14 +5578,14 @@ class Sniptype:
 
             try:
                 result = manager_rename_static(
-                    self.snippets,
+                    self._manager_static_projection(),
                     self.library_metadata,
                     old_trigger,
                     new_trigger,
                     dynamic_triggers=self._manager_dynamic_triggers(),
                 )
                 follow(new_trigger)
-                if not self._persist_manager_action(result):
+                if not self._persist_manager_static_action(result):
                     follow(old_trigger)
                     ui_widgets.alert(
                         root, _("Erro ao salvar"), _("Não foi possível gravar snippets.json."),
@@ -5514,8 +5618,9 @@ class Sniptype:
         )
         self._register_manager_editor(editor)
 
-        tree.bind("<<TreeviewSelect>>", on_tree_select)
+        tree.bind("<<TreeviewSelect>>", on_tree_select, add="+")
         btn_new.configure(command=on_new)
+        page_new.configure(command=on_new)
         btn_save.configure(command=on_save)
         btn_duplicate.configure(command=on_duplicate)
         btn_rename.configure(command=on_rename)
@@ -5591,11 +5696,12 @@ class Sniptype:
             nonlocal mappings_info
             mappings_info = get_mappings_info()
 
-            listbox_types.delete(0, tk.END)
+            listbox_types.delete(*listbox_types.get_children())
             type_keys.clear()
             for key, info in sorted(mappings_info.items(), key=lambda item: (not item[1]["builtin"], item[1]["label"])):
                 type_keys.append(key)
-                listbox_types.insert(tk.END, info["label"])
+                listbox_types.insert("", tk.END, iid=key, text=info["label"])
+            narrow_types.configure(values=tuple(mappings_info[key]["label"] for key in type_keys))
 
             if mapping_type.get() not in type_keys and type_keys:
                 mapping_type.set(type_keys[0])
@@ -5606,11 +5712,10 @@ class Sniptype:
         def select_type_row(key):
             if key not in type_keys:
                 return
-            index = type_keys.index(key)
-            listbox_types.selection_clear(0, tk.END)
-            listbox_types.selection_set(index)
-            listbox_types.activate(index)
-            listbox_types.see(index)
+            listbox_types.selection_set(key)
+            listbox_types.focus(key)
+            listbox_types.see(key)
+            narrow_type_var.set(mappings_info[key]["label"])
 
         def type_label(container):
             info = mappings_info.get(container)
@@ -5633,10 +5738,10 @@ class Sniptype:
             return True
 
         def on_type_select(_event=None):
-            selection = listbox_types.curselection()
+            selection = listbox_types.selection()
             if not selection:
                 return
-            if not switch_type(type_keys[selection[0]]):
+            if not switch_type(selection[0]):
                 select_type_row(mapping_type.get())
 
         def ensure_mapping_dict(current_type):
@@ -5653,6 +5758,9 @@ class Sniptype:
             fg=ui.text,
             bg=ui.surface,
         ).grid(row=0, column=0, sticky="w")
+        page_new_map = ui_widgets.button(main, text=_("Novo item"), icon="add", variant="accent",
+                                         command=lambda: on_new_map())
+        page_new_map.grid(row=0, column=0, sticky="e")
         lbl_example = tk.Label(
             main,
             text="",
@@ -5660,9 +5768,26 @@ class Sniptype:
             fg=ui.text_muted,
             bg=ui.surface,
         )
-        lbl_example.grid(row=1, column=0, sticky="w", pady=(ui.space_xs, ui.space_md))
+        narrow_type_row = tk.Frame(main, bg=ui.surface)
+        narrow_type_row.grid(row=1, column=0, sticky="ew", pady=(ui.space_xs, ui.space_sm))
+        tk.Label(narrow_type_row, text=_("Tipos"), bg=ui.surface, fg=ui.text,
+                 font=ui.font()).pack(side=tk.LEFT, padx=(0, ui.space_sm))
+        narrow_type_var = tk.StringVar()
+        narrow_types = ui_widgets.combobox(narrow_type_row, textvariable=narrow_type_var, width=18)
+        narrow_types.pack(side=tk.LEFT)
 
-        content = tk.Frame(main, bg=ui.surface)
+        def select_narrow_type(_event=None):
+            selected = next((key for key in type_keys if mappings_info[key]["label"] == narrow_type_var.get()), None)
+            if selected and not switch_type(selected):
+                select_type_row(mapping_type.get())
+
+        narrow_types.bind("<<ComboboxSelected>>", select_narrow_type)
+        ui_widgets.button(narrow_type_row, text=_("Novo tipo"), command=lambda: add_new_type(),
+                          icon="add").pack(side=tk.LEFT, padx=(ui.space_sm, 0))
+        ui_widgets.button(narrow_type_row, text=_("Excluir tipo"), command=lambda: delete_current_type(),
+                          variant="danger", icon="delete").pack(side=tk.LEFT)
+
+        content = tk.Frame(main, bg=ui.divider)
         content.grid(row=2, column=0, sticky="nsew")
         content.grid_columnconfigure(0, weight=0, minsize=140)
         # Items and editor split by weight alone (see the static tab).
@@ -5670,10 +5795,23 @@ class Sniptype:
         content.grid_columnconfigure(2, weight=3, minsize=360, uniform="panes")
         content.grid_rowconfigure(0, weight=1)
 
+        def fit_type_pane(_event=None):
+            narrow = main.winfo_toplevel().winfo_width() < ui.px(1300)
+            if narrow:
+                frame_types.grid_remove()
+                content.grid_columnconfigure(0, minsize=0)
+                narrow_type_row.grid()
+            else:
+                frame_types.grid()
+                content.grid_columnconfigure(0, minsize=ui.px(140))
+                narrow_type_row.grid_remove()
+
+        main.bind("<Configure>", fit_type_pane, add="+")
+
         # Types live in a scrollable vertical list so any number of custom
         # mapping types stays reachable (a horizontal row clipped them).
-        frame_types = ui_widgets.card(content, padding=ui.space_md)
-        frame_types.grid(row=0, column=0, sticky="nsew", padx=(0, ui.space_md))
+        frame_types = ui_widgets.flat_pane(content)
+        frame_types.grid(row=0, column=0, sticky="nsew", padx=(0, 1))
         frame_types.grid_columnconfigure(0, weight=1)
         frame_types.grid_rowconfigure(1, weight=1)
 
@@ -5685,22 +5823,14 @@ class Sniptype:
             fg=ui.text,
         ).grid(row=0, column=0, sticky="w", pady=(0, ui.space_sm))
 
-        types_list_frame = ui_widgets.field_frame(frame_types)
+        types_list_frame = ui_widgets.list_frame(frame_types)
         types_list_frame.grid(row=1, column=0, sticky="nsew")
         types_list_frame.grid_columnconfigure(0, weight=1)
         types_list_frame.grid_rowconfigure(0, weight=1)
 
         type_keys = []
-        listbox_types = tk.Listbox(
-            types_list_frame,
-            font=ui.font(10),
-            relief=tk.FLAT,
-            borderwidth=0,
-            activestyle="none",
-            width=16,
-            exportselection=False,
-            **ui_widgets.listbox_colors(ui),
-        )
+        listbox_types = ui_widgets.tree_list(types_list_frame)
+        listbox_types.column("#0", width=ui.px(120), stretch=True)
         ui_widgets.track_focus(types_list_frame, listbox_types)
         scrollbar_types = ui_widgets.scrollbar(
             types_list_frame,
@@ -5713,29 +5843,26 @@ class Sniptype:
         btn_types_frame = tk.Frame(frame_types, bg=ui.card)
         btn_types_frame.grid(row=2, column=0, sticky="ew", pady=(ui.space_sm, 0))
 
-        frame_left = ui_widgets.card(content, padding=ui.space_md)
-        frame_left.grid(row=0, column=1, sticky="nsew", padx=(0, ui.space_md))
+        frame_left = ui_widgets.flat_pane(content)
+        frame_left.grid(row=0, column=1, sticky="nsew", padx=(0, 1))
         frame_left.grid_columnconfigure(0, weight=1)
         frame_left.grid_rowconfigure(3, weight=1)
 
+        mapping_count_var = tk.StringVar()
         tk.Label(
             frame_left,
-            text=_("Itens"),
-            font=ui.subtitle_font(),
+            textvariable=mapping_count_var,
+            font=ui.caption_font(),
             bg=ui.card,
-            fg=ui.text,
+            fg=ui.text_muted,
         ).grid(row=0, column=0, sticky="w")
 
         map_search_var = tk.StringVar()
-        tk.Label(
-            frame_left,
-            text=_("Pesquisar"),
-            font=ui.font(),
-            bg=ui.card,
-            fg=ui.text_strong,
-        ).grid(row=1, column=0, sticky="w", pady=(ui.space_sm, 0))
+        ui_widgets.button(frame_left, text=_("Limpar"), variant="subtle",
+                          command=lambda: map_search_var.set("")).grid(row=0, column=0, sticky="e")
         map_search_entry = ui_widgets.entry(frame_left, textvariable=map_search_var)
-        map_search_entry.grid(row=2, column=0, sticky="ew", pady=(ui.space_xs, ui.space_md))
+        map_search_entry.grid(row=2, column=0, sticky="ew", pady=(ui.space_xs, ui.space_sm))
+        ui_widgets.search_hint(map_search_entry, _("Pesquisar itens"))
         self._manager_search_entries[str(parent)] = map_search_entry
 
         listbox_frame = ui_widgets.list_frame(frame_left)
@@ -5748,30 +5875,28 @@ class Sniptype:
             trigger_heading=_("Identificador"),
             trigger_share=0.5,
         )
-        empty_mapping_label = tk.Label(
-            listbox_frame,
-            text=_("Nenhum item encontrado.\nCrie um novo ou ajuste a pesquisa."),
-            font=ui.caption_font(),
+        empty_mapping_label = tk.Frame(listbox_frame, bg=ui.card)
+        empty_mapping_message = tk.Label(
+            empty_mapping_label,
+            text=_("Este tipo ainda não tem itens."),
+            font=ui.font(),
             bg=ui.card,
             fg=ui.text_muted,
             justify="center",
         )
+        empty_mapping_message.pack(pady=(ui.space_lg, ui.space_sm))
+        empty_map_new = ui_widgets.button(empty_mapping_label, text=_("Novo item"), command=lambda: on_new_map())
+        empty_map_clear = ui_widgets.button(empty_mapping_label, text=_("Limpar busca"),
+                                            command=lambda: map_search_var.set(""))
         empty_mapping_label.grid(row=0, column=0, sticky="nsew")
 
-        frame_right = ui_widgets.card(content)
+        frame_right = ui_widgets.flat_pane(content)
         frame_right.grid(row=0, column=2, sticky="nsew")
         frame_right.grid_columnconfigure(0, weight=1)
         # Toolbar plus ~4 lines of text: without a floor the fixed rows took
         # every pixel at the minimum window size and the content box vanished.
         frame_right.grid_rowconfigure(5, weight=1, minsize=EDITOR_CONTENT_MIN_HEIGHT)
 
-        tk.Label(
-            frame_right,
-            text=_("Editor"),
-            font=ui.subtitle_font(),
-            bg=ui.card,
-            fg=ui.text,
-        ).grid(row=0, column=0, sticky="w")
         # What the editor holds and whether it is saved, as in Textos.
         header = self._editor_header(frame_right, lambda: reveal_mapping())
         header.frame.grid(row=1, column=0, sticky="ew", pady=(ui.space_xs, ui.space_md))
@@ -5797,13 +5922,6 @@ class Sniptype:
         entry_name = ui_widgets.entry(frame_right, textvariable=name_var)
         entry_name.grid(row=3, column=0, sticky="ew", pady=(ui.space_xs, ui.space_md))
 
-        tk.Label(
-            frame_right,
-            text=_("Conteúdo"),
-            font=ui.font(),
-            bg=ui.card,
-            fg=ui.text_strong,
-        ).grid(row=4, column=0, sticky="w")
         editor_shell = tk.Frame(frame_right, bg=ui.card)
         editor_shell.grid(row=5, column=0, sticky="nsew", pady=(ui.space_xs, 0))
         editor_shell.grid_columnconfigure(0, weight=1)
@@ -5837,7 +5955,7 @@ class Sniptype:
         btn_save_map = mapping_button(_("Salvar"), "save", variant="accent", parent=secondary_actions)
         btn_new_map.pack(side=tk.LEFT)
         # Face-to-face gaps, as in the static editor's action row.
-        btn_delete_map.pack(side=tk.LEFT, padx=(0, ui_widgets.face_gap(btn_frame, 6)))
+        btn_delete_map.pack(side=tk.LEFT, padx=(0, ui_widgets.face_gap(btn_frame, ui.space_lg)))
         btn_save_map.pack(side=tk.LEFT)
         layout_wrapping_row(
             btn_frame, primary_actions, secondary_actions,
@@ -5845,7 +5963,7 @@ class Sniptype:
             ui_widgets.face_gap(btn_frame, ui.space_sm),
         )
         mapping_metadata_frame = tk.Frame(frame_right, bg=ui.card)
-        mapping_metadata_frame.grid(row=8, column=0, sticky="ew", pady=(ui.space_md, 0))
+        mapping_metadata_frame.grid(row=4, column=0, sticky="ew", pady=(0, ui.space_sm))
         mapping_favorite_var = tk.BooleanVar(value=False)
         mapping_favorite_check = ui_widgets.checkbox(
             mapping_metadata_frame,
@@ -5898,6 +6016,7 @@ class Sniptype:
             focus_item = tree_map.focus()
             top = tree_map.yview()[0] if keep_view else 0.0
             tree_map.delete(*tree_map.get_children())
+            tree_map.full_values.clear()
             current_type = mapping_type.get()
             query = map_search_var.get()
             mapping = self.snippets.get(current_type, {})
@@ -5910,17 +6029,30 @@ class Sniptype:
                 if row.kind == "mapping" and row.container == current_type
             )
             has_rows = False
+            shown = 0
             for key in iter_filtered_mapping_items(mapping, query):
                 if not key:
                     continue  # a blank key cannot be a Treeview row iid
-                values = snippet_tree_values(key, mapping.get(key, ""))
                 row = mapping_rows.get(key)
-                if row is not None:
-                    values = (format_trigger_pair(row),) + values[1:]
-                tree_map.insert("", tk.END, iid=key,
-                                values=values)
+                self._insert_snippet_row(tree_map, key, mapping.get(key, ""), row)
                 has_rows = True
-            (tree_map if has_rows else empty_mapping_label).tkraise()
+                shown += 1
+            tree_map.fit_cells()
+            if has_rows:
+                empty_mapping_label.grid_remove()
+                tree_map.grid()
+            else:
+                tree_map.grid_remove()
+                empty_mapping_label.grid()
+            mapping_count_var.set(_("{shown} de {total}").format(shown=shown, total=len(mapping_rows)))
+            empty_map_new.pack_forget()
+            empty_map_clear.pack_forget()
+            if mapping_rows:
+                empty_mapping_message.configure(text=_("Nenhum item corresponde à busca."))
+                empty_map_clear.pack()
+            else:
+                empty_mapping_message.configure(text=_("Este tipo ainda não tem itens."))
+                empty_map_new.pack()
             update_total_count()
             update_example_label()
             if shows_here(session.ref) and tree_map.exists(session.ref):
@@ -5980,6 +6112,8 @@ class Sniptype:
             item = current_mapping_item()
             read_only = bool(getattr(self.library_metadata, "read_only", False))
             _set_enabled(btn_save_map, dirty and problem is None)
+            ui_widgets.set_button_variant(btn_save_map, "accent" if dirty and problem is None else "standard", icon="save")
+            ui_widgets.set_button_variant(page_new_map, "standard" if dirty and problem is None else "accent", icon="add")
             _set_enabled(btn_delete_map, item is not None)
             _set_enabled(mapping_preview_button, item is not None)
             for widget in (mapping_favorite_check, mapping_form_button):
@@ -6221,7 +6355,7 @@ class Sniptype:
             variant="danger", icon="delete",
         ).pack(fill=tk.X, pady=(6, 0))
 
-        listbox_types.bind("<<ListboxSelect>>", on_type_select)
+        listbox_types.bind("<<TreeviewSelect>>", on_type_select, add="+")
         self._bind_mousewheel(listbox_types, listbox_types)
         self._bind_mousewheel(text_value, text_value)
 
@@ -6519,7 +6653,7 @@ class Sniptype:
         self._register_manager_editor(editor)
 
         mapping_type.trace_add("write", lambda *_: on_type_changed())
-        tree_map.bind("<<TreeviewSelect>>", on_tree_select)
+        tree_map.bind("<<TreeviewSelect>>", on_tree_select, add="+")
         btn_new_map.configure(command=on_new_map)
         btn_save_map.configure(command=on_save_map)
         btn_delete_map.configure(command=on_delete_map)

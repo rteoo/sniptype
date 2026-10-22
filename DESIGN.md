@@ -144,6 +144,27 @@ shifted so the body role matches the platform's default size.
 - The library and mapping views keep a list/editor split. Empty lists say
   what to do next. Destructive work follows the confirmation ladder below,
   and persistence failures never claim success.
+- Collections and editors are flat planes separated by a one-pixel divider.
+  Each view has one 28 px page title. The page's New command is primary while
+  there is no valid draft to save; a valid dirty draft gives that emphasis to
+  Save, with stable labels and button geometry. Delete stays at least 24 px
+  from Save, measured between control faces.
+- The library's inline filters are All, Favorites, Recent, Disabled and With
+  problems. Sidebar counts always name the full collection; list counts name
+  the visible subset. Empty libraries offer New and Import; empty searches
+  offer Clear search. Recent usage remains session-only.
+- The shared Treeview draws a 3 × 16 px `accent_border` selection pill in its
+  reserved 6 px image column. Focus keeps the neutral `select_bg`; an unfocused
+  selection uses `surface_alt` and keeps the pill. Capability cells show A
+  (rich text), ƒ (variables), ▤ (form) and ★ (favorite). Disabled groups and
+  dynamic collisions have written row states and muted text. Group cells
+  appear from 1400 px; cells use measured ellipses and retain their full values
+  for navigation and editing. Types, choosers and form-field lists use the same
+  Treeview primitive.
+- Below 1300 px, mapping types move into a labeled combobox. Formatting status
+  moves below its toolbar when measured control and label widths need it;
+  macOS always keeps its stacked path. At 100% Windows scaling the 1180 × 760
+  healthy library fits at least 16 complete Compact rows.
 - Group management is a labeled **Grupos** button with a drop-down chevron
   beside the group filter, never an icon-only menu.
 - The supported Windows minimum is 1180 × 760 and the default is 1280 × 800.
@@ -392,7 +413,7 @@ satisfy any of them.
 | Appearance: Windows contrast themes | Not tested. Drawn faces ignore system colors. |
 | Density: Comfortable and Touch | Not applicable until a density setting exists. |
 | Display: 125/150/200% DPI and mixed monitors | Not tested on hardware. Window minimums and spacing are still unscaled pixels. |
-| Keyboard: visible focus on list rows | Failed. A focused Treeview row is not drawn differently from a selected one. The light selection fill is faint without a marker: 1.14:1 on the panel and 1.02:1 on the navigation surface, where the copper pill and the semibold label carry the current page. |
+| Keyboard: visible focus on list rows | Implemented in WP6: focused selection uses neutral `select_bg`; unfocused selection uses `surface_alt`, retaining a 3 × 16 px copper pill in both states. Verified with the actual Tk focus-state prototype and dark/light harness captures. Physical keyboard traversal and contrast themes remain unverified. |
 | Keyboard: formatting commands | Failed. Bold, italic, underline, code and strikethrough have shortcuts (Ctrl+B, Ctrl+I, Ctrl+U, Ctrl+Shift+C, Ctrl+Shift+S); clearing the formatting and the three variable inserts are pointer-only. |
 | Accessibility: Narrator roles, values and announcements | Not tested. |
 | Work preservation: drafts across appearance changes and refresh | Passed in the smoke tests and the harness (row change, Novo, Editar último, type change, close, restore, rebuild). Open: quitting from the tray does not ask yet (the close box does), and Excluir on an item with a draft deletes it without asking; Desfazer brings back the saved version, not the draft. |
