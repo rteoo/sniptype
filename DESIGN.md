@@ -29,7 +29,7 @@ design system's `DESIGN.md`, `native/windows/tokens.css`, `patterns.md` and
 | Decision | Value | Where |
 | --- | --- | --- |
 | Appearance | **Dark** on Windows and Linux; Light and System are explicit choices in Configurações > Geral. macOS defaults to System (see Deviations). | `ui_theme.default_preference()` |
-| Density | **Compact**: 32 px controls and 32 px list rows at 100% scaling. Comfortable (40/44) and Touch (44/48) are defined but have no setting yet. | `ui_theme.DENSITY_METRICS` |
+| Density | **Compact**: 32 px controls and 32 px list rows at 100% scaling. Settings also offers Comfortable (40/44) and Touch (44/48), persisted after the draft guard and applied on rebuild. | `ui_theme.DENSITY_METRICS` |
 | Corner radius | 4 px controls, 8 px cards | `ui_widgets._configure` |
 | Spacing | 4 / 8 / 12 / 16 / 24 px | `Theme.space_*` |
 
@@ -404,6 +404,20 @@ in Dark and Light at 1180 × 760 and 1600 × 1000, at 100% scaling only.
 
 ## Unresolved gates
 
+WP8 secondary views use one searchable, categorized Actions collection, local
+backup timestamps with age and separate text/list counts, and immediate guarded
+appearance, language and density settings. Read-only paths have Copy controls.
+Settings sections retain full-size controls in a scrollbar viewport; wheel and
+Tab navigation reveal the focused control at the supported minimum. The backup
+path uses measured middle ellipsis beside a reserved Copy command, which copies
+the complete value. The hotkey dialog measures its minimum from its actual
+language, density and scale, reserves its footer first, and returns focus through
+the same explicit handoff as DialogKit.
+Tk Treeview has row fonts rather than cell fonts: Actions keeps its state and
+description readable in the UI font, so its trigger column uses that same font.
+The trigger text and stable registry key remain exact; a per-cell mono face is
+deferred until the collection primitive supports it without overlay controls.
+
 Recorded per the family's release gates. A headless or harness pass does not
 satisfy any of them.
 
@@ -411,10 +425,10 @@ satisfy any of them.
 | --- | --- |
 | Appearance: live System change while the manager is open | Implemented: checked every 3 s while the manager is shown; a draft holds the switch and says so. Verified in the smoke test and the harness with the registry read mocked, not by switching the real Windows setting. |
 | Appearance: Windows contrast themes | Not tested. Drawn faces ignore system colors. |
-| Density: Comfortable and Touch | Not applicable until a density setting exists. |
+| Density: Comfortable and Touch | Implemented in WP8; physical desktop layout and higher DPI remain unverified. |
 | Display: 125/150/200% DPI and mixed monitors | Not tested on hardware. Window minimums and spacing are still unscaled pixels. |
 | Keyboard: visible focus on list rows | Implemented in WP6: focused selection uses neutral `select_bg`; unfocused selection uses `surface_alt`, retaining a 3 × 16 px copper pill in both states. Verified with the actual Tk focus-state prototype and dark/light harness captures. Physical keyboard traversal and contrast themes remain unverified. |
-| Keyboard: formatting commands | Failed. Bold, italic, underline, code and strikethrough have shortcuts (Ctrl+B, Ctrl+I, Ctrl+U, Ctrl+Shift+C, Ctrl+Shift+S); clearing the formatting and the three variable inserts are pointer-only. |
+| Keyboard: formatting commands | Implemented in WP7: Ctrl+Shift+X clears formatting; Ctrl+Shift+R/V/F inserts a reference, clipboard value or form field. Existing Ctrl+B/I/U and code/strikethrough shortcuts remain. Physical keyboard and Narrator verification remain open. |
 | Accessibility: Narrator roles, values and announcements | Not tested. |
 | Work preservation: drafts across appearance changes and refresh | Passed in the smoke tests and the harness (row change, Novo, Editar último, type change, close, restore, rebuild). Open: quitting from the tray does not ask yet (the close box does), and Excluir on an item with a draft deletes it without asking; Desfazer brings back the saved version, not the draft. |
 | Keyboard: Ctrl+Z for Desfazer | Failed. Desfazer is a button in the receipt line, reachable with Tab; no shortcut yet. |

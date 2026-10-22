@@ -78,6 +78,13 @@ DENSITY_METRICS = {
     "touch": (44, 48),
 }
 DEFAULT_DENSITY = "compact"
+_density = DEFAULT_DENSITY
+
+
+def set_density(value):
+    """Select validated metrics for subsequent window builds."""
+    global _density
+    _density = value if isinstance(value, str) and value in DENSITY_METRICS else DEFAULT_DENSITY
 # Aqua rows keep the height they always had: the Windows family density does
 # not apply to macOS's native controls.
 _MAC_TREE_ROW_HEIGHT = 44
@@ -865,7 +872,7 @@ def _probe_font_families(widget):
 
 
 def build_theme(kind, system=None, default_size=None, preference="system",
-                font_families=None, scale=1.0):
+                font_families=None, scale=1.0, density=DEFAULT_DENSITY):
     """Assemble a :class:`Theme`. Pure given its arguments.
 
     macOS "system" mode keeps Aqua's dynamic color names. A fixed light/dark
@@ -895,6 +902,7 @@ def build_theme(kind, system=None, default_size=None, preference="system",
         display_family=faces.get("display"),
         display_strong_family=faces.get("display_strong"),
         scale=scale,
+        density=density,
     )
 
 
@@ -928,6 +936,7 @@ def bind(widget=None, system=None):
     _current = build_theme(
         kind, system, default_size, preference=chosen, font_families=families,
         scale=display_scale(widget) if widget is not None else 1.0,
+        density=_density,
     )
     return _current
 
@@ -944,6 +953,7 @@ def reset():
     global _current, _preference
     _current = None
     _preference = default_preference()
+    set_density(DEFAULT_DENSITY)
 
 
 def ui_font(size=BODY_FONT_SIZE, weight=None):

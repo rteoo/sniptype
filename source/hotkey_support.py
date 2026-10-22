@@ -10,6 +10,52 @@ from pynput.keyboard import Key, KeyCode
 
 ACTIONS = ("open_manager", "edit_last", "toggle_enabled")
 
+
+def display_hotkey(binding):
+    """Render persisted pynput syntax as a human-readable chord."""
+    if not binding:
+        return ""
+    labels = {"ctrl": "Ctrl", "shift": "Shift", "alt": "Alt", "cmd": "Win"}
+    return "+".join(labels.get(part.strip("<>"), part.strip("<>").upper())
+                    for part in binding.split("+"))
+
+
+_TK_MODIFIER_KEYS = {
+    "Control_L": "ctrl", "Control_R": "ctrl",
+    "Shift_L": "shift", "Shift_R": "shift",
+    "Alt_L": "alt", "Alt_R": "alt", "Option_L": "alt", "Option_R": "alt",
+    "Meta_L": "cmd", "Meta_R": "cmd", "Super_L": "cmd", "Super_R": "cmd",
+    "Win_L": "cmd", "Win_R": "cmd",
+}
+
+
+def capture_hotkey(keysym, state, windowing_system="win32", pressed_keys=()):
+    """Translate a Tk key event to pynput syntax, without installing a listener."""
+    if keysym in _TK_MODIFIER_KEYS or keysym in {"Tab", "ISO_Left_Tab"}:
+        return None
+    # Tk 8.6 win/tkWinKey.c maps Mod1 to NumLock, Mod2 to Alt;
+    # win/tkWinPointer.c also reports ALT_MASK (generic/tkInt.h).
+    # Aqua's macosx/tkMacOSXKeyEvent.c maps Command/Option to Mod1/Mod2.
+    # X11 modifier slots are configurable: use observed modifier key events
+    # there, plus Tk's platform-independent synthetic Alt/Meta masks.
+    alt_mask = 0x20000 | (0x10 if windowing_system in {"win32", "aqua"} else 0)
+    cmd_mask = 0x10000 | (0x8 if windowing_system == "aqua" else 0)
+    held = {_TK_MODIFIER_KEYS[key] for key in pressed_keys if key in _TK_MODIFIER_KEYS}
+    for mask, name in ((0x4, "ctrl"), (alt_mask, "alt"), (0x1, "shift"), (cmd_mask, "cmd")):
+        if state & mask:
+            held.add(name)
+    if keysym in {"BackSpace", "Delete"} and not held:
+        return ""
+    parts = [f"<{name}>" for name in ("ctrl", "alt", "shift", "cmd") if name in held]
+    key = keysym.casefold()
+    if len(key) == 1:
+        parts.append(key)
+    else:
+        aliases = {"return": "enter", "escape": "esc", "prior": "page_up",
+                   "next": "page_down", "space": "space"}
+        parts.append(f"<{aliases.get(key, key)}>")
+    return "+".join(parts)
+
 _MODIFIER_ALIASES = {
     Key.alt_l: Key.alt,
     Key.alt_r: Key.alt,

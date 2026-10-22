@@ -1040,11 +1040,9 @@ class ManagerGuiSmokeTests(unittest.TestCase):
         }
 
         def labels(frame):
-            return [
-                widget.cget("text")
-                for widget in _descendants(frame)
-                if isinstance(widget, tk.Label)
-            ]
+            tree = next(widget for widget in _descendants(frame) if isinstance(widget, ttk.Treeview))
+            return [tree.item(row, "values")[1] for group in tree.get_children()
+                    for row in tree.get_children(group)]
 
         def build(shared_root):
             root = tk.Toplevel(shared_root)
@@ -1064,6 +1062,217 @@ class ManagerGuiSmokeTests(unittest.TestCase):
             return labels(frame)
 
         self.assertIn("stable → updated", self._on_gui(refresh))
+
+    def test_actions_table_toggle_persists_stable_key_exports_and_keeps_target_navigation(self):
+        key = next(key for key in self.app.dynamic_registry if not key.startswith("_"))
+        trigger = "xsyntheticaction"
+        self.assertTrue(self.app._rename_registry_entry(key, trigger))
+        was_enabled = tx.is_enabled(self.app.dynamic_registry[key], key=key)
+
+        def run(root):
+            self.app._build_manager_window(root)
+            window = self.app.manager_window
+            page = self.app._manager_notebook.nametowidget(self.app._manager_notebook.tabs()[2])
+            tree = next(w for w in _descendants(page) if isinstance(w, ttk.Treeview))
+            self.assertTrue(self.app._select_manager_target(SnippetRef("dynamic", key)))
+            window.update()
+            row, = tree.selection()
+            self.assertIn(trigger, tree.item(row, "values")[1])
+            with mock.patch.object(self.app, "export_sync_bundle") as export:
+                _buttons(page)["Desativar" if was_enabled else "Ativar"].invoke()
+            export.assert_called_once_with()
+            window.update()
+            row, = tree.selection()
+            self.assertEqual(tree.item(row, "values")[0], "Inativo" if was_enabled else "Ativo")
+
+        self._on_gui(run)
+        override = tx.load_json_file(self.app.dynamic_registry_file)
+        self.assertEqual(override[key]["enabled"], not was_enabled)
+        self.assertEqual(override[key]["trigger"], trigger)
+
+    def test_backup_table_counts_library_document_without_metadata_and_has_one_primary(self):
+        document = {f"xsynth{i:02}": "Synthetic response" for i in range(30)}
+        document.update({f"_synth{i:02}": {"sample": "Synthetic list value"} for i in range(10)})
+        document = tx.build_library_document(document, LibraryMetadata())
+        path = os.path.join(self.app.backups_dir, "snippets-20261021-120000.json")
+        tx.write_json_atomic(path, document)
+
+        def run(root):
+            window = tk.Toplevel(root)
+            frame = tk.Frame(window)
+            frame.pack(fill=tk.BOTH, expand=True)
+            self.app._create_backups_tab(frame, window)
+            tree = next(w for w in _descendants(frame) if isinstance(w, ttk.Treeview))
+            rows = [tree.item(row, "values") for row in tree.get_children()]
+            self.assertTrue(any(values[1:3] == ("30", "10") for values in rows), rows)
+            restore = _buttons(frame)["Restaurar"]
+            self.assertTrue(restore.instate(["disabled"]))
+            tree.selection_set(tree.get_children()[0])
+            window.update()
+            self.assertFalse(restore.instate(["disabled"]))
+            self.assertTrue(str(restore.cget("style")).endswith("Accent.TButton"))
+            self.assertEqual([restore], [button for button in _buttons(frame).values()
+                                        if str(button.cget("style")).endswith("Accent.TButton")])
+
+        self._on_gui(run)
+
+    def test_failed_appearance_save_rolls_back_radio_without_rebuild(self):
+        self.addCleanup(tx.ui_theme.set_preference, None)
+        def run(root):
+            self.app._build_manager_window(root)
+            window = self.app.manager_window
+            radio, = self._settings_widgets(ttk.Radiobutton, lambda w: w.cget("value") == "light")
+            with mock.patch.object(tx, "save_settings", return_value=False):
+                radio.invoke()
+            window.update()
+            self.assertIs(self.app.manager_window, window)
+            self.assertEqual(radio.getvar(radio.cget("variable")), "dark")
+            self.assertIn("Não foi possível salvar a aparência.", _labels(self.app._manager_settings_tab))
+        self._on_gui(run)
+
+    def test_long_backup_path_preserves_copy_geometry_and_copies_the_complete_value(self):
+        value = "C:/synthetic/" + "long-folder/" * 50 + "data"
+        def run(root):
+            owner = tk.Toplevel(root)
+            owner.geometry("900x500")
+            page = tk.Frame(owner)
+            page.pack(fill="both", expand=True)
+            with mock.patch.object(self.app, "data_dir", value):
+                self.app._create_backups_tab(page, owner)
+                owner.update()
+                copy = _buttons(page)["Copiar"]
+                self.assertGreaterEqual(copy.winfo_width(), copy.winfo_reqwidth())
+                self.assertGreaterEqual(copy.winfo_height(), copy.winfo_reqheight())
+                label = next(widget for widget in copy.master.winfo_children()
+                             if isinstance(widget, tk.Label))
+                shown = label.cget("text")
+                self.assertIn("…", shown)
+                self.assertTrue(shown.startswith("C:/"), shown)
+                self.assertTrue(shown.endswith("data"), shown)
+                self.assertLessEqual(tkfont.Font(root=label, font=label.cget("font")).measure(shown),
+                                     label.winfo_width())
+                with mock.patch.object(self.app, "_copy_ui_value") as copied:
+                    copy.invoke()
+                copied.assert_called_once_with(owner, value)
+        self._on_gui(run)
+
+    def test_settings_minimum_keeps_full_density_controls_reachable_by_tab_and_scroll(self):
+        self.addCleanup(tx.ui_theme.set_density, "compact")
+        self.addCleanup(tx.ui_theme.set_preference, None)
+        self.addCleanup(tx.i18n.set_language, "pt-BR")
+        for appearance in ("dark", "light"):
+            for language in ("pt-BR", "en-US"):
+                for density in ("compact", "comfortable", "touch"):
+                    with self.subTest(appearance=appearance, language=language, density=density):
+                        def run(root):
+                            tx.ui_theme.set_preference(appearance)
+                            tx.ui_theme.set_density(density)
+                            tx.i18n.set_language(language)
+                            self.app._build_manager_window(root)
+                            window = self.app.manager_window
+                            window.geometry("1180x760")
+                            self.app._manager_notebook.select(self.app._manager_settings_tab)
+                            window.update()
+                            section = self.app._manager_settings_sections.frames["general"]
+                            canvas = next(w for w in section.winfo_children() if isinstance(w, tk.Canvas))
+                            scrollbar = next(w for w in section.winfo_children() if isinstance(w, ttk.Scrollbar))
+                            self.assertTrue(scrollbar.winfo_ismapped())
+                            controls = list(_descendants(section))
+                            switch, = [w for w in controls if isinstance(w, CHECKBOXES)]
+                            combo, = [w for w in controls if isinstance(w, ttk.Combobox)]
+                            combo.focus_force()
+                            window.update()
+                            for _step in range(30):
+                                if window.focus_get() is switch:
+                                    break
+                                _press(window.focus_get(), "<Tab>")
+                                window.update()
+                            self.assertIs(window.focus_get(), switch)
+                            self.assertGreaterEqual(switch.winfo_height(), switch.winfo_reqheight())
+                            self.assertGreaterEqual(switch.winfo_width(), switch.winfo_reqwidth())
+                            self.assertGreaterEqual(switch.winfo_rooty(), canvas.winfo_rooty())
+                            self.assertLessEqual(switch.winfo_rooty() + switch.winfo_height(),
+                                                 canvas.winfo_rooty() + canvas.winfo_height())
+                            canvas.yview_moveto(0)
+                            window.update()
+                            before = canvas.yview()[0]
+                            canvas.yview_scroll(100, "units")
+                            window.update()
+                            self.assertGreaterEqual(canvas.yview()[0], before)
+                            self.assertLessEqual(switch.winfo_rooty() + switch.winfo_height(),
+                                                 canvas.winfo_rooty() + canvas.winfo_height())
+                            self.app._release_manager_ui_refs()
+                            window.destroy()
+                        self._on_gui(run)
+
+    def test_hotkey_declared_minimum_exposes_full_fields_and_footer_at_each_density(self):
+        from hotkey_dialog import HotkeyDialog
+        self.addCleanup(tx.ui_theme.set_density, "compact")
+        self.addCleanup(tx.i18n.set_language, "pt-BR")
+        for language in ("pt-BR", "en-US"):
+            for density in ("compact", "comfortable", "touch"):
+                with self.subTest(language=language, density=density):
+                    def run(root):
+                        tx.i18n.set_language(language)
+                        tx.ui_theme.set_density(density)
+                        owner = tk.Toplevel(root)
+                        owner.update()
+                        dialog = HotkeyDialog(owner, {"open_manager": "<ctrl>+m"})
+                        width, height = dialog.window.minsize()
+                        dialog.window.geometry(f"{width}x{height}")
+                        dialog.window.update()
+                        footer, = [w for w in _descendants(dialog.window) if hasattr(w, "buttons")]
+                        for widget in (*dialog._controls.values(), *footer.buttons.values()):
+                            self.assertGreaterEqual(widget.winfo_width(), widget.winfo_reqwidth())
+                            self.assertGreaterEqual(widget.winfo_height(), widget.winfo_reqheight())
+                            self.assertGreaterEqual(widget.winfo_rooty(), dialog.window.winfo_rooty())
+                            self.assertLessEqual(widget.winfo_rooty() + widget.winfo_height(),
+                                                 dialog.window.winfo_rooty() + height)
+                        footer.buttons["primary"].invoke()
+                        self.assertEqual(dialog.controller.result["open_manager"], "<ctrl>+m")
+                        self.assertFalse(dialog.window.winfo_exists())
+                        owner.destroy()
+                    self._on_gui(run)
+
+    def test_hotkey_capture_plain_escape_cancels_without_save_and_returns_opener_focus(self):
+        from hotkey_dialog import HotkeyDialog
+        def run(root):
+            owner = tk.Toplevel(root)
+            opener = ui_widgets.entry(owner)
+            opener.pack()
+            owner.update()
+            opener.focus_force()
+            owner.update()
+            initial = {"open_manager": "<ctrl>+m"}
+            with mock.patch.object(self.app, "_persist_settings") as persist:
+                dialog = HotkeyDialog(owner, initial)
+                field = dialog._controls["open_manager"]
+                dialog.window.update()
+                _press(field, "<Control-Shift-KeyPress-M>")
+                self.assertEqual(dialog._captured["open_manager"], "<ctrl>+<shift>+m")
+                _press(field, "<Escape>")
+                owner.update()
+                self.assertFalse(dialog.window.winfo_exists())
+                self.assertIsNone(dialog.controller.result)
+                self.assertEqual(initial, {"open_manager": "<ctrl>+m"})
+                self.assertIs(owner.focus_get(), opener)
+                persist.assert_not_called()
+        self._on_gui(run)
+
+    def test_density_selection_persists_and_rebuilds_with_requested_row_height(self):
+        self.addCleanup(tx.ui_theme.set_density, "compact")
+        def run(root):
+            self.app._build_manager_window(root)
+            first = self.app.manager_window
+            radio, = self._settings_widgets(ttk.Radiobutton,
+                                            lambda w: w.cget("value") == "comfortable")
+            radio.invoke()
+            first.update()
+            self.assertIsNot(self.app.manager_window, first)
+            self.assertEqual(tx.ui_theme.theme().density, "comfortable")
+            self.assertEqual(tx.ui_theme.theme().tree_row_height, tx.ui_theme.theme().px(44))
+            self.assertEqual(tx.load_settings(self.app.settings_file)["density"], "comfortable")
+        self._on_gui(run)
 
     def test_refresh_hook_updates_metadata_controls_and_group_choices(self):
         def build(shared_root):
@@ -1525,15 +1734,11 @@ class ManagerGuiSmokeTests(unittest.TestCase):
             first = self.app.manager_window
             # No saved appearance: the manager opens in the Dark default.
             self.assertEqual(ttk.Style(first).theme_use(), "sniptype-fluent-dark")
-            combo, = self._settings_widgets(
-                ttk.Combobox, lambda w: tx.ui_theme.APPEARANCE_LABELS["light"] in w.cget("values"))
-            self.assertEqual(combo.get(), tx.ui_theme.APPEARANCE_LABELS["dark"])
-            combo.set(tx.ui_theme.APPEARANCE_LABELS["light"])
-            apply, = self._settings_widgets(
-                BUTTONS, lambda w: w.cget("text") == "Aplicar aparência")
+            radio, = self._settings_widgets(
+                ttk.Radiobutton, lambda w: w.cget("value") == "light")
             # Nothing is unsaved, so nothing asks.
             with mock.patch.object(tx.ui_widgets, "confirm") as confirm:
-                apply.invoke()
+                radio.invoke()
             confirm.assert_not_called()
             first.update()
             rebuilt = self.app.manager_window
@@ -1565,21 +1770,18 @@ class ManagerGuiSmokeTests(unittest.TestCase):
             self.app._build_manager_window(shared_root)
             first = self.app.manager_window
             text = self._start_a_static_draft(first)
-            combo, = self._settings_widgets(
-                ttk.Combobox, lambda w: tx.ui_theme.APPEARANCE_LABELS["light"] in w.cget("values"))
-            combo.set(tx.ui_theme.APPEARANCE_LABELS["light"])
-            apply, = self._settings_widgets(
-                BUTTONS, lambda w: w.cget("text") == "Aplicar aparência")
+            radio, = self._settings_widgets(
+                ttk.Radiobutton, lambda w: w.cget("value") == "light")
             # The draft asks Salvar · Descartar · Cancelar; Cancelar keeps everything.
             with mock.patch.object(tx.ui_widgets, "confirm", return_value=None) as confirm:
-                apply.invoke()
+                radio.invoke()
             self.assertEqual("Alterações não salvas", confirm.call_args.args[1])
             first.update()
             self.assertIs(self.app.manager_window, first)
             self.assertEqual("hello (rascunho)", text.get("1.0", "end-1c"))
             self.assertEqual(tx.ui_theme.preference(), "dark")
             self.assertNotIn("appearance", tx.load_settings(self.app.settings_file))
-            self.assertEqual(combo.get(), tx.ui_theme.APPEARANCE_LABELS["dark"])
+            self.assertEqual(radio.getvar(radio.cget("variable")), "dark")
 
         self._on_gui(run)
 
@@ -1765,11 +1967,9 @@ class ManagerGuiSmokeTests(unittest.TestCase):
             combo, = self._settings_widgets(
                 ttk.Combobox, lambda w: i18n.LANGUAGES["en-US"] in w.cget("values"))
             combo.set(i18n.LANGUAGES["en-US"])
-            apply, = self._settings_widgets(
-                BUTTONS, lambda w: w.cget("text") == "Aplicar idioma")
             with mock.patch.object(tx.ui_widgets, "confirm") as confirm, \
                     mock.patch.object(self.app, "refresh_tray_menu") as refresh_tray:
-                apply.invoke()
+                combo.event_generate("<<ComboboxSelected>>")
             confirm.assert_not_called()
             first.update()
             rebuilt = self.app.manager_window
@@ -1796,10 +1996,8 @@ class ManagerGuiSmokeTests(unittest.TestCase):
             combo, = self._settings_widgets(
                 ttk.Combobox, lambda w: i18n.LANGUAGES["en-US"] in w.cget("values"))
             combo.set(i18n.LANGUAGES["en-US"])
-            apply, = self._settings_widgets(
-                BUTTONS, lambda w: w.cget("text") == "Aplicar idioma")
             with mock.patch.object(tx.ui_widgets, "confirm", return_value=None):
-                apply.invoke()
+                combo.event_generate("<<ComboboxSelected>>")
             first.update()
             self.assertIs(self.app.manager_window, first)
             self.assertEqual(i18n.language(), "pt-BR")
@@ -2746,6 +2944,7 @@ class WorkPreservationTests(unittest.TestCase):
             backups = notebook.nametowidget(notebook.tabs()[3])
             backup_tree = next(w for w in _descendants(backups) if isinstance(w, ttk.Treeview))
             backup_tree.selection_set(backup_tree.get_children()[0])
+            window.update()  # Process the selection event that enables Restore.
             # Restaurar backup? yes. The draft? Cancelar.
             with mock.patch.object(
                     tx.ui_widgets, "confirm", side_effect=[tx.ui_widgets.PRIMARY, None]) as ask:
@@ -3525,10 +3724,18 @@ class StatusAndAttentionTests(unittest.TestCase):
     def test_the_editor_status_line_rests_on_the_save_shortcut_not_on_a_format_caption(self):
         def run(root):
             window = self._manager(root)
-            return _labels(self._static_tab_of(window))
+            page = self._static_tab_of(window)
+            # Leave the search/tree hint owners through their real focus/hover events.
+            heading = next(widget for widget in _descendants(page)
+                           if isinstance(widget, tk.Label) and widget.cget("text") == "Textos")
+            heading.focus_force()
+            heading.event_generate("<Motion>", x=heading.winfo_width() // 2,
+                                   y=heading.winfo_height() // 2, warp=True)
+            window.update()
+            return self.app._manager_receipts[str(page)].label.cget("text"), _labels(page)
 
-        labels = self._on_gui(run)
-        self.assertIn("Ctrl+S para salvar", labels)
+        receipt, labels = self._on_gui(run)
+        self.assertEqual("Ctrl+S para salvar", receipt)
         self.assertFalse([t for t in labels if t.startswith("Formatação opcional")])
 
     def test_the_backups_page_confirms_in_its_status_line_and_opens_no_dialog(self):
@@ -3546,6 +3753,7 @@ class StatusAndAttentionTests(unittest.TestCase):
                 seen["created"] = self._status_line(page, "Backup criado às")
                 tree = next(w for w in _descendants(page) if isinstance(w, ttk.Treeview))
                 tree.selection_set(tree.get_children()[0])
+                window.update()  # Process the selection event that enables Restore.
                 _buttons(page)["Restaurar"].invoke()
                 window.update()
                 seen["restored"] = self._status_line(page, "Backup restaurado às")

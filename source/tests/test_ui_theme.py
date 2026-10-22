@@ -15,6 +15,23 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 import ui_theme
 
 
+class DensitySelectionTests(unittest.TestCase):
+    def tearDown(self):
+        ui_theme.reset()
+
+    def test_selected_density_reaches_bind_and_distinct_cached_styles(self):
+        import ui_widgets
+        names = []
+        for density, (_control, row_height) in ui_theme.DENSITY_METRICS.items():
+            ui_theme.set_density(density)
+            theme = ui_theme.bind(None, "windows")
+            self.assertEqual(theme.density, density)
+            self.assertEqual(theme.tree_row_height, row_height)
+            names.append(ui_widgets.theme_name(theme))
+        self.assertEqual(len(set(names)), 3)
+        self.assertEqual(names[0], "sniptype-fluent-dark")
+
+
 # Teô Personal DS 2.7.1 Windows-family roles (Ink & Copper) are pinned here so
 # a later palette change requires an explicit review. Surfaces and neutrals
 # come from native/windows/tokens.css, the copper and state pairs from

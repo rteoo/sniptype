@@ -106,7 +106,8 @@ def uses_fluent(ui=None):
 
 
 def theme_name(ui):
-    return "sniptype-fluent-dark" if ui.is_dark else "sniptype-fluent-light"
+    base = "sniptype-fluent-dark" if ui.is_dark else "sniptype-fluent-light"
+    return base if ui.density == "compact" else f"{base}-{ui.density}"
 
 
 # ---------------------------------------------------------------------------
@@ -428,6 +429,10 @@ def _configure(style, ui, artist, elements):
         insertcolor=text, fieldbackground=ui.field,
     )
     style.map(".", foreground=[("disabled", muted)])
+    style.configure("TRadiobutton", background=ui.card, foreground=text,
+                    font=font, padding=(0, px(4)))
+    style.map("TRadiobutton", background=[("active", ui.card)],
+              foreground=[("disabled", muted)])
 
     def states(draw, rest, variants=(), disabled=(), focusable=True):
         """``([(state spec, image), ...], rest image)`` in ttk match order.

@@ -15,6 +15,7 @@ RUNTIME_SETTING_DEFAULTS = {
     # None: no choice yet, so ui_theme applies its platform default (Dark on
     # Windows, per the DS 2.7.1 Windows family).
     "appearance": None,
+    "density": "compact",
     # None: no choice yet, so the interface follows the system language.
     "language": None,
     "terminator_mode": False,
@@ -47,6 +48,11 @@ def normalize_runtime_settings(settings):
     """
     normalized = dict(settings) if isinstance(settings, dict) else {}
     invalid = {}
+
+    if "density" in normalized and normalized["density"] not in (
+        "compact", "comfortable", "touch",
+    ):
+        invalid["density"] = RUNTIME_SETTING_DEFAULTS["density"]
 
     if "appearance" in normalized and normalized["appearance"] not in {
         None, "system", "light", "dark",

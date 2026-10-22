@@ -103,7 +103,7 @@ from app_paths import (
     needs_migration,
 )
 from settings_support import load_settings, normalize_runtime_settings, save_settings
-from hotkey_support import ACTIONS, HotkeyRouter, normalize_hotkeys
+from hotkey_support import ACTIONS, HotkeyRouter, display_hotkey, normalize_hotkeys
 from workflow_support import SnippetRef, WorkflowState
 from validation_support import validate_trigger
 import health_support
@@ -496,6 +496,7 @@ class Sniptype:
         self.terminator_mode = self.settings.get("terminator_mode", False)
         i18n.set_language(self.settings.get("language"))
         ui_theme.set_preference(self.settings.get("appearance"))
+        ui_theme.set_density(self.settings.get("density"))
         # Clipboard/erase delays: per-OS defaults, overridable per key from
         # settings.json. Resolved once — they are read on the listener thread.
         timings = insertion_timings(self.settings)
@@ -3116,14 +3117,33 @@ class Sniptype:
             bg=ui.surface,
             fg=ui.text,
         ).grid(row=0, column=0, sticky="w")
+        path_row = tk.Frame(main, bg=ui.surface)
+        path_row.grid(row=1, column=0, sticky="ew", pady=(ui.space_xs, ui.space_md))
+        path_row.grid_columnconfigure(0, weight=1, minsize=0)
         path_label = tk.Label(
-            main,
-            text=_("Pasta de dados: {data_dir}").format(data_dir=self.data_dir),
-            font=ui.caption_font(),
+            path_row,
+            text=self.data_dir,
+            font=ui.mono_font(),
             bg=ui.surface,
             fg=ui.text_muted,
+            anchor="w", width=1,
         )
-        path_label.grid(row=1, column=0, sticky="w", pady=(ui.space_xs, ui.space_md))
+        path_label.grid(row=0, column=0, sticky="ew", padx=(0, ui.space_sm))
+        ui_widgets.button(path_row, text=_("Copiar"),
+                          command=lambda: self._copy_ui_value(root, self.data_dir)).grid(
+                              row=0, column=1, sticky="e")
+        measure_path = tkfont.Font(root=path_label, font=ui.mono_font()).measure
+        def fit_path(event):
+            # Keep the useful ends visible; Copy always uses the complete path.
+            value = str(self.data_dir)
+            budget = max(0, event.width - ui.space_sm)
+            if measure_path(value) > budget:
+                half = len(value) // 2
+                while half and measure_path(value[:half] + "…" + value[-half:]) > budget:
+                    half -= 1
+                value = value[:half] + "…" + value[-half:] if half else "…"
+            path_label.configure(text=value)
+        path_label.bind("<Configure>", fit_path)
 
         table_card = ui_widgets.card(main, padding=ui.space_sm)
         table_card.grid(row=2, column=0, sticky="nsew")
@@ -3133,7 +3153,7 @@ class Sniptype:
         table_shell.grid(row=0, column=0, sticky="nsew")
         table_shell.grid_columnconfigure(0, weight=1)
         table_shell.grid_rowconfigure(0, weight=1)
-        columns = ("backup", "size", "count")
+        columns = ("backup", "texts", "lists", "size")
         tree = ttk.Treeview(
             table_shell,
             columns=columns,
@@ -3141,12 +3161,15 @@ class Sniptype:
             height=12,
             style="Manager.Treeview",
         )
-        tree.heading("backup", text=_("Backup"))
-        tree.heading("size", text=_("Tamanho"))
-        tree.heading("count", text=_("Snippets"))
-        tree.column("backup", width=260, anchor="w")
-        tree.column("size", width=90, anchor="e")
-        tree.column("count", width=90, anchor="e")
+        for column, label, width, anchor in (
+            ("backup", _("Quando"), 300, "w"),
+            ("texts", _("Textos"), 90, "e"),
+            ("lists", _("Listas"), 90, "e"),
+            ("size", _("Tamanho"), 90, "e"),
+        ):
+            tree.heading(column, text=label, anchor=anchor)
+            tree.column(column, width=ui.px(width), anchor=anchor,
+                        stretch=column == "backup")
         tree.grid(row=0, column=0, sticky="nsew")
 
         scrollbar = ui_widgets.scrollbar(table_shell, command=tree.yview)
@@ -3155,6 +3178,10 @@ class Sniptype:
 
         # Maps tree row id -> backup path.
         row_paths = {}
+        summary = tk.StringVar(main)
+        tk.Label(main, textvariable=summary, font=ui.caption_font(),
+                 bg=ui.surface, fg=ui.text_muted, anchor="w").grid(
+                     row=4, column=0, sticky="ew", pady=(ui.space_sm, 0))
 
         def human_size(num_bytes):
             size = float(num_bytes)
@@ -3174,15 +3201,30 @@ class Sniptype:
                     size_bytes = 0
                 try:
                     data = load_json_file(path)
-                    count = len(data) if isinstance(data, dict) else "?"
+                    if not isinstance(data, dict):
+                        raise ValueError("not a library document")
+                    snippets, _metadata = split_library_document(data)
+                    lists = sum(key.startswith("_") and isinstance(value, dict)
+                                for key, value in snippets.items())
+                    texts = len(snippets) - lists
+                    empty = not snippets
                 except Exception:
-                    count = _("inválido")
+                    texts = lists = _("inválido")
+                    empty = False
+                taken = backup_time(path)
+                when = (taken.strftime("%d/%m/%Y %H:%M") + " · "
+                        + time_format.relative_age(taken, datetime.now()))
+                if empty:
+                    when += " · " + _("0 itens")
                 row = tree.insert(
                     "",
                     tk.END,
-                    values=(os.path.basename(path), human_size(size_bytes), count),
+                    values=(when, texts, lists, human_size(size_bytes)),
                 )
                 row_paths[row] = path
+            summary.set(_("{count} backups disponíveis").format(count=len(row_paths))
+                        if row_paths else _("Nenhum backup. Use Criar backup para proteger a biblioteca."))
+            restore_button.configure(state=tk.DISABLED)
 
         def selected_backup():
             selection = tree.selection()
@@ -3294,10 +3336,18 @@ class Sniptype:
         buttons.grid(row=3, column=0, sticky="ew", pady=(ui.space_md, 0))
         ui_widgets.button(
             buttons, text=_("Criar backup"), command=on_backup_now,
-            variant="accent", icon="add",
+            icon="add",
         ).pack(side=tk.LEFT, padx=(0, ui.space_sm))
+        restore_button = ui_widgets.button(
+            buttons, text=_("Restaurar"), command=on_restore, variant="accent", icon="restore",
+            state=tk.DISABLED,
+        )
+        restore_button.pack(side=tk.LEFT, padx=(0, ui.space_sm))
+        tree.bind("<<TreeviewSelect>>", lambda _event: restore_button.configure(
+            state=tk.NORMAL if tree.selection() else tk.DISABLED))
+        tree.bind("<Return>", lambda _event: on_restore() if tree.selection() else None)
+        tree.bind("<Double-Button-1>", lambda _event: on_restore() if tree.selection() else None)
         for label, command, icon in (
-            (_("Restaurar"), on_restore, "restore"),
             (_("Exportar…"), on_export, "export"),
             (_("Importar…"), on_import, "import"),
             (_("Abrir pasta"), self.open_data_folder, "folder"),
@@ -3332,6 +3382,11 @@ class Sniptype:
         self.settings = updated
         return True
 
+    @staticmethod
+    def _copy_ui_value(owner, value):
+        owner.clipboard_clear()
+        owner.clipboard_append(str(value))
+
     def _create_settings_tab(self, parent, root):
         """Configurações tab: one section at a time, chosen from a side nav."""
         ui = ui_theme.theme()
@@ -3358,17 +3413,69 @@ class Sniptype:
         nav = tk.Frame(body, bg=ui.surface)
         nav.pack(side=tk.LEFT, fill=tk.Y, padx=(0, ui.space_lg))
         content = tk.Frame(body, bg=ui.surface)
-        content.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        content.pack(side=tk.LEFT, fill=tk.Y)
+        body.bind("<Configure>", lambda event: content.configure(
+            width=min(ui.px(720), max(ui.px(300), event.width - nav.winfo_reqwidth() - ui.space_lg))))
+        content.pack_propagate(False)
         sections = SectionSwitcher(ui, nav, content)
         self._manager_settings_sections = sections
         general = sections.add("general", _("Geral"), icon="settings")
         hotkeys = sections.add("hotkeys", _("Atalhos"), icon="keyboard")
         data = sections.add("data", _("Dados"), icon="folder")
+        general = self._settings_viewport(general)
+        hotkeys = self._settings_viewport(hotkeys)
+        data = self._settings_viewport(data)
         self._build_language_card(general, root)
         self._build_appearance_card(general, root)
+        self._build_density_card(general, root)
         self._build_expansion_card(general)
         self._build_hotkeys_card(hotkeys, root)
         self._build_data_card(data)
+        for inner in (general, hotkeys, data):
+            canvas = inner.master
+            self._bind_mousewheel_descendants(inner, canvas)
+            for child in self._widget_descendants(inner):
+                child.bind("<FocusIn>", canvas.reveal_focus, add="+")
+
+    @staticmethod
+    def _widget_descendants(parent):
+        for child in parent.winfo_children():
+            yield child
+            yield from Sniptype._widget_descendants(child)
+
+    @staticmethod
+    def _settings_viewport(parent):
+        """Keep full-size settings controls reachable by wheel, scrollbar and Tab."""
+        ui = ui_theme.theme()
+        parent.grid_columnconfigure(0, weight=1)
+        parent.grid_rowconfigure(0, weight=1)
+        canvas = tk.Canvas(parent, bg=ui.surface, highlightthickness=0, takefocus=0)
+        canvas.grid(row=0, column=0, sticky="nsew")
+        scrollbar = ui_widgets.scrollbar(parent, command=canvas.yview)
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        inner = tk.Frame(canvas, bg=ui.surface)
+        item = canvas.create_window((0, 0), window=inner, anchor="nw")
+        inner.bind("<Configure>", lambda _event: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(item, width=event.width))
+
+        def reveal_focus(event):
+            canvas.update_idletasks()
+            top = event.widget.winfo_rooty() - inner.winfo_rooty()
+            bottom = top + event.widget.winfo_height()
+            visible_top = canvas.canvasy(0)
+            height = canvas.winfo_height()
+            margin = ui.space_sm
+            target = None
+            if top - margin < visible_top:
+                target = top - margin
+            elif bottom + margin > visible_top + height:
+                target = bottom + margin - height
+            if target is not None:
+                canvas.yview_moveto(max(0, target) / max(1, inner.winfo_height()))
+
+        canvas.reveal_focus = reveal_focus
+        return inner
 
     def _settings_card(self, parent, title, description):
         """A titled settings card; content goes in grid rows 2+ (column 1 stretches)."""
@@ -3406,12 +3513,13 @@ class Sniptype:
         names = i18n.LANGUAGES
         display = tk.StringVar(card, names[i18n.language()])
         status = tk.StringVar(card, "")
-        ui_widgets.combobox(
+        combo = ui_widgets.combobox(
             card,
             textvariable=display,
             values=tuple(names.values()),
             width=18,
-        ).grid(row=2, column=0, sticky="w")
+        )
+        combo.grid(row=2, column=0, sticky="w")
         tk.Label(
             card,
             textvariable=status,
@@ -3429,17 +3537,17 @@ class Sniptype:
             # first, and a clean manager applies without asking.
             if not self._resolve_manager_drafts(root):
                 display.set(names[i18n.language()])
+                status.set(_("Alteração cancelada; o rascunho foi mantido."))
                 return
             if not self._persist_settings({"language": choice}):
+                display.set(names[i18n.language()])
                 status.set(_("Não foi possível salvar o idioma."))
                 return
             i18n.set_language(choice)
             self.refresh_tray_menu()
             root.after_idle(lambda: self._reload_manager_window(root, settings_page=True))
 
-        ui_widgets.button(
-            card, text=_("Aplicar idioma"), command=apply, variant="accent",
-        ).grid(row=2, column=2, sticky="e")
+        combo.bind("<<ComboboxSelected>>", lambda _event: apply())
 
     def _build_appearance_card(self, parent, root):
         ui = ui_theme.theme()
@@ -3451,14 +3559,10 @@ class Sniptype:
         )
         current = ui_theme.preference()
         labels = {key: _(label) for key, label in ui_theme.APPEARANCE_LABELS.items()}
-        display = tk.StringVar(card, labels[current])
+        display = tk.StringVar(card, current)
         status = tk.StringVar(card, _(ui_theme.APPEARANCE_STATUS[current]))
-        ui_widgets.combobox(
-            card,
-            textvariable=display,
-            values=tuple(labels.values()),
-            width=18,
-        ).grid(row=2, column=0, sticky="w")
+        choices = tk.Frame(card, bg=ui.card)
+        choices.grid(row=2, column=0, columnspan=3, sticky="w")
         tk.Label(
             card,
             textvariable=status,
@@ -3466,10 +3570,10 @@ class Sniptype:
             bg=ui.card,
             fg=ui.text_muted,
             anchor="w",
-        ).grid(row=2, column=1, sticky="w", padx=(ui.space_md, 0))
+        ).grid(row=3, column=0, columnspan=3, sticky="w", pady=(ui.space_sm, 0))
 
         def apply():
-            choice = next((key for key, label in labels.items() if label == display.get()), None)
+            choice = display.get()
             if choice is None:
                 status.set(_("Escolha uma aparência válida."))
                 return
@@ -3479,17 +3583,49 @@ class Sniptype:
             # The rebuild drops what the editors show: a draft is settled
             # first, and a clean manager applies without asking.
             if not self._resolve_manager_drafts(root):
-                display.set(labels[ui_theme.preference()])
+                display.set(ui_theme.preference())
+                status.set(_("Alteração cancelada; o rascunho foi mantido."))
                 return
             if not self._persist_settings({"appearance": choice}):
+                display.set(ui_theme.preference())
                 status.set(_("Não foi possível salvar a aparência."))
                 return
             ui_theme.set_preference(choice)
             root.after_idle(lambda: self._reload_manager_window(root, settings_page=True))
 
-        ui_widgets.button(
-            card, text=_("Aplicar aparência"), command=apply, variant="accent",
-        ).grid(row=2, column=2, sticky="e")
+        for key, label in labels.items():
+            ttk.Radiobutton(choices, text=label, variable=display, value=key,
+                            command=apply).pack(side=tk.LEFT, padx=(0, ui.space_md))
+
+    def _build_density_card(self, parent, root):
+        ui = ui_theme.theme()
+        card = self._settings_card(parent, _("Densidade"),
+                                   _("Escolha o espaço dos controles e das linhas."))
+        current = self.settings.get("density", "compact")
+        display = tk.StringVar(card, current)
+        status = tk.StringVar(card)
+        def apply():
+            choice = display.get()
+            if choice == current:
+                return
+            if not self._resolve_manager_drafts(root):
+                display.set(current)
+                status.set(_("Alteração cancelada; o rascunho foi mantido."))
+                return
+            if not self._persist_settings({"density": choice}):
+                display.set(current)
+                status.set(_("Não foi possível salvar."))
+                return
+            ui_theme.set_density(choice)
+            root.after_idle(lambda: self._reload_manager_window(root, settings_page=True))
+        choices = tk.Frame(card, bg=ui.card)
+        choices.grid(row=2, column=0, columnspan=3, sticky="w")
+        for key, label in (("compact", _("Compacta")), ("comfortable", _("Confortável")),
+                           ("touch", _("Toque"))):
+            ttk.Radiobutton(choices, text=label, variable=display, value=key,
+                            command=apply).pack(side=tk.LEFT, padx=(0, ui.space_md))
+        tk.Label(card, textvariable=status, font=ui.caption_font(), bg=ui.card,
+                 fg=ui.text_muted).grid(row=3, column=0, columnspan=3, sticky="w")
 
     def _reload_manager_window(self, window, *, settings_page=False):
         """Rebuild the manager in place so a new appearance or language takes effect. GUI thread.
@@ -3579,7 +3715,7 @@ class Sniptype:
                 fg=ui.text,
                 anchor="w",
             ).grid(row=row, column=0, sticky="w", padx=(0, ui.space_lg), pady=2)
-            value = tk.Label(card, font=ui.mono_font(), bg=ui.card, anchor="w")
+            value = tk.Label(card, font=ui.font(), bg=ui.card, anchor="w")
             value.grid(row=row, column=1, columnspan=2, sticky="w", pady=2)
             values[action] = value
 
@@ -3589,7 +3725,7 @@ class Sniptype:
             for action, label in values.items():
                 binding = bindings.get(action)
                 label.configure(
-                    text=binding or _("Desativado"),
+                    text=display_hotkey(binding) or _("Desativado"),
                     fg=ui.text if binding else ui.text_muted,
                 )
 
@@ -3631,10 +3767,12 @@ class Sniptype:
                 fg=ui.text,
                 anchor="w",
             ).grid(row=row, column=0, sticky="w", padx=(0, ui.space_lg), pady=2)
-            field = ui_widgets.entry(card)
-            field.insert(0, value)
-            field.configure(state="readonly")
-            field.grid(row=row, column=1, columnspan=2, sticky="ew", pady=2)
+            tk.Label(card, text=value, anchor="w", font=ui.mono_font() if kind or value == self.data_dir
+                     else ui.font(), bg=ui.card, fg=ui.text, wraplength=ui.px(340)).grid(
+                         row=row, column=1, sticky="ew", pady=2)
+            ui_widgets.button(card, text=_("Copiar"),
+                              command=lambda value=value: self._copy_ui_value(card, value)).grid(
+                                  row=row, column=2, sticky="e")
             row += 1
             if kind is not None:
                 transfer = self._transfer_status(card, kind, value)
@@ -7271,19 +7409,147 @@ class Sniptype:
 
     def _create_dynamic_snippets_tab(self, parent, root):
         """Build the single tab listing every built-in dynamic snippet."""
-        self._create_reference_tab(
-            parent,
-            root,
-            _("Snippets dinâmicos integrados"),
-            _("Data/hora local, indicadores do Banco Central, ações e atalhos de WhatsApp."),
-            [
-                (_("Data e Hora"), "datetime"),
-                (_("Indicadores Econômicos (Banco Central)"), "economy"),
-                (_("Ações (B3 e US)"), "stock"),
-                ("WhatsApp", "whatsapp"),
-            ],
-            _("Use a chave para ativar ou desativar. Dê dois cliques no trigger para renomear."),
-        )
+        ui = ui_theme.theme()
+        self._page_receipt(parent)
+        main = tk.Frame(parent, bg=ui.surface, padx=ui.space_lg, pady=ui.space_lg)
+        main.pack(fill=tk.BOTH, expand=True)
+        tk.Label(main, text=_("Snippets dinâmicos integrados"), font=ui.title_font(),
+                 bg=ui.surface, fg=ui.text).pack(anchor="w")
+        search_row = tk.Frame(main, bg=ui.surface)
+        search_row.pack(fill=tk.X, pady=ui.space_md)
+        tk.Label(search_row, text=_("Buscar"), font=ui.font(), bg=ui.surface,
+                 fg=ui.text).pack(side=tk.LEFT, padx=(0, ui.space_sm))
+        query = tk.StringVar(main)
+        search = ui_widgets.entry(search_row, textvariable=query)
+        search.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self._manager_search_entries[str(parent)] = search
+        count = tk.StringVar(main)
+        tk.Label(search_row, textvariable=count, font=ui.caption_font(),
+                 bg=ui.surface, fg=ui.text_muted).pack(side=tk.RIGHT, padx=ui.space_sm)
+        commands = tk.Frame(main, bg=ui.surface)
+        commands.pack(fill=tk.X, pady=(0, ui.space_sm))
+        shell = ui_widgets.list_frame(main)
+        shell.pack(fill=tk.BOTH, expand=True)
+        shell.grid_columnconfigure(0, weight=1)
+        shell.grid_rowconfigure(0, weight=1)
+        tree = ui_widgets.tree_list(shell, columns=("state", "trigger", "description"), headings=True)
+        tree.column("#0", width=ui.px(22), stretch=False)
+        for column, label, width in (("state", _("Ativo"), 90),
+                                     ("trigger", "Trigger", 220),
+                                     ("description", _("Descrição"), 350)):
+            tree.heading(column, text=label, anchor="w")
+            tree.column(column, width=ui.px(width), minwidth=ui.px(60),
+                        stretch=column == "description", anchor="w")
+        tree.grid(row=0, column=0, sticky="nsew")
+        scrollbar = ui_widgets.scrollbar(shell, command=tree.yview)
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        tree.configure(yscrollcommand=scrollbar.set)
+        self._bind_mousewheel(tree, tree)
+        row_keys = {}
+        categories = {
+            "datetime": _("Data e Hora"),
+            "economy": _("Indicadores Econômicos (Banco Central)"),
+            "stock": _("Ações (B3 e US)"),
+            "whatsapp": "WhatsApp",
+        }
+        def selected_key():
+            return row_keys.get(next(iter(tree.selection()), ""))
+        def selection_changed(_event=None):
+            key = selected_key()
+            enabled = key is not None
+            toggle.configure(state=tk.NORMAL if enabled else tk.DISABLED,
+                             text=_("Desativar") if enabled and is_enabled(self.dynamic_registry[key])
+                             else _("Ativar"))
+            rename.configure(state=tk.NORMAL if enabled else tk.DISABLED)
+        def populate(*_args):
+            selected = selected_key()
+            scroll = tree.yview()
+            tree.delete(*tree.get_children())
+            row_keys.clear()
+            needle = query.get().strip().casefold()
+            total = shown = 0
+            for category, entries in reference_entries_by_category(self.dynamic_registry).items():
+                title = categories.get(category, category)
+                matches = []
+                for key, trigger, description, enabled in entries:
+                    total += 1
+                    desc = _(description)
+                    if not needle or needle in " ".join((title, key, trigger, desc)).casefold():
+                        matches.append((key, trigger, desc, enabled))
+                if not matches:
+                    continue
+                group = tree.insert("", tk.END, values=("", "", title), open=True)
+                for key, trigger, description, enabled in matches:
+                    row = tree.insert(group, tk.END, values=(
+                        _("Ativo") if enabled else _("Inativo"),
+                        key if key == trigger else f"{key} → {trigger}", description))
+                    row_keys[row] = key
+                    shown += 1
+                    if key == selected:
+                        tree.selection_set(row)
+                        tree.focus(row)
+            count.set(_("{shown} de {total}").format(shown=shown, total=total))
+            if scroll:
+                tree.yview_moveto(scroll[0])
+            selection_changed()
+        def toggle_selected(_event=None):
+            key = selected_key()
+            if key is not None and self._toggle_registry_entry(
+                    key, not is_enabled(self.dynamic_registry[key]), parent=root):
+                populate()
+            return "break"
+        def rename_selected(_event=None):
+            key = selected_key()
+            if key is not None:
+                self._rename_registry_entry_dialog(root, key,
+                    effective_trigger(key, self.dynamic_registry[key]), populate)
+            return "break"
+        toggle = ui_widgets.button(commands, text=_("Ativar"), command=toggle_selected)
+        toggle.pack(side=tk.LEFT)
+        rename = ui_widgets.button(commands, text=_("Renomear"), command=rename_selected)
+        rename.pack(side=tk.LEFT, padx=ui.space_sm)
+        tree.bind("<<TreeviewSelect>>", selection_changed, add="+")
+        tree.bind("<space>", toggle_selected)
+        tree.bind("<F2>", rename_selected)
+        def double_click(event):
+            row = tree.identify_row(event.y)
+            if row in row_keys:
+                tree.selection_set(row)
+                return toggle_selected()
+        tree.bind("<Double-Button-1>", double_click)
+        self._manager_commands[str(parent)] = {
+            "search": search, "tree": tree, "rename": rename_selected,
+            "escape": lambda: query.set(""),
+        }
+        def enter_list(_event):
+            row = next(iter(row_keys), None)
+            if row is not None:
+                tree.selection_set(row)
+                tree.focus(row)
+                tree.see(row)
+                tree.focus_set()
+            return "break"
+        search.bind("<Return>", enter_list)
+        search.bind("<Down>", enter_list)
+        query.trace_add("write", populate)
+        self._register_manager_refresher(populate)
+        def select_dynamic_target(descriptor):
+            if descriptor.kind != "dynamic":
+                return False
+            query.set("")
+            row = next((row for row, key in row_keys.items()
+                        if key == descriptor.stored_trigger), None)
+            if row is None:
+                return False
+            if self._manager_notebook is not None:
+                self._manager_notebook.select(parent)
+            tree.selection_set(row)
+            tree.focus(row)
+            tree.see(row)
+            tree.focus_set()
+            return True
+        self._manager_tab_selectors["dynamic"] = select_dynamic_target
+        populate()
 
     def _rename_registry_entry_dialog(self, root, key, current_trigger, refresh):
         """Ask for a new trigger name, validate it, then persist and refresh."""

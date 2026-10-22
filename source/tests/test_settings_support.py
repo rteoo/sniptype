@@ -9,6 +9,15 @@ from settings_support import load_settings, normalize_runtime_settings, save_set
 
 
 class SettingsSupportTests(unittest.TestCase):
+    def test_density_normalization_preserves_supported_metrics_and_rejects_unknown(self):
+        for value in ("compact", "comfortable", "touch"):
+            normalized, invalid = normalize_runtime_settings({"density": value})
+            self.assertEqual(normalized["density"], value)
+            self.assertNotIn("density", invalid)
+        normalized, invalid = normalize_runtime_settings({"density": "dense"})
+        self.assertEqual(normalized["density"], "compact")
+        self.assertEqual(invalid["density"], "compact")
+
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
         self.path = os.path.join(self.tmp, "settings.json")
