@@ -48,7 +48,7 @@ def normalize_manager_view(value):
             if not isinstance(raw, dict):
                 continue
             page = {}
-            for key in ("query", "filter", "group", "container", "focus", "row_focus", "selection"):
+            for key in ("query", "filter", "group", "container", "focus", "row_focus", "selection", "top_row"):
                 item = raw.get(key)
                 if isinstance(item, str) and len(item) <= 4096:
                     page[key] = item

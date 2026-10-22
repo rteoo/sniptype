@@ -12,9 +12,29 @@ from manager_view_support import (
     find_manager_target,
     format_trigger_pair,
     manager_row_preview,
+    normalize_manager_view,
     search_manager_rows,
 )
 from workflow_support import SnippetRef, WorkflowState
+
+
+class ManagerScrollAnchorNormalizationTests(unittest.TestCase):
+    def test_bounded_stable_anchor_and_legacy_fraction_round_trip(self):
+        for page, anchor in (("static", "sample"), ("mapping", "sample"),
+                             ("dynamic", "action:xdate"), ("backups", "synthetic-backup.json")):
+            with self.subTest(page=page):
+                state = {"pages": {page: {"scroll": 41 / 81, "top_row": anchor}}}
+                self.assertEqual(state, normalize_manager_view(state))
+        legacy = {"pages": {"mapping": {"scroll": 0.5}}}
+        self.assertEqual(legacy, normalize_manager_view(legacy))
+
+    def test_malformed_anchor_is_removed_without_losing_legacy_fraction(self):
+        for anchor in (None, 41, True, [], {}, "x" * 4097):
+            with self.subTest(anchor_type=type(anchor).__name__):
+                state = {"pages": {"mapping": {"scroll": 0.5, "top_row": anchor}}}
+                self.assertEqual({"pages": {"mapping": {"scroll": 0.5}}}, normalize_manager_view(state))
+        boundary = {"pages": {"mapping": {"top_row": "x" * 4096}}}
+        self.assertEqual(boundary, normalize_manager_view(boundary))
 
 
 class ManagerRowBuildTests(unittest.TestCase):

@@ -2253,6 +2253,7 @@ class ManagerGuiSmokeTests(unittest.TestCase):
                     tree.yview_moveto(0.5)
                     window.update()
                     before = self.app._manager_views["mapping"][0]()
+                    before_top = (before["top_row"], tree.bbox(before["top_row"]))
                     self.assertEqual("_mail_codes", before["container"])
                     self.assertEqual("sample050", before["target"]["key"])
                     self.assertGreater(before["scroll"], 0)
@@ -2268,6 +2269,37 @@ class ManagerGuiSmokeTests(unittest.TestCase):
                     for key in ("container", "target", "query", "selection", "row_focus"):
                         self.assertEqual(before[key], after[key], key)
                     self.assertAlmostEqual(before["scroll"], after["scroll"], places=2)
+                    rebuilt_tree = self.app._manager_commands[str(self.app._manager_pages["mapping"])]["tree"]
+                    self.assertEqual(before_top, (after["top_row"], rebuilt_tree.bbox(after["top_row"])))
+        self.app.gui.call(run, timeout=60)
+
+    def test_rebuild_uses_row_anchor_with_a_saved_partial_row_fraction(self):
+        self._keyboard_fixture_cleanup()
+        self.app.snippets = {f"sample{i:03d}": f"Synthetic response {i:03d}" for i in range(80)}
+        self.app.refresh_runtime_indexes()
+        def run(root):
+            self.app._build_manager_window(root)
+            window = self.app.manager_window
+            window.geometry("1180x760+20+20")
+            window.update()
+            tree = self.app._manager_commands[str(self.app._manager_pages["static"])]["tree"]
+            tree.yview(41)
+            window.update()
+            view = self.app._capture_manager_view(window)
+            self.assertEqual("sample041", view["pages"]["static"]["top_row"])
+            before_bbox = tree.bbox("sample041")
+            # A genuine saved fraction from Tk8.6's partial-bottom-row total81.
+            # On total80 runtimes this fraction alone selects row40 instead.
+            view["pages"]["static"]["scroll"] = 41 / 81
+            with mock.patch.object(self.app, "_capture_manager_view", return_value=view):
+                self.app._reload_manager_window(window)
+            rebuilt = self.app.manager_window
+            rebuilt.update()
+            rebuilt.update()
+            tree = self.app._manager_commands[str(self.app._manager_pages["static"])]["tree"]
+            state = self.app._manager_views["static"][0]()
+            self.assertEqual("sample041", state["top_row"])
+            self.assertEqual(before_bbox, tree.bbox("sample041"))
         self.app.gui.call(run, timeout=60)
 
     def test_filtered_detached_row_stays_hidden_and_reuses_its_iid_after_rebuild(self):

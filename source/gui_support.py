@@ -9,6 +9,46 @@ from variable_support import find_variable_names
 PREVIEW_CHARS = 60
 
 
+def expanded_tree_rows(tree):
+    """Displayed preorder of the actions tree's one section/child level."""
+    rows = []
+    for section in tree.get_children():
+        rows.append(section)
+        if tree.item(section, "open"):
+            rows.extend(tree.get_children(section))
+    return rows
+
+
+def capture_tree_scroll(tree, rows=None, row_keys=None):
+    """Keep a displayed row identity as well as the legacy scroll fraction.
+
+    Hierarchical callers supply expanded preorder; get_children() suffices
+    for flat lists and deliberately excludes detached filtered rows.
+    """
+    rows = tree.get_children() if rows is None else rows
+    scroll = tree.yview()[0]
+    anchor = next((row for row in rows if tree.bbox(row)), "")
+    if row_keys is not None:
+        anchor = row_keys.get(anchor, "")
+    return {"scroll": scroll, "top_row": anchor}
+
+
+def restore_tree_scroll(tree, state, rows=None, row_keys=None):
+    """Restore a displayed row without depending on a provisional total.
+
+    Tk 8.6 can add a synthetic scroll row for a partially visible bottom row.
+    A saved fraction therefore need not identify the same row before layout.
+    """
+    rows = tuple(tree.get_children() if rows is None else rows)
+    anchor = state.get("top_row")
+    if row_keys is not None:
+        anchor = next((row for row in rows if anchor and row in row_keys and row_keys[row] == anchor), None)
+    if anchor in rows:
+        tree.yview(rows.index(anchor))
+    else:
+        tree.yview_moveto(state.get("scroll", 0))
+
+
 def snippet_row_values(key, value, preview_chars=PREVIEW_CHARS):
     """Return ``(trigger, preview, markers)`` for one Treeview row.
 

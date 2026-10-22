@@ -220,6 +220,9 @@ from manager_view_support import (
     manager_geometry_for_tk,
 )
 from gui_support import (
+    capture_tree_scroll,
+    expanded_tree_rows,
+    restore_tree_scroll,
     center_dialog,
     center_on_screen,
     ellipsize_text,
@@ -3523,9 +3526,10 @@ class Sniptype:
         def capture_view():
             selected = next(iter(tree.selection()), "")
             focused = tree.focus()
+            scroll = capture_tree_scroll(tree, row_keys={row: os.path.basename(path) for row, path in row_paths.items()})
             return {"selection": os.path.basename(row_paths.get(selected, "")),
                     "row_focus": os.path.basename(row_paths.get(focused, "")),
-                    "scroll": tree.yview()[0],
+                    **scroll,
                     "focus": "list" if root.focus_get() is tree else ""}
 
         def restore_view(state):
@@ -3536,7 +3540,7 @@ class Sniptype:
                 tree.selection_set(selected)
             if focused is not None:
                 tree.focus(focused)
-            tree.yview_moveto(state.get("scroll", 0))
+            restore_tree_scroll(tree, state, row_keys={row: name for name, row in by_name.items()})
             if state.get("focus") == "list":
                 tree.focus_set()
         self._manager_views["backups"] = (capture_view, restore_view)
@@ -6320,7 +6324,7 @@ class Sniptype:
             target = {"kind": "static", "key": session.ref} if session.ref else None
             return {"query": search_var.get(), "filter": filter_var.get(), "group": group_var.get(),
                     "selection": next(iter(tree.selection()), ""), "row_focus": tree.focus(),
-                    "scroll": tree.yview()[0], "target": target,
+                    **capture_tree_scroll(tree), "target": target,
                     "focus": "search" if focused is search_entry else "list" if focused is tree
                     else "editor" if focused in (entry_trigger, text_value) else ""}
         def restore_view(state):
@@ -6338,7 +6342,7 @@ class Sniptype:
             focus = state.get("row_focus")
             if focus in static_snips:
                 tree.focus(focus)
-            tree.yview_moveto(state.get("scroll", 0))
+            restore_tree_scroll(tree, state)
             render_editor()
             focused = {"search": search_entry, "list": tree, "editor": text_value}.get(state.get("focus"))
             if focused is not None:
@@ -7440,7 +7444,7 @@ class Sniptype:
             target = {"kind": "mapping", "key": session.ref, "container": session.container} if session.ref else None
             return {"query": map_search_var.get(), "container": mapping_type.get(),
                     "selection": next(iter(tree_map.selection()), ""), "row_focus": tree_map.focus(),
-                    "scroll": tree_map.yview()[0], "target": target,
+                    **capture_tree_scroll(tree_map), "target": target,
                     "focus": "search" if focused is map_search_entry else "list" if focused is tree_map
                     else "editor" if focused in (entry_name, text_value) else ""}
         def restore_view(state):
@@ -7462,7 +7466,7 @@ class Sniptype:
                 tree_map.selection_set(state["selection"])
             if state.get("row_focus") in visible:
                 tree_map.focus(state["row_focus"])
-            tree_map.yview_moveto(state.get("scroll", 0))
+            restore_tree_scroll(tree_map, state)
             render_editor()
             focused = {"search": map_search_entry, "list": tree_map, "editor": text_value}.get(state.get("focus"))
             if focused is not None:
@@ -7891,7 +7895,8 @@ class Sniptype:
         self._manager_tab_selectors["dynamic"] = select_dynamic_target
         populate()
         def capture_view():
-            return {"query": query.get(), "selection": selected_key() or "", "scroll": tree.yview()[0],
+            return {"query": query.get(), "selection": selected_key() or "",
+                    **capture_tree_scroll(tree, expanded_tree_rows(tree)),
                     "row_focus": tree.focus(),
                     "focus": "search" if root.focus_get() is search else "list" if root.focus_get() is tree else ""}
         def restore_view(state):
@@ -7904,7 +7909,7 @@ class Sniptype:
             focused_row = state.get("row_focus")
             if focused_row in row_keys or focused_row in tree.get_children():
                 tree.focus(focused_row)
-            tree.yview_moveto(state.get("scroll", 0))
+            restore_tree_scroll(tree, state, expanded_tree_rows(tree))
             focused = {"search": search, "list": tree}.get(state.get("focus"))
             if focused is not None:
                 focused.focus_set()
