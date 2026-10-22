@@ -8,6 +8,7 @@ Tk, disk, providers, or the clipboard.
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+import re
 
 from dynamic_registry import effective_trigger as registry_effective_trigger
 from dynamic_registry import is_enabled as registry_entry_enabled
@@ -24,6 +25,74 @@ FILTER_RECENT = "recent"
 FILTER_DISABLED = "disabled"
 FILTER_PROBLEMS = "problems"
 UNGROUPED_FILTER = "ungrouped"
+
+MANAGER_PAGES = ("static", "mapping", "dynamic", "backups", "settings")
+_GEOMETRY = re.compile(r"([1-9][0-9]{0,4})x([1-9][0-9]{0,4})([+-][0-9]{1,6})([+-][0-9]{1,6})\Z")
+
+
+def normalize_manager_view(value):
+    """Accept only bounded, JSON-safe view state; never restore widget paths."""
+    if not isinstance(value, dict):
+        return {}
+    result = {}
+    if value.get("page") in MANAGER_PAGES:
+        result["page"] = value["page"]
+    geometry = value.get("geometry")
+    if isinstance(geometry, str) and _GEOMETRY.fullmatch(geometry):
+        result["geometry"] = geometry
+    pages = value.get("pages")
+    if isinstance(pages, dict):
+        result["pages"] = {}
+        for name in MANAGER_PAGES:
+            raw = pages.get(name)
+            if not isinstance(raw, dict):
+                continue
+            page = {}
+            for key in ("query", "filter", "group", "container", "focus", "row_focus", "selection"):
+                item = raw.get(key)
+                if isinstance(item, str) and len(item) <= 4096:
+                    page[key] = item
+            scroll = raw.get("scroll")
+            if isinstance(scroll, (int, float)) and not isinstance(scroll, bool) and 0 <= scroll <= 1:
+                page["scroll"] = float(scroll)
+            ref = raw.get("target")
+            if isinstance(ref, dict):
+                try:
+                    target = SnippetRef(ref.get("kind"), ref.get("key"), ref.get("container"))
+                    if len(target.key) <= 4096 and (target.container is None or len(target.container) <= 4096):
+                        page["target"] = {"kind": target.kind, "key": target.key, "container": target.container}
+                except (TypeError, ValueError):
+                    pass
+            result["pages"][name] = page
+    return result
+
+
+def geometry_intersects_monitors(geometry, monitors):
+    """Validate absolute saved coordinates against real monitor rectangles.
+
+    The signed offsets in our settings represent absolute positions. Tk's
+    right/bottom-relative negative-offset syntax is deliberately not used here.
+    """
+    match = _GEOMETRY.fullmatch(geometry) if isinstance(geometry, str) else None
+    if match is None:
+        return False
+    width, height, x, y = map(int, match.groups())
+    return any(x < right and x + width > left and y < bottom and y + height > top
+               for left, top, right, bottom in monitors)
+
+
+def manager_geometry_for_tk(geometry):
+    """Convert saved absolute coordinates to Tk's explicit left/top syntax.
+
+    For example, saved ``800x600-1400+20`` must become
+    ``800x600+-1400+20``. Passing ``-1400`` directly to Tk would instead anchor
+    the window 1,400 pixels from the right edge of the primary desktop.
+    """
+    match = _GEOMETRY.fullmatch(geometry) if isinstance(geometry, str) else None
+    if match is None:
+        return None
+    width, height, x, y = map(int, match.groups())
+    return f"{width}x{height}+{x}+{y}"
 
 
 @dataclass(frozen=True)
@@ -420,9 +489,12 @@ __all__ = [
     "filter_static_rows",
     "find_manager_target",
     "format_trigger_pair",
+    "geometry_intersects_monitors",
     "lookup_manager_target",
     "manager_rows_for_filter",
     "manager_row_preview",
+    "manager_geometry_for_tk",
     "navigation_target",
+    "normalize_manager_view",
     "search_manager_rows",
 ]

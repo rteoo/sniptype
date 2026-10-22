@@ -24,6 +24,129 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from app_module import sniptype as tx  # .pyw is not importable off Windows
 
 
+class DpiAwarenessTests(unittest.TestCase):
+    def setUp(self):
+        # Guard both ctypes loader surfaces so a regressed implementation can
+        # never call a native DPI API during this pure test class.
+        windll = types.SimpleNamespace(user32=types.SimpleNamespace(), shcore=types.SimpleNamespace())
+        windll_patcher = mock.patch.object(tx.ctypes, "windll", new=windll, create=True)
+        windll_patcher.start()
+        self.addCleanup(windll_patcher.stop)
+        loader_patcher = mock.patch.object(
+            tx.ctypes, "WinDLL", create=True, side_effect=OSError("native loader blocked in tests")
+        )
+        loader_patcher.start()
+        self.addCleanup(loader_patcher.stop)
+
+    def test_per_monitor_v2_uses_pointer_context_and_stops_on_success(self):
+        user32 = types.SimpleNamespace(SetProcessDpiAwarenessContext=mock.Mock(return_value=1))
+        with mock.patch.object(tx, "IS_WINDOWS", True), \
+                mock.patch.object(tx.ctypes, "WinDLL", create=True, return_value=user32) as load, \
+                mock.patch.object(tx.ctypes, "set_last_error", create=True) as set_error, \
+                mock.patch.object(tx.ctypes, "get_last_error", create=True, return_value=0):
+            tx.set_dpi_awareness()
+
+        api = user32.SetProcessDpiAwarenessContext
+        self.assertEqual([tx.ctypes.c_void_p], api.argtypes)
+        self.assertIs(api.restype, tx.ctypes.c_int32)
+        self.assertEqual(tx.ctypes.c_void_p(-4).value, api.call_args.args[0].value)
+        set_error.assert_called_once_with(0)
+        load.assert_called_once_with("user32", use_last_error=True)
+
+    def test_context_access_denied_respects_existing_process_awareness(self):
+        user32 = types.SimpleNamespace(SetProcessDpiAwarenessContext=mock.Mock(return_value=0))
+        with mock.patch.object(tx, "IS_WINDOWS", True), \
+                mock.patch.object(tx.ctypes, "WinDLL", create=True, return_value=user32) as load, \
+                mock.patch.object(tx.ctypes, "set_last_error", create=True), \
+                mock.patch.object(tx.ctypes, "get_last_error", create=True, return_value=5):
+            tx.set_dpi_awareness()
+
+        load.assert_called_once_with("user32", use_last_error=True)
+
+    def test_non_access_context_failure_tries_shcore_with_typed_hresult(self):
+        user32 = types.SimpleNamespace(SetProcessDpiAwarenessContext=mock.Mock(return_value=0))
+        shcore = types.SimpleNamespace(SetProcessDpiAwareness=mock.Mock(return_value=0))
+
+        def load(name, **_kwargs):
+            return {"user32": user32, "shcore": shcore}[name]
+
+        with mock.patch.object(tx, "IS_WINDOWS", True), \
+                mock.patch.object(tx.ctypes, "WinDLL", create=True, side_effect=load), \
+                mock.patch.object(tx.ctypes, "set_last_error", create=True), \
+                mock.patch.object(tx.ctypes, "get_last_error", create=True, return_value=87):
+            tx.set_dpi_awareness()
+
+        self.assertEqual([tx.ctypes.c_int], shcore.SetProcessDpiAwareness.argtypes)
+        self.assertIs(shcore.SetProcessDpiAwareness.restype, tx.ctypes.c_int32)
+        shcore.SetProcessDpiAwareness.assert_called_once_with(2)
+
+    def test_shcore_failure_tries_checked_legacy_api(self):
+        user32 = types.SimpleNamespace(SetProcessDpiAwarenessContext=mock.Mock(return_value=0))
+        shcore = types.SimpleNamespace(SetProcessDpiAwareness=mock.Mock(return_value=-1))
+        legacy = mock.Mock(return_value=1)
+
+        def load(name, **_kwargs):
+            return {"user32": user32, "shcore": shcore}[name]
+
+        user32.SetProcessDPIAware = legacy
+        with mock.patch.object(tx, "IS_WINDOWS", True), \
+                mock.patch.object(tx.ctypes, "WinDLL", create=True, side_effect=load) as load_dll, \
+                mock.patch.object(tx.ctypes, "set_last_error", create=True), \
+                mock.patch.object(tx.ctypes, "get_last_error", create=True, return_value=87):
+            tx.set_dpi_awareness()
+
+        self.assertEqual([], legacy.argtypes)
+        self.assertIs(legacy.restype, tx.ctypes.c_int32)
+        legacy.assert_called_once_with()
+        self.assertEqual(
+            [mock.call("user32", use_last_error=True), mock.call("shcore", use_last_error=True),
+             mock.call("user32", use_last_error=True)],
+            load_dll.call_args_list,
+        )
+
+    def test_missing_windows_apis_and_non_windows_are_graceful(self):
+        missing = types.SimpleNamespace()
+        with mock.patch.object(tx, "IS_WINDOWS", True), \
+                mock.patch.object(tx.ctypes, "WinDLL", create=True, return_value=missing):
+            tx.set_dpi_awareness()
+
+        with mock.patch.object(tx, "IS_WINDOWS", False), \
+                mock.patch.object(tx.ctypes, "WinDLL", create=True) as load:
+            tx.set_dpi_awareness()
+        load.assert_not_called()
+
+    def test_missing_windows_library_is_graceful(self):
+        with mock.patch.object(tx, "IS_WINDOWS", True), \
+                mock.patch.object(tx.ctypes, "WinDLL", create=True, side_effect=OSError("missing DLL")):
+            tx.set_dpi_awareness()
+
+    def test_loaded_api_programming_errors_are_not_swallowed(self):
+        user32 = types.SimpleNamespace(
+            SetProcessDpiAwarenessContext=mock.Mock(side_effect=RuntimeError("broken prototype"))
+        )
+        with mock.patch.object(tx, "IS_WINDOWS", True), \
+                mock.patch.object(tx.ctypes, "WinDLL", create=True, return_value=user32), \
+                mock.patch.object(tx.ctypes, "set_last_error", create=True):
+            with self.assertRaisesRegex(RuntimeError, "broken prototype"):
+                tx.set_dpi_awareness()
+
+    def test_shcore_access_denied_does_not_downgrade_to_legacy(self):
+        user32 = types.SimpleNamespace(SetProcessDpiAwarenessContext=mock.Mock(return_value=0))
+        shcore = types.SimpleNamespace(SetProcessDpiAwareness=mock.Mock(return_value=-2147024891))
+
+        def load(name, **_kwargs):
+            return {"user32": user32, "shcore": shcore}[name]
+
+        with mock.patch.object(tx, "IS_WINDOWS", True), \
+                mock.patch.object(tx.ctypes, "WinDLL", create=True, side_effect=load) as load_dll, \
+                mock.patch.object(tx.ctypes, "set_last_error", create=True), \
+                mock.patch.object(tx.ctypes, "get_last_error", create=True, return_value=87):
+            tx.set_dpi_awareness()
+
+        shcore.SetProcessDpiAwareness.assert_called_once_with(2)
+        self.assertEqual(2, load_dll.call_count)
+
+
 def make_startup_app():
     """A Sniptype with only what ``run()`` touches, and nothing real behind it."""
     app = tx.Sniptype.__new__(tx.Sniptype)

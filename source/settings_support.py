@@ -8,6 +8,7 @@ import math
 
 from hotkey_support import ACTIONS, normalize_hotkeys
 from i18n import LANGUAGES
+from manager_view_support import normalize_manager_view
 from snippet_utils import load_json_file, write_json_atomic
 
 
@@ -48,6 +49,12 @@ def normalize_runtime_settings(settings):
     """
     normalized = dict(settings) if isinstance(settings, dict) else {}
     invalid = {}
+
+    if "manager_view" in normalized:
+        view = normalize_manager_view(normalized["manager_view"])
+        if view != normalized["manager_view"]:
+            invalid["manager_view"] = view
+        normalized["manager_view"] = view
 
     if "density" in normalized and normalized["density"] not in (
         "compact", "comfortable", "touch",

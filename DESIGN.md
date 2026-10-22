@@ -389,6 +389,58 @@ Adopted now as a project extension:
 
 ## Accessibility and proof
 
+WP10 keeps the manager alive in the tray. Close first settles every editor's
+draft, atomically saves `manager_view`, then withdraws the Toplevel. A failed
+view save leaves it open with an error. Tray open, the open-manager hotkey and
+a second launch raise the same window; Edit last additionally selects its
+stable target. The last page, per-page search/filter, editor target, selection,
+row focus and scroll survive closing and reopening. They also survive the
+necessary language, appearance, contrast, density and Windows text-size
+rebuilds. Density and text size extend WP10's original rebuild list to retain
+the WP8/WP9 behavior. Settings remembers its selected section. Restored Windows
+geometry must overlap an enumerated current monitor; an invalid position uses
+the normal default. Saved geometry records absolute frame coordinates from
+`winfo_x/y`; application uses explicit Tk left/top offsets (`+-1400` for a
+negative X) rather than right/bottom-relative geometry. A one-window native
+probe verified these parser and roundtrip semantics on the current Windows
+desktop; it does not prove real mixed-monitor behavior. Other platforms use Tk's reported virtual-root bounds and
+still need physical multi-monitor verification.
+
+The projection is cached by library revision. Persistence, reload, replacement
+and registry changes invalidate it after publishing runtime state. Search uses
+one cancellable 100 ms callback per collection and retains Treeview item IDs;
+Enter/Down focus handoffs and chooser actions settle only their own pending
+query immediately, so a fast key cannot choose a row from the prior query.
+Filter-hidden rows are detached, so visibility checks use attached membership
+rather than item existence. Hiding cancels search callbacks and the appearance
+poll; reopening flushes pending search and restarts one poll. The shared GUI
+pump is unchanged. Already bound controls skip repeated descendant walks on
+Map; newly mapped controls still receive the window commands once. Quit
+settles drafts, releases retained widget callbacks and
+Tk variables on the GUI thread, then stops the shared root. Deleting the open
+item also settles its draft, and cancelling a Favorites/Recent jump leaves its
+chooser open. Edit last is disabled before a successful expansion; its separate
+status line names the last expansion with its local record date and time.
+
+The timing acceptance uses a synthetic library of 1,031 texts. The final
+controlled Windows run retained thirty samples per metric, with production
+per-monitor-v2 DPI initialization before Tk. Reopen p50/p95 was 89.802/110.523 ms,
+passing the unchanged 150 ms p95 gate. Immediate search handling passed its
+30 ms gate at 0.176/0.470 ms; deferred rendering measured 84.447/162.176 ms.
+The 100 ms debounce wait is reported separately from keystroke handling.
+Reopen timing includes show plus Tk idle layout; it does not certify compositor
+completion. The earlier 209.750 ms reopen p95 failure remains in the private
+evidence. Startup correctness and the coordinated test environment changed
+before the final run; these measurements do not isolate either as its cause
+or guarantee performance on other hardware. The actual display was 96 DPI;
+this does not verify physical high-DPI or mixed-monitor behavior.
+The fresh full unittest run completed successfully: 1,542 tests, three expected
+platform skips. Ruff passed. Fixture logging diagnostics and native Tcl pump
+warnings remain recorded; this is a test pass, not a claim of clean runtime
+logs. The wrapper's subsequent temporary-log cleanup failure was separate from
+the successful test aggregate; its exact remaining fixture was preserved after
+the test process exited.
+
 Body text and labels target 4.5:1, and control boundaries, copper marks and
 the focus ring target 3:1. The suite checks, in both palettes:
 
@@ -434,6 +486,10 @@ it is outside WP9. Do not describe the manager as Narrator compatible.
 Evidence for this adoption: the unit suite and the manager smoke tests, plus
 screenshots of the real windows on an isolated data home with synthetic data,
 in Dark and Light at 1180 × 760 and 1600 × 1000, at 100% scaling only.
+The final comparison reviewed 52 fresh current-source windows with production
+DPI initialization against 48 retained original-main screenshots. Six fresh
+rebuild cases preserved view state; text-size and contrast cases used process
+mocks rather than changes to actual OS accessibility settings.
 
 ## Unresolved gates
 
@@ -464,7 +520,7 @@ satisfy any of them.
 | Keyboard: visible focus on list rows | Implemented in WP6: focused selection uses neutral `select_bg`; unfocused selection uses `surface_alt`, retaining a 3 × 16 px copper pill in both states. Verified with the actual Tk focus-state prototype and dark/light harness captures. Physical keyboard traversal and contrast themes remain unverified. |
 | Keyboard: formatting commands | Implemented in WP7: Ctrl+Shift+X clears formatting; Ctrl+Shift+R/V/F inserts a reference, clipboard value or form field. Existing Ctrl+B/I/U and code/strikethrough shortcuts remain. Physical keyboard and Narrator verification remain open. |
 | Accessibility: Narrator roles, values and announcements | Not tested. |
-| Work preservation: drafts across appearance changes and refresh | Passed in the smoke tests and the harness (row change, Novo, Editar último, type change, close, restore, rebuild). Open: quitting from the tray does not ask yet (the close box does), and Excluir on an item with a draft deletes it without asking; Desfazer brings back the saved version, not the draft. |
+| Work preservation: drafts across appearance changes and refresh | Smoke tests and synthetic native harnesses passed row change, Novo, Editar último, type change, close, restore, rebuild, tray Quit, deletion and chooser navigation. Six rebuild cases also retained custom mapping type, query, target, selection, row focus, scroll and section. Text size and contrast cases used process mocks; real OS accessibility settings and hardware remain unverified. |
 | Keyboard: Ctrl+Z for Desfazer | Failed. Desfazer is a button in the receipt line, reachable with Tab; no shortcut yet. |
 | Status: tray badge on real taskbars | Not tested. The badge is drawn at runtime and differs by shape as well as color, but it was checked as a Pillow render at 16 to 32 px on simulated light and dark taskbar colors, not on a real taskbar. |
 | Status: Narrator announcements of a state change | Not tested. The InfoBar and the status line are plain Tk labels, which expose nothing to UI Automation. |

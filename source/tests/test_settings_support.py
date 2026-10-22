@@ -19,7 +19,9 @@ class SettingsSupportTests(unittest.TestCase):
         self.assertEqual(invalid["density"], "compact")
 
     def setUp(self):
-        self.tmp = tempfile.mkdtemp()
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.tmp = temporary.name
         self.path = os.path.join(self.tmp, "settings.json")
 
     def _write(self, content):
@@ -77,6 +79,26 @@ class SettingsSupportTests(unittest.TestCase):
 
 
 class RuntimeSettingsNormalizationTests(unittest.TestCase):
+    def test_manager_view_rejects_malformed_nested_values_and_preserves_other_settings(self):
+        normalized, invalid = normalize_runtime_settings({
+            "future": {"keep": True},
+            "manager_view": {"page": ["static"], "geometry": "800x600+nan+1",
+                             "pages": {"static": {"query": 8, "scroll": float("nan"),
+                                                    "target": {"kind": "mapping", "key": "x"}},
+                                       "unknown": {"query": "ignored"}}},
+        })
+        self.assertEqual({"keep": True}, normalized["future"])
+        self.assertEqual({"pages": {"static": {}}}, normalized["manager_view"])
+        self.assertIn("manager_view", invalid)
+
+    def test_manager_view_round_trips_stable_mapping_reference_and_negative_geometry(self):
+        view = {"page": "mapping", "geometry": "1180x760-1400+20", "pages": {
+            "mapping": {"query": "synthetic", "container": "_examples", "scroll": 0.5,
+                        "target": {"kind": "mapping", "key": "sample", "container": "_examples"}}}}
+        normalized, invalid = normalize_runtime_settings({"manager_view": view})
+        self.assertEqual(view, normalized["manager_view"])
+        self.assertEqual({}, invalid)
+
     def test_malformed_known_values_fall_back_without_dropping_unknown_keys(self):
         normalized, invalid = normalize_runtime_settings({
             "terminator_mode": "false",

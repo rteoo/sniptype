@@ -117,6 +117,13 @@ def _is_text_entry(widget):
     return isinstance(widget, tk.Entry) and not isinstance(widget, ttk.Combobox)
 
 
+def _render_pending_search(app, window):
+    """Finish a collection render explicitly; debounce scheduling is tested separately."""
+    app._cancel_manager_search(window)
+    app._flush_manager_search()
+    window.update()
+
+
 @unittest.skipUnless(TK_AVAILABLE, TK_SKIP_REASON)
 class ManagerGuiSmokeTests(unittest.TestCase):
     def setUp(self):
@@ -215,6 +222,7 @@ class ManagerGuiSmokeTests(unittest.TestCase):
         self._on_gui(run)
 
     def test_empty_library_and_no_results_have_distinct_recovery_actions(self):
+        self._keyboard_fixture_cleanup()
         def run(root):
             self.app._build_manager_window(root)
             window = self.app.manager_window
@@ -224,17 +232,17 @@ class ManagerGuiSmokeTests(unittest.TestCase):
             clear = next(w for w in _descendants(tab) if isinstance(w, BUTTONS) and w.cget("text") == "Limpar busca")
             self.assertFalse(clear.winfo_ismapped(), "healthy rows must unmap empty-state actions")
             search.insert(0, "synthetic-no-match")
-            window.update()
+            _render_pending_search(self.app, window)
             visible_text = lambda: [str(w.cget("text")) for w in _descendants(tab)
                                     if isinstance(w, (tk.Label, *BUTTONS)) and w.winfo_ismapped()]
             self.assertIn("Nenhum snippet corresponde à busca ou aos filtros.", visible_text())
             self.assertTrue(clear.winfo_ismapped())
             clear.invoke()
             self.assertEqual("", search.get())
-            window.update()
+            _render_pending_search(self.app, window)
             self.assertFalse(clear.winfo_ismapped())
-            self.app.snippets.clear()
-            self.app.shadowed_static_snippets.clear()
+            ok, error = self.app.apply_import(({}, {}), "replace")
+            self.assertTrue(ok, error)
             self.app._refresh_manager_lists()
             window.update()
             self.assertIn("Sua biblioteca está vazia.", visible_text())
@@ -630,6 +638,114 @@ class ManagerGuiSmokeTests(unittest.TestCase):
 
         self._on_gui(run)
 
+    def test_immediate_collection_enter_and_down_use_the_pending_query(self):
+        self._keyboard_fixture_cleanup()
+        self.app.snippets = {"xalpha": "Synthetic alpha", "xbeta": "Synthetic beta",
+                             "_codes": {"__prefix__": "code", "alpha": "Synthetic alpha", "beta": "Synthetic beta"}}
+        self.app.dynamic_registry = {}
+        self.app.refresh_runtime_indexes()
+        def run(root):
+            self.app._build_manager_window(root)
+            window = self.app.manager_window
+            window.update()
+            for kind, first, wanted in (("static", "xalpha", "xbeta"), ("mapping", "alpha", "beta")):
+                for sequence in ("<Return>", "<Down>"):
+                    with self.subTest(kind=kind, sequence=sequence):
+                        self.app._restore_manager_view(window, {"page": kind, "pages": {
+                            kind: {"query": "", "container": "_codes"}}})
+                        page = self.app._manager_pages[kind]
+                        commands = self.app._manager_commands[str(page)]
+                        search, tree = commands["search"], commands["tree"]
+                        tree.selection_set(first)
+                        tree.focus(first)
+                        search.focus_force()
+                        window.update()
+                        search.insert(0, wanted)
+                        self.assertIn(kind, self.app._manager_pending_search)
+                        search.event_generate(sequence)
+                        self.assertEqual((wanted,), tree.selection())
+                        self.assertEqual(wanted, tree.focus())
+                        self.assertEqual((wanted,), tree.get_children())
+                        self.assertNotIn(kind, self.app._manager_pending_search)
+                        self.assertNotIn(kind, self.app._manager_search_jobs)
+        self._on_gui(run)
+
+    def test_immediate_action_enter_and_down_use_the_pending_query(self):
+        self._keyboard_fixture_cleanup()
+        self.app.dynamic_registry = {
+            key: {"category": "datetime", "description": "Synthetic action", "enabled": True}
+            for key in ("xalpha", "xbeta")}
+        self.app.refresh_runtime_indexes()
+        def run(root):
+            self.app._build_manager_window(root)
+            window = self.app.manager_window
+            window.update()
+            for sequence in ("<Return>", "<Down>"):
+                with self.subTest(sequence=sequence):
+                    self.app._restore_manager_view(window, {"page": "dynamic", "pages": {"dynamic": {"query": ""}}})
+                    commands = self.app._manager_commands[str(self.app._manager_pages["dynamic"])]
+                    search, tree = commands["search"], commands["tree"]
+                    tree.selection_set("action:xalpha")
+                    tree.focus("action:xalpha")
+                    search.focus_force()
+                    window.update()
+                    search.insert(0, "xbeta")
+                    self.assertIn("dynamic", self.app._manager_pending_search)
+                    search.event_generate(sequence)
+                    self.assertEqual(("action:xbeta",), tree.selection())
+                    self.assertEqual("action:xbeta", tree.focus())
+                    self.assertNotIn("dynamic", self.app._manager_pending_search)
+                    self.assertNotIn("dynamic", self.app._manager_search_jobs)
+        self._on_gui(run)
+
+    def test_immediate_switcher_choose_and_create_use_the_current_query(self):
+        self._keyboard_fixture_cleanup()
+        self.app.snippets = {"xalpha": "Synthetic alpha", "xbeta": "Synthetic beta"}
+        self.app.dynamic_registry = {}
+        self.app.refresh_runtime_indexes()
+        def run(root):
+            self.app._build_manager_window(root)
+            window = self.app.manager_window
+            window.update()
+            def picker():
+                self.app._show_manager_switcher(window)
+                dialog = next(w for w in window.winfo_children() if isinstance(w, tk.Toplevel))
+                entry = next(w for w in _descendants(dialog) if _is_text_entry(w))
+                dialog.update()
+                entry.focus_force()
+                dialog.update()
+                return dialog, entry
+            dialog, entry = picker()
+            with mock.patch.object(self.app, "_select_manager_target", return_value=True) as selected:
+                entry.insert(0, "xbeta")
+                self.assertIn("switcher", self.app._manager_pending_search)
+                entry.event_generate("<Return>")
+                selected.assert_called_once_with(SnippetRef("static", "xbeta"))
+                self.assertFalse(dialog.winfo_exists())
+            dialog, entry = picker()
+            entry.insert(0, "xnewsynthetic")
+            self.assertIn("switcher", self.app._manager_pending_search)
+            entry.event_generate("<Return>")
+            self.assertFalse(dialog.winfo_exists())
+            self.assertEqual("xnewsynthetic", window.focus_get().get())
+            self.assertNotIn("xnewsynthetic", self.app.snippets)
+            # Discard the unsaved new item before opening another chooser.
+            with mock.patch.object(ui_widgets, "confirm", return_value=ui_widgets.EXTRA):
+                self.app._resolve_manager_drafts(window)
+            dialog, entry = picker()
+            entry.insert(0, "xnewsynthetic")
+            _render_pending_search(self.app, dialog)
+            create = _buttons(dialog)['Criar "xnewsynthetic"']
+            entry.delete(0, tk.END)
+            entry.insert(0, "xbeta")
+            self.assertIn("switcher", self.app._manager_pending_search)
+            create.invoke()
+            self.assertTrue(dialog.winfo_exists(), "A stale Create button must not create an existing match")
+            tree = next(w for w in _descendants(dialog) if isinstance(w, ttk.Treeview))
+            self.assertEqual("xbeta", tree.item(tree.selection()[0], "values")[1])
+            dialog.destroy()
+        self._on_gui(run)
+
     def test_quick_switcher_searches_effective_triggers_all_kinds_and_offers_creation(self):
         self._keyboard_fixture_cleanup()
         provider = mock.Mock(side_effect=AssertionError("Switcher must never run providers"))
@@ -664,7 +780,7 @@ class ManagerGuiSmokeTests(unittest.TestCase):
                           and w.title() == "Alternar snippet")
             entry = picker.focus_get()
             entry.insert(0, "xnewsynthetic")
-            window.update()
+            _render_pending_search(self.app, picker)
             self.assertIn('Criar "xnewsynthetic"', _buttons(picker))
             self.assertTrue(_buttons(picker)['Criar "xnewsynthetic"'].winfo_ismapped())
             _press(entry, "<Return>")
@@ -973,6 +1089,7 @@ class ManagerGuiSmokeTests(unittest.TestCase):
 
     def test_refresh_hook_repopulates_lists_after_library_swap(self):
         """Restore/import rebind self.snippets; registered lists must rebuild."""
+        self._keyboard_fixture_cleanup()
         def build(shared_root):
             root = tk.Toplevel(shared_root)
             root.withdraw()
@@ -984,10 +1101,9 @@ class ManagerGuiSmokeTests(unittest.TestCase):
         frame = self._on_gui(build)
         self.assertNotIn("ximported", self._on_gui(lambda _r: self._static_rows(frame)))
 
-        # Stand in for restore_backup/import_library, which rebind the dict.
-        self.app.snippets = {"ximported": "from backup"}
-
         def refresh(_root):
+            ok, error = self.app.apply_import(({"ximported": "from backup"}, {}), "replace")
+            self.assertTrue(ok, error)
             self.app._refresh_manager_lists()
             return self._static_rows(frame)
 
@@ -1469,7 +1585,7 @@ class ManagerGuiSmokeTests(unittest.TestCase):
             root, frame = self._build_static_tab(shared_root)
             search = [w for w in _descendants(frame) if _is_text_entry(w)][0]
             search.insert(0, "assig")
-            root.update()
+            _render_pending_search(self.app, root)
             tree = next(w for w in _descendants(frame) if isinstance(w, ttk.Treeview))
             return [(iid, tree.full_values[iid][0]) for iid in tree.get_children()]
 
@@ -1507,6 +1623,7 @@ class ManagerGuiSmokeTests(unittest.TestCase):
         self.assertEqual(3, counts[-1])
 
     def test_mapping_count_ignores_the_search_filter(self):
+        self._keyboard_fixture_cleanup()
         self.app.snippets["_cpf_numbers"] = {"__prefix__": "cpf", "alice": "1", "bruno": "2"}
         counts = []
 
@@ -1514,7 +1631,7 @@ class ManagerGuiSmokeTests(unittest.TestCase):
             frame = self._build_mappings_tab(shared_root, set_count=counts.append)
             entries = [w for w in _descendants(frame) if _is_text_entry(w)]
             entries[0].insert(0, "alice")
-            frame.winfo_toplevel().update()
+            _render_pending_search(self.app, frame.winfo_toplevel())
             return self._tree_rows(frame)
 
         rows = self._on_gui(build_and_search)
@@ -1744,7 +1861,8 @@ class ManagerGuiSmokeTests(unittest.TestCase):
             self.app._build_manager_window(shared_root)
             first = self.app.manager_window
             # No saved appearance: the manager opens in the Dark default.
-            self.assertEqual(ttk.Style(first).theme_use(), "sniptype-fluent-dark")
+            self.assertTrue(tx.ui_theme.theme().is_dark)
+            self.assertEqual(ttk.Style(first).theme_use(), ui_widgets.theme_name(tx.ui_theme.theme()))
             radio, = self._settings_widgets(
                 ttk.Radiobutton, lambda w: w.cget("value") == "light")
             # Nothing is unsaved, so nothing asks.
@@ -1759,7 +1877,8 @@ class ManagerGuiSmokeTests(unittest.TestCase):
             self.assertEqual(tx.load_settings(self.app.settings_file)["appearance"], "light")
             self.assertEqual(
                 self.app._manager_notebook.select(), str(self.app._manager_settings_tab))
-            self.assertEqual(ttk.Style(rebuilt).theme_use(), "sniptype-fluent-light")
+            self.assertFalse(tx.ui_theme.theme().is_dark)
+            self.assertEqual(ttk.Style(rebuilt).theme_use(), ui_widgets.theme_name(tx.ui_theme.theme()))
 
         self._on_gui(run)
 
@@ -2026,7 +2145,9 @@ class ManagerGuiSmokeTests(unittest.TestCase):
         def build_fake_manager(_root):
             self.app.manager_window = first
 
-        with mock.patch.object(
+        with mock.patch.object(self.app, "_check_system_appearance"), \
+                mock.patch.object(self.app, "_start_system_appearance_poll"), \
+                mock.patch.object(self.app, "_refresh_edit_last"), mock.patch.object(
             self.app,
             "_build_manager_window",
             side_effect=build_fake_manager,
@@ -2050,6 +2171,131 @@ class ManagerGuiSmokeTests(unittest.TestCase):
         first.lift.assert_called_once_with()
         first.focus_force.assert_called_once_with()
         self.app.manager_window = None
+
+    def test_close_withdraws_and_reopen_preserves_page_query_and_selection(self):
+        def run(root):
+            self.app._build_manager_window(root)
+            window = self.app.manager_window
+            window.update()
+            self.app._restore_manager_view(window, {"page": "mapping", "pages": {
+                "static": {"query": "xhi", "selection": "xhi", "row_focus": "xhi",
+                           "target": {"kind": "static", "key": "xhi"}}}})
+            window.update()
+            before = self.app._capture_manager_view(window)
+            self.assertTrue(self.app._hide_manager_window(window))
+            self.assertTrue(window.winfo_exists())
+            self.assertEqual("withdrawn", window.state())
+            self.assertIsNone(self.app._manager_appearance_poll)
+            self.assertEqual({}, self.app._manager_search_jobs)
+            self.app._show_manager_window(root)
+            window.update()
+            self.assertIs(window, self.app.manager_window)
+            after = self.app._capture_manager_view(window)
+            self.assertEqual("mapping", after["page"])
+            self.assertEqual(before["pages"]["static"]["query"], after["pages"]["static"]["query"])
+            self.assertEqual("xhi", after["pages"]["static"]["selection"])
+            self.assertEqual(before["pages"]["static"]["target"], after["pages"]["static"]["target"])
+            self.assertEqual(before, tx.load_settings(self.app.settings_file)["manager_view"])
+        self._on_gui(run)
+
+    @unittest.skipUnless(tx.IS_WINDOWS, "Windows absolute frame positioning")
+    def test_negative_absolute_geometry_round_trips_through_a_manager_rebuild(self):
+        def run(root):
+            self.app._build_manager_window(root)
+            window = self.app.manager_window
+            window.update()
+            self.app._restore_manager_view(window, {"geometry": "1180x760-100+100"})
+            window.update()
+            before = (window.winfo_x(), window.winfo_y(), window.winfo_rootx(), window.winfo_rooty())
+            self.assertEqual((-100, 100), before[:2])
+            self.assertEqual("1180x760-100+100", self.app._capture_manager_view(window)["geometry"])
+            self.app._reload_manager_window(window)
+            rebuilt = self.app.manager_window
+            rebuilt.update()
+            after = (rebuilt.winfo_x(), rebuilt.winfo_y(), rebuilt.winfo_rootx(), rebuilt.winfo_rooty())
+            self.assertEqual(before, after)
+        self._on_gui(run)
+
+    def test_rebuild_keeps_nondefault_mapping_type_and_view_after_queued_events(self):
+        self._keyboard_fixture_cleanup()
+        self.app.snippets["_mail_codes"] = {"__prefix__": "mail", **{
+            f"sample{index:03d}": f"Synthetic mapping {index:03d}" for index in range(80)}}
+        self.app.refresh_runtime_indexes()
+        def run(root):
+            self.app._build_manager_window(root)
+            window = self.app.manager_window
+            window.update()
+            def type_controls():
+                page = self.app._manager_pages["mapping"]
+                types = next(w for w in _descendants(page) if isinstance(w, ttk.Treeview)
+                             and "_mail_codes" in w.get_children())
+                narrow = next(w for w in _descendants(page) if isinstance(w, ttk.Combobox)
+                              and "MAIL" in w.cget("values"))
+                return types, narrow
+            for width in (1180, 1600):
+                with self.subTest(width=width):
+                    window = self.app.manager_window
+                    window.geometry(f"{width}x760+20+20")
+                    self.app._manager_notebook.select(self.app._manager_pages["mapping"])
+                    types, narrow = type_controls()
+                    self.assertIn("_mail_codes", types.get_children(), "fixture must be an actual listed mapping type")
+                    types.selection_set("_mail_codes")
+                    window.update()
+                    self.assertEqual("MAIL", narrow.get())
+                    commands = self.app._manager_commands[str(self.app._manager_pages["mapping"])]
+                    search, tree = commands["search"], commands["tree"]
+                    search.delete(0, tk.END)
+                    search.insert(0, "sample")
+                    _render_pending_search(self.app, window)
+                    tree.selection_set("sample050")
+                    tree.focus("sample050")
+                    window.update()
+                    tree.yview_moveto(0.5)
+                    window.update()
+                    before = self.app._manager_views["mapping"][0]()
+                    self.assertEqual("_mail_codes", before["container"])
+                    self.assertEqual("sample050", before["target"]["key"])
+                    self.assertGreater(before["scroll"], 0)
+                    self.app._reload_manager_window(window)
+                    rebuilt = self.app.manager_window
+                    # Deliver queued default-type selections from construction.
+                    rebuilt.update()
+                    rebuilt.update()
+                    after = self.app._manager_views["mapping"][0]()
+                    types, narrow = type_controls()
+                    self.assertEqual(("_mail_codes",), types.selection())
+                    self.assertEqual("MAIL", narrow.get())
+                    for key in ("container", "target", "query", "selection", "row_focus"):
+                        self.assertEqual(before[key], after[key], key)
+                    self.assertAlmostEqual(before["scroll"], after["scroll"], places=2)
+        self.app.gui.call(run, timeout=60)
+
+    def test_filtered_detached_row_stays_hidden_and_reuses_its_iid_after_rebuild(self):
+        def run(root):
+            self.app._build_manager_window(root)
+            window = self.app.manager_window
+            window.update()
+            tab = self.app._manager_pages["static"]
+            tree = self.app._manager_commands[str(tab)]["tree"]
+            self.app._restore_manager_view(window, {"page": "static", "pages": {
+                "static": {"query": "no synthetic match", "target": {"kind": "static", "key": "xhi"}}}})
+            window.update()
+            self.assertTrue(tree.exists("xhi"))
+            self.assertNotIn("xhi", tree.get_children())
+            shown = [str(widget.cget("text")) for widget in _descendants(tab)
+                     if isinstance(widget, tk.Label)]
+            self.assertIn("Oculto pelo filtro atual.", shown)
+            self.app._reload_manager_window(window)
+            rebuilt = self.app.manager_window
+            rebuilt.update()
+            view = self.app._capture_manager_view(rebuilt)
+            self.assertEqual("no synthetic match", view["pages"]["static"]["query"])
+            self.assertEqual("xhi", view["pages"]["static"]["target"]["key"])
+            restore = self.app._manager_views["static"][1]
+            restore({"query": "xhi"})
+            tree = self.app._manager_commands[str(self.app._manager_pages["static"])]["tree"]
+            self.assertEqual(("xhi",), tree.get_children())
+        self._on_gui(run)
 
 
 
@@ -3005,6 +3251,58 @@ class WorkPreservationTests(unittest.TestCase):
         self.assertFalse(seen["title_clean"].startswith("• "))
         self.assertEqual("Synthetic note 30 editada", self._on_disk()["note30"])
 
+    def test_delete_and_recent_jump_cancel_keep_the_open_draft(self):
+        def run(root):
+            self.app._build_manager_window(root)
+            window = self.app.manager_window
+            frame = self.app._manager_pages["static"]
+            tree, text, _trigger = self._parts(frame)
+            tree.selection_set("xola")
+            window.update()
+            text.insert("end", "!")
+            window.update()
+            self.app.workflow_state.record_success(SnippetRef("static", "xhi"))
+            with mock.patch.object(tx.ui_widgets, "confirm", return_value=None) as ask:
+                _buttons(frame)["Excluir"].invoke()
+                self.assertIn("xola", self.app.snippets)
+                chooser = self.app._show_manager_filter_dialog(window, tx.FILTER_RECENT, "Synthetic recent")
+                window.update()
+                _buttons(chooser)["Abrir"].invoke()
+                window.update()
+                self.assertTrue(chooser.winfo_exists(), "Cancel keeps the chooser available")
+                self.assertEqual("Olá, tudo bem?!", text.get("1.0", "end-1c"))
+                self.assertEqual(2, ask.call_count)
+                chooser.destroy()
+        self.app.gui.call(run, timeout=60)
+
+    def test_tray_quit_cancel_keeps_draft_then_discard_releases_tk_references(self):
+        def run(root):
+            self.app._build_manager_window(root)
+            window = self.app.manager_window
+            tree, text, _trigger = self._parts(self.app._manager_pages["static"])
+            tree.selection_set("xola")
+            window.update()
+            text.insert("end", "!")
+            window.update()
+            icon = mock.Mock()
+            with mock.patch.object(self.app.task_runner, "start") as stop:
+                with mock.patch.object(tx.ui_widgets, "confirm", return_value=None):
+                    self.app._quit_with_manager(icon)
+                self.assertIs(window, self.app.manager_window)
+                self.assertEqual("Olá, tudo bem?!", text.get("1.0", "end-1c"))
+                stop.assert_not_called()
+                with mock.patch.object(tx.ui_widgets, "confirm", return_value=tx.ui_widgets.EXTRA):
+                    self.app._quit_with_manager(icon)
+                stop.assert_called_once_with(self.app._finish_quit, icon, name="quit-app")
+            self.assertFalse(window.winfo_exists())
+            self.assertIsNone(self.app.manager_window)
+            self.assertIsNone(self.app._manager_import_action)
+            self.assertIsNone(self.app._manager_last_expansion_var)
+            self.assertEqual({}, self.app._manager_views)
+            self.assertEqual({}, self.app._manager_search_jobs)
+        self.app.gui.call(run, timeout=60)
+        self.assertEqual("Olá, tudo bem?", self._on_disk()["xola"])
+
     def test_closing_with_a_draft_asks_first(self):
         def run(root):
             self.app._build_manager_window(root)
@@ -3022,11 +3320,12 @@ class WorkPreservationTests(unittest.TestCase):
             kept = window.winfo_exists() and self.app.manager_window is window
             with mock.patch.object(tx.ui_widgets, "confirm", return_value=tx.ui_widgets.EXTRA):
                 window.tk.call(close)
-            return kept, window.winfo_exists(), self.app._manager_appearance_poll
+            return kept, window.winfo_exists(), window.state(), self.app._manager_appearance_poll
 
-        kept, exists, poll = self.app.gui.call(run, timeout=60)
+        kept, exists, state, poll = self.app.gui.call(run, timeout=60)
         self.assertTrue(kept, "Cancelar keeps the window open")
-        self.assertFalse(exists, "Descartar closes it")
+        self.assertTrue(exists, "Descartar retains the manager for reopening")
+        self.assertEqual("withdrawn", state)
         self.assertIsNone(poll, "the System appearance check stops with the window")
         self.assertEqual("Olá, tudo bem?", self._on_disk()["xola"])
 
@@ -3053,7 +3352,7 @@ class WorkPreservationTests(unittest.TestCase):
             window.update()
             seen["open"] = (states(frame), self._shown(frame))
             search.insert(0, "nada-casa")
-            window.update()
+            _render_pending_search(self.app, window)
             seen["hidden"] = (self._shown(frame), _buttons(frame)["Mostrar na lista"].winfo_manager() == "grid")
             _buttons(frame)["Mostrar na lista"].invoke()
             window.update()
@@ -3413,6 +3712,8 @@ class WorkPreservationTests(unittest.TestCase):
                 ttk.Style(rebuilt).theme_use(),
                 rebuilt_notebook.index(rebuilt_notebook.select()),
             )
+            seen["expected_theme"] = ui_widgets.theme_name(tx.ui_theme.theme())
+            seen["is_light"] = not tx.ui_theme.theme().is_dark
             return seen
 
         seen = self.app.gui.call(run, timeout=60)
@@ -3422,7 +3723,8 @@ class WorkPreservationTests(unittest.TestCase):
             (True, ["O tema do Windows mudou. O gerenciador troca de tema quando este rascunho "
                     "for salvo ou descartado."]),
             seen["held"])
-        self.assertEqual((True, False, "windows", "sniptype-fluent-light", 1), seen["rebuilt"])
+        self.assertTrue(seen["is_light"])
+        self.assertEqual((True, False, "windows", seen["expected_theme"], 1), seen["rebuilt"])
         self.assertEqual("Olá, tudo bem?!", self._on_disk()["xola"])
 
 
@@ -3927,7 +4229,7 @@ class StatusAndAttentionTests(unittest.TestCase):
             search = self.app._manager_search_entries[str(frame)]
             before = (self._status_line(frame, "3 de"), self._nav_text(window))
             search.insert(0, "xola")
-            window.update()
+            _render_pending_search(self.app, window)
             after = (self._status_line(frame, "1 de"), self._nav_text(window))
             return before, after
 

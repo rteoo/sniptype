@@ -215,6 +215,9 @@ from manager_view_support import (
     format_trigger_pair,
     manager_row_preview,
     search_manager_rows,
+    normalize_manager_view,
+    geometry_intersects_monitors,
+    manager_geometry_for_tk,
 )
 from gui_support import (
     center_dialog,
@@ -454,6 +457,13 @@ class Sniptype:
         self._manager_editors = []
         # The pending System-appearance check of the open manager: (window, after id).
         self._manager_appearance_poll = None
+        self._manager_views = {}
+        self._manager_search_jobs = {}
+        self._manager_pending_search = {}
+        self._manager_rows_revision = 0
+        self._manager_rows_cache = None
+        self._last_successful_expansion_at = None
+        self._manager_last_expansion_var = None
         # Serializes expansion dialogs; see _run_modal_dialog.
         self._dialog_lock = threading.Lock()
         # Serializes autostart toggles; see _apply_autostart_toggle.
@@ -808,6 +818,7 @@ class Sniptype:
         try:
             write_json_atomic(self.snippets_file, document)
             self.library_metadata = normalized_metadata
+            self._invalidate_manager_rows()
             self.logger.info("✓ snippets.json salvo com sucesso.")
         except Exception as e:
             self.logger.error(f"Erro ao salvar snippets: {e}")
@@ -1914,6 +1925,7 @@ class Sniptype:
         (prefix + item name) plus a small safety margin, so a long mapping item
         can never be truncated out of the typed-text buffer and fail to match.
         """
+        self._invalidate_manager_rows()
         self.rebuild_trigger_index()
         direct_max = max(
             (len(target.effective_trigger) for target in self.trigger_index["direct_targets"]),
@@ -2578,6 +2590,9 @@ class Sniptype:
                 reference = self._workflow_ref(trigger)
                 if reference is not None:
                     self.workflow_state.record_success(reference)
+                    self._last_successful_expansion_at = datetime.now()
+                    if self.manager_window is not None:
+                        self.gui.submit(self._refresh_edit_last)
             # Only re-emit the terminator when text was actually inserted, so a
             # cancelled form dialog or a failed paste does not leave a stray char.
             if append_text and inserted and self._expansion_target_is_current():
@@ -2716,12 +2731,135 @@ class Sniptype:
 
     def _manager_rows(self):
         """Return the immutable local projection used by manager navigation."""
-        return build_manager_rows(
-            self.snippets,
-            getattr(self, "library_metadata", None),
-            getattr(self, "dynamic_registry", None),
-            getattr(self, "shadowed_static_snippets", None),
-        )
+        revision = getattr(self, "_manager_rows_revision", 0)
+        cached = getattr(self, "_manager_rows_cache", None)
+        if cached is None or cached[0] != revision:
+            rows = build_manager_rows(
+                self.snippets, getattr(self, "library_metadata", None),
+                getattr(self, "dynamic_registry", None),
+                getattr(self, "shadowed_static_snippets", None),
+            )
+            self._manager_rows_cache = (revision, rows)
+            return rows
+        return cached[1]
+
+    def _invalidate_manager_rows(self):
+        """Invalidate after publication; failed writes never publish proposed rows."""
+        self._manager_rows_revision = getattr(self, "_manager_rows_revision", 0) + 1
+        self._manager_rows_cache = None
+
+    def _schedule_manager_search(self, window, key, callback):
+        self._manager_pending_search[key] = callback
+        old = self._manager_search_jobs.pop(key, None)
+        if old is not None:
+            old[0].after_cancel(old[1])
+        if not window.winfo_viewable():
+            return
+        def render():
+            self._manager_search_jobs.pop(key, None)
+            if not window.winfo_viewable():
+                return
+            pending = self._manager_pending_search.pop(key, None)
+            if pending is not None:
+                pending()
+        self._manager_search_jobs[key] = (window, window.after(100, render))
+
+    def _cancel_manager_search(self, window, *, discard=False):
+        for key, (owner, job) in list(getattr(self, "_manager_search_jobs", {}).items()):
+            if owner is window:
+                owner.after_cancel(job)
+                self._manager_search_jobs.pop(key, None)
+        if discard:
+            self._manager_pending_search = {}
+
+    def _flush_manager_search(self, key=None):
+        """Settle the current query before an immediate result action.
+
+        A keyed handoff leaves other collections' debounce timers untouched.
+        Reopening may omit the key to settle every retained collection.
+        """
+        keys = tuple(self._manager_pending_search) if key is None else (key,)
+        for pending_key in keys:
+            job = self._manager_search_jobs.pop(pending_key, None)
+            if job is not None:
+                job[0].after_cancel(job[1])
+            callback = self._manager_pending_search.pop(pending_key, None)
+            if callback is not None:
+                callback()
+
+    def _capture_manager_view(self, window):
+        selected = str(self._manager_notebook.select())
+        page = next((name for name, widget in self._manager_pages.items()
+                     if str(widget) == selected), "static")
+        # WM geometry can use right/bottom-relative offsets. Persist absolute
+        # frame coordinates so validation and application use the same space.
+        geometry = (f"{window.winfo_width()}x{window.winfo_height()}"
+                    f"{window.winfo_x():+d}{window.winfo_y():+d}")
+        return normalize_manager_view({"page": page, "geometry": geometry,
+                                       "pages": {name: callbacks[0]() for name, callbacks
+                                                 in self._manager_views.items()}})
+
+    @staticmethod
+    def _manager_monitors(window):
+        if platform_support.IS_WINDOWS:
+            from ctypes import wintypes
+            monitors = []
+            callback_type = ctypes.WINFUNCTYPE(ctypes.c_int, wintypes.HMONITOR,
+                                               wintypes.HDC, ctypes.POINTER(wintypes.RECT),
+                                               wintypes.LPARAM)
+            def collect(_monitor, _dc, rectangle, _data):
+                rect = rectangle.contents
+                monitors.append((rect.left, rect.top, rect.right, rect.bottom))
+                return 1
+            callback = callback_type(collect)
+            if ctypes.windll.user32.EnumDisplayMonitors(None, None, callback, 0):
+                return monitors
+            # An unavailable monitor inventory cannot validate a saved position.
+            return []
+        return [(window.winfo_vrootx(), window.winfo_vrooty(),
+                 window.winfo_vrootx() + window.winfo_vrootwidth(),
+                 window.winfo_vrooty() + window.winfo_vrootheight())]
+
+    def _restore_manager_view(self, window, value):
+        view = normalize_manager_view(value)
+        geometry = view.get("geometry")
+        if geometry_intersects_monitors(geometry, self._manager_monitors(window)):
+            window.geometry(manager_geometry_for_tk(geometry))
+        page = self._manager_pages.get(view.get("page"))
+        if page is not None:
+            self._manager_notebook.select(page)
+        for name, state in view.get("pages", {}).items():
+            callbacks = self._manager_views.get(name)
+            if callbacks:
+                callbacks[1](state)
+        self._cancel_manager_search(window, discard=True)
+
+    def _hide_manager_window(self, window):
+        if not self._resolve_manager_drafts(window):
+            return False
+        view = self._capture_manager_view(window)
+        if not self._persist_settings({"manager_view": view}):
+            ui_widgets.alert(window, _("Não foi possível salvar a visualização"),
+                             _("A janela continua aberta. Verifique os logs e tente de novo."), tone="danger")
+            return False
+        self._stop_system_appearance_poll(window)
+        self._cancel_manager_search(window)
+        window.withdraw()
+        return True
+
+    def _refresh_edit_last(self, _root=None):
+        target = self.workflow_state.last_successful_item
+        descriptor = self._manager_target(target) if target is not None else None
+        control = getattr(self, "_manager_edit_last_control", None)
+        if control is not None:
+            _set_enabled(control, descriptor is not None)
+        status = getattr(self, "_manager_last_expansion_var", None)
+        if status is not None:
+            when = getattr(self, "_last_successful_expansion_at", None)
+            status.set(_("Última expansão: {name} · {when}").format(
+                name=descriptor.effective_trigger if descriptor else target.key,
+                when=time_format.absolute_stamp(when, datetime.now()))
+                if target is not None and when is not None else _("Nada expandido ainda"))
 
     def _manager_target(self, target):
         """Resolve a workflow reference without touching disk or GUI state."""
@@ -2838,6 +2976,8 @@ class Sniptype:
             selection = listbox.selection()
             if not selection or not rows:
                 return
+            if not self._resolve_manager_drafts(root):
+                return
             if self._select_manager_target(rows[int(selection[0])].ref):
                 dialog.destroy()
 
@@ -2868,6 +3008,12 @@ class Sniptype:
 
         if already_open:
             window.deiconify()
+            self._check_system_appearance(window)
+            window = self.manager_window
+            self._start_system_appearance_poll(window)
+            self._cancel_manager_search(window)
+            self._flush_manager_search()
+            self._refresh_edit_last()
             window.lift()
             window.focus_force()
             self._select_manager_target(pending_target)
@@ -2947,6 +3093,11 @@ class Sniptype:
                 item = ui_widgets.nav_item(footer, label, action, icon=icon)
                 if icon == "edit":
                     self._manager_edit_last_control = item
+            self._manager_last_expansion_var = tk.StringVar(root)
+            tk.Label(footer, textvariable=self._manager_last_expansion_var,
+                     bg=sidebar_bg, fg=ui.text_muted, font=ui.caption_font(),
+                     wraplength=ui.px(190), justify=tk.LEFT, anchor="w").pack(fill=tk.X)
+            self._refresh_edit_last()
             help_text = _("Ctrl+1–5: seções · Ctrl+F: busca\nCtrl+K: alternar · Ctrl+/: teclado")
             help_font = tkfont.Font(root=root, font=ui.caption_font())
             # Enlarged sidebar help must reserve its complete two-line width;
@@ -2996,6 +3147,7 @@ class Sniptype:
             notebook.add(tab_settings, text=_("Configurações"))
             self._manager_settings_tab = tab_settings
             self._manager_pages = {
+                "static": tab_static, "mapping": tab_dynamic,
                 "dynamic": tab_builtin, "backups": tab_backups, "settings": tab_settings,
             }
 
@@ -3016,6 +3168,7 @@ class Sniptype:
             self._manager_search_entries = {}
             self._manager_commands = {}
             self._manager_receipts = {}
+            self._manager_views = {}
             self._create_static_snippets_tab(
                 tab_static, root, set_count=tab_counter(tab_static, _("Textos")))
             self._create_dynamic_mappings_tab(
@@ -3043,14 +3196,7 @@ class Sniptype:
             self._bind_manager_commands(root, notebook)
 
             def on_close():
-                # Closing drops what the editors show, so a draft is settled first.
-                if not self._resolve_manager_drafts(root):
-                    return
-                self._release_manager_ui_refs()
-                root.destroy()
-                # Tk variables must be collected on this
-                # thread; a later GC on the tray thread can abort Tcl.
-                gc.collect()
+                self._hide_manager_window(root)
 
             root.protocol("WM_DELETE_WINDOW", on_close)
             self.manager_window = root
@@ -3059,6 +3205,7 @@ class Sniptype:
             root.lift()
             root.focus_force()
             focus_search(None)
+            self._restore_manager_view(root, self.settings.get("manager_view", {}))
 
         except Exception as e:
             self._release_manager_ui_refs()
@@ -3373,6 +3520,27 @@ class Sniptype:
 
         refresh_backups()
 
+        def capture_view():
+            selected = next(iter(tree.selection()), "")
+            focused = tree.focus()
+            return {"selection": os.path.basename(row_paths.get(selected, "")),
+                    "row_focus": os.path.basename(row_paths.get(focused, "")),
+                    "scroll": tree.yview()[0],
+                    "focus": "list" if root.focus_get() is tree else ""}
+
+        def restore_view(state):
+            by_name = {os.path.basename(path): row for row, path in row_paths.items()}
+            selected = by_name.get(state.get("selection"))
+            focused = by_name.get(state.get("row_focus"))
+            if selected is not None:
+                tree.selection_set(selected)
+            if focused is not None:
+                tree.focus(focused)
+            tree.yview_moveto(state.get("scroll", 0))
+            if state.get("focus") == "list":
+                tree.focus_set()
+        self._manager_views["backups"] = (capture_view, restore_view)
+
     def _page_receipt(self, parent):
         """The status line at the bottom of a page that has no editor.
 
@@ -3443,6 +3611,11 @@ class Sniptype:
         self._build_expansion_card(general)
         self._build_hotkeys_card(hotkeys, root)
         self._build_data_card(data)
+        self._manager_views["settings"] = (
+            lambda: {"selection": sections.current},
+            lambda state: sections.select(state["selection"])
+            if state.get("selection") in sections.frames else None,
+        )
         for inner in (general, hotkeys, data):
             canvas = inner.master
             self._bind_mousewheel_descendants(inner, canvas)
@@ -3654,10 +3827,7 @@ class Sniptype:
         settle unsaved drafts first (see _resolve_manager_drafts).
         """
         tk_root = window.master
-        geometry = window.geometry()
-        notebook = self._manager_notebook
-        page = notebook.index(notebook.select()) if notebook is not None else None
-        targets = [editor.target() for editor in self._manager_editors]
+        view = self._capture_manager_view(window)
         self._release_manager_ui_refs()
         window.destroy()
         # Tk variables must be collected on this thread; see on_close.
@@ -3666,17 +3836,10 @@ class Sniptype:
         rebuilt = self.manager_window
         if rebuilt is None:
             return
-        rebuilt.geometry(geometry)
-        for target in targets:
-            descriptor = self._manager_target(target) if target is not None else None
-            selector = self._manager_tab_selectors.get(descriptor.tab) if descriptor else None
-            if selector is not None:
-                selector(descriptor)
+        self._restore_manager_view(rebuilt, view)
         notebook = self._manager_notebook
         if settings_page and self._manager_settings_tab is not None:
             notebook.select(self._manager_settings_tab)
-        elif page is not None:
-            notebook.select(notebook.tabs()[page])
 
     def _build_expansion_card(self, parent):
         ui = ui_theme.theme()
@@ -4001,7 +4164,10 @@ class Sniptype:
             tree.column("preview", width=preview)
             tree.column("group", width=group_width)
             measure = tkfont.Font(root=tree, font=ui.font()).measure
+            attached = set(tree.get_children())
             for item, values in list(tree.full_values.items()):
+                if item not in attached:
+                    continue
                 if tree.exists(item):
                     tree.item(item, values=tuple(
                         ellipsize_text(value, max(0, tree.column(column, "width") - ui.px(10)), measure)
@@ -4041,7 +4207,12 @@ class Sniptype:
         values = (format_trigger_pair(row) if row else key, preview, " ".join(markers),
                   row.group_label if row and row.group_id else "")
         tree.full_values[key] = values
-        tree.insert("", tk.END, iid=key, values=values, tags=("unavailable",) if notes else ())
+        tags = ("unavailable",) if notes else ()
+        if tree.exists(key):
+            tree.item(key, values=values, tags=tags)
+            tree.move(key, "", tk.END)
+        else:
+            tree.insert("", tk.END, iid=key, values=values, tags=tags)
 
     def _register_manager_refresher(self, refresher):
         """Register a list-rebuild callback invoked after restore/import.
@@ -4083,6 +4254,12 @@ class Sniptype:
         window.title(self._manager_title(
             dirty=any(editor.dirty for editor in self._manager_editors)))
 
+    def _stop_system_appearance_poll(self, window):
+        poll = getattr(self, "_manager_appearance_poll", None)
+        if poll is not None and poll[0] is window:
+            window.after_cancel(poll[1])
+            self._manager_appearance_poll = None
+
     def _start_system_appearance_poll(self, window):
         """Follow live Windows theme changes while ``window`` is open.
 
@@ -4090,18 +4267,24 @@ class Sniptype:
         The check reschedules itself on ``window`` and is cancelled when the
         window is destroyed, so it never runs against a closed manager.
         """
+        self._stop_system_appearance_poll(window)
+        if not window.winfo_viewable():
+            return
         def tick():
+            if not window.winfo_viewable():
+                self._manager_appearance_poll = None
+                return
             self._manager_appearance_poll = (
                 window, window.after(SYSTEM_APPEARANCE_POLL_MS, tick))
             self._check_system_appearance(window)
 
         def stop(event):
-            poll = self._manager_appearance_poll
-            if event.widget is window and poll is not None and poll[0] is window:
-                window.after_cancel(poll[1])
-                self._manager_appearance_poll = None
+            if event.widget is window:
+                self._stop_system_appearance_poll(window)
 
-        window.bind("<Destroy>", stop, add="+")
+        if not getattr(window, "_sniptype_poll_bound", False):
+            window.bind("<Destroy>", stop, add="+")
+            window._sniptype_poll_bound = True
         self._manager_appearance_poll = (window, window.after(SYSTEM_APPEARANCE_POLL_MS, tick))
 
     def _check_system_appearance(self, window):
@@ -4157,7 +4340,7 @@ class Sniptype:
         widget.bind("<Destroy>", release, add="+")
 
     def _register_manager_commands(self, page, search, tree, *, new, save, delete,
-                                   escape, duplicate=None, rename=None):
+                                   escape, search_key, duplicate=None, rename=None):
         """Register the existing page actions, without owning editor state."""
         self._manager_commands[str(page)] = {
             "new": new, "save": save, "delete": delete, "escape": escape,
@@ -4165,6 +4348,7 @@ class Sniptype:
         }
 
         def enter_list(_event):
+            self._flush_manager_search(search_key)
             children = tree.get_children()
             if children:
                 selected = tree.selection()
@@ -4223,14 +4407,16 @@ class Sniptype:
 
         def install(widget):
             tags = widget.bindtags()
-            if tag not in tags:
-                widget.bindtags((tags[0], tag, *tags[1:]))
+            if tag in tags:
+                return
+            widget.bindtags((tags[0], tag, *tags[1:]))
             for child in widget.winfo_children():
                 if not isinstance(child, tk.Toplevel):
                     install(child)
         install(root)
         # Editor notices rebuild their action controls after library changes.
-        # Map is inherited by children through the owning toplevel bindtag.
+        # Each new child inherits this Map handler from the toplevel. Already
+        # installed parents need no repeated subtree walk when shown again.
         root.bind("<Map>", lambda event: install(event.widget)
                   if event.widget.winfo_toplevel() is root else None, add="+")
         edit_last = self._manager_edit_last_control
@@ -4290,8 +4476,14 @@ class Sniptype:
         rows = self._manager_rows()
         projection = self._manager_static_projection()
         displayed = []
+        row_iids = {row.ref: str(index) for index, row in enumerate(rows)}
+        iid_rows = {row_iids[row.ref]: row for row in rows}
 
         def close():
+            job = self._manager_search_jobs.pop("switcher", None)
+            if job is not None:
+                job[0].after_cancel(job[1])
+            self._manager_pending_search.pop("switcher", None)
             picker.grab_release()
             picker.destroy()
             if opener is not None and opener.winfo_exists():
@@ -4299,14 +4491,22 @@ class Sniptype:
 
         def refresh(*_args):
             displayed[:] = search_manager_rows(rows, query.get(), projection)
-            tree.delete(*tree.get_children())
-            for index, row in enumerate(displayed):
+            attached = tree.get_children()
+            if attached:
+                tree.detach(*attached)
+            tree.selection_remove(tree.selection())
+            for row in displayed:
+                iid = row_iids[row.ref]
                 preview = manager_row_preview(row, projection).replace("\n", " ")[:120]
-                tree.insert("", tk.END, iid=str(index), values=(
-                    kind_labels[row.kind], row.effective_trigger, preview))
+                if tree.exists(iid):
+                    tree.move(iid, "", tk.END)
+                else:
+                    tree.insert("", tk.END, iid=iid, values=(
+                        kind_labels[row.kind], row.effective_trigger, preview))
             if displayed:
-                tree.selection_set("0")
-                tree.focus("0")
+                first = row_iids[displayed[0].ref]
+                tree.selection_set(first)
+                tree.focus(first)
             create.configure(text=_("Criar \"{query}\"").format(query=query.get().strip()),
                              state=tk.NORMAL if not displayed and query.get().strip() else tk.DISABLED)
             if displayed or not query.get().strip():
@@ -4317,9 +4517,12 @@ class Sniptype:
                 create.pack(side=tk.BOTTOM, fill=tk.X, pady=(ui.space_sm, 0), before=tree)
 
         def choose(_event=None):
+            self._flush_manager_search("switcher")
             selection = tree.selection()
             if selection:
-                target = displayed[int(selection[0])].ref
+                target = iid_rows[selection[0]].ref
+                if not self._resolve_manager_drafts(root):
+                    return "break"
                 close()
                 self._select_manager_target(target)
                 commands = self._manager_commands.get(self._manager_notebook.select(), {})
@@ -4330,7 +4533,12 @@ class Sniptype:
             return "break"
 
         def create_new():
+            self._flush_manager_search("switcher")
+            if displayed or not query.get().strip():
+                return
             value = query.get().strip()
+            if not self._resolve_manager_drafts(root):
+                return
             close()
             # Creation has one home; a switcher search across other kinds still
             # opens a guarded new Textos draft, never an accidental provider.
@@ -4343,10 +4551,11 @@ class Sniptype:
         create = ui_widgets.button(body, _("Novo snippet"), create_new)
         ui_widgets.dialog_footer(body, (_("Abrir"), choose), close, ui=ui).pack(side=tk.BOTTOM, fill=tk.X)
         tree.pack(fill=tk.BOTH, expand=True)
-        query.trace_add("write", refresh)
+        query.trace_add("write", lambda *_: self._schedule_manager_search(picker, "switcher", refresh))
         refresh()
         tree.bind("<Double-Button-1>", choose)
         def enter_list(_event):
+            self._flush_manager_search("switcher")
             if displayed:
                 tree.focus_set()
             return "break"
@@ -4358,6 +4567,12 @@ class Sniptype:
 
     def _release_manager_ui_refs(self):
         """Drop widget callbacks while still running on the GUI thread."""
+        window = self.manager_window
+        if window is not None:
+            self._stop_system_appearance_poll(window)
+            self._cancel_manager_search(window, discard=True)
+        self._manager_views = {}
+        self._manager_last_expansion_var = None
         self._manager_notebook = None
         self._manager_status_var = None
         self._manager_status_label = None
@@ -4378,13 +4593,14 @@ class Sniptype:
         self._manager_editors = []
         self._manager_tab_selectors = {}
         self._manager_preview_controller = None
+        self._manager_import_action = None
 
     def _refresh_manager_lists(self, _root=None):
         """Rebuild every registered list and the InfoBar, which reads the library's state.
 
         ``_root`` is the arg the GuiThread pump passes.
         """
-        for refresher in [*self._manager_refreshers, self._refresh_manager_health]:
+        for refresher in [*self._manager_refreshers, self._refresh_manager_health, self._refresh_edit_last]:
             try:
                 refresher()
             except Exception as e:
@@ -5316,10 +5532,14 @@ class Sniptype:
             focus row and, unless the filter changed, the scroll position too."""
             focus_item = tree.focus()
             top = tree.yview()[0] if keep_view else 0.0
-            tree.delete(*tree.get_children())
-            tree.full_values.clear()
+            attached = tree.get_children()
+            if attached:
+                tree.detach(*attached)
             static_snips.clear()
             static_snips.update(get_static_visible_snippets())
+            for key in set(tree.full_values) - set(static_rows_by_key):
+                tree.delete(key)
+                del tree.full_values[key]
             for key in static_snips:
                 row = visible_rows.get(key)
                 self._insert_snippet_row(tree, key, static_snips[key], row)
@@ -5345,9 +5565,9 @@ class Sniptype:
                 empty_import.pack()
             if set_count is not None:
                 set_count(total)
-            if session.ref is not None and tree.exists(session.ref):
+            if session.ref in static_snips:
                 tree.selection_set(session.ref)
-            if focus_item and tree.exists(focus_item):
+            if focus_item in static_snips:
                 tree.focus(focus_item)
             tree.yview_moveto(top)
             render_editor()
@@ -5394,7 +5614,7 @@ class Sniptype:
                 _set_enabled(widget, item is not None and not read_only)
             item_group_combo.configure(
                 state="readonly" if item is not None and not read_only else tk.DISABLED)
-            hidden = item is not None and not tree.exists(session.ref)
+            hidden = item is not None and session.ref not in static_snips
             if session.ref is not None:
                 target = _("Editando {name}").format(name=session.ref)
             elif session.mode == EDITOR_NEW or dirty:
@@ -5497,14 +5717,14 @@ class Sniptype:
             key = selection[0]
             if not editor.resolve():
                 # Cancelar: the list goes back to what the editor still shows.
-                if session.ref is not None and tree.exists(session.ref):
+                if session.ref in static_snips:
                     tree.selection_set(session.ref)
                     tree.focus(session.ref)
-                elif tree.exists(key):
+                elif key in static_snips:
                     tree.selection_remove(key)
                 return
             load_item(key)
-            if tree.exists(key):
+            if key in static_snips:
                 tree.selection_set(key)
                 tree.focus(key)
 
@@ -5514,7 +5734,8 @@ class Sniptype:
             group_var.set("")
             filter_var.set(FILTER_ALL)
             search_var.set("")
-            if key is not None and tree.exists(key):
+            refresh_listbox()
+            if key in static_snips:
                 tree.selection_set(key)
                 tree.focus(key)
                 tree.see(key)
@@ -5531,7 +5752,7 @@ class Sniptype:
             filter_var.set(FILTER_ALL)
             search_var.set("")
             refresh_listbox()
-            if not tree.exists(key):
+            if key not in static_snips:
                 return False
             try:
                 if self._manager_notebook is not None:
@@ -5560,7 +5781,7 @@ class Sniptype:
         def show_restored_static(key):
             # Desfazer puts the snippet back; the editor opens it unless it
             # holds a draft by now.
-            if tree.exists(key) and not is_dirty():
+            if key in static_snips and not is_dirty():
                 load_item(key)
                 tree.selection_set(key)
                 tree.focus(key)
@@ -5844,13 +6065,15 @@ class Sniptype:
             self.receipt(N_("Salvo às {time}"), trigger, key=f"save-static:{trigger}")
 
             refresh_listbox()
-            if tree.exists(trigger):
+            if trigger in static_snips:
                 tree.see(trigger)
             update_format_status()
             _move_focus_off(btn_save, text_value)
             return True
 
         def on_delete():
+            if not editor.resolve():
+                return
             trigger = session.ref
             if not trigger:
                 ui_widgets.alert(root, _("Excluir snippet"), _("Selecione um snippet."))
@@ -5962,7 +6185,7 @@ class Sniptype:
                 manager_action_failed(_("Duplicar"))
                 return
             load_item(destination)
-            if tree.exists(destination):
+            if destination in static_snips:
                 tree.selection_set(destination)
                 tree.focus(destination)
                 tree.see(destination)
@@ -6037,7 +6260,7 @@ class Sniptype:
                 self.logger.exception("Manager rename failed unexpectedly")
                 manager_action_failed(_("Renomear"))
                 return
-            if tree.exists(new_trigger):
+            if new_trigger in static_snips:
                 tree.see(new_trigger)
             self.receipt(N_("Renomeado às {time}"), new_trigger, key=f"rename-static:{new_trigger}")
 
@@ -6052,6 +6275,7 @@ class Sniptype:
         self._register_manager_editor(editor)
         self._register_manager_commands(
             parent, search_entry, tree, new=on_new, save=on_save, delete=on_delete,
+            search_key="static",
             duplicate=on_duplicate, rename=on_rename,
             escape=lambda: self._escape_manager_editor(root, search_var, is_dirty, draft_question, revert_draft),
         )
@@ -6074,7 +6298,8 @@ class Sniptype:
         btn_rename.configure(command=on_rename)
         btn_delete.configure(command=on_delete)
         item_group_combo.bind("<<ComboboxSelected>>", on_group_assignment)
-        search_var.trace_add("write", lambda *_: refresh_listbox(keep_view=False))
+        search_var.trace_add("write", lambda *_: self._schedule_manager_search(
+            root, "static", lambda: refresh_listbox(keep_view=False)))
         filter_var.trace_add("write", lambda *_: refresh_listbox(keep_view=False))
         group_var.trace_add("write", lambda *_: refresh_listbox(keep_view=False))
         trigger_var.trace_add("write", lambda *_: request_editor_update())
@@ -6090,6 +6315,35 @@ class Sniptype:
 
         refresh_static_tab()
         self._register_manager_refresher(refresh_static_tab)
+        def capture_view():
+            focused = root.focus_get()
+            target = {"kind": "static", "key": session.ref} if session.ref else None
+            return {"query": search_var.get(), "filter": filter_var.get(), "group": group_var.get(),
+                    "selection": next(iter(tree.selection()), ""), "row_focus": tree.focus(),
+                    "scroll": tree.yview()[0], "target": target,
+                    "focus": "search" if focused is search_entry else "list" if focused is tree
+                    else "editor" if focused in (entry_trigger, text_value) else ""}
+        def restore_view(state):
+            search_var.set(state.get("query", ""))
+            filter_var.set(state.get("filter", FILTER_ALL))
+            group_var.set(state.get("group", ""))
+            refresh_listbox(keep_view=False)
+            target = state.get("target", {})
+            key = target.get("key")
+            if target.get("kind") == "static" and key in static_rows_by_key:
+                load_item(key)
+            selection = state.get("selection")
+            if selection in static_snips:
+                tree.selection_set(selection)
+            focus = state.get("row_focus")
+            if focus in static_snips:
+                tree.focus(focus)
+            tree.yview_moveto(state.get("scroll", 0))
+            render_editor()
+            focused = {"search": search_entry, "list": tree, "editor": text_value}.get(state.get("focus"))
+            if focused is not None:
+                focused.focus_set()
+        self._manager_views["static"] = (capture_view, restore_view)
         search_entry.focus_set()
 
     def _create_dynamic_mappings_tab(self, parent, root, set_count=None):
@@ -6466,8 +6720,9 @@ class Sniptype:
             the scroll position."""
             focus_item = tree_map.focus()
             top = tree_map.yview()[0] if keep_view else 0.0
-            tree_map.delete(*tree_map.get_children())
-            tree_map.full_values.clear()
+            attached = tree_map.get_children()
+            if attached:
+                tree_map.detach(*attached)
             current_type = mapping_type.get()
             query = map_search_var.get()
             mapping = self.snippets.get(current_type, {})
@@ -6479,6 +6734,9 @@ class Sniptype:
                 for row in self._manager_rows()
                 if row.kind == "mapping" and row.container == current_type
             )
+            for key in set(tree_map.full_values) - set(mapping_rows):
+                tree_map.delete(key)
+                del tree_map.full_values[key]
             has_rows = False
             shown = 0
             for key in iter_filtered_mapping_items(mapping, query):
@@ -6506,9 +6764,10 @@ class Sniptype:
                 empty_map_new.pack()
             update_total_count()
             update_example_label()
-            if shows_here(session.ref) and tree_map.exists(session.ref):
+            visible = set(tree_map.get_children())
+            if shows_here(session.ref) and session.ref in visible:
                 tree_map.selection_set(session.ref)
-            if focus_item and tree_map.exists(focus_item):
+            if focus_item in visible:
                 tree_map.focus(focus_item)
             tree_map.yview_moveto(top)
             render_editor()
@@ -6571,7 +6830,7 @@ class Sniptype:
                 _set_enabled(widget, item is not None and not read_only)
             container = session.container or mapping_type.get()
             label = type_label(container)
-            hidden = item is not None and shows_here(session.ref) and not tree_map.exists(session.ref)
+            hidden = item is not None and shows_here(session.ref) and session.ref not in tree_map.get_children()
             if session.ref is not None:
                 target = _("Editando {name} em {type}").format(name=session.ref, type=label)
             elif session.mode == EDITOR_NEW or dirty:
@@ -6821,21 +7080,22 @@ class Sniptype:
             key = selection[0]
             if not editor.resolve():
                 # Cancelar: the list goes back to what the editor still shows.
-                if shows_here(session.ref) and tree_map.exists(session.ref):
+                if shows_here(session.ref) and session.ref in tree_map.get_children():
                     tree_map.selection_set(session.ref)
                     tree_map.focus(session.ref)
-                elif tree_map.exists(key):
+                elif key in tree_map.get_children():
                     tree_map.selection_remove(key)
                 return
             load_item(key)
-            if tree_map.exists(key):
+            if key in tree_map.get_children():
                 tree_map.selection_set(key)
                 tree_map.focus(key)
 
         def reveal_mapping():
             """Mostrar na lista: clear the search that hides the open item and select it."""
             map_search_var.set("")
-            if shows_here(session.ref) and tree_map.exists(session.ref):
+            refresh_mapping_list()
+            if shows_here(session.ref) and session.ref in tree_map.get_children():
                 tree_map.selection_set(session.ref)
                 tree_map.focus(session.ref)
                 tree_map.see(session.ref)
@@ -6853,7 +7113,7 @@ class Sniptype:
             mapping_type.set(descriptor.container)
             map_search_var.set("")
             refresh_mapping_list()
-            if not tree_map.exists(key):
+            if key not in tree_map.get_children():
                 return False
             try:
                 if self._manager_notebook is not None:
@@ -7054,13 +7314,15 @@ class Sniptype:
                 key=f"save-map:{current_type}:{name}")
             refresh_type_list()
             refresh_mapping_list()
-            if shows_here(name) and tree_map.exists(name):
+            if shows_here(name) and name in tree_map.get_children():
                 tree_map.see(name)
             update_format_status()
             _move_focus_off(btn_save_map, text_value)
             return True
 
         def on_delete_map():
+            if not editor.resolve():
+                return
             item = current_mapping_item()
             if item is None:
                 ui_widgets.alert(root, _("Excluir item"), _("Selecione um item."))
@@ -7138,6 +7400,7 @@ class Sniptype:
         self._register_manager_editor(editor)
         self._register_manager_commands(
             parent, map_search_entry, tree_map, new=on_new_map, save=on_save_map, delete=on_delete_map,
+            search_key="mapping",
             duplicate=on_duplicate_map,
             rename=lambda: (entry_name.focus_set(), entry_name.selection_range(0, tk.END)),
             escape=lambda: self._escape_manager_editor(root, map_search_var, is_dirty, draft_question, revert_draft),
@@ -7157,7 +7420,8 @@ class Sniptype:
         btn_new_map.configure(command=on_new_map)
         btn_save_map.configure(command=on_save_map)
         btn_delete_map.configure(command=on_delete_map)
-        map_search_var.trace_add("write", lambda *_: refresh_mapping_list(keep_view=False))
+        map_search_var.trace_add("write", lambda *_: self._schedule_manager_search(
+            root, "mapping", lambda: refresh_mapping_list(keep_view=False)))
         name_var.trace_add("write", lambda *_: request_editor_update())
         for widget in (entry_name, text_value, tree_map):
             widget.bind("<Control-s>", lambda _event: (on_save_map(), "break")[1])
@@ -7171,6 +7435,39 @@ class Sniptype:
 
         refresh_all_mappings()
         self._register_manager_refresher(refresh_all_mappings)
+        def capture_view():
+            focused = root.focus_get()
+            target = {"kind": "mapping", "key": session.ref, "container": session.container} if session.ref else None
+            return {"query": map_search_var.get(), "container": mapping_type.get(),
+                    "selection": next(iter(tree_map.selection()), ""), "row_focus": tree_map.focus(),
+                    "scroll": tree_map.yview()[0], "target": target,
+                    "focus": "search" if focused is map_search_entry else "list" if focused is tree_map
+                    else "editor" if focused in (entry_name, text_value) else ""}
+        def restore_view(state):
+            container = state.get("container")
+            if container in mappings_info:
+                # Construction queues a default-type selection event. Align
+                # both selectors before restoring the model/editor so that
+                # queued event observes the restored type instead.
+                select_type_row(container)
+                mapping_type.set(container)
+            map_search_var.set(state.get("query", ""))
+            refresh_mapping_list(keep_view=False)
+            target = state.get("target", {})
+            key = target.get("key")
+            if target.get("container") == mapping_type.get() and key in mapping_rows:
+                load_item(key)
+            visible = set(tree_map.get_children())
+            if state.get("selection") in visible:
+                tree_map.selection_set(state["selection"])
+            if state.get("row_focus") in visible:
+                tree_map.focus(state["row_focus"])
+            tree_map.yview_moveto(state.get("scroll", 0))
+            render_editor()
+            focused = {"search": map_search_entry, "list": tree_map, "editor": text_value}.get(state.get("focus"))
+            if focused is not None:
+                focused.focus_set()
+        self._manager_views["mapping"] = (capture_view, restore_view)
 
     def _create_reference_tab(
         self, parent, root, section_title, subtitle, sections, footer_text
@@ -7489,7 +7786,12 @@ class Sniptype:
         def populate(*_args):
             selected = selected_key()
             scroll = tree.yview()
-            tree.delete(*tree.get_children())
+            for group in tree.get_children():
+                children = tree.get_children(group)
+                if children:
+                    tree.detach(*children)
+                tree.detach(group)
+            tree.selection_remove(tree.selection())
             row_keys.clear()
             needle = query.get().strip().casefold()
             total = shown = 0
@@ -7503,11 +7805,22 @@ class Sniptype:
                         matches.append((key, trigger, desc, enabled))
                 if not matches:
                     continue
-                group = tree.insert("", tk.END, values=("", "", title), open=True)
+                group = "category:" + category
+                if tree.exists(group):
+                    tree.item(group, values=("", "", title))
+                    tree.move(group, "", tk.END)
+                else:
+                    tree.insert("", tk.END, iid=group, values=("", "", title), open=True)
                 for key, trigger, description, enabled in matches:
-                    row = tree.insert(group, tk.END, values=(
+                    row = "action:" + key
+                    values = (
                         _("Ativo") if enabled else _("Inativo"),
-                        key if key == trigger else f"{key} → {trigger}", description))
+                        key if key == trigger else f"{key} → {trigger}", description)
+                    if tree.exists(row):
+                        tree.item(row, values=values)
+                        tree.move(row, group, tk.END)
+                    else:
+                        tree.insert(group, tk.END, iid=row, values=values)
                     row_keys[row] = key
                     shown += 1
                     if key == selected:
@@ -7547,6 +7860,7 @@ class Sniptype:
             "escape": lambda: query.set(""),
         }
         def enter_list(_event):
+            self._flush_manager_search("dynamic")
             row = next(iter(row_keys), None)
             if row is not None:
                 tree.selection_set(row)
@@ -7556,12 +7870,13 @@ class Sniptype:
             return "break"
         search.bind("<Return>", enter_list)
         search.bind("<Down>", enter_list)
-        query.trace_add("write", populate)
+        query.trace_add("write", lambda *_: self._schedule_manager_search(root, "dynamic", populate))
         self._register_manager_refresher(populate)
         def select_dynamic_target(descriptor):
             if descriptor.kind != "dynamic":
                 return False
             query.set("")
+            populate()
             row = next((row for row, key in row_keys.items()
                         if key == descriptor.stored_trigger), None)
             if row is None:
@@ -7575,6 +7890,25 @@ class Sniptype:
             return True
         self._manager_tab_selectors["dynamic"] = select_dynamic_target
         populate()
+        def capture_view():
+            return {"query": query.get(), "selection": selected_key() or "", "scroll": tree.yview()[0],
+                    "row_focus": tree.focus(),
+                    "focus": "search" if root.focus_get() is search else "list" if root.focus_get() is tree else ""}
+        def restore_view(state):
+            query.set(state.get("query", ""))
+            populate()
+            selected = "action:" + state.get("selection", "")
+            if selected in row_keys:
+                tree.selection_set(selected)
+                tree.focus(selected)
+            focused_row = state.get("row_focus")
+            if focused_row in row_keys or focused_row in tree.get_children():
+                tree.focus(focused_row)
+            tree.yview_moveto(state.get("scroll", 0))
+            focused = {"search": search, "list": tree}.get(state.get("focus"))
+            if focused is not None:
+                focused.focus_set()
+        self._manager_views["dynamic"] = (capture_view, restore_view)
 
     def _rename_registry_entry_dialog(self, root, key, current_trigger, refresh):
         """Ask for a new trigger name, validate it, then persist and refresh."""
@@ -7942,6 +8276,13 @@ class Sniptype:
             def handler(event):
                 if event.widget is window:
                     self._manager_visible = visible
+                    if visible:
+                        self._cancel_manager_search(window)
+                        self._flush_manager_search()
+                        self._start_system_appearance_poll(window)
+                    else:
+                        self._stop_system_appearance_poll(window)
+                        self._cancel_manager_search(window)
             return handler
 
         window.bind("<Map>", set_visible(True), add="+")
@@ -8360,6 +8701,28 @@ class Sniptype:
 
     def quit_app(self, icon, item):
         """Quit the application."""
+        # A macOS tray callback is a Cocoa frame: queue all Tk work, then stop
+        # the loop from a worker so Windows never joins its own GUI thread.
+        if self.manager_window is not None:
+            self.gui.submit(lambda _root: self._quit_with_manager(icon))
+            return
+        self._finish_quit(icon)
+
+    def _quit_with_manager(self, icon):
+        window = self.manager_window
+        if window is not None:
+            if not self._resolve_manager_drafts(window):
+                return
+            if not self._persist_settings({"manager_view": self._capture_manager_view(window)}):
+                ui_widgets.alert(window, _("Não foi possível salvar a visualização"),
+                                 _("A janela continua aberta. Verifique os logs e tente de novo."), tone="danger")
+                return
+            self._release_manager_ui_refs()
+            window.destroy()
+            gc.collect()
+        self.task_runner.start(self._finish_quit, icon, name="quit-app")
+
+    def _finish_quit(self, icon):
         self.enabled = False
         if self.listener:
             self.listener.stop()
@@ -8492,7 +8855,8 @@ class Sniptype:
             ),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(lazy("Gerenciar snippets"), self.manage_snippets_gui, default=True),
-            pystray.MenuItem(lazy("Editar último snippet"), self.edit_last_snippet),
+            pystray.MenuItem(lazy("Editar último snippet"), self.edit_last_snippet,
+                            enabled=lambda _item: self._manager_target(self.workflow_state.last_successful_item) is not None),
             pystray.MenuItem(lazy("Configurar atalhos"), self.configure_hotkeys),
             pystray.MenuItem(lazy("Atualizar biblioteca"), self.reload_snippets),
             pystray.Menu.SEPARATOR,
@@ -8536,19 +8900,44 @@ class Sniptype:
 
 def set_dpi_awareness():
     """Make Tk render crisply on high-DPI displays (per-monitor v2, best effort)."""
-    try:
-        # -4 = DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
-        ctypes.windll.user32.SetProcessDpiAwarenessContext(-4)
+    if not IS_WINDOWS:
         return
-    except Exception:
-        pass
+
     try:
-        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
-    except Exception:
-        try:
-            ctypes.windll.user32.SetProcessDPIAware()
-        except Exception:
-            pass
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        set_context = user32.SetProcessDpiAwarenessContext
+        # The API takes a pointer-sized context and returns a four-byte Win32 BOOL.
+        # ctypes' default int conversion can truncate this pseudo-handle on 64-bit Windows.
+        set_context.argtypes = [ctypes.c_void_p]
+        set_context.restype = ctypes.c_int32
+        ctypes.set_last_error(0)
+        if set_context(ctypes.c_void_p(-4)):
+            return
+        if ctypes.get_last_error() == 5:  # ERROR_ACCESS_DENIED: a manifest/process already chose.
+            return
+    except (AttributeError, OSError):
+        pass
+
+    try:
+        shcore = ctypes.WinDLL("shcore", use_last_error=True)
+        set_awareness = shcore.SetProcessDpiAwareness
+        set_awareness.argtypes = [ctypes.c_int]
+        set_awareness.restype = ctypes.c_int32  # HRESULT is a signed 32-bit value.
+        result = set_awareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
+        if result == 0 or result & 0xFFFFFFFF == 0x80070005:  # S_OK or E_ACCESSDENIED
+            return
+    except (AttributeError, OSError):
+        pass
+
+    try:
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        set_legacy = user32.SetProcessDPIAware
+        set_legacy.argtypes = []
+        set_legacy.restype = ctypes.c_int32
+        if set_legacy():
+            return
+    except (AttributeError, OSError):
+        pass
 
 
 def main():

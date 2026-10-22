@@ -6,6 +6,10 @@ a missing, unused or placeholder-mismatched entry.
 """
 
 EN_US = {
+    "Não foi possível salvar a visualização": "Could not save the view",
+    "A janela continua aberta. Verifique os logs e tente de novo.": "The window remains open. Check the logs and try again.",
+    "Última expansão: {name} · {when}": "Last expansion: {name} · {when}",
+    "Nada expandido ainda": "Nothing expanded yet",
     "Mover para cima": "Move up",
     "Mover para baixo": "Move down",
     "Pressione uma combinação, como Ctrl+Shift+M. Backspace limpa o atalho.": "Press a combination, such as Ctrl+Shift+M. Backspace clears the shortcut.",
