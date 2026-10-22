@@ -213,6 +213,8 @@ from manager_view_support import (
     filter_static_rows,
     find_manager_target,
     format_trigger_pair,
+    manager_row_preview,
+    search_manager_rows,
 )
 from gui_support import (
     center_dialog,
@@ -435,6 +437,7 @@ class Sniptype:
         # Info issues dismissed this session (health ids).
         self._dismissed_health = set()
         self._manager_search_entries = {}
+        self._manager_commands = {}
         self._manager_settings_tab = None
         self._manager_settings_sections = None
         self._manager_tab_selectors = {}
@@ -2937,11 +2940,12 @@ class Sniptype:
             for label, action, icon in (
                 (_("Editar último"), self.edit_last_snippet, "edit"),
                 (_("Notificações"), lambda: self._open_notification_history(root), "bell"),
-                (_("Atalhos"), self.configure_hotkeys, "keyboard"),
             ):
-                ui_widgets.nav_item(footer, label, action, icon=icon)
+                item = ui_widgets.nav_item(footer, label, action, icon=icon)
+                if icon == "edit":
+                    self._manager_edit_last_control = item
             tk.Label(
-                footer, text=_("Ctrl+1–5: seções   •   Ctrl+F: busca nas listas"),
+                footer, text=_("Ctrl+1–5: seções · Ctrl+F: busca\nCtrl+K: alternar · Ctrl+/: teclado"),
                 font=ui.caption_font(), bg=sidebar_bg, fg=ui.text_muted,
                 anchor="w", justify="left", wraplength=170,
             ).pack(fill=tk.X, padx=(ui.space_sm, 0), pady=(ui.space_md, 0))
@@ -2959,7 +2963,7 @@ class Sniptype:
             self._manager_health = ui_widgets.InfoBar(content, ui=ui)
             self._manager_health.frame.grid(row=0, column=0, sticky="ew")
 
-            notebook = ttk.Notebook(content, style="Pages.TNotebook")
+            notebook = ttk.Notebook(content, style="Pages.TNotebook", takefocus=0)
             notebook.grid(row=1, column=0, sticky="nsew")
             self._manager_notebook = notebook
 
@@ -2997,6 +3001,7 @@ class Sniptype:
             self._manager_editors = []
             self._manager_tab_selectors = {}
             self._manager_search_entries = {}
+            self._manager_commands = {}
             self._manager_receipts = {}
             self._create_static_snippets_tab(
                 tab_static, root, set_count=tab_counter(tab_static, _("Textos")))
@@ -3022,6 +3027,7 @@ class Sniptype:
                 return "break"
 
             root.bind("<Control-f>", focus_search)
+            self._bind_manager_commands(root, notebook)
 
             def on_close():
                 # Closing drops what the editors show, so a draft is settled first.
@@ -3039,6 +3045,7 @@ class Sniptype:
             self._start_system_appearance_poll(root)
             root.lift()
             root.focus_force()
+            focus_search(None)
 
         except Exception as e:
             self._release_manager_ui_refs()
@@ -3957,6 +3964,234 @@ class Sniptype:
             return
         self._reload_manager_window(window)
 
+    @staticmethod
+    def _shortcut_hint(widget, receipt, text):
+        """Temporarily show a control's keys without replacing a newer receipt."""
+        owner = object()
+        state = {"receipt": None, "sources": set()}
+        def show(_event, source):
+            current = receipt() if callable(receipt) else receipt
+            if current is None:
+                return
+            if state["receipt"] is not None and state["receipt"] is not current:
+                state["receipt"].hide_hint(owner)
+            state["receipt"] = current
+            state["sources"].add(source)
+            current.show_hint(owner, text)
+        def hide(_event, source):
+            state["sources"].discard(source)
+            if not state["sources"] and state["receipt"] is not None:
+                state["receipt"].hide_hint(owner)
+                state["receipt"] = None
+        for sequence, source in (("<Enter>", "hover"), ("<FocusIn>", "focus")):
+            widget.bind(sequence, lambda event, key=source: show(event, key), add="+")
+        for sequence, source in (("<Leave>", "hover"), ("<FocusOut>", "focus")):
+            widget.bind(sequence, lambda event, key=source: hide(event, key), add="+")
+        def release(_event):
+            state["sources"].clear()
+            hide(None, "destroy")
+        widget.bind("<Destroy>", release, add="+")
+
+    def _register_manager_commands(self, page, search, tree, *, new, save, delete,
+                                   escape, duplicate=None, rename=None):
+        """Register the existing page actions, without owning editor state."""
+        self._manager_commands[str(page)] = {
+            "new": new, "save": save, "delete": delete, "escape": escape,
+            "duplicate": duplicate, "rename": rename, "search": search, "tree": tree,
+        }
+
+        def enter_list(_event):
+            children = tree.get_children()
+            if children:
+                selected = tree.selection()
+                key = selected[0] if selected else children[0]
+                tree.selection_set(key)
+                tree.focus(key)
+                tree.see(key)
+                tree.focus_set()
+            return "break"
+
+        search.bind("<Down>", enter_list)
+        search.bind("<Return>", enter_list)
+
+    def _bind_manager_commands(self, root, notebook):
+        def allowed(event):
+            return event.widget.winfo_toplevel() is root and root.grab_current() is None
+
+        def dispatch(name, event):
+            # Toplevel bindings otherwise see Text's Ctrl+N/Ctrl+D only after
+            # its class binding has already moved or deleted text.
+            if not allowed(event):
+                return None
+            commands = self._manager_commands.get(notebook.select(), {})
+            if name == "delete" and event.widget is not commands.get("tree"):
+                return None
+            action = commands.get(name)
+            if action is not None:
+                action()
+            return "break"
+
+        bindings = {
+            "<Control-n>": "new", "<Control-s>": "save", "<Control-d>": "duplicate",
+            "<F2>": "rename", "<Delete>": "delete", "<Escape>": "escape",
+        }
+        # A bindtag starting with '.' is parsed as a widget path by Tcl.
+        tag = "ManagerCommands:" + str(root)
+        for sequence, command in bindings.items():
+            root.bind_class(tag, sequence, lambda event, name=command: dispatch(name, event))
+        def global_command(event, action):
+            if not allowed(event):
+                return None
+            action()
+            return "break"
+        root.bind_class(tag, "<Control-k>", lambda event: global_command(event, lambda: self._show_manager_switcher(root)))
+        root.bind_class(tag, "<Control-e>", lambda event: global_command(event, self.edit_last_snippet))
+        root.bind_class(tag, "<Control-slash>", lambda event: global_command(event, lambda: self._show_manager_keyboard_map(root)))
+        def focus_search(_event):
+            if not allowed(_event):
+                return None
+            entry = self._manager_search_entries.get(notebook.select())
+            if entry is not None:
+                entry.focus_set()
+                entry.selection_range(0, tk.END)
+            return "break"
+        root.bind_class(tag, "<Control-f>", focus_search)
+
+        def install(widget):
+            tags = widget.bindtags()
+            if tag not in tags:
+                widget.bindtags((tags[0], tag, *tags[1:]))
+            for child in widget.winfo_children():
+                if not isinstance(child, tk.Toplevel):
+                    install(child)
+        install(root)
+        # Editor notices rebuild their action controls after library changes.
+        # Map is inherited by children through the owning toplevel bindtag.
+        root.bind("<Map>", lambda event: install(event.widget)
+                  if event.widget.winfo_toplevel() is root else None, add="+")
+        edit_last = self._manager_edit_last_control
+        self._shortcut_hint(edit_last, lambda: self._manager_receipts.get(notebook.select()),
+                            _("Ctrl+E — Editar último"))
+
+    @staticmethod
+    def _escape_manager_editor(root, search, dirty, question, revert):
+        if search.get():
+            search.set("")
+        elif dirty() and ui_widgets.confirm(
+            root, _("Alterações não salvas"), question(), _("Descartar"), danger=True,
+        ) == ui_widgets.PRIMARY:
+            revert()
+
+    @staticmethod
+    def _show_manager_keyboard_map(root):
+        ui_widgets.alert(
+            root, _("Teclado do gerenciador"),
+            _("Ctrl+N — Novo com a busca\nCtrl+S — Salvar\nCtrl+D — Duplicar item salvo\n"
+              "F2 — Renomear texto / focar identificador\nDelete — Excluir na lista (Desfazer disponível)\n"
+              "Esc — Limpar busca / descartar rascunho com confirmação\n"
+              "Ctrl+K — Alternar snippet\nCtrl+E — Editar último\nCtrl+F — Buscar\n"
+              "Ctrl+1–5 — Seções\n↓ / Enter na busca — Focar lista\n"
+              "Tab / Shift+Tab — Próximo / anterior\nCtrl+Tab — Inserir tabulação\n"
+              "Ctrl+Shift+R — Referência\nCtrl+Shift+V — Área de transferência\n"
+              "Ctrl+Shift+F — Campo de formulário\nCtrl+Shift+X — Limpar formato\n"
+              "Ctrl+B / I / U — Negrito / itálico / sublinhado\n"
+              "Ctrl+Shift+C / S — Código / tachado"), tone="info",
+        )
+
+    def _show_manager_switcher(self, root):
+        """Navigate local rows by stable reference, without expanding content."""
+        if root.grab_current() is not None:
+            return
+        ui = ui_theme.theme()
+        opener = root.focus_get()
+        picker = tk.Toplevel(root)
+        picker.title(_("Alternar snippet"))
+        picker.transient(root)
+        picker.geometry("680x430")
+        ui_theme.prepare_window(picker, ui)
+        body = tk.Frame(picker, bg=ui.surface, padx=ui.space_md, pady=ui.space_md)
+        body.pack(fill=tk.BOTH, expand=True)
+        query = tk.StringVar(picker)
+        entry = ui_widgets.entry(body, textvariable=query)
+        entry.pack(fill=tk.X, pady=(0, ui.space_sm))
+        ui_widgets.search_hint(entry, _("Pesquisar snippets"))
+        tree = ui_widgets.tree_list(body, columns=("kind", "trigger", "preview"), headings=True)
+        tree.heading("kind", text=_("Tipo"))
+        tree.heading("trigger", text=_("Trigger"))
+        tree.heading("preview", text=_("Prévia"))
+        tree.column("kind", width=110, stretch=False)
+        tree.column("trigger", width=160, stretch=False)
+        tree.column("preview", width=280)
+        kind_labels = {"static": _("Texto"), "mapping": _("Mapeamento"), "dynamic": _("Ação dinâmica")}
+        rows = self._manager_rows()
+        projection = self._manager_static_projection()
+        displayed = []
+
+        def close():
+            picker.grab_release()
+            picker.destroy()
+            if opener is not None and opener.winfo_exists():
+                opener.focus_force()
+
+        def refresh(*_args):
+            displayed[:] = search_manager_rows(rows, query.get(), projection)
+            tree.delete(*tree.get_children())
+            for index, row in enumerate(displayed):
+                preview = manager_row_preview(row, projection).replace("\n", " ")[:120]
+                tree.insert("", tk.END, iid=str(index), values=(
+                    kind_labels[row.kind], row.effective_trigger, preview))
+            if displayed:
+                tree.selection_set("0")
+                tree.focus("0")
+            create.configure(text=_("Criar \"{query}\"").format(query=query.get().strip()),
+                             state=tk.NORMAL if not displayed and query.get().strip() else tk.DISABLED)
+            if displayed or not query.get().strip():
+                create.pack_forget()
+            else:
+                # Reserve the empty-state action before the list takes the
+                # remaining height, just like the dialog footer.
+                create.pack(side=tk.BOTTOM, fill=tk.X, pady=(ui.space_sm, 0), before=tree)
+
+        def choose(_event=None):
+            selection = tree.selection()
+            if selection:
+                target = displayed[int(selection[0])].ref
+                close()
+                self._select_manager_target(target)
+                commands = self._manager_commands.get(self._manager_notebook.select(), {})
+                if commands.get("tree") is not None:
+                    commands["tree"].focus_set()
+            elif query.get().strip():
+                create_new()
+            return "break"
+
+        def create_new():
+            value = query.get().strip()
+            close()
+            # Creation has one home; a switcher search across other kinds still
+            # opens a guarded new Textos draft, never an accidental provider.
+            for page, commands in self._manager_commands.items():
+                if commands.get("kind") == "static":
+                    self._manager_notebook.select(page)
+                    commands["new"](value)
+                    break
+
+        create = ui_widgets.button(body, _("Novo snippet"), create_new)
+        ui_widgets.dialog_footer(body, (_("Abrir"), choose), close, ui=ui).pack(side=tk.BOTTOM, fill=tk.X)
+        tree.pack(fill=tk.BOTH, expand=True)
+        query.trace_add("write", refresh)
+        refresh()
+        tree.bind("<Double-Button-1>", choose)
+        def enter_list(_event):
+            if displayed:
+                tree.focus_set()
+            return "break"
+        entry.bind("<Down>", enter_list)
+        picker.protocol("WM_DELETE_WINDOW", close)
+        center_dialog(picker, root)
+        picker.grab_set()
+        entry.focus_force()
+
     def _release_manager_ui_refs(self):
         """Drop widget callbacks while still running on the GUI thread."""
         self._manager_notebook = None
@@ -3970,6 +4205,8 @@ class Sniptype:
         self._manager_receipts = {}
         self._manager_pages = {}
         self._manager_search_entries = {}
+        self._manager_commands = {}
+        self._manager_edit_last_control = None
         self._manager_settings_tab = None
         self._manager_settings_sections = None
         self.manager_window = None
@@ -4393,7 +4630,7 @@ class Sniptype:
         add_toolbar_button("U", lambda: apply_style("underline"), 1, _("Formato: sublinhado"), "underline", "underline")
         add_toolbar_button("S", lambda: apply_style("strike"), 1, _("Formato: tachado"), "strike", "strike")
         add_toolbar_button("<>", lambda: apply_style("code"), 1, _("Formato: código monoespaçado"), "code", "code")
-        add_toolbar_button("⌫", clear_styles_handler, 1, _("Formato: limpar estilos"), "clear", "clear_format")
+        add_toolbar_button("⌫", clear_styles_handler, 1, _("Formato: limpar estilos (Ctrl+Shift+X)"), "clear", "clear_format")
 
         # Separator before variable buttons
         tk.Frame(toolbar, width=1, bg=ui.divider).pack(side=tk.LEFT, padx=(8, 6), fill=tk.Y, pady=2)
@@ -4449,6 +4686,9 @@ class Sniptype:
                 listbox.delete(*listbox.get_children())
                 for index, choice in enumerate(displayed):
                     listbox.insert("", tk.END, iid=str(index), text=choice)
+                if displayed:
+                    listbox.selection_set("0")
+                    listbox.focus("0")
 
             search_var.trace_add("write", refresh_list)
             refresh_list()
@@ -4473,6 +4713,7 @@ class Sniptype:
 
             center_dialog(picker, parent_win)
             search_entry.focus_set()
+            search_entry.bind("<Down>", lambda _event: (listbox.focus_set(), "break")[1])
 
         def insert_snippet_ref():
             # Every snippet kind is referenceable: static, runtime dynamic and
@@ -4501,9 +4742,38 @@ class Sniptype:
             if name is not None:
                 _insert_variable_text(name.replace(" ", "_"))
 
-        add_toolbar_button("%%s", insert_snippet_ref, 1, _("Variável: referenciar snippet (%%trigger%%)"), "var")
-        add_toolbar_button("%%cb", insert_clipboard_var, 1, _("Variável: colar clipboard (%%clipboard-paste%%)"), "var")
-        add_toolbar_button("%%?", insert_form_field, 1, _("Variável: campo de formulário (%%campo%%)"), "var")
+        variable_button = tk.Menubutton(
+            toolbar, text=_("Inserir variável ▾"), font=ui.font(), bg=toolbar_bg, fg=ui.text,
+            activebackground=ui.select_bg, activeforeground=ui.select_fg,
+            relief=tk.FLAT, bd=0, padx=ui.space_sm, pady=0, takefocus=0,
+        )
+        variable_menu = ui_widgets.menu(variable_button, ui=ui)
+        variable_button.configure(menu=variable_menu)
+        variable_button.pack(side=tk.LEFT, padx=1)
+        for label, shortcut, action in (
+            (_("Referência"), "Ctrl+Shift+R", insert_snippet_ref),
+            (_("Área de transferência"), "Ctrl+Shift+V", insert_clipboard_var),
+            (_("Campo de formulário"), "Ctrl+Shift+F", insert_form_field),
+        ):
+            variable_menu.add_command(label=label, accelerator=shortcut, command=action)
+        for sequence, action in (
+            ("<Control-Shift-R>", insert_snippet_ref),
+            ("<Control-Shift-V>", insert_clipboard_var),
+            ("<Control-Shift-F>", insert_form_field),
+            ("<Control-Shift-X>", clear_styles_handler),
+        ):
+            text_widget.bind(sequence, lambda _event, handler=action: (handler(), "break")[1])
+
+        def traverse_text(backwards=False):
+            target = text_widget.tk_focusPrev() if backwards else text_widget.tk_focusNext()
+            if target is not None:
+                target.focus_set()
+            return "break"
+
+        text_widget.bind("<Tab>", lambda _event: traverse_text())
+        text_widget.bind("<Shift-Tab>", lambda _event: traverse_text(True))
+        text_widget.bind("<ISO_Left_Tab>", lambda _event: traverse_text(True))
+        text_widget.bind("<Control-Tab>", lambda _event: (text_widget.insert(tk.INSERT, "\t"), "break")[1])
 
         format_label = tk.Label(parent, textvariable=status_var, bg=toolbar_bg,
                                 **ui.status_label_options())
@@ -5337,10 +5607,11 @@ class Sniptype:
                 self._manager_preview_controller = controller
             controller.show(result, title=_("Prévia — {key}").format(key=key))
 
-        def on_new():
+        def on_new(prefill=None):
             if not editor.resolve():
                 return
             clear_editor(new=True)
+            trigger_var.set(search_var.get().strip() if prefill is None else prefill)
             entry_trigger.focus_set()
 
         def on_save():
@@ -5617,6 +5888,21 @@ class Sniptype:
             target=lambda: SnippetRef("static", session.ref) if session.ref else None,
         )
         self._register_manager_editor(editor)
+        self._register_manager_commands(
+            parent, search_entry, tree, new=on_new, save=on_save, delete=on_delete,
+            duplicate=on_duplicate, rename=on_rename,
+            escape=lambda: self._escape_manager_editor(root, search_var, is_dirty, draft_question, revert_draft),
+        )
+        self._manager_commands[str(parent)]["kind"] = "static"
+        for control, hint in (
+            (btn_new, _("Ctrl+N — Novo com a busca")), (page_new, _("Ctrl+N — Novo com a busca")),
+            (btn_save, _("Ctrl+S — Salvar")), (btn_duplicate, _("Ctrl+D — Duplicar item salvo")),
+            (btn_rename, _("F2 — Renomear")), (btn_delete, _("Delete na lista — Excluir · Desfazer disponível")),
+            (search_entry, _("Ctrl+F: busca · ↓/Enter: lista\nEsc: limpar · Ctrl+N: novo com busca")),
+            (tree, _("F2: renomear · Ctrl+D: duplicar\nDelete: excluir · Desfazer disponível")),
+            (text_value, _("Tab/Shift+Tab: navegar · Ctrl+Tab: tabulação\nEsc: descartar com confirmação")),
+        ):
+            self._shortcut_hint(control, receipt, hint)
 
         tree.bind("<<TreeviewSelect>>", on_tree_select, add="+")
         btn_new.configure(command=on_new)
@@ -5901,6 +6187,9 @@ class Sniptype:
         header = self._editor_header(frame_right, lambda: reveal_mapping())
         header.frame.grid(row=1, column=0, sticky="ew", pady=(ui.space_xs, ui.space_md))
         session = EditorSession("mapping", container=mapping_type.get())
+        # Only a duplicated draft carries a form to its future saved identity.
+        # No metadata is published until that draft's explicit Save succeeds.
+        copied_form = {"value": None}
 
         tk.Label(
             frame_right,
@@ -6152,6 +6441,7 @@ class Sniptype:
 
         def load_item(key):
             """Open item ``key`` of the visible type in the editor."""
+            copied_form["value"] = None
             container = mapping_type.get()
             value = stored_value(container, key)
             name_var.set(key)
@@ -6163,6 +6453,7 @@ class Sniptype:
 
         def clear_editor(*, new=False):
             """Show nothing, or with ``new`` a fresh draft (Novo), in the visible type."""
+            copied_form["value"] = None
             name_var.set("")
             load_value_into_text_widget(text_value, "")
             session.reset(new=new, container=mapping_type.get())
@@ -6513,6 +6804,23 @@ class Sniptype:
             if not editor.resolve():
                 return
             clear_editor(new=True)
+            name_var.set(map_search_var.get().strip())
+            entry_name.focus_set()
+
+        def on_duplicate_map():
+            if not editor.resolve():
+                return
+            item = current_mapping_item()
+            if item is None:
+                ui_widgets.alert(root, _("Duplicar"), _("Selecione um item."))
+                return
+            container, key = item
+            value = copy.deepcopy(stored_value(container, key))
+            form = copy.deepcopy(self._mapping_form_metadata(container, key))
+            clear_editor(new=True)
+            load_value_into_text_widget(text_value, value)
+            copied_form["value"] = form
+            update_format_status()
             entry_name.focus_set()
 
         def on_save_map():
@@ -6546,10 +6854,24 @@ class Sniptype:
                 if isinstance(previous_mapping, dict)
                 else previous_mapping
             )
+            previous_metadata = self.library_metadata
+            if copied_form["value"] is not None:
+                try:
+                    proposed = {**self.snippets, current_type: {
+                        **(previous_mapping if isinstance(previous_mapping, dict) else {}), name: value,
+                    }}
+                    self.library_metadata = manager_set_mapping_form(
+                        proposed, self.library_metadata, current_type, name, copied_form["value"],
+                        dynamic_triggers=self._manager_dynamic_triggers(),
+                    ).metadata
+                except (KeyError, ValueError, MetadataReadOnlyError) as error:
+                    ui_widgets.alert(root, _("Formulário"), str(error), tone="danger")
+                    return False
             mapping = ensure_mapping_dict(current_type)
             mapping[name] = value
 
             if not self.save_snippets(self.snippets):
+                self.library_metadata = previous_metadata
                 if previous_mapping is _MISSING:
                     self.snippets.pop(current_type, None)
                 else:
@@ -6563,6 +6885,7 @@ class Sniptype:
                 return False
             self.refresh_runtime_indexes()
             session.mark_saved(name, name, value, copy.deepcopy(value), container=current_type)
+            copied_form["value"] = None
             header.notice(None)
             self.receipt(
                 N_("Salvo às {time}"), _("{name} em {type}").format(name=name, type=type_label(current_type)),
@@ -6651,6 +6974,21 @@ class Sniptype:
             target=mapping_target,
         )
         self._register_manager_editor(editor)
+        self._register_manager_commands(
+            parent, map_search_entry, tree_map, new=on_new_map, save=on_save_map, delete=on_delete_map,
+            duplicate=on_duplicate_map,
+            rename=lambda: (entry_name.focus_set(), entry_name.selection_range(0, tk.END)),
+            escape=lambda: self._escape_manager_editor(root, map_search_var, is_dirty, draft_question, revert_draft),
+        )
+        for control, hint in (
+            (btn_new_map, _("Ctrl+N — Novo com a busca")), (btn_save_map, _("Ctrl+S — Salvar")),
+            (btn_delete_map, _("Delete na lista — Excluir · Desfazer disponível")),
+            (entry_name, _("F2: identificador · Ctrl+D: duplicar\nCtrl+S: salvar")),
+            (map_search_entry, _("Ctrl+F: busca · ↓/Enter: lista\nEsc: limpar · Ctrl+N: novo com busca")),
+            (tree_map, _("F2: identificador · Ctrl+D: duplicar\nDelete: excluir · Desfazer disponível")),
+            (text_value, _("Tab/Shift+Tab: navegar · Ctrl+Tab: tabulação\nEsc: descartar com confirmação")),
+        ):
+            self._shortcut_hint(control, receipt, hint)
 
         mapping_type.trace_add("write", lambda *_: on_type_changed())
         tree_map.bind("<<TreeviewSelect>>", on_tree_select, add="+")

@@ -563,6 +563,285 @@ class ManagerGuiSmokeTests(unittest.TestCase):
         self.assertIn("MAIL", labels)
         self.assertIn("CPF", labels)
 
+    def _keyboard_fixture_cleanup(self):
+        self.addCleanup(shutil.rmtree, self.app.data_dir, ignore_errors=True)
+        self.addCleanup(_close_log_handlers, self.app.data_dir)
+
+    def test_keyboard_new_save_rename_duplicate_delete_and_undo_use_existing_actions(self):
+        self._keyboard_fixture_cleanup()
+
+        def run(root):
+            self.app._build_manager_window(root)
+            window = self.app.manager_window
+            window.update()
+            page = self.app._manager_notebook.select()
+            commands = self.app._manager_commands[page]
+            search, tree = commands["search"], commands["tree"]
+            self.assertIs(window.focus_get(), search, "opening focus belongs to search")
+            search.insert(0, "xsynthetic")
+            _press(search, "<Control-n>")
+            window.update()
+            trigger = window.focus_get()
+            self.assertEqual("xsynthetic", trigger.get())
+            text = next(w for w in _descendants(window.nametowidget(page)) if isinstance(w, tk.Text))
+            text.insert("1.0", "Synthetic response")
+            # Saving is routed to the active page even with search focused.
+            _press(search, "<Control-s>")
+            window.update()
+            self.assertEqual("Synthetic response", self.app.snippets["xsynthetic"])
+            _press(search, "<Escape>")
+            window.update()
+            tree.selection_set("xsynthetic")
+            window.update()
+            with mock.patch.object(ui_widgets, "ask_text", return_value="xrenamed") as prompt:
+                _press(tree, "<F2>")
+                self.assertEqual("Renomear snippet", prompt.call_args.args[1])
+            window.update()
+            self.assertNotIn("xsynthetic", self.app.snippets)
+            self.assertEqual("Synthetic response", self.app.snippets["xrenamed"])
+            with mock.patch.object(ui_widgets, "ask_text", return_value="xcopy"):
+                _press(tree, "<Control-d>")
+            window.update()
+            self.assertEqual("Synthetic response", self.app.snippets["xcopy"])
+            # Delete in Text keeps its editing meaning and cannot delete a row.
+            _press(text, "<Delete>")
+            self.assertIn("xcopy", self.app.snippets)
+            tree.selection_set("xcopy")
+            window.update()
+            _press(tree, "<Delete>")
+            window.update()
+            self.assertNotIn("xcopy", self.app.snippets)
+            self.app._manager_receipts[page].action.invoke()
+            window.update()
+            self.assertEqual("Synthetic response", self.app.snippets["xcopy"])
+            with open(self.app.snippets_file, encoding="utf-8") as handle:
+                self.assertEqual("Synthetic response", json.load(handle)["xcopy"])
+
+        self._on_gui(run)
+
+    def test_quick_switcher_searches_effective_triggers_all_kinds_and_offers_creation(self):
+        self._keyboard_fixture_cleanup()
+        provider = mock.Mock(side_effect=AssertionError("Switcher must never run providers"))
+        self.app.snippets.update({"sig": "Synthetic signature", "_codes": {"__prefix__": "code", "item": "Synthetic mapping"},
+                                  "xclock": provider})
+        self.app.library_metadata = LibraryMetadata({
+            "groups": {"mail": {"label": "Mail", "prefix": "as"}},
+            "items": {"static": {"sig": {"group_id": "mail"}}},
+        })
+
+        def run(root):
+            self.app._build_manager_window(root)
+            window = self.app.manager_window
+            window.update()
+            search = self.app._manager_search_entries[self.app._manager_notebook.select()]
+            _press(search, "<Control-k>")
+            window.update()
+            picker = next(w for w in _descendants(window) if isinstance(w, tk.Toplevel)
+                          and w.title() == "Alternar snippet")
+            entry = picker.focus_get()
+            tree = next(w for w in _descendants(picker) if isinstance(w, ttk.Treeview))
+            kinds = {tree.item(i, "values")[0] for i in tree.get_children()}
+            self.assertEqual({"Texto", "Mapeamento", "Ação dinâmica"}, kinds)
+            entry.insert(0, "assig")
+            _press(entry, "<Return>")
+            window.update()
+            page = self.app._manager_notebook.select()
+            self.assertEqual(("sig",), self.app._manager_commands[page]["tree"].selection())
+            _press(window, "<Control-k>")
+            window.update()
+            picker = next(w for w in _descendants(window) if isinstance(w, tk.Toplevel)
+                          and w.title() == "Alternar snippet")
+            entry = picker.focus_get()
+            entry.insert(0, "xnewsynthetic")
+            window.update()
+            self.assertIn('Criar "xnewsynthetic"', _buttons(picker))
+            self.assertTrue(_buttons(picker)['Criar "xnewsynthetic"'].winfo_ismapped())
+            _press(entry, "<Return>")
+            window.update()
+            self.assertEqual("xnewsynthetic", window.focus_get().get())
+            self.assertNotIn("xnewsynthetic", self.app.snippets, "creation opens an unsaved draft")
+            provider.assert_not_called()
+
+        self._on_gui(run)
+
+    def test_escape_draft_guard_search_list_focus_and_keyboard_map(self):
+        self._keyboard_fixture_cleanup()
+
+        def run(root):
+            self.app._build_manager_window(root)
+            window = self.app.manager_window
+            window.update()
+            commands = self.app._manager_commands[self.app._manager_notebook.select()]
+            search, tree = commands["search"], commands["tree"]
+            _press(search, "<Down>")
+            window.update()
+            self.assertIs(window.focus_get(), tree)
+            _press(search, "<Return>")
+            window.update()
+            self.assertIs(window.focus_get(), tree)
+            search.insert(0, "xnew")
+            _press(search, "<Control-n>")
+            trigger = window.focus_get()
+            with mock.patch.object(ui_widgets, "confirm", return_value=None) as confirm:
+                _press(trigger, "<Escape>")
+                self.assertEqual("", search.get())
+                confirm.assert_not_called()
+                _press(trigger, "<Escape>")
+                confirm.assert_called_once()
+                self.assertEqual("xnew", trigger.get(), "cancel keeps the draft")
+            with mock.patch.object(ui_widgets, "confirm", return_value=ui_widgets.PRIMARY):
+                _press(trigger, "<Escape>")
+            self.assertEqual("", trigger.get())
+            with mock.patch.object(ui_widgets, "alert") as alert:
+                _press(search, "<Control-slash>")
+                self.assertIn("Ctrl+Shift+X", alert.call_args.args[2])
+            with mock.patch.object(self.app, "edit_last_snippet") as edit:
+                _press(search, "<Control-e>")
+                edit.assert_called_once()
+
+        self._on_gui(run)
+
+    def test_text_tab_traversal_and_readable_variable_menu_keep_format_shortcuts(self):
+        self._keyboard_fixture_cleanup()
+
+        def run(root):
+            self.app._build_manager_window(root)
+            window = self.app.manager_window
+            window.update()
+            page = self.app._manager_notebook.select()
+            tree = self.app._manager_commands[page]["tree"]
+            tree.selection_set("xhi")
+            window.update()
+            tab = window.nametowidget(page)
+            text = next(w for w in _descendants(tab) if isinstance(w, tk.Text))
+            before = text.get("1.0", "end-1c")
+            _press(text, "<Tab>")
+            window.update()
+            self.assertIsNot(window.focus_get(), text)
+            self.assertEqual(before, text.get("1.0", "end-1c"))
+            _press(text, "<Shift-Tab>")
+            window.update()
+            self.assertIsNot(window.focus_get(), text)
+            text.mark_set(tk.INSERT, "end-1c")
+            _press(text, "<Control-Tab>")
+            self.assertEqual(before + "\t", text.get("1.0", "end-1c"))
+            _press(text, "<Control-Shift-V>")
+            self.assertIn("%%clipboard-paste%%", text.get("1.0", "end-1c"))
+            _press(text, "<Control-Shift-R>")
+            window.update()
+            picker = next(w for w in _descendants(window) if isinstance(w, tk.Toplevel)
+                          and w.title() == "Inserir referência de snippet")
+            entry = picker.focus_get()
+            entry.insert(0, "xhi")
+            _press(entry, "<Return>")
+            window.update()
+            self.assertIn("%%xhi%%", text.get("1.0", "end-1c"))
+            with mock.patch.object(ui_widgets, "ask_text", return_value="customer name"):
+                _press(text, "<Control-Shift-F>")
+            self.assertIn("%%customer_name%%", text.get("1.0", "end-1c"))
+            variable = next(w for w in _descendants(tab) if isinstance(w, tk.Menubutton))
+            self.assertEqual("Inserir variável ▾", variable.cget("text"))
+            menu = variable.nametowidget(variable.cget("menu"))
+            self.assertEqual(["Ctrl+Shift+R", "Ctrl+Shift+V", "Ctrl+Shift+F"],
+                             [menu.entrycget(i, "accelerator") for i in range(3)])
+            for sequence, tag in (("<Control-Shift-C>", "code"), ("<Control-Shift-S>", "strike")):
+                text.tag_add(tk.SEL, "1.0", "1.5")
+                _press(text, sequence)
+                self.assertIn(tag, [span["tag"] for span in tx.serialize_text_widget_content(text)["spans"]])
+            _press(text, "<Control-Shift-X>")
+            self.assertFalse(tx.is_rich_text_payload(tx.serialize_text_widget_content(text)))
+
+        self._on_gui(run)
+
+    def test_mapping_duplicate_is_a_guarded_draft_and_copies_form_only_on_successful_save(self):
+        self._keyboard_fixture_cleanup()
+        form = {"fields": [{"name": "person", "type": "text"}]}
+        self.app.snippets["_codes"] = {"__prefix__": "code", "source": "Hello %%person%%"}
+        self.app.library_metadata = LibraryMetadata({
+            "items": {"mappings": {"_codes": {"source": {"form": form}}}},
+        })
+        self.assertTrue(self.app.save_snippets(self.app.snippets))
+        with open(self.app.snippets_file, "rb") as handle:
+            before = handle.read()
+
+        def run(root):
+            self.app._build_manager_window(root)
+            window = self.app.manager_window
+            self.app._select_manager_target(SnippetRef("mapping", "source", "_codes"))
+            window.update()
+            page = self.app._manager_notebook.select()
+            commands = self.app._manager_commands[page]
+            tree = commands["tree"]
+            text = next(w for w in _descendants(window.nametowidget(page)) if isinstance(w, tk.Text))
+            text.insert("end-1c", " dirty")
+            with mock.patch.object(ui_widgets, "confirm", return_value=None):
+                _press(tree, "<Control-d>")
+            self.assertIn("dirty", text.get("1.0", "end-1c"))
+            with mock.patch.object(ui_widgets, "confirm", return_value=ui_widgets.EXTRA):
+                _press(tree, "<Control-d>")
+            window.update()
+            identifier = window.focus_get()
+            self.assertEqual("", identifier.get())
+            self.assertEqual("Hello %%person%%", text.get("1.0", "end-1c"))
+            with open(self.app.snippets_file, "rb") as handle:
+                self.assertEqual(before, handle.read(), "duplicating alone writes nothing")
+            identifier.insert(0, "copy")
+            with mock.patch.object(self.app, "save_snippets", return_value=False), \
+                    mock.patch.object(ui_widgets, "alert"):
+                _press(identifier, "<Control-s>")
+            self.assertNotIn("copy", self.app.snippets["_codes"])
+            self.assertIsNone(self.app._mapping_form_metadata("_codes", "copy"))
+            self.assertEqual("Hello %%person%%", text.get("1.0", "end-1c"))
+            _press(identifier, "<Control-s>")
+            window.update()
+            self.assertEqual("Hello %%person%%", self.app.snippets["_codes"]["copy"])
+            self.assertEqual(form, self.app._mapping_form_metadata("_codes", "copy"))
+            self.assertEqual(form, self.app._mapping_form_metadata("_codes", "source"))
+            with open(self.app.snippets_file, encoding="utf-8") as handle:
+                self.assertEqual(form, json.load(handle)["__sniptype__"]["items"]["mappings"]["_codes"]["copy"]["form"])
+
+        self._on_gui(run)
+
+    def test_modal_guards_dynamic_control_bindtags_and_control_hints_preserve_receipts(self):
+        self._keyboard_fixture_cleanup()
+
+        def run(root):
+            self.app._build_manager_window(root)
+            window = self.app.manager_window
+            window.update()
+            page = self.app._manager_notebook.select()
+            search = self.app._manager_search_entries[page]
+            dynamic = ui_widgets.entry(window)
+            dynamic.place(x=300, y=450, width=100)
+            window.update()
+            self.assertTrue(any(str(tag).startswith("ManagerCommands:") for tag in dynamic.bindtags()))
+            _press(dynamic, "<Control-f>")
+            window.update()
+            self.assertIs(window.focus_get(), search)
+            receipt = self.app._manager_receipts[page]
+            search.event_generate("<Enter>")
+            self.assertIn("Ctrl+N", receipt.label.cget("text"))
+            receipt.show("Synthetic fresh receipt")
+            search.event_generate("<Leave>")
+            self.assertEqual("Synthetic fresh receipt", receipt.label.cget("text"))
+            modal = tk.Toplevel(window)
+            modal.update()
+            modal.grab_set()
+            try:
+                with mock.patch.object(self.app, "edit_last_snippet") as edit, \
+                        mock.patch.object(self.app, "_show_manager_keyboard_map") as keyboard_map, \
+                        mock.patch.object(self.app, "_show_manager_switcher") as switcher:
+                    for sequence in ("<Control-e>", "<Control-slash>", "<Control-k>"):
+                        _press(search, sequence)
+                    edit.assert_not_called()
+                    keyboard_map.assert_not_called()
+                    switcher.assert_not_called()
+            finally:
+                modal.grab_release()
+                modal.destroy()
+
+        self._on_gui(run)
+
     def _static_rows(self, frame):
         """{trigger: (value cell,)} from the static tab's Treeview."""
         trees = [w for w in _descendants(frame) if isinstance(w, ttk.Treeview)]
@@ -1782,6 +2061,42 @@ class DialogKitTests(unittest.TestCase):
             return answer, answered, owner.focus_get() is opener
 
         return _SHARED_GUI.call(run, timeout=60)
+
+    def test_overlapping_control_hints_restore_the_receipt_and_preserve_newer_messages(self):
+        def run(root):
+            owner = tk.Toplevel(root)
+            owner.withdraw()
+            receipt = ui_widgets.ReceiptLine(owner, "Resting hint")
+            first, second = ui_widgets.entry(owner), ui_widgets.entry(owner)
+            tx.Sniptype._shortcut_hint(first, receipt, "Tree shortcuts")
+            tx.Sniptype._shortcut_hint(second, receipt, "Search shortcuts")
+            receipt.show("Original receipt")
+            first.event_generate("<FocusIn>")
+            second.event_generate("<Enter>")
+            first.event_generate("<FocusOut>")
+            second.event_generate("<FocusIn>")
+            second.event_generate("<Leave>")
+            self.assertEqual("Search shortcuts", receipt.label.cget("text"))
+            second.event_generate("<FocusOut>")
+            self.assertEqual("Original receipt", receipt.label.cget("text"))
+            first.event_generate("<FocusIn>")
+            second.event_generate("<Enter>")
+            receipt.show("Newer receipt")
+            first.event_generate("<FocusOut>")
+            second.event_generate("<Leave>")
+            self.assertEqual("Newer receipt", receipt.label.cget("text"))
+            first.event_generate("<FocusIn>")
+            second.event_generate("<Enter>")
+            second.event_generate("<Leave>")
+            self.assertEqual("Tree shortcuts", receipt.label.cget("text"))
+            first.destroy()
+            self.assertEqual("Newer receipt", receipt.label.cget("text"))
+            second.event_generate("<FocusIn>")
+            receipt.reset()
+            second.event_generate("<FocusOut>")
+            self.assertEqual("Resting hint", receipt.label.cget("text"))
+
+        _SHARED_GUI.call(run, timeout=30)
 
     @staticmethod
     def _confirm(owner, **options):

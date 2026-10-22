@@ -326,6 +326,41 @@ def filter_static_rows(rows, query, snippets):
     return tuple(row for _rank, row in ranked)
 
 
+def manager_row_preview(row, snippets):
+    """Read saved text only; looking up a dynamic row never calls its provider."""
+    value = _as_mapping(snippets).get(row.stored_trigger)
+    if row.kind == "mapping":
+        value = _as_mapping(_as_mapping(snippets).get(row.container)).get(row.key)
+    if row.kind == "dynamic" or callable(value):
+        return ""
+    return extract_plain_text(value) if value is not None else ""
+
+
+def search_manager_rows(rows, query, snippets):
+    """Rank all kinds by literal trigger, group and saved-content matches.
+
+    Equal matches retain the projection's order, including distinct rows with
+    the same effective trigger. No provider or clipboard is consulted.
+    """
+    candidates = tuple(rows or ())
+    needle = query.strip().casefold()
+    if not needle:
+        return candidates
+    ranked = []
+    for row in candidates:
+        fields = [(_TRIGGER_FIELD, row.stored_trigger),
+                  (_TRIGGER_FIELD, row.effective_trigger),
+                  (_CONTENT_FIELD, manager_row_preview(row, snippets))]
+        if row.group_id is not None:
+            fields.append((_GROUP_FIELD, row.group_label))
+        ranks = [(field, rank) for field, text in fields
+                 if (rank := _match_rank(text, needle)) is not None]
+        if ranks:
+            ranked.append((min(ranks), row))
+    ranked.sort(key=lambda item: item[0])
+    return tuple(row for _rank, row in ranked)
+
+
 def navigation_target(row):
     """Return a stable tab/row descriptor for a manager row."""
     if not isinstance(row, ManagerRow):
@@ -387,5 +422,7 @@ __all__ = [
     "format_trigger_pair",
     "lookup_manager_target",
     "manager_rows_for_filter",
+    "manager_row_preview",
     "navigation_target",
+    "search_manager_rows",
 ]

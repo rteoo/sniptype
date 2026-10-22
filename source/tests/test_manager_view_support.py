@@ -11,6 +11,8 @@ from manager_view_support import (
     filter_static_rows,
     find_manager_target,
     format_trigger_pair,
+    manager_row_preview,
+    search_manager_rows,
 )
 from workflow_support import SnippetRef, WorkflowState
 
@@ -220,6 +222,32 @@ class StaticSearchTests(unittest.TestCase):
         ):
             with self.subTest(case, query=query):
                 self.assertEqual(expected, self._search(snippets, query))
+
+
+class SwitcherSearchTests(unittest.TestCase):
+    def test_searches_all_kinds_and_saved_text_without_running_providers(self):
+        def forbidden():
+            self.fail("Searching must never execute a provider")
+
+        snippets = {"sig": "Signature", "_codes": {"__prefix__": "code", "mail": "Saved signature"},
+                    "clock": forbidden}
+        metadata = {"groups": {"g": {"label": "Mail", "prefix": "as"}},
+                    "items": {"static": {"sig": {"group_id": "g"}}}}
+        rows = build_manager_rows(snippets, metadata, {"clock": {"trigger": "now"}})
+        self.assertEqual(["sig"], [r.key for r in search_manager_rows(rows, "ASSIG", snippets)])
+        self.assertEqual(["mail", "sig"], [r.key for r in search_manager_rows(rows, "mail", snippets)])
+        self.assertEqual(["sig", "mail"], [r.key for r in search_manager_rows(rows, "signature", snippets)])
+        self.assertEqual(["clock"], [r.key for r in search_manager_rows(rows, "now", snippets)])
+        self.assertEqual("", manager_row_preview(rows[-1], snippets))
+        self.assertEqual(rows, search_manager_rows(rows, "  ", snippets))
+
+    def test_equal_effective_triggers_remain_distinct_and_queries_are_literal(self):
+        snippets = {"codeitem": "Static [value]", "_codes": {"__prefix__": "code", "item": "Mapping"}}
+        rows = build_manager_rows(snippets)
+        self.assertEqual(["static", "mapping"],
+                         [r.kind for r in search_manager_rows(rows, "codeitem", snippets)])
+        self.assertEqual(["codeitem"], [r.key for r in search_manager_rows(rows, "[", snippets)])
+        self.assertEqual((), search_manager_rows(rows, ".*", snippets))
 
 
 class ManagerNavigationTests(unittest.TestCase):

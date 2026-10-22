@@ -1347,7 +1347,10 @@ def _run_prompt(window, focus):
     if previous_grab is not None and previous_grab.winfo_exists():
         previous_grab.grab_set()
     if opener is not None and opener.winfo_exists():
-        opener.focus_set()
+        # The destroyed prompt owned the X input focus. On X11 focus_set only
+        # records a pending focus when the application no longer has it, so an
+        # explicit return is needed, just as when entering this owned prompt.
+        opener.focus_force()
 
 
 def confirm(parent, title, body, primary_label, danger=False, typed_word=None, extra=None,
@@ -1493,12 +1496,36 @@ class ReceiptLine:
         self.frame.configure(height=self.action.winfo_reqheight())
         self.frame.pack_propagate(False)
         self._timer = None
+        self._message = (hint, self.ui.text_muted)
+        self._shortcut_hints = {}
         self.frame.bind("<Destroy>", self._on_destroy, add="+")
+
+    def _render_message(self):
+        if not self.label.winfo_exists():
+            return
+        if self._shortcut_hints:
+            text = next(reversed(self._shortcut_hints.values()))
+            color = self.ui.text_muted
+        else:
+            text, color = self._message
+        self.label.configure(text=text, fg=color)
+
+    def show_hint(self, owner, text):
+        """The latest active control owns the hint; receipts own restoration."""
+        self._shortcut_hints.pop(owner, None)
+        self._shortcut_hints[owner] = text
+        self._render_message()
+
+    def hide_hint(self, owner):
+        self._shortcut_hints.pop(owner, None)
+        self._render_message()
 
     def show(self, text, action_label=None, action=None, *, seconds=10):
         """Replace the line with ``text``, plus ``action`` while it lasts."""
         self._cancel_timer()
-        self.label.configure(text=text, fg=self.ui.text)
+        self._shortcut_hints.clear()
+        self._message = (text, self.ui.text)
+        self._render_message()
         if action is None:
             self.action.pack_forget()
             return
@@ -1514,7 +1541,9 @@ class ReceiptLine:
         """
         self._cancel_timer()
         self.action.pack_forget()
-        self.label.configure(text=self._hint, fg=self.ui.text_muted)
+        self._shortcut_hints.clear()
+        self._message = (self._hint, self.ui.text_muted)
+        self._render_message()
 
     def _act(self, action):
         self._cancel_timer()

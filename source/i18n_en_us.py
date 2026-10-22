@@ -179,7 +179,7 @@ EN_US = {
     "{PRODUCT_NAME} — Biblioteca": "{PRODUCT_NAME} — Library",
     "Editar último": "Edit last",
     "Notificações": "Notifications",
-    "Ctrl+1–5: seções   •   Ctrl+F: busca nas listas": "Ctrl+1–5: sections   •   Ctrl+F: search the lists",
+    "Ctrl+1–5: seções · Ctrl+F: busca\nCtrl+K: alternar · Ctrl+/: teclado": "Ctrl+1–5: sections · Ctrl+F: search\nCtrl+K: switch · Ctrl+/: keyboard",
     "Textos": "Snippets",
     "Mapeamentos": "Mappings",
     "Ações dinâmicas": "Dynamic actions",
@@ -241,15 +241,12 @@ EN_US = {
     "Selecione um trecho para formatar.": "Select some text to format.",
     "Formato: itálico": "Format: italic",
     "Formato: código monoespaçado": "Format: monospaced code",
-    "Formato: limpar estilos": "Format: clear styles",
+    "Formato: limpar estilos (Ctrl+Shift+X)": "Format: clear styles (Ctrl+Shift+X)",
     "Inserir referência de snippet": "Insert snippet reference",
     "Inserir": "Insert",
     "Nenhum snippet disponível.": "No snippets available.",
     "Variáveis": "Variables",
     "Campo de formulário": "Form field",
-    "Variável: referenciar snippet (%%trigger%%)": "Variable: reference a snippet (%%trigger%%)",
-    "Variável: colar clipboard (%%clipboard-paste%%)": "Variable: paste the clipboard (%%clipboard-paste%%)",
-    "Variável: campo de formulário (%%campo%%)": "Variable: form field (%%field%%)",
     "Favoritos": "Favorites",
     "Recentes": "Recent",
     "Todos os grupos": "All groups",
@@ -590,4 +587,48 @@ EN_US = {
     "Também aguardando atenção: {titles}": "Also waiting: {titles}",
     "Dispensar": "Dismiss",
     "Erro inesperado: {error}": "Unexpected error: {error}",
+    "Trigger": "Trigger",
+    "Referência": "Reference",
+    "Área de transferência": "Clipboard",
+    "Inserir variável ▾": "Insert variable ▾",
+    "Ação dinâmica": "Dynamic action",
+    "Alternar snippet": "Switch snippet",
+    "Criar \"{query}\"": "Create \"{query}\"",
+    "Teclado do gerenciador": "Manager keyboard map",
+    "Ctrl+N — Novo com a busca\nCtrl+S — Salvar\nCtrl+D — Duplicar item salvo\n"
+    "F2 — Renomear texto / focar identificador\nDelete — Excluir na lista (Desfazer disponível)\n"
+    "Esc — Limpar busca / descartar rascunho com confirmação\n"
+    "Ctrl+K — Alternar snippet\nCtrl+E — Editar último\nCtrl+F — Buscar\n"
+    "Ctrl+1–5 — Seções\n↓ / Enter na busca — Focar lista\n"
+    "Tab / Shift+Tab — Próximo / anterior\nCtrl+Tab — Inserir tabulação\n"
+    "Ctrl+Shift+R — Referência\nCtrl+Shift+V — Área de transferência\n"
+    "Ctrl+Shift+F — Campo de formulário\nCtrl+Shift+X — Limpar formato\n"
+    "Ctrl+B / I / U — Negrito / itálico / sublinhado\n"
+    "Ctrl+Shift+C / S — Código / tachado":
+    "Ctrl+N — New from search\nCtrl+S — Save\nCtrl+D — Duplicate saved item\n"
+    "F2 — Rename text / focus identifier\nDelete — Delete from list (Undo available)\n"
+    "Esc — Clear search / confirm discarding draft\n"
+    "Ctrl+K — Switch snippet\nCtrl+E — Edit last\nCtrl+F — Search\n"
+    "Ctrl+1–5 — Sections\n↓ / Enter in search — Focus list\n"
+    "Tab / Shift+Tab — Next / previous\nCtrl+Tab — Insert tab\n"
+    "Ctrl+Shift+R — Reference\nCtrl+Shift+V — Clipboard\n"
+    "Ctrl+Shift+F — Form field\nCtrl+Shift+X — Clear format\n"
+    "Ctrl+B / I / U — Bold / italic / underline\n"
+    "Ctrl+Shift+C / S — Code / strike",
+    "Ctrl+E — Editar último": "Ctrl+E — Edit last",
+    "Ctrl+N — Novo com a busca": "Ctrl+N — New from search",
+    "Ctrl+S — Salvar": "Ctrl+S — Save",
+    "Ctrl+D — Duplicar item salvo": "Ctrl+D — Duplicate saved item",
+    "F2 — Renomear": "F2 — Rename",
+    "Delete na lista — Excluir · Desfazer disponível": "Delete in list — Delete · Undo available",
+    "Ctrl+F: busca · ↓/Enter: lista\nEsc: limpar · Ctrl+N: novo com busca":
+    "Ctrl+F: search · ↓/Enter: list\nEsc: clear · Ctrl+N: new from search",
+    "F2: renomear · Ctrl+D: duplicar\nDelete: excluir · Desfazer disponível":
+    "F2: rename · Ctrl+D: duplicate\nDelete: delete · Undo available",
+    "Tab/Shift+Tab: navegar · Ctrl+Tab: tabulação\nEsc: descartar com confirmação":
+    "Tab/Shift+Tab: navigate · Ctrl+Tab: tab\nEsc: confirm discard",
+    "F2: identificador · Ctrl+D: duplicar\nCtrl+S: salvar":
+    "F2: identifier · Ctrl+D: duplicate\nCtrl+S: save",
+    "F2: identificador · Ctrl+D: duplicar\nDelete: excluir · Desfazer disponível":
+    "F2: identifier · Ctrl+D: duplicate\nDelete: delete · Undo available",
 }
