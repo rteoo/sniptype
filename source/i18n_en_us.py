@@ -6,6 +6,8 @@ a missing, unused or placeholder-mismatched entry.
 """
 
 EN_US = {
+    "Mover para cima": "Move up",
+    "Mover para baixo": "Move down",
     "Pressione uma combinação, como Ctrl+Shift+M. Backspace limpa o atalho.": "Press a combination, such as Ctrl+Shift+M. Backspace clears the shortcut.",
     "Copiar": "Copy",
     "Listas": "Lists",

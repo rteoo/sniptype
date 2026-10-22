@@ -2885,6 +2885,8 @@ class Sniptype:
             ui = ui_theme.bind(tk_root)
             root = tk.Toplevel(tk_root)
             root.theme_kind = ui.kind
+            root.theme_text_scale = ui.text_scale
+            root.theme_contrast_signature = ui.contrast_signature
             root.title(self._manager_title(dirty=False))
             geometry, min_width, min_height = ui.manager_window_size
             root.geometry(geometry)
@@ -2945,11 +2947,21 @@ class Sniptype:
                 item = ui_widgets.nav_item(footer, label, action, icon=icon)
                 if icon == "edit":
                     self._manager_edit_last_control = item
-            tk.Label(
-                footer, text=_("Ctrl+1–5: seções · Ctrl+F: busca\nCtrl+K: alternar · Ctrl+/: teclado"),
+            help_text = _("Ctrl+1–5: seções · Ctrl+F: busca\nCtrl+K: alternar · Ctrl+/: teclado")
+            help_font = tkfont.Font(root=root, font=ui.caption_font())
+            # Enlarged sidebar help must reserve its complete two-line width;
+            # otherwise the fixed-height shell compresses its wrapped lines.
+            help_width = (
+                (max(help_font.measure(line) for line in help_text.splitlines()) + ui.px(16))
+                // max(1, help_font.measure("0")) + 1 if ui.text_scale > 1 else 0
+            )
+            shortcut_label = tk.Label(
+                footer, text=help_text, width=help_width,
                 font=ui.caption_font(), bg=sidebar_bg, fg=ui.text_muted,
                 anchor="w", justify="left", wraplength=170,
-            ).pack(fill=tk.X, padx=(ui.space_sm, 0), pady=(ui.space_md, 0))
+            )
+            shortcut_label.pack(fill=tk.X, padx=(ui.space_sm, 0), pady=(ui.space_md, 0))
+            ui_widgets.wrap_label(shortcut_label)
             tk.Label(
                 footer, text=f"v{APP_VERSION}", font=ui.caption_font(),  # i18n: not ui
                 bg=sidebar_bg, fg=ui.text_muted, anchor="w",
@@ -3105,7 +3117,7 @@ class Sniptype:
         """Backups tab: list backups and expose restore/export/import actions."""
         ui = ui_theme.theme()
         self._page_receipt(parent)
-        main = tk.Frame(parent, bg=ui.surface, padx=ui.space_lg, pady=ui.space_lg)
+        main = tk.Frame(ui_widgets.page_viewport(parent), bg=ui.surface, padx=ui.space_lg, pady=ui.space_lg)
         main.pack(fill=tk.BOTH, expand=True)
         main.grid_columnconfigure(0, weight=1)
         main.grid_rowconfigure(2, weight=1)
@@ -3391,7 +3403,7 @@ class Sniptype:
         """Configurações tab: one section at a time, chosen from a side nav."""
         ui = ui_theme.theme()
         self._page_receipt(parent)
-        main = tk.Frame(parent, bg=ui.surface, padx=ui.space_lg, pady=ui.space_lg)
+        main = tk.Frame(ui_widgets.page_viewport(parent), bg=ui.surface, padx=ui.space_lg, pady=ui.space_lg)
         main.pack(fill=tk.BOTH, expand=True)
         tk.Label(
             main,
@@ -3483,14 +3495,15 @@ class Sniptype:
         card = ui_widgets.card(parent, padding=(ui.space_lg, ui.space_md))
         card.pack(fill=tk.X, pady=(0, ui.space_md))
         card.grid_columnconfigure(1, weight=1)
-        tk.Label(
+        title_label = tk.Label(
             card,
             text=title,
             font=ui.subtitle_font(),
             bg=ui.card,
             fg=ui.text_strong,
-        ).grid(row=0, column=0, columnspan=3, sticky="w")
-        tk.Label(
+        )
+        title_label.grid(row=0, column=0, columnspan=3, sticky="w")
+        description_label = tk.Label(
             card,
             text=description,
             font=ui.caption_font(),
@@ -3499,7 +3512,13 @@ class Sniptype:
             anchor="w",
             justify="left",
             wraplength=640,
-        ).grid(row=1, column=0, columnspan=3, sticky="ew", pady=(ui.space_xs, ui.space_sm))
+        )
+        description_label.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(ui.space_xs, ui.space_sm))
+        def wrap_labels(event):
+            width = max(ui.px(180), event.width - 2 * ui.space_lg)
+            ui_widgets.fit_label(title_label, width)
+            ui_widgets.fit_label(description_label, width)
+        card.bind("<Configure>", wrap_labels, add="+")
         return card
 
     def _build_language_card(self, parent, root):
@@ -3767,9 +3786,10 @@ class Sniptype:
                 fg=ui.text,
                 anchor="w",
             ).grid(row=row, column=0, sticky="w", padx=(0, ui.space_lg), pady=2)
-            tk.Label(card, text=value, anchor="w", font=ui.mono_font() if kind or value == self.data_dir
-                     else ui.font(), bg=ui.card, fg=ui.text, wraplength=ui.px(340)).grid(
-                         row=row, column=1, sticky="ew", pady=2)
+            path_label = tk.Label(card, text=value, anchor="w", font=ui.mono_font() if kind or value == self.data_dir
+                                  else ui.font(), bg=ui.card, fg=ui.text, wraplength=ui.px(340))
+            path_label.grid(row=row, column=1, sticky="ew", pady=2)
+            ui_widgets.wrap_label(path_label)
             ui_widgets.button(card, text=_("Copiar"),
                               command=lambda value=value: self._copy_ui_value(card, value)).grid(
                                   row=row, column=2, sticky="e")
@@ -3780,14 +3800,16 @@ class Sniptype:
                     row=row, column=1, columnspan=2, sticky="ew", pady=(0, ui.space_xs))
                 transfers.append(transfer.refresh)
                 row += 1
-        tk.Label(
+        data_note = tk.Label(
             card,
             text=_("A cópia espelho e o pacote de sincronização são definidos em settings.json."),
             font=ui.caption_font(),
             bg=ui.card,
             fg=ui.text_muted,
             anchor="w",
-        ).grid(row=row, column=0, columnspan=3, sticky="w", pady=(ui.space_xs, 0))
+        )
+        data_note.grid(row=row, column=0, columnspan=3, sticky="ew", pady=(ui.space_xs, 0))
+        ui_widgets.wrap_label(data_note)
         ui_widgets.button(
             card, text=_("Abrir pasta"), command=self.open_data_folder, icon="folder",
         ).grid(row=row + 1, column=0, sticky="w", pady=(ui.space_sm, 0))
@@ -4091,6 +4113,10 @@ class Sniptype:
         """
         wanted = ui_theme.live_system_kind()
         pending = wanted is not None and wanted != window.theme_kind
+        if ui_theme.theme().system == "windows":
+            pending = pending or ui_theme.windows_text_scale() != getattr(window, "theme_text_scale", 1.0)
+            if wanted == "contrast" and window.theme_kind == "contrast":
+                pending = pending or ui_theme.windows_contrast_signature(window) != window.theme_contrast_signature
         held = pending and any(editor.is_dirty() for editor in self._manager_editors)
         for editor in self._manager_editors:
             editor.hold_rebuild(held and editor.dirty)
@@ -4734,10 +4760,8 @@ class Sniptype:
         def add_toolbar_button(label, handler, padx, tooltip, font_key, icon=None):
             if ui_widgets.uses_fluent(ui):
                 # The letters stay as the label where no icon font exists.
-                glyph = icon and ui_widgets.icon_image(toolbar, icon, ui.text)
                 button = ui_widgets.button(
-                    toolbar, text="" if glyph else label, variant="toolbar",
-                    icon=icon if glyph else None,
+                    toolbar, text=label, variant="toolbar",
                 )
             else:
                 button = tk.Button(
@@ -4768,7 +4792,7 @@ class Sniptype:
         add_toolbar_button("U", lambda: apply_style("underline"), 1, _("Formato: sublinhado"), "underline", "underline")
         add_toolbar_button("S", lambda: apply_style("strike"), 1, _("Formato: tachado"), "strike", "strike")
         add_toolbar_button("<>", lambda: apply_style("code"), 1, _("Formato: código monoespaçado"), "code", "code")
-        add_toolbar_button("⌫", clear_styles_handler, 1, _("Formato: limpar estilos (Ctrl+Shift+X)"), "clear", "clear_format")
+        add_toolbar_button(_("Limpar"), clear_styles_handler, 1, _("Formato: limpar estilos (Ctrl+Shift+X)"), "clear", "clear_format")
 
         # Separator before variable buttons
         tk.Frame(toolbar, width=1, bg=ui.divider).pack(side=tk.LEFT, padx=(8, 6), fill=tk.Y, pady=2)
@@ -4960,7 +4984,7 @@ class Sniptype:
         ui = ui_theme.theme()
 
         main = tk.Frame(
-            parent, bg=ui.surface, padx=ui.space_lg, pady=ui.space_lg
+            ui_widgets.page_viewport(parent), bg=ui.surface, padx=ui.space_lg, pady=ui.space_lg
         )
         main.pack(fill=tk.BOTH, expand=True)
         # A uniform group splits by weight alone; otherwise grid sizes by
@@ -6077,7 +6101,7 @@ class Sniptype:
         ui = ui_theme.theme()
 
         main = tk.Frame(
-            parent, bg=ui.surface, padx=ui.space_lg, pady=ui.space_lg
+            ui_widgets.page_viewport(parent), bg=ui.surface, padx=ui.space_lg, pady=ui.space_lg
         )
         main.pack(fill=tk.BOTH, expand=True)
         main.grid_columnconfigure(0, weight=1)
@@ -7226,6 +7250,7 @@ class Sniptype:
                     # The switch writes by stable key, not by the (renameable) trigger.
                     ui_widgets.switch(
                         row,
+                        text=_("Ativo"),
                         variable=var,
                         command=lambda k=key, v=var: self._on_registry_checkbox(k, v, root),
                     ).pack(side=tk.LEFT)
@@ -7411,7 +7436,7 @@ class Sniptype:
         """Build the single tab listing every built-in dynamic snippet."""
         ui = ui_theme.theme()
         self._page_receipt(parent)
-        main = tk.Frame(parent, bg=ui.surface, padx=ui.space_lg, pady=ui.space_lg)
+        main = tk.Frame(ui_widgets.page_viewport(parent), bg=ui.surface, padx=ui.space_lg, pady=ui.space_lg)
         main.pack(fill=tk.BOTH, expand=True)
         tk.Label(main, text=_("Snippets dinâmicos integrados"), font=ui.title_font(),
                  bg=ui.surface, fg=ui.text).pack(anchor="w")

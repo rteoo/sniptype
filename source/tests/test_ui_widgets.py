@@ -30,6 +30,27 @@ def _hex(pixel):
 
 class ColorTests(unittest.TestCase):
 
+    def test_wrapping_uses_the_allocated_cell_and_does_not_oscillate_one_pixel(self):
+        label = mock.Mock()
+        options = {"padx": 1, "borderwidth": 0, "wraplength": 0}
+        label.cget.side_effect = options.__getitem__
+        label.configure.side_effect = lambda **changed: options.update(changed)
+        for width in (468, 469, 468, 469):
+            ui_widgets.fit_label(label, width)
+        self.assertEqual(label.configure.call_count, 1)
+        self.assertLessEqual(options["wraplength"] + 2, 468)
+        ui_widgets.fit_label(label, 247)
+        self.assertLessEqual(options["wraplength"] + 2, 247)
+        self.assertGreater(options["wraplength"], 230)
+
+    def test_contrast_text_size_dpi_and_palette_have_distinct_image_sets(self):
+        variants = [ui_theme.build_theme(kind, "windows", **options) for kind, options in (
+            ("windows", {}), ("dark", {}), ("contrast", {}),
+            ("contrast", {"text_scale": 2}), ("contrast", {"scale": 1.5}),
+            ("contrast", {"contrast_signature": "changed"}),
+        )]
+        self.assertEqual(len({ui_widgets.theme_name(ui) for ui in variants}), len(variants))
+
     def test_mix_moves_linearly_between_two_colors(self):
         self.assertEqual(ui_widgets.mix("#000000", "#FFFFFF", 0), "#000000")
         self.assertEqual(ui_widgets.mix("#000000", "#FFFFFF", 1), "#FFFFFF")
@@ -44,6 +65,78 @@ class ColorTests(unittest.TestCase):
 
 
 class DrawnImageTests(unittest.TestCase):
+
+    def test_contrast_faces_are_two_pixel_outlines_with_transparent_centers(self):
+        artist = _artist()
+        artist.contrast = True
+        artist.outline = "#FFFFFF"
+        face, _ = artist.face(4, "#E6A05A", margin=artist.margin)
+        middle, edge = face.width // 2, artist.margin
+        self.assertEqual(face.getpixel((middle, middle))[3], 0)
+        for offset in (0, 1):
+            self.assertEqual(_hex(face.getpixel((middle, edge + offset))), "#FFFFFF")
+        self.assertEqual(face.getpixel((middle, edge + 2))[3], 0)
+        checked = artist.checkbox(20, 8, "#E6A05A", "#FFFFFF", "#FFFFFF")
+        self.assertEqual(checked.getpixel((artist.margin + 3, artist.margin + 3))[3], 0)
+        switch = artist.switch(40, 20, 8, "#E6A05A", "#FFFFFF", 12, True, "#FFFFFF")
+        self.assertEqual(switch.getpixel((artist.margin + 30, artist.margin + 10))[3], 0)
+
+    def test_contrast_configuration_resolves_system_colors_only_at_draw_boundary(self):
+        ui = ui_theme.build_theme("contrast", "windows")
+        widget = mock.Mock()
+        widget.winfo_rgb.return_value = (65535, 65535, 65535)
+        artist = _artist()
+        artist.master = widget
+        elements = {}
+        with mock.patch.object(ui_widgets.tkfont, "Font") as font:
+            font.return_value.metrics.return_value = 18
+            ui_widgets._configure(mock.Mock(), ui, artist, elements)
+        self.assertTrue(elements)
+        self.assertEqual(ui.text, "SystemWindowText")
+        self.assertTrue(artist.contrast)
+        for name in ("Fluent.Button.face", "Fluent.Accent.face", "Fluent.Subtle.face", "Fluent.Nav.face"):
+            specs, default = elements[name]
+            for image in [default, *(image for _, image in specs)]:
+                self.assertEqual(image.getpixel((image.width // 2, image.height // 2))[3], 0, name)
+
+    def test_contrast_style_pairs_remain_readable_when_window_and_button_colors_differ(self):
+        # Window and Button system pairs need not coincide in a user's
+        # contrast palette. Resolving all system colors to white hid both bugs.
+        resolved = {"SystemWindow": "#000000", "SystemWindowText": "#FFFFFF",
+                    "SystemButtonFace": "#FFFFFF", "SystemButtonText": "#000000",
+                    "SystemHighlight": "#FFFF00", "SystemHighlightText": "#000000",
+                    "SystemGrayText": "#808080"}
+        ui = ui_theme.build_theme("contrast", "windows")
+        style = mock.Mock()
+        with mock.patch.object(ui_widgets, "resolve_color", side_effect=lambda _master, color: resolved[color]), \
+                mock.patch.object(ui_widgets.tkfont, "Font") as font:
+            font.return_value.metrics.return_value = 18
+            ui_widgets._configure(style, ui, _artist(), {})
+        maps = {call.args[0]: call.kwargs for call in style.map.call_args_list}
+        configs = {call.args[0]: call.kwargs for call in style.configure.call_args_list}
+        disabled = dict(maps["Accent.TButton"]["foreground"])["disabled"]
+        self.assertEqual(disabled, resolved["SystemGrayText"])
+        self.assertNotEqual(disabled, resolved["SystemWindow"])
+        self.assertEqual(configs["Accent.TButton"]["foreground"], resolved["SystemWindowText"])
+        combo = maps["TCombobox"]
+        self.assertEqual(dict(combo["fieldbackground"])["readonly"], resolved["SystemWindow"])
+        self.assertEqual(dict(combo["selectbackground"])["readonly"], resolved["SystemWindow"])
+        self.assertEqual(dict(combo["selectforeground"])["readonly"], resolved["SystemWindowText"])
+        self.assertEqual(configs["TCombobox"]["foreground"], resolved["SystemWindowText"])
+
+    def test_regular_disabled_accent_and_readonly_combo_maps_keep_their_palette_contract(self):
+        for kind in ("windows", "dark"):
+            with self.subTest(kind=kind):
+                ui = ui_theme.build_theme(kind, "windows")
+                style = mock.Mock()
+                with mock.patch.object(ui_widgets.tkfont, "Font") as font:
+                    font.return_value.metrics.return_value = 18
+                    ui_widgets._configure(style, ui, _artist(), {})
+                maps = {call.args[0]: call.kwargs for call in style.map.call_args_list}
+                self.assertEqual(dict(maps["Accent.TButton"]["foreground"])["disabled"],
+                                 ui.text_muted if ui.is_dark else ui.card)
+                self.assertEqual(dict(maps["TCombobox"]["selectbackground"])["readonly"], ui.control)
+                self.assertEqual(dict(maps["TCombobox"]["fieldbackground"])["readonly"], ui.control)
 
     def test_control_face_is_rounded_filled_and_outlined(self):
         artist = _artist()
@@ -140,6 +233,51 @@ class DrawnImageTests(unittest.TestCase):
 
 
 class FactoryTests(unittest.TestCase):
+
+    def test_icon_buttons_and_switches_refuse_missing_visible_labels(self):
+        for text in ("", " "):
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                ui_widgets.button(object(), text=text, icon="more", ui=self.windows)
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                ui_widgets.switch(object(), text=text, ui=self.windows)
+
+    def test_formatting_toolbar_keeps_text_and_every_switch_call_names_its_label(self):
+        import ast
+        from pathlib import Path
+        source = (Path(__file__).parents[1] / "sniptype.pyw").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                continue
+            if isinstance(node.func.value, ast.Name) and node.func.value.id == "ui_widgets":
+                if node.func.attr == "switch":
+                    self.assertTrue(any(option.arg == "text" for option in node.keywords), node.lineno)
+                if node.func.attr == "button":
+                    options = {option.arg: option.value for option in node.keywords}
+                    if "icon" in options:
+                        self.assertIn("text", options, node.lineno)
+                        if isinstance(options["text"], ast.Constant):
+                            self.assertTrue(str(options["text"].value).strip(), node.lineno)
+
+    def test_all_production_icon_button_wrappers_keep_nonempty_text_branches(self):
+        import ast
+        from pathlib import Path
+        source = Path(__file__).parents[1]
+        for path in [*source.glob("*.py"), *source.glob("*.pyw")]:
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                    continue
+                if node.func.attr not in ("button", "_button"):
+                    continue
+                options = {option.arg: option.value for option in node.keywords}
+                if "icon" not in options:
+                    continue
+                label = options.get("text") if node.func.attr == "button" else (
+                    node.args[1] if len(node.args) > 1 else options.get("text"))
+                self.assertIsNotNone(label, (path.name, node.lineno))
+                for branch in ast.walk(label):
+                    if isinstance(branch, ast.Constant) and isinstance(branch.value, str):
+                        self.assertTrue(branch.value.strip(), (path.name, node.lineno))
 
     def setUp(self):
         self.mac = ui_theme.build_theme("light", system="darwin")

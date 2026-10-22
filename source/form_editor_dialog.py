@@ -263,7 +263,7 @@ class FormEditor:
 
     def _build(self):
         self._assert_owner()
-        body = tk.Frame(self.window, bg=self.theme.surface)
+        body = tk.Frame(ui_widgets.page_viewport(self.window, ui=self.theme), bg=self.theme.surface)
         body.pack(fill="both", expand=True, padx=self.theme.space_lg, pady=self.theme.space_lg)
 
         heading = tk.Label(
@@ -286,12 +286,13 @@ class FormEditor:
         self._field_list.bind("<<TreeviewSelect>>", self._on_select, add="+")
         list_buttons = tk.Frame(left, bg=self.theme.surface)
         list_buttons.pack(fill="x", pady=(self.theme.space_sm, 0))
-        self._button(list_buttons, _("Adicionar"), self._add, icon="add").pack(side="left")
-        # Icon-only where the icon font exists; the arrows are the fallback.
-        glyphs = ui_widgets.has_icons(list_buttons, self.theme)
-        self._button(list_buttons, "" if glyphs else "↑", self._move_up, variant="subtle", icon="up").pack(side="left", padx=(self.theme.space_xs, 0))
-        self._button(list_buttons, "" if glyphs else "↓", self._move_down, variant="subtle", icon="down").pack(side="left", padx=(self.theme.space_xs, 0))
-        self._button(list_buttons, _("Remover"), self._remove, variant="danger", icon="delete").pack(side="left", padx=(self.theme.space_xs, 0))
+        self._button(list_buttons, _("Adicionar"), self._add, icon="add").grid(row=0, column=0, sticky="ew")
+        self._button(list_buttons, _("Remover"), self._remove, variant="danger", icon="delete").grid(
+            row=0, column=1, sticky="ew", padx=(self.theme.space_xs, 0))
+        self._button(list_buttons, _("Mover para cima"), self._move_up, variant="subtle", icon="up").grid(
+            row=1, column=0, sticky="ew", pady=(self.theme.space_xs, 0))
+        self._button(list_buttons, _("Mover para baixo"), self._move_down, variant="subtle", icon="down").grid(
+            row=1, column=1, sticky="ew", padx=(self.theme.space_xs, 0), pady=(self.theme.space_xs, 0))
 
         editor = tk.Frame(content, bg=self.theme.surface)
         editor.pack(side="left", fill="both", expand=True)

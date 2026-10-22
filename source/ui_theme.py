@@ -142,7 +142,7 @@ class Theme:
     __slots__ = (
         "kind", "system", "preference", "family", "strong_family",
         "display_family", "display_strong_family", "emoji_family", "mono_family",
-        "symbol_family", "size_delta", "scale", "density",
+        "symbol_family", "size_delta", "scale", "density", "text_scale", "contrast_signature",
         "surface", "surface_alt", "surface_alt_active",
         "card", "field",
         "control", "control_hover", "control_active",
@@ -161,7 +161,7 @@ class Theme:
     def __init__(self, kind, system, family, emoji_family, mono_family,
                  symbol_family, size_delta, colors, preference="system",
                  strong_family=None, display_family=None, display_strong_family=None,
-                 scale=1.0, density=DEFAULT_DENSITY):
+                 scale=1.0, density=DEFAULT_DENSITY, text_scale=1.0, contrast_signature=""):
         if density not in DENSITY_METRICS:
             raise ValueError(f"unknown density: {density!r}")
         self.kind = kind
@@ -179,6 +179,8 @@ class Theme:
         self.size_delta = size_delta
         # Display pixels per DS pixel: 1.0 at 96 DPI (100%).
         self.scale = scale
+        self.text_scale = text_scale
+        self.contrast_signature = contrast_signature
         self.density = density
         for name, value in colors.items():
             setattr(self, name, value)
@@ -191,9 +193,9 @@ class Theme:
         self.space_lg = 16
         self.space_xl = 24
         control, row = DENSITY_METRICS[density]
-        self.control_height = self.px(control)
+        self.control_height = self.px(max(control, 14 * text_scale * 1.5 + 10))
         self.tree_row_height = (
-            _MAC_TREE_ROW_HEIGHT if system == "darwin" else self.px(row)
+            _MAC_TREE_ROW_HEIGHT if system == "darwin" else self.px(max(row, 14 * text_scale * 1.5 + 10))
         )
 
     def px(self, value):
@@ -212,7 +214,7 @@ class Theme:
             role = _ROLE_FOR_SIZE[size]
         except KeyError:
             raise ValueError(f"font size {size!r} has no DS type role") from None
-        return -self.px(TYPE_ROLE_PIXELS[role])
+        return -self.px(TYPE_ROLE_PIXELS[role] * self.text_scale)
 
     def font(self, size=BODY_FONT_SIZE, weight=None):
         """Return a font spec tuple for the GUI's shared family."""
@@ -255,7 +257,7 @@ class Theme:
         The opaque dark palette needs them painted, because the OS otherwise
         leaves these classic Tk widgets light under light-on-dark text.
         """
-        if self.system != "darwin" and not self.is_dark:
+        if self.system != "darwin" and not self.is_dark and not self.is_contrast:
             return {}
         return {
             "bg": self.field,
@@ -283,7 +285,7 @@ class Theme:
 
     def listbox_colors(self):
         """See :meth:`entry_colors` for the same native-versus-painted seam."""
-        if self.system != "darwin" and not self.is_dark:
+        if self.system != "darwin" and not self.is_dark and not self.is_contrast:
             return {}
         return {
             "bg": self.field,
@@ -344,10 +346,14 @@ class Theme:
         """
         return {
             "relief": "flat",
-            "highlightthickness": 1,
+            "highlightthickness": self.px(2) if self.is_contrast else 1,
             "highlightbackground": self.border,
             "highlightcolor": self.focus_ring,
         }
+
+    @property
+    def is_contrast(self):
+        return self.kind == "contrast"
 
 
 
@@ -526,6 +532,20 @@ def palette(kind, system=None):
     there. With no ``system``, ``'light'``/``'dark'`` keep their historical
     meaning: the macOS Aqua maps.
     """
+    if kind == "contrast":
+        colors = dict.fromkeys(_LIGHT, "SystemWindow")
+        for token in ("text", "text_strong", "text_native", "link", "danger", "warning", "success", "info",
+                      "border", "divider", "card_border", "field_border", "control_stroke",
+                      "control_stroke_bottom", "stroke_strong", "scrollbar_thumb"):
+            colors[token] = "SystemWindowText"
+        for token in ("control", "control_hover", "control_active"):
+            colors[token] = "SystemButtonFace"
+        colors.update(text_muted="SystemGrayText", text_on_accent="SystemButtonText",
+                      select_bg="SystemHighlight", select_fg="SystemHighlightText",
+                      accent="SystemButtonFace", accent_hover="SystemButtonFace",
+                      accent_active="SystemButtonFace", accent_border="SystemHighlight",
+                      focus_ring="SystemHighlight")
+        return colors
     if system is None and kind in {"light", "dark"}:
         system = "darwin"
     if system != "darwin":
@@ -793,6 +813,48 @@ def _windows_apps_use_light_theme():
         return None
 
 
+def _windows_high_contrast():
+    """Read HCF_HIGHCONTRASTON without changing a Windows preference."""
+    class HIGHCONTRAST(ctypes.Structure):
+        # This GET returns a cached system pointer, despite the structure's
+        # published ownership note. Microsoft explicitly documents that
+        # discrepancy in its own consumer: never dereference or free it here.
+        # https://source.dot.net/System.Private.Windows.Core/Windows/Win32/PInvokeCore.SystemParametersInfo.cs.html
+        _fields_ = [("cbSize", ctypes.c_uint), ("dwFlags", ctypes.c_uint),
+                    ("lpszDefaultScheme", ctypes.c_void_p)]
+    state = HIGHCONTRAST()
+    try:
+        state.cbSize = ctypes.sizeof(state)
+        query = ctypes.windll.user32.SystemParametersInfoW
+        query.argtypes = [ctypes.c_uint, ctypes.c_uint, ctypes.c_void_p, ctypes.c_uint]
+        query.restype = ctypes.c_int
+        success = bool(query(0x0042, state.cbSize, ctypes.byref(state), 0))
+        return bool(success and state.dwFlags & 1)
+    except (AttributeError, OSError):
+        return False
+
+
+def windows_text_scale():
+    """Windows Text size is separate from display DPI; unreadable means 100%."""
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Accessibility") as key:
+            value, kind = winreg.QueryValueEx(key, "TextScaleFactor")
+        if kind == winreg.REG_DWORD and isinstance(value, int) and not isinstance(value, bool) and 100 <= value <= 225:
+            return value / 100
+    except (ImportError, OSError, TypeError, ValueError):
+        pass
+    return 1.0
+
+
+def windows_contrast_signature(widget):
+    """Identity of the active system colors for the contrast image cache."""
+    import hashlib
+    return hashlib.sha256(str(tuple(
+        widget.winfo_rgb(color) for color in sorted(set(palette("contrast", "windows").values()))
+    )).encode("ascii")).hexdigest()[:12]
+
+
 # ---------------------------------------------------------------------------
 # Runtime resolution
 # ---------------------------------------------------------------------------
@@ -836,7 +898,14 @@ def live_system_kind(system=None):
     open windows keep the palette they were built with.
     """
     system = system or current_os()
-    if _preference != "system" or system != "windows":
+    if system != "windows":
+        return None
+    if _windows_high_contrast():
+        return "contrast"
+    if _preference != "system":
+        # Leaving contrast restores the still-saved fixed appearance.
+        if _current is not None and _current.is_contrast:
+            return "dark" if _preference == "dark" else "windows"
         return None
     return _probe_kind(None, system)
 
@@ -872,7 +941,8 @@ def _probe_font_families(widget):
 
 
 def build_theme(kind, system=None, default_size=None, preference="system",
-                font_families=None, scale=1.0, density=DEFAULT_DENSITY):
+                font_families=None, scale=1.0, density=DEFAULT_DENSITY, text_scale=1.0,
+                contrast_signature=""):
     """Assemble a :class:`Theme`. Pure given its arguments.
 
     macOS "system" mode keeps Aqua's dynamic color names. A fixed light/dark
@@ -903,6 +973,8 @@ def build_theme(kind, system=None, default_size=None, preference="system",
         display_strong_family=faces.get("display_strong"),
         scale=scale,
         density=density,
+        text_scale=text_scale,
+        contrast_signature=contrast_signature,
     )
 
 
@@ -918,7 +990,9 @@ def bind(widget=None, system=None):
     global _current
     system = system or current_os()
     chosen = _preference
-    if chosen == "dark":
+    if system == "windows" and _windows_high_contrast():
+        kind = "contrast"
+    elif chosen == "dark":
         kind = "dark"
     elif chosen == "light":
         kind = "light" if system == "darwin" else "windows"
@@ -933,10 +1007,17 @@ def bind(widget=None, system=None):
         _probe_font_families(widget)
         if widget is not None and system == "windows" else None
     )
+    signature = ""
+    if kind == "contrast" and widget is not None:
+        # A new Windows contrast palette needs fresh drawn images, even if
+        # HCF_HIGHCONTRASTON stayed on throughout the change.
+        signature = windows_contrast_signature(widget)
     _current = build_theme(
         kind, system, default_size, preference=chosen, font_families=families,
         scale=display_scale(widget) if widget is not None else 1.0,
         density=_density,
+        text_scale=windows_text_scale() if system == "windows" else 1.0,
+        contrast_signature=signature,
     )
     return _current
 

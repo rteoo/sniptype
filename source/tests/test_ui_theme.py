@@ -15,12 +15,93 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 import ui_theme
 
 
+class WindowsAccessibilityTests(unittest.TestCase):
+    def tearDown(self):
+        ui_theme.reset()
+
+    def test_spi_reads_the_flag_only_after_a_successful_call(self):
+        def spi(action, size, pointer, flags):
+            self.assertEqual((action, flags), (0x0042, 0))
+            self.assertEqual(pointer._obj.cbSize, size)
+            pointer._obj.dwFlags = 1
+            return 1
+        api = mock.Mock()
+        api.user32.SystemParametersInfoW.side_effect = spi
+        with mock.patch.object(ui_theme.ctypes, "windll", api, create=True):
+            self.assertTrue(ui_theme._windows_high_contrast())
+            api.user32.SystemParametersInfoW.side_effect = None
+            api.user32.SystemParametersInfoW.return_value = 0
+            self.assertFalse(ui_theme._windows_high_contrast())
+
+    def test_repeated_spi_reads_preserve_flags_without_freeing_the_cached_scheme(self):
+        api = mock.Mock()
+        answers = iter(((1, 1), (1, 0), (0, 1)))
+        def query(_action, _size, pointer, _flags):
+            success, flags = next(answers)
+            pointer._obj.lpszDefaultScheme = 12345
+            pointer._obj.dwFlags = flags
+            return success
+        api.user32.SystemParametersInfoW.side_effect = query
+        with mock.patch.object(ui_theme.ctypes, "windll", api, create=True):
+            self.assertEqual([ui_theme._windows_high_contrast() for _ in range(3)], [True, False, False])
+        api.kernel32.LocalFree.assert_not_called()
+        self.assertEqual(api.user32.SystemParametersInfoW.argtypes[2], ui_theme.ctypes.c_void_p)
+
+    def test_contrast_overrides_every_preference_without_saving_it(self):
+        for preference in ("dark", "light", "system"):
+            ui_theme.set_preference(preference)
+            with mock.patch.object(ui_theme, "_windows_high_contrast", return_value=True), \
+                    mock.patch.object(ui_theme, "windows_text_scale", return_value=1.0):
+                ui = ui_theme.bind(None, "windows")
+                self.assertTrue(ui.is_contrast)
+                self.assertEqual(ui_theme.preference(), preference)
+                self.assertEqual(ui.preference, preference)
+                self.assertEqual(ui.surface, "SystemWindow")
+                self.assertEqual(ui.text, "SystemWindowText")
+                self.assertEqual(ui.select_bg, "SystemHighlight")
+                self.assertEqual(ui.select_fg, "SystemHighlightText")
+                self.assertEqual(ui.entry_colors()["bg"], "SystemWindow")
+                self.assertTrue(all(color.startswith("System")
+                                    for color in ui_theme.palette("contrast", "windows").values()))
+            with mock.patch.object(ui_theme, "_windows_high_contrast", return_value=False):
+                if preference != "system":
+                    expected = "dark" if preference == "dark" else "windows"
+                    self.assertEqual(ui_theme.live_system_kind("windows"), expected)
+
+    def test_registry_text_scale_is_validated_and_multiplies_dpi_and_roles(self):
+        registry = mock.MagicMock()
+        registry.REG_DWORD = 4
+        for value, kind, expected in ((150, 4, 1.5), (200, 4, 2), (225, 4, 2.25),
+                                      (50, 4, 1), (999, 4, 1), ("150", 1, 1), (True, 4, 1)):
+            registry.QueryValueEx.return_value = value, kind
+            with self.subTest(value=value), mock.patch.dict(sys.modules, winreg=registry):
+                self.assertEqual(ui_theme.windows_text_scale(), expected)
+        registry.QueryValueEx.assert_called_with(mock.ANY, "TextScaleFactor")
+        registry.OpenKey.assert_called_with(registry.HKEY_CURRENT_USER, r"Software\Microsoft\Accessibility")
+        ui = ui_theme.build_theme("dark", "windows", text_scale=1.5)
+        self.assertEqual(ui.font()[1], -21)
+        self.assertEqual(ui.caption_font()[1], -18)
+        self.assertEqual(ui.title_font()[1], -42)
+        self.assertEqual(ui.mono_font()[1], -21)
+        doubled = ui_theme.build_theme("dark", "windows", scale=2, text_scale=1.5)
+        self.assertEqual(doubled.font()[1], -42)
+        self.assertGreater(ui_theme.build_theme("dark", "windows", text_scale=2).tree_row_height, 32)
+
+    def test_bind_reads_registry_scale_without_writing_preferences(self):
+        with mock.patch.object(ui_theme, "_windows_high_contrast", return_value=False), \
+                mock.patch.object(ui_theme, "windows_text_scale", return_value=1.5):
+            self.assertEqual(ui_theme.bind(None, "windows").font()[1], -21)
+
+
 class DensitySelectionTests(unittest.TestCase):
     def tearDown(self):
         ui_theme.reset()
 
     def test_selected_density_reaches_bind_and_distinct_cached_styles(self):
         import ui_widgets
+        # The test pins a dark cache name, independently of the host default
+        # (Aqua defaults to System). It is not an OS appearance probe.
+        ui_theme.set_preference("dark")
         names = []
         for density, (_control, row_height) in ui_theme.DENSITY_METRICS.items():
             ui_theme.set_density(density)

@@ -265,6 +265,17 @@ class ManagerGuiSmokeTests(unittest.TestCase):
                 dialog._field_list.selection_set("0")
                 dialog.window.update()
                 self.assertEqual("Synthetic changed", dialog.default_var.get())
+                controls = _buttons(dialog.window)
+                self.assertIn("Mover para cima", controls)
+                self.assertIn("Mover para baixo", controls)
+                controls["Mover para baixo"].invoke()
+                dialog.window.update()
+                self.assertEqual(["second", "first"], [field["name"] for field in dialog.controller.fields])
+                self.assertEqual("Synthetic changed", dialog.controller.fields[1]["default"])
+                controls["Mover para cima"].invoke()
+                dialog.window.update()
+                self.assertEqual(["first", "second"], [field["name"] for field in dialog.controller.fields])
+                self.assertEqual("Synthetic changed", dialog.default_var.get())
             finally:
                 dialog.cancel()
 

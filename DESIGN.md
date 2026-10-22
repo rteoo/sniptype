@@ -175,7 +175,7 @@ shifted so the body role matches the platform's default size.
 | Area | Design system | SnipType | Why |
 | --- | --- | --- | --- |
 | Toolkit | WinUI 3 controls | Tk/ttk with drawn faces | The existing stack works; migration has no demonstrated benefit. |
-| Accessibility API | UI Automation peers | Tk 8.6 provides no UI Automation peers for its widgets, so Narrator support is limited and untested | Tk limitation. |
+| Accessibility API | UI Automation peers | Tk 8.6 provides no UI Automation peers for its widgets. Narrator roles, values and automatic announcements remain unavailable or unverified. | Toolkit limitation; mitigations below. |
 | Materials | Mica window base | Opaque surfaces | Tk cannot draw Mica; the family's opaque fallback is used. |
 | Control templates | Native templates | Nine-slice images, 128 px tiled middle, per-surface styles | Tk has no rounded primitive; see the runtime reference. |
 | Focus geometry | Web: 3 px ring, 3 px offset | 2 px ring, 1 px gap | Tk cannot paint outside a widget. Every pixel of margin widens every control, and 2 px still meets the WCAG 2.4.13 area. |
@@ -192,7 +192,11 @@ Adopted now as a project extension:
   The focus ring sits in a reserved margin on every face, including the combo
   box, check box and switch, and composes with selection. Marks use the
   primary border tone; copper fills only primary faces and checked fills.
-  Contrast-theme handling from that profile is not implemented yet.
+  Windows contrast themes take precedence over the saved appearance without
+  changing it: `SPI_GETHIGHCONTRAST` selects semantic system colors. The Pillow
+  boundary resolves those names and draws transparent faces with 2 px outlines;
+  the image cache distinguishes contrast, the resolved system palette, DPI,
+  text scale and density. Leaving contrast restores the saved appearance.
 - **State vocabulary (§12.1), expansion glossary.** The sidebar names one
   canonical state, and the states never collapse into each other:
 
@@ -398,6 +402,35 @@ State is never conveyed by color alone. Keep labels readable at the minimum
 window size and with longer PT-BR text. Do not add a custom title bar, fake
 Mica or a second Tk root.
 
+WP9 reads `HKCU\Software\Microsoft\Accessibility\TextScaleFactor` as a
+percentage independently of display DPI. At 96 DPI, 150% produces a 21 px body;
+200% produces 28 px. Controls and rows grow to fit the enlarged body. Above
+100% text, each manager page has horizontal and vertical scrollbars, and Tab
+reveals focused controls. Settings descriptions wrap to the available width;
+other long page labels wrap within the scrollable surface. This is a deliberate
+Tk adaptation: enlarged pages can require horizontal scrolling instead of
+compressing controls or reducing text. Formatting controls retain visible B/I/U/S
+and code labels, Clear is written out, and switches have visible text.
+Form-field reorder commands are labeled Move up/Move down and preserve their
+unsaved draft. Enlarged sidebar help reserves its measured width; settings
+paths wrap to their actual value column while Copy retains the complete value.
+Oversized editors reveal the existing insertion caret on focus instead of
+scrolling to the field's far edge. Wrapping uses stable measured widths to avoid
+one-pixel layout feedback in nested settings viewports.
+
+The contrast reader uses the returned scheme pointer only as an opaque field.
+Microsoft's [own Windows consumer](https://source.dot.net/System.Private.Windows.Core/Windows/Win32/PInvokeCore.SystemParametersInfo.cs.html)
+documents that this pointer is cached and must not be freed, correcting the
+structure reference's ownership statement. The app reads the flag and never
+dereferences, frees or retains the scheme name.
+
+These changes do not supply an accessibility bridge. The mitigations are
+visible action names, written state and failure messages, consistent focus,
+keyboard commands and the searchable command picker. Receipts and InfoBars
+remain plain Tk labels: they do not acquire Narrator live announcements. A
+native UIA bridge or a toolkit migration requires separate design and approval;
+it is outside WP9. Do not describe the manager as Narrator compatible.
+
 Evidence for this adoption: the unit suite and the manager smoke tests, plus
 screenshots of the real windows on an isolated data home with synthetic data,
 in Dark and Light at 1180 × 760 and 1600 × 1000, at 100% scaling only.
@@ -424,7 +457,8 @@ satisfy any of them.
 | Gate | Status |
 | --- | --- |
 | Appearance: live System change while the manager is open | Implemented: checked every 3 s while the manager is shown; a draft holds the switch and says so. Verified in the smoke test and the harness with the registry read mocked, not by switching the real Windows setting. |
-| Appearance: Windows contrast themes | Not tested. Drawn faces ignore system colors. |
+| Appearance: Windows contrast themes | Implemented in WP9; SPI and system-name resolution covered with patched APIs and Pillow image assertions. Actual Windows contrast theme on remains an open manual gate; simulated process captures do not satisfy it. |
+| Accessibility: Windows Text size 200% at 1280 × 800 | Implemented in WP9; registry/type scaling covered by pure tests. Actual system Text size 200% and physical scroll/focus traversal remain open manual gates. No OS settings were changed. Screenshots must be attached to the PR when the real setting is tested. |
 | Density: Comfortable and Touch | Implemented in WP8; physical desktop layout and higher DPI remain unverified. |
 | Display: 125/150/200% DPI and mixed monitors | Not tested on hardware. Window minimums and spacing are still unscaled pixels. |
 | Keyboard: visible focus on list rows | Implemented in WP6: focused selection uses neutral `select_bg`; unfocused selection uses `surface_alt`, retaining a 3 × 16 px copper pill in both states. Verified with the actual Tk focus-state prototype and dark/light harness captures. Physical keyboard traversal and contrast themes remain unverified. |

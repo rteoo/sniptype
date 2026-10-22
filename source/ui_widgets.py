@@ -31,6 +31,7 @@ collection on a thread other than the GUI thread can abort Tcl (see the
 
 import base64
 import io
+import copy
 from collections import namedtuple
 import tkinter as tk
 from tkinter import font as tkfont
@@ -106,8 +107,15 @@ def uses_fluent(ui=None):
 
 
 def theme_name(ui):
-    base = "sniptype-fluent-dark" if ui.is_dark else "sniptype-fluent-light"
-    return base if ui.density == "compact" else f"{base}-{ui.density}"
+    base = "sniptype-fluent-contrast" if ui.is_contrast else (
+        "sniptype-fluent-dark" if ui.is_dark else "sniptype-fluent-light")
+    if ui.density != "compact":
+        base += f"-{ui.density}"
+    if ui.scale != 1.0 or ui.text_scale != 1.0:
+        base += f"-dpi{ui.scale:.4f}-text{ui.text_scale:.4f}"
+    if ui.contrast_signature:
+        base += f"-{ui.contrast_signature}"
+    return base
 
 
 # ---------------------------------------------------------------------------
@@ -173,6 +181,8 @@ class _Artist:
         self.images = []
         self.ring = self.px(2)
         self.margin = self.ring + self.px(1)
+        self.contrast = False
+        self.outline = None
 
     def px(self, value):
         return max(1, round(value * self.scale))
@@ -248,7 +258,12 @@ class _Artist:
             self.focus_ring(draw, (0, 0, side, side), radius + margin, focus)
         x0 = y0 = margin
         x1 = y1 = side - margin
-        line = self.px(1)
+        line = self.px(2 if self.contrast else 1)
+        if self.contrast:
+            stroke = stroke or self.outline
+            fill = _CLEAR
+            bottom = stroke
+            bottom_width = 2
         if stroke is None:
             self.rounded(draw, (x0, y0, x1, y1), radius, fill)
             return self.finish(image, side, side), border
@@ -276,10 +291,13 @@ class _Artist:
 
     def _outlined(self, draw, box, radius, fill, stroke):
         x0, y0, x1, y1 = box
+        if self.contrast:
+            stroke = stroke or self.outline
+            fill = _CLEAR
         if stroke is None:
             self.rounded(draw, box, radius, fill)
             return
-        line = self.px(1)
+        line = self.px(2 if self.contrast else 1)
         self.rounded(draw, box, radius, stroke)
         self.rounded(draw, (x0 + line, y0 + line, x1 - line, y1 - line), radius - line, fill)
 
@@ -321,7 +339,9 @@ class _Artist:
         draw.ellipse(
             ((center_x - half) * _SS, (center_y - half) * _SS,
              (center_x + half) * _SS, (center_y + half) * _SS),
-            fill=knob,
+            fill=None if self.contrast else knob,
+            outline=knob if self.contrast else None,
+            width=round(self.px(2) * _SS),
         )
         return self.finish(image, width + gap, full_height)
 
@@ -409,6 +429,17 @@ def _configure(style, ui, artist, elements):
     ``elements`` records each state-dependent image element as ttk matches
     it (see :class:`_ThemeState`).
     """
+    if ui.is_contrast:
+        # Keep semantic system names in Theme. Pillow only accepts resolved
+        # colors; this copy is confined to the image/style construction seam.
+        ui = copy.copy(ui)
+        for token in ui.__slots__:
+            value = getattr(ui, token)
+            if isinstance(value, str) and value.startswith("System"):
+                setattr(ui, token, resolve_color(artist.master, value))
+        artist.contrast = True
+        artist.outline = ui.text
+        ui.text_on_accent = ui.text
     px = artist.px
     light = not ui.is_dark
     base = ui.card
@@ -546,7 +577,7 @@ def _configure(style, ui, artist, elements):
     style.configure("Danger.TButton", foreground=ui.danger)
     style.map("Danger.TButton", foreground=[("disabled", muted)])
     style.configure("Accent.TButton", foreground=ui.text_on_accent)
-    style.map("Accent.TButton", foreground=[("disabled", ui.card if light else muted)])
+    style.map("Accent.TButton", foreground=[("disabled", muted if ui.is_contrast else (ui.card if light else muted))])
     style.configure("Subtle.TButton", padding=(px(8), top, px(8), bottom))
     style.configure("Toolbar.TButton", padding=(px(6), top, px(6), bottom))
     style.configure(
@@ -617,9 +648,9 @@ def _configure(style, ui, artist, elements):
     style.map(
         "TCombobox",
         foreground=[("disabled", muted)],
-        selectbackground=[("readonly", ui.control)],
+        selectbackground=[("readonly", ui.field if ui.is_contrast else ui.control)],
         selectforeground=[("readonly", text)],
-        fieldbackground=[("readonly", ui.control)],
+        fieldbackground=[("readonly", ui.field if ui.is_contrast else ui.control)],
     )
 
     # -- Checkbox and switch ------------------------------------------------
@@ -628,10 +659,10 @@ def _configure(style, ui, artist, elements):
     box, label_gap = px(20), px(8)
     unchecked = _rgba(overlay, 0.02 if light else 0.1)
     unchecked_hover = _rgba(overlay, 0.06 if light else 0.14)
-    check = ui.text_on_accent
+    check = ui.text if ui.is_contrast else ui.text_on_accent
     edge = ui.accent_border
     off_stroke = ui.stroke_strong
-    indicator_disabled = mix(base, overlay, 0.2)
+    indicator_disabled = ui.text_muted if ui.is_contrast else mix(base, overlay, 0.2)
 
     def checkbox(fill, outline=None, mark=None, focus=None):
         return artist.checkbox(box, label_gap, fill, outline, mark, focus=focus)
@@ -644,13 +675,13 @@ def _configure(style, ui, artist, elements):
             ("pressed", (unchecked_hover, off_stroke)),
             ("active", (unchecked_hover, off_stroke)),
         ], [
-            ("selected disabled", (indicator_disabled, None, base)),
+            ("selected disabled", (indicator_disabled, None, indicator_disabled if ui.is_contrast else base)),
             ("disabled", (_CLEAR, indicator_disabled)),
         ]),
     }
     track, height = px(40), px(20)
     knob, knob_hover = px(12), px(14)
-    off_knob = mix(text, base, 0.35)
+    off_knob = text if ui.is_contrast else mix(text, base, 0.35)
 
     def switch(fill, knob_color, knob_size, on, outline=None, focus=None):
         return artist.switch(track, height, label_gap, fill, knob_color, knob_size, on,
@@ -662,7 +693,7 @@ def _configure(style, ui, artist, elements):
             ("selected", (ui.accent, check, knob, True, edge)),
             ("active", (unchecked_hover, off_knob, knob_hover, False, off_stroke)),
         ], [
-            ("selected disabled", (indicator_disabled, base, knob, True)),
+            ("selected disabled", (indicator_disabled, indicator_disabled if ui.is_contrast else base, knob, True)),
             ("disabled", (_CLEAR, indicator_disabled, knob, False, indicator_disabled)),
         ])
     for name, (specs, default) in indicators.items():
@@ -828,7 +859,7 @@ def icon_image(widget, name, color, *, gap=0, leading=False, ui=None):
 def _icon_option(widget, icon, variant, with_text, ui, trailing=False):
     """``-image`` spec for a button icon, or None."""
     color = {
-        "accent": ui.text_on_accent,
+        "accent": ui.text if ui.is_contrast else ui.text_on_accent,
         "danger": ui.danger,
     }.get(variant, ui.text)
     gap = 8 if with_text else 0
@@ -848,6 +879,8 @@ def button(parent, text="", command=None, *, variant="standard", icon=None,
     glyph shown before the text where the icon font exists.
     """
     ui = ui or ui_theme.theme()
+    if icon and not str(text).strip():
+        raise ValueError("an icon button requires a visible text label")
     if variant not in VARIANTS:
         raise ValueError(f"unknown button variant: {variant!r}")
     if not uses_fluent(ui):
@@ -944,7 +977,7 @@ def search_hint(widget, text):
     def refresh(*_args):
         if not widget.get() and widget.focus_get() is not widget:
             cue.place(in_=widget, x=ui.px(10), rely=0.5, anchor="w",
-                      relwidth=0.85, height=ui.px(20))
+                      relwidth=0.85, height=cue.winfo_reqheight())
         else:
             cue.place_forget()
 
@@ -977,7 +1010,7 @@ def tree_list(parent, *, columns=(), headings=False, ui=None, **options):
         ("Treeitem.text", {"side": "left", "sticky": ""}),
     ]})])
     style.map("Manager.Treeview", background=[("selected", "focus", ui.select_bg),
-                                               ("selected", "!focus", ui.surface_alt)],
+                                               ("selected", "!focus", ui.select_bg if ui.is_contrast else ui.surface_alt)],
               foreground=[("selected", ui.select_fg)])
     tree = ttk.Treeview(parent, columns=columns, show="tree headings" if headings else "tree",
                         selectmode="browse", style="Manager.Treeview", **options)
@@ -1039,6 +1072,8 @@ def checkbox(parent, text="", *, variable=None, command=None, ui=None, **options
 
 def switch(parent, text="", *, variable=None, command=None, ui=None, **options):
     """A toggle switch for an on/off setting that applies immediately."""
+    if not str(text).strip():
+        raise ValueError("a switch requires a visible text label")
     return _check(parent, "Switch.TCheckbutton", text, variable, command, ui, options)
 
 
@@ -1049,10 +1084,124 @@ def _check(parent, base, text, variable, command, ui, options):
             parent, text=text, variable=variable, command=command,
             font=ui.font(), anchor="w", **options,
         )
+    style = _surface_style(parent, base, ui)
+    if ui.text_scale > 1:
+        ttk.Style(parent).configure(style, wraplength=ui.px(540))
     return ttk.Checkbutton(
         parent, text=text, variable=variable, command=command,
-        style=_surface_style(parent, base, ui), **options,
+        style=style, **options,
     )
+
+
+def page_viewport(parent, *, ui=None):
+    """Enlarged text keeps its natural geometry inside a scrollable page.
+
+    The ordinary layout is unchanged at 100%. At larger Text size both axes
+    scroll, including editor actions; Tab reveals the focused control.
+    """
+    ui = ui or ui_theme.theme()
+    if ui.text_scale <= 1:
+        return parent
+    shell = tk.Frame(parent, bg=ui.surface)
+    shell.pack(fill=tk.BOTH, expand=True)
+    shell.grid_columnconfigure(0, weight=1)
+    shell.grid_rowconfigure(0, weight=1)
+    canvas = tk.Canvas(shell, bg=ui.surface, highlightthickness=0, takefocus=0)
+    canvas.grid(row=0, column=0, sticky="nsew")
+    vertical = scrollbar(shell, command=canvas.yview, ui=ui)
+    horizontal = scrollbar(shell, orient=tk.HORIZONTAL, command=canvas.xview, ui=ui)
+    vertical.grid(row=0, column=1, sticky="ns")
+    horizontal.grid(row=1, column=0, sticky="ew")
+    canvas.configure(yscrollcommand=vertical.set, xscrollcommand=horizontal.set)
+    inner = tk.Frame(canvas, bg=ui.surface)
+    item = canvas.create_window((0, 0), window=inner, anchor="nw")
+
+    def layout(event):
+        canvas.itemconfigure(item, width=max(event.width, ui.px(1000 * ui.text_scale)),
+                             height=max(event.height, ui.px(700 * ui.text_scale)))
+        canvas.configure(scrollregion=canvas.bbox("all"))
+
+    def reveal(event):
+        canvas.update_idletasks()
+        widget = event.widget
+        x, y, width, height = focus_bounds(widget)
+        for axis, position, extent, viewport, origin, move in (
+            ("x", x - inner.winfo_rootx(), width,
+             canvas.winfo_width(), canvas.canvasx(0), canvas.xview_moveto),
+            ("y", y - inner.winfo_rooty(), height,
+             canvas.winfo_height(), canvas.canvasy(0), canvas.yview_moveto),
+        ):
+            target = position - ui.space_sm if position < origin else (
+                position + extent + ui.space_sm - viewport if position + extent > origin + viewport else None)
+            if target is not None:
+                total = inner.winfo_width() if axis == "x" else inner.winfo_height()
+                move(max(0, target) / max(1, total))
+
+    def connect(event):
+        if event.widget is not inner:
+            return
+        pending = list(inner.winfo_children())
+        while pending:
+            child = pending.pop()
+            pending.extend(child.winfo_children())
+            if getattr(child, "_page_focus_bound", False):
+                continue
+            child._page_focus_bound = True
+            child.bind("<FocusIn>", reveal, add="+")
+            # Entries and collections retain their own wheel/arrow behavior.
+            if isinstance(child, (tk.Frame, tk.Label)):
+                child.bind("<MouseWheel>", lambda wheel: canvas.yview_scroll(-int(wheel.delta / 120), "units"))
+
+    canvas.bind("<Configure>", layout)
+    inner.bind("<Map>", connect)
+    inner.page_canvas = canvas
+    return inner
+
+
+def focus_bounds(widget):
+    """The focused caret/row of a scrollable field, or the complete control.
+
+    Seeing an existing caret or row preserves the insertion index/selection.
+    Scrolling an oversized field's far edge into view can hide its caret.
+    """
+    bounds = None
+    if isinstance(widget, tk.Text):
+        widget.see("insert")
+        widget.update_idletasks()
+        bounds = widget.bbox("insert")
+        if bounds:
+            bounds = (*bounds[:2], max(1, int(widget.cget("insertwidth"))), bounds[3])
+    elif isinstance(widget, ttk.Treeview):
+        row = widget.focus()
+        if row:
+            widget.see(row)
+            bounds = widget.bbox(row)
+            if bounds:
+                bounds = (*bounds[:2], min(30, bounds[2]), bounds[3])
+    elif isinstance(widget, (tk.Entry, ttk.Entry, ttk.Combobox)):
+        bounds = widget.bbox("insert")
+    if bounds:
+        x, y, width, height = bounds
+        return widget.winfo_rootx() + x, widget.winfo_rooty() + y, width, height
+    return widget.winfo_rootx(), widget.winfo_rooty(), widget.winfo_width(), widget.winfo_height()
+
+
+def fit_label(label, width):
+    """Wrap to an allocated cell, reserving label chrome and stable rounding.
+
+    Eight-pixel steps prevent one-pixel requested/allocated width oscillation
+    in nested Tk grid/canvas layouts. Reapplying an unchanged wrap is inert.
+    """
+    inset = 2 * (int(label.cget("padx")) + int(label.cget("borderwidth")))
+    wrap = max(8, (max(8, int(width) - inset) // 8) * 8)
+    if int(label.cget("wraplength")) != wrap:
+        label.configure(wraplength=wrap, justify=tk.LEFT)
+
+
+def wrap_label(label):
+    """Follow this label's actual allocated width instead of a page constant."""
+    label.bind("<Configure>", lambda event: fit_label(label, event.width), add="+")
+    return label
 
 
 def scrollbar(parent, *, orient=tk.VERTICAL, ui=None, **options):
@@ -1498,11 +1647,14 @@ class ReceiptLine:
         )
         self.label.pack(side=tk.LEFT)
         self.action = button(self.frame, variant="subtle", ui=self.ui)
-        self.frame.configure(height=self.action.winfo_reqheight())
+        line = tkfont.Font(root=parent, font=self.ui.caption_font()).metrics("linespace")
+        self._minimum_height = max(self.action.winfo_reqheight(), 2 * line + self.ui.px(6))
+        self.frame.configure(height=self._minimum_height)
         self.frame.pack_propagate(False)
         self._timer = None
         self._message = (hint, self.ui.text_muted)
         self._shortcut_hints = {}
+        self.frame.bind("<Configure>", lambda _event: self._fit_message(), add="+")
         self.frame.bind("<Destroy>", self._on_destroy, add="+")
 
     def _render_message(self):
@@ -1514,6 +1666,13 @@ class ReceiptLine:
         else:
             text, color = self._message
         self.label.configure(text=text, fg=color)
+        self._fit_message()
+
+    def _fit_message(self):
+        room = self.frame.winfo_width() - (self.action.winfo_reqwidth() if self.action.winfo_manager() else 0)
+        if room > 8:
+            fit_label(self.label, room)
+        self.frame.configure(height=max(self._minimum_height, self.label.winfo_reqheight()))
 
     def show_hint(self, owner, text):
         """The latest active control owns the hint; receipts own restoration."""
