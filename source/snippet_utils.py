@@ -88,6 +88,36 @@ def find_shadowed_statics(static_snippets, dynamic_snippets):
     }
 
 
+def _library_items(snippets):
+    """Every addressable item of a static library: static keys and mapping entries."""
+    items = {}
+    for key, value in snippets.items():
+        if callable(value):
+            continue
+        if key.startswith("_") and isinstance(value, dict):
+            for name, item in value.items():
+                if name != "__prefix__":
+                    items[(key, name)] = item
+        else:
+            items[(None, key)] = value
+    return items
+
+
+def library_change_counts(before, after):
+    """What replacing library ``before`` with ``after`` does, item by item.
+
+    Returns ``{"new": n, "overwritten": n, "removed": n}``. Mapping entries are
+    counted one by one, so replacing a whole mapping container (what a merge
+    import does when both sides define it) shows the entries it drops.
+    """
+    old, new = _library_items(before), _library_items(after)
+    return {
+        "new": sum(1 for item in new if item not in old),
+        "overwritten": sum(1 for item, value in new.items() if item in old and old[item] != value),
+        "removed": sum(1 for item in old if item not in new),
+    }
+
+
 def get_dynamic_prefixes(snippets):
     """Return builtin and custom dynamic mapping prefixes."""
     prefixes = {}

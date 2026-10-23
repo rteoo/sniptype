@@ -218,62 +218,63 @@ class GroupDialog:
 
     def _label(self, parent, text):
         tk.Label(
-            parent, text=text, anchor="w", bg=self.theme.card,
+            parent, text=text, anchor="w", bg=self.theme.surface,
             fg=self.theme.text, font=self.theme.font(),
-        ).pack(fill="x", padx=self.theme.space_md, pady=(self.theme.space_sm, self.theme.space_xs))
+        ).pack(fill="x", pady=(self.theme.space_sm, self.theme.space_xs))
 
     def _build(self):
         self._assert_owner()
         body = tk.Frame(self.window, bg=self.theme.surface)
         body.pack(fill="both", expand=True, padx=self.theme.space_lg, pady=self.theme.space_lg)
-        card = ui_widgets.card(body, padding=(0, self.theme.space_sm), ui=self.theme)
-        card.pack(fill="both", expand=True)
+        # The fields sit on the dialog surface itself, with no card around them.
+        fields = tk.Frame(body, bg=self.theme.surface)
+        fields.pack(fill="both", expand=True)
 
-        self._label(card, _("Nome do grupo *"))
-        label = ui_widgets.entry(card, ui=self.theme)
-        label.pack(fill="x", padx=self.theme.space_md)
+        self._label(fields, _("Nome do grupo *"))
+        label = ui_widgets.entry(fields, ui=self.theme)
+        label.pack(fill="x")
 
-        self._label(card, _("Notas"))
+        self._label(fields, _("Notas"))
         notes_field, notes = ui_widgets.text_area(
-            card, height=3, wrap="word",
+            fields, height=3, wrap="word",
             padx=self.theme.space_sm, pady=self.theme.space_xs, ui=self.theme,
         )
-        notes_field.pack(fill="x", padx=self.theme.space_md)
+        notes_field.pack(fill="x")
 
-        self._label(card, _("Prefixo de runtime"))
-        prefix = ui_widgets.entry(card, ui=self.theme)
-        prefix.pack(fill="x", padx=self.theme.space_md)
+        self._label(fields, _("Prefixo do trigger"))
+        prefix = ui_widgets.entry(fields, ui=self.theme)
+        prefix.pack(fill="x")
 
         enabled_var = tk.BooleanVar(self.window)
         enabled = ui_widgets.checkbox(
-            card, text=_("Grupo ativo"), variable=enabled_var, ui=self.theme,
+            fields, text=_("Grupo ativo"), variable=enabled_var, ui=self.theme,
         )
-        enabled.pack(anchor="w", padx=self.theme.space_md, pady=(self.theme.space_sm, 0))
+        enabled.pack(anchor="w", pady=(self.theme.space_sm, 0))
 
-        self._label(card, _("Terminador"))
+        self._label(fields, _("Terminador"))
         terminator = ui_widgets.combobox(
-            card, values=tuple(_(label) for label in TERMINATOR_LABELS.values()), ui=self.theme,
+            fields, values=tuple(_(label) for label in TERMINATOR_LABELS.values()), ui=self.theme,
         )
-        terminator.pack(fill="x", padx=self.theme.space_md)
+        terminator.pack(fill="x")
 
-        self._label(card, _("Modo de aplicativo"))
+        self._label(fields, _("Modo de aplicativo"))
         application_mode = ui_widgets.combobox(
-            card, values=tuple(_(label) for label in APPLICATION_LABELS.values()), ui=self.theme,
+            fields, values=tuple(_(label) for label in APPLICATION_LABELS.values()), ui=self.theme,
         )
-        application_mode.pack(fill="x", padx=self.theme.space_md)
+        application_mode.pack(fill="x")
 
         tk.Label(
-            card, text=_(WINDOWS_POLICY_NOTE), anchor="w", justify="left",
-            wraplength=470, bg=self.theme.card, fg=self.theme.text_muted,
+            fields, text=_(WINDOWS_POLICY_NOTE), anchor="w", justify="left",
+            wraplength=470, bg=self.theme.surface, fg=self.theme.text_muted,
             font=self.theme.caption_font(),
-        ).pack(fill="x", padx=self.theme.space_md, pady=(self.theme.space_sm, 0))
+        ).pack(fill="x", pady=(self.theme.space_sm, 0))
 
-        self._label(card, _("Executáveis (um por linha)"))
+        self._label(fields, _("Executáveis (um por linha)"))
         executables_field, executables = ui_widgets.text_area(
-            card, height=4, wrap="none", font=self.theme.mono_font(9),
+            fields, height=4, wrap="none", font=self.theme.mono_font(9),
             padx=self.theme.space_sm, pady=self.theme.space_xs, ui=self.theme,
         )
-        executables_field.pack(fill="both", expand=True, padx=self.theme.space_md)
+        executables_field.pack(fill="both", expand=True)
 
         normalized = normalize_group(None, self._group)
         label.insert(0, normalized.label if self._group else "")
@@ -300,23 +301,10 @@ class GroupDialog:
             bg=self.theme.surface, fg=self.theme.danger, font=self.theme.caption_font(),
         )
         self._error_label.pack(fill="x", pady=(self.theme.space_sm, 0))
-        buttons = tk.Frame(body, bg=self.theme.surface)
-        buttons.pack(fill="x", pady=(self.theme.space_md, 0))
-        ui_widgets.button(
-            buttons, text=_("Cancelar"), command=self.cancel, width=10, ui=self.theme,
-        ).pack(side="right")
-        ui_widgets.button(
-            buttons, text=_("Salvar"), command=self.save, width=10, variant="accent",
-            icon="save", ui=self.theme,
-        ).pack(side="right", padx=(0, self.theme.space_sm))
-        self.window.bind("<Escape>", lambda _event: self.cancel())
-        self.window.bind("<Return>", self._save_from_key)
-
-    def _save_from_key(self, event):
-        if isinstance(event.widget, tk.Text):
-            return None
-        self.save()
-        return "break"
+        # Enter saves (outside the multi-line fields) and Escape cancels.
+        ui_widgets.dialog_footer(
+            body, (_("Salvar"), self.save), self.cancel, ui=self.theme,
+        ).pack(fill="x", pady=(self.theme.space_md, 0))
 
     def save(self):
         self._assert_owner()

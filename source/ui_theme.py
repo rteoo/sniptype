@@ -10,9 +10,11 @@ This module is the seam. Call sites ask for a semantic token
 (``theme().surface``, ``theme().text``) and a size (``ui_font(9, "bold")``)
 instead of naming a color or a font family:
 
-* **Windows** resolves to the opaque Windows Design System 1.0.0 palette and
-  follows the user's app-theme preference by default. The light palette keeps
-  the native selection behavior of controls the app does not paint itself.
+* **Windows** resolves to the opaque Teô Personal Design System 2.7.1 Windows
+  native family (Ink & Copper): neutral Windows surfaces, the copper primary
+  and the family's pixel type roles. Dark is the default appearance. The
+  light palette keeps the native selection behavior of controls the app does
+  not paint itself.
 * **macOS** resolves to Aqua's dynamic system colors (``systemTextColor`` and
   friends), which follow the light/dark appearance natively, plus a small set
   of derived grays for the tokens Aqua only exposes with an alpha channel --
@@ -28,9 +30,10 @@ it was closed. A live switch with the window open is not handled -- the tokens
 mapped to system color *names* repaint themselves, the derived grays do not.
 
 The user's appearance choice (``system``/``light``/``dark``, persisted as the
-``appearance`` setting) is module state set once via :func:`set_preference`,
-not a ``bind`` argument, so every dialog that re-binds against its own parent
-keeps the same appearance as the manager.
+``appearance`` setting; :func:`default_preference` when unset) is module
+state set once via :func:`set_preference`, not a ``bind`` argument, so every
+dialog that re-binds against its own parent keeps the same appearance as the
+manager.
 """
 
 import ctypes
@@ -41,18 +44,50 @@ from platform_support import current_os
 from i18n import N_
 
 
-# The GUI's body size, in the Windows point scale every ``font=`` call uses.
-# Other platforms shift their sizes by the distance between this and their own
-# system default, so the body role stays readable across native themes.
+# Call sites name a type role by its historical Windows point size, which is
+# what every ``font=`` call passes. macOS and Linux shift these sizes by the
+# distance between the body size and their own system default, so the body
+# role stays readable across native themes.
 BODY_FONT_SIZE = 10
-# The rest of the Windows 11 type ramp in the same scale: Caption (12 px),
-# Subtitle (for panes and cards) and Title (for pages), the last two
+# Caption, Subtitle (panes and cards) and Title (pages), the last two
 # semibold. Nothing in the GUI goes below the caption size.
 CAPTION_FONT_SIZE = 9
 SUBTITLE_FONT_SIZE = 12
 TITLE_FONT_SIZE = 16
-# From here up, Windows switches to the variable font's display optical size.
+# From here up, the size is a title in the variable font's display optical size.
 DISPLAY_FONT_SIZE = 14
+
+# Windows resolves those sizes to the DS 2.7.1 Windows family roles, in pixels
+# at 100% scaling (``native/windows/tokens.css``): caption 12, body 14,
+# heading 18, title 28. Tk point sizes cannot express 14 px, so the roles are
+# negative (pixel) Tk sizes scaled by the display DPI.
+TYPE_ROLE_PIXELS = {"caption": 12, "body": 14, "heading": 18, "title": 28}
+_ROLE_FOR_SIZE = {
+    CAPTION_FONT_SIZE: "caption",
+    BODY_FONT_SIZE: "body",
+    SUBTITLE_FONT_SIZE: "heading",
+    DISPLAY_FONT_SIZE: "title",
+    TITLE_FONT_SIZE: "title",
+}
+
+# DS 2.7.1 Windows densities as (control height, list row height) in pixels at
+# 100% scaling (``native/windows/patterns.md``). Compact is the default.
+DENSITY_METRICS = {
+    "compact": (32, 32),
+    "comfortable": (40, 44),
+    "touch": (44, 48),
+}
+DEFAULT_DENSITY = "compact"
+_density = DEFAULT_DENSITY
+
+
+def set_density(value):
+    """Select validated metrics for subsequent window builds."""
+    global _density
+    _density = value if isinstance(value, str) and value in DENSITY_METRICS else DEFAULT_DENSITY
+# Aqua rows keep the height they always had: the Windows family density does
+# not apply to macOS's native controls.
+_MAC_TREE_ROW_HEIGHT = 44
 
 # Tk names the Windows 11 variable font per optical size and weight; plain
 # "Segoe UI Variable" is not a family at all and silently resolves to Arial.
@@ -79,12 +114,18 @@ _MAC_FAMILY = ".AppleSystemUIFont"
 _MAC_EMOJI_FAMILY = "Apple Color Emoji"
 _LINUX_FAMILY = "TkDefaultFont"
 
-# Monospace, for the trigger columns.
+# Monospace, for literal triggers and paths only. Windows prefers the
+# family's Cascadia Mono (no ligatures), then Cascadia Code, when installed.
 _MONO_FAMILIES = {
     "windows": "Consolas",
     "darwin": "Menlo",
     "linux": "TkFixedFont",
 }
+_WINDOWS_MONO_PREFERENCE = ("Cascadia Mono", "Cascadia Code")
+
+# Segoe Fluent Icons (Windows 11), then Segoe MDL2 Assets (Windows 10); the
+# Fluent controls render their icon glyphs from the first one Pillow opens.
+ICON_FONT_FILES = ("SegoeIcons.ttf", "segmdl2.ttf")
 
 # The toolbar's glyph buttons. Windows needs the dedicated symbol face; the
 # macOS system font already carries the glyphs.
@@ -101,24 +142,28 @@ class Theme:
     __slots__ = (
         "kind", "system", "preference", "family", "strong_family",
         "display_family", "display_strong_family", "emoji_family", "mono_family",
-        "symbol_family", "size_delta",
+        "symbol_family", "size_delta", "scale", "density", "text_scale", "contrast_signature",
         "surface", "surface_alt", "surface_alt_active",
         "card", "field",
         "control", "control_hover", "control_active",
-        "control_stroke", "control_stroke_bottom", "stroke_strong",
+        "control_stroke", "control_stroke_bottom", "stroke_strong", "field_border",
         "card_border", "scrollbar_thumb",
         "text", "text_strong", "text_muted", "text_on_accent",
         "border", "divider",
-        "accent", "accent_hover", "accent_active", "danger", "focus_ring",
-        "link", "warning", "success",
-        "select_bg", "select_fg", "text_native", "tab_unselected_fg",
+        "accent", "accent_hover", "accent_active", "accent_border", "focus_ring",
+        "link", "danger", "danger_bg", "warning", "warning_bg",
+        "success", "success_bg", "info", "info_bg",
+        "select_bg", "select_fg", "text_native", "overlay",
         "space_xs", "space_sm", "space_md", "space_lg", "space_xl",
-        "tree_row_height",
+        "control_height", "tree_row_height",
     )
 
     def __init__(self, kind, system, family, emoji_family, mono_family,
                  symbol_family, size_delta, colors, preference="system",
-                 strong_family=None, display_family=None, display_strong_family=None):
+                 strong_family=None, display_family=None, display_strong_family=None,
+                 scale=1.0, density=DEFAULT_DENSITY, text_scale=1.0, contrast_signature=""):
+        if density not in DENSITY_METRICS:
+            raise ValueError(f"unknown density: {density!r}")
         self.kind = kind
         self.system = system
         self.preference = preference
@@ -132,23 +177,53 @@ class Theme:
         self.mono_family = mono_family
         self.symbol_family = symbol_family
         self.size_delta = size_delta
+        # Display pixels per DS pixel: 1.0 at 96 DPI (100%).
+        self.scale = scale
+        self.text_scale = text_scale
+        self.contrast_signature = contrast_signature
+        self.density = density
         for name, value in colors.items():
             setattr(self, name, value)
+        # Translucent hover/press layers of the Fluent controls: darken in
+        # light, lighten in dark.
+        self.overlay = _DARK_OVERLAY if kind == "dark" else _LIGHT_OVERLAY
         self.space_xs = 4
         self.space_sm = 8
         self.space_md = 12
         self.space_lg = 16
         self.space_xl = 24
-        self.tree_row_height = 44
+        control, row = DENSITY_METRICS[density]
+        self.control_height = self.px(max(control, 14 * text_scale * 1.5 + 10))
+        self.tree_row_height = (
+            _MAC_TREE_ROW_HEIGHT if system == "darwin" else self.px(max(row, 14 * text_scale * 1.5 + 10))
+        )
+
+    def px(self, value):
+        """``value`` DS pixels as display pixels at this theme's scale."""
+        return max(1, round(value * self.scale))
+
+    def _size(self, size):
+        """The Tk font size for a call site's historical point ``size``.
+
+        Windows answers the DS pixel role as a negative (pixel) size; a size
+        outside the ramp has no role and fails loudly rather than guessing.
+        """
+        if self.system != "windows":
+            return size + self.size_delta
+        try:
+            role = _ROLE_FOR_SIZE[size]
+        except KeyError:
+            raise ValueError(f"font size {size!r} has no DS type role") from None
+        return -self.px(TYPE_ROLE_PIXELS[role] * self.text_scale)
 
     def font(self, size=BODY_FONT_SIZE, weight=None):
         """Return a font spec tuple for the GUI's shared family."""
         display = size >= DISPLAY_FONT_SIZE
         if weight == "bold" and self.strong_family:
             family = self.display_strong_family if display else self.strong_family
-            return _spec(family, size + self.size_delta)
+            return _spec(family, self._size(size))
         family = self.display_family if display else self.family
-        return _spec(family, size + self.size_delta, weight)
+        return _spec(family, self._size(size), weight)
 
     def caption_font(self):
         return self.font(CAPTION_FONT_SIZE)
@@ -160,10 +235,10 @@ class Theme:
         return self.font(TITLE_FONT_SIZE, "bold")
 
     def emoji_font(self, size=BODY_FONT_SIZE, weight=None):
-        return _spec(self.emoji_family, size + self.size_delta, weight)
+        return _spec(self.emoji_family, self._size(size), weight)
 
     def mono_font(self, size=BODY_FONT_SIZE, weight=None):
-        return _spec(self.mono_family, size + self.size_delta, weight)
+        return _spec(self.mono_family, self._size(size), weight)
 
     @property
     def is_dark(self):
@@ -182,7 +257,7 @@ class Theme:
         The opaque dark palette needs them painted, because the OS otherwise
         leaves these classic Tk widgets light under light-on-dark text.
         """
-        if self.system != "darwin" and not self.is_dark:
+        if self.system != "darwin" and not self.is_dark and not self.is_contrast:
             return {}
         return {
             "bg": self.field,
@@ -210,7 +285,7 @@ class Theme:
 
     def listbox_colors(self):
         """See :meth:`entry_colors` for the same native-versus-painted seam."""
-        if self.system != "darwin" and not self.is_dark:
+        if self.system != "darwin" and not self.is_dark and not self.is_contrast:
             return {}
         return {
             "bg": self.field,
@@ -271,10 +346,14 @@ class Theme:
         """
         return {
             "relief": "flat",
-            "highlightthickness": 1,
+            "highlightthickness": self.px(2) if self.is_contrast else 1,
             "highlightbackground": self.border,
             "highlightcolor": self.focus_ring,
         }
+
+    @property
+    def is_contrast(self):
+        return self.kind == "contrast"
 
 
 
@@ -286,85 +365,104 @@ def _spec(family, size, weight=None):
 # Palettes
 # ---------------------------------------------------------------------------
 
-# Windows Design System 1.0.0 opaque surfaces. Tk cannot reproduce Mica or Acrylic
-# reliably across platforms, so hierarchy comes from restrained contrast,
-# spacing and selection states instead.
+# Teô Personal DS 2.7.1, Windows native family (Ink & Copper). Surfaces are
+# the family's opaque neutrals (``native/windows/tokens.css``): the canvas and
+# navigation sit on ``surface``, collections on ``card``, editing on
+# ``field``. Tk cannot reproduce Mica or Acrylic, so hierarchy comes from
+# these opaque layers, spacing and selection. Copper marks the primary action
+# and selection; it never washes a surface.
 _LIGHT = {
-    "surface": "#F3F3F3",
-    "surface_alt": "#FFFFFF",
-    "surface_alt_active": "#DEDEDE",
-    "card": "#FFFFFF",
+    "surface": "#E9E8E7",
+    "surface_alt": "#E9E8E7",
+    "surface_alt_active": "#E8E6E3",
+    "card": "#F6F5F4",
     "field": "#FFFFFF",
-    # Windows 11 control fills, flattened over a white card. A neutral
-    # button is near-white and separated from its surface by the elevation
-    # stroke (lighter sides, darker bottom edge), not by a grey fill.
-    "control": "#FBFBFB",
-    "control_hover": "#F6F6F6",
-    "control_active": "#F5F5F5",
-    "control_stroke": "#E5E5E5",
-    "control_stroke_bottom": "#C4C4C4",
-    # Field underline, checkbox/switch outline and off-state knob.
-    "stroke_strong": "#8A8A8A",
-    "card_border": "#E5E5E5",
-    "scrollbar_thumb": "#8A8A8A",
-    "text": "#1A1A1A",
-    "text_strong": "#1A1A1A",
-    "text_muted": "#5C5C5C",
-    "text_on_accent": "#FFFFFF",
-    "border": "#D6D6D6",
-    "divider": "#D6D6D6",
-    "accent": "#005FB8",
-    "accent_hover": "#1A6FBF",
-    "accent_active": "#004A91",
-    "danger": "#A4262C",
-    "focus_ring": "#005FB8",
-    "link": "#005FB8",
-    "warning": "#7A4D00",
-    "success": "#0F6B36",
-    "select_bg": "#DCEEFF",
-    "select_fg": "#1A1A1A",
+    # A neutral button is the content fill inside a 1px field border, as the
+    # family's buttons are. Pressed has no DS value; Tk needs one distinct
+    # from hover, so it is the hover tone one step darker (an adaptation).
+    "control": "#FFFFFF",
+    "control_hover": "#E8E6E3",
+    "control_active": "#DEDCD8",
+    "control_stroke": "#7B8088",
+    "control_stroke_bottom": "#7B8088",
+    # Field and checkbox/switch outline (WCAG 1.4.11 boundary).
+    "stroke_strong": "#7B8088",
+    "field_border": "#7B8088",
+    "card_border": "#D8D8D8",
+    "scrollbar_thumb": "#606060",
+    "text": "#202630",
+    "text_strong": "#202630",
+    "text_muted": "#606060",
+    "text_on_accent": "#15100A",
+    "border": "#D8D8D8",
+    "divider": "#D8D8D8",
+    "accent": "#E6A05A",
+    "accent_hover": "#D99551",
+    "accent_active": "#BE7836",
+    # Copper as a mark (nav pill, checked edge, field focus underline): raw
+    # copper is under 3:1 on the light surfaces, its deep tone is not.
+    "accent_border": "#A0520A",
+    "focus_ring": "#263C56",
+    "link": "#A0520A",
+    "danger": "#9B2C2C",
+    "danger_bg": "#FCE8E8",
+    "warning": "#7A4A00",
+    "warning_bg": "#FFF1D6",
+    "success": "#16643B",
+    "success_bg": "#E6F6EC",
+    "info": "#263C56",
+    "info_bg": "#E8EEF5",
+    "select_bg": "#E8E6E3",
+    "select_fg": "#202630",
     # Foreground for widgets the pre-change GUI left uncolored. Resolved to
     # each platform's own default so filling it in changes nothing there.
-    "text_native": "#1A1A1A",
-    # Unselected notebook-tab label. The selected tab uses the accent token.
-    "tab_unselected_fg": "#5C5C5C",
+    "text_native": "#202630",
 }
 
-# Opaque Windows Design System dark surfaces keep classic Tk predictable on
-# Windows and Linux. The light-blue accent uses dark text for contrast.
+# The family's dark appearance, the default. Copper keeps its dark label.
 _DARK = {
-    "surface": "#202020",
-    "surface_alt": "#333333",
-    "surface_alt_active": "#414141",
-    "card": "#2B2B2B",
-    "field": "#333333",
-    "control": "#383838",
-    "control_hover": "#3D3D3D",
-    "control_active": "#323232",
-    "control_stroke": "#454545",
-    "control_stroke_bottom": "#3B3B3B",
-    "stroke_strong": "#9E9E9E",
-    "card_border": "#1C1C1C",
-    "scrollbar_thumb": "#9F9F9F",
-    "text": "#F5F5F5",
-    "text_strong": "#F5F5F5",
-    "text_muted": "#C4C4C4",
-    "text_on_accent": "#003047",
-    "border": "#494949",
-    "divider": "#494949",
-    "accent": "#60CDFF",
-    "accent_hover": "#5BBBE9",
-    "accent_active": "#A1E2FF",
-    "danger": "#FFB4B8",
-    "focus_ring": "#75D5FF",
-    "link": "#75D5FF",
-    "warning": "#FFD479",
-    "success": "#8EDBA5",
-    "select_bg": "#153F54",
-    "select_fg": "#F5F5F5",
-    "text_native": "#F5F5F5",
-    "tab_unselected_fg": "#C4C4C4",
+    "surface": "#292929",
+    "surface_alt": "#292929",
+    "surface_alt_active": "#484848",
+    "card": "#232323",
+    "field": "#1C1C1E",
+    "control": "#1C1C1E",
+    "control_hover": "#484848",
+    # Tk adaptation, as in the light palette: pressed between rest and hover.
+    "control_active": "#3A3A3A",
+    "control_stroke": "#999CA3",
+    "control_stroke_bottom": "#999CA3",
+    "stroke_strong": "#999CA3",
+    "field_border": "#999CA3",
+    "card_border": "#454545",
+    "scrollbar_thumb": "#BCBCBC",
+    "text": "#F2EFE9",
+    "text_strong": "#F2EFE9",
+    "text_muted": "#BCBCBC",
+    "text_on_accent": "#15100A",
+    "border": "#454545",
+    "divider": "#454545",
+    "accent": "#E6A05A",
+    "accent_hover": "#EDB47C",
+    "accent_active": "#CE8845",
+    "accent_border": "#E6A05A",
+    "focus_ring": "#F0C293",
+    "link": "#EDB47C",
+    "danger": "#FF8A85",
+    "danger_bg": "#351718",
+    "warning": "#FFD27A",
+    "warning_bg": "#342A17",
+    "success": "#73E0A1",
+    "success_bg": "#13271D",
+    "info": "#ADC1DC",
+    "info_bg": "#202E40",
+    "select_bg": "#484848",
+    "select_fg": "#F2EFE9",
+    "text_native": "#F2EFE9",
 }
+
+_LIGHT_OVERLAY = "#000000"
+_DARK_OVERLAY = "#FFFFFF"
 
 # Win32's defaults for the widgets this GUI leaves uncolored (tkWinDefault.h).
 # Naming them explicitly is a no-op on Windows and keeps the seam honest.
@@ -383,7 +481,6 @@ _MAC_SYSTEM = {
     "field": "systemTextBackgroundColor",
     "text": "systemTextColor",
     "text_strong": "systemTextColor",
-    "tab_unselected_fg": "systemTextColor",
     "select_bg": "systemSelectedTextBackgroundColor",
     "select_fg": "systemTextColor",
 }
@@ -405,18 +502,24 @@ _MAC_DARK_OVERRIDES = {
     "text_muted": "#98989D",
     "border": "#48484A",
     "divider": "#48484A",
-    # The light-mode blues lose contrast against a dark surface.
-    "link": "#6BA0FF",
+    # The light link and focus tones lose contrast against a dark surface;
+    # these are the DS dark ones.
+    "link": "#EDB47C",
     "warning": "#E0A458",
     "success": "#4ADE80",
     "danger": "#FF6961",
-    "focus_ring": "#6BA0FF",
+    "focus_ring": "#F0C293",
     # Only the Fluent controls (Windows/Linux) read these; keep the map
     # coherent anyway so no light literal leaks into a dark palette.
     **{token: _DARK[token] for token in (
         "control_hover", "control_stroke", "control_stroke_bottom",
-        "stroke_strong", "card_border", "scrollbar_thumb",
+        "stroke_strong", "field_border", "card_border", "scrollbar_thumb",
+        "danger_bg", "warning_bg", "success_bg", "info", "info_bg",
     )},
+    # The bar beside the current navigation item is the one copper mark Tk
+    # draws on macOS (ui_widgets.set_selected). The light #A0520A would fall
+    # under 3:1 on the dark sidebar; the DS dark link tone clears it.
+    "accent_border": "#EDB47C",
 }
 
 
@@ -424,11 +527,25 @@ def palette(kind, system=None):
     """Return the color token map for ``kind`` in {'windows', 'light', 'dark'}.
 
     Pure: no Tk, no platform probing. Off macOS, ``'windows'``/``'light'``
-    return the opaque Fluent palette and ``'dark'`` the opaque dark one;
+    return the opaque light Windows-family palette and ``'dark'`` the dark one;
     Linux takes the same literals because Aqua's color names do not resolve
     there. With no ``system``, ``'light'``/``'dark'`` keep their historical
     meaning: the macOS Aqua maps.
     """
+    if kind == "contrast":
+        colors = dict.fromkeys(_LIGHT, "SystemWindow")
+        for token in ("text", "text_strong", "text_native", "link", "danger", "warning", "success", "info",
+                      "border", "divider", "card_border", "field_border", "control_stroke",
+                      "control_stroke_bottom", "stroke_strong", "scrollbar_thumb"):
+            colors[token] = "SystemWindowText"
+        for token in ("control", "control_hover", "control_active"):
+            colors[token] = "SystemButtonFace"
+        colors.update(text_muted="SystemGrayText", text_on_accent="SystemButtonText",
+                      select_bg="SystemHighlight", select_fg="SystemHighlightText",
+                      accent="SystemButtonFace", accent_hover="SystemButtonFace",
+                      accent_active="SystemButtonFace", accent_border="SystemHighlight",
+                      focus_ring="SystemHighlight")
+        return colors
     if system is None and kind in {"light", "dark"}:
         system = "darwin"
     if system != "darwin":
@@ -443,6 +560,24 @@ def palette(kind, system=None):
     colors.update(_MAC_NATIVE)
     colors.update(_MAC_DARK_OVERRIDES if kind == "dark" else _MAC_LIGHT_OVERRIDES)
     return colors
+
+
+def tray_badge_colors(state):
+    """``(fill, glyph, ring)`` of the badge drawn on the tray icon for ``state``.
+
+    ``state`` is ``"paused"`` (the warning tone) or ``"down"`` (the danger
+    tone). The tray sits on the taskbar, not on a window, so the badge always
+    takes the dark palette's state colors: they read on dark and light
+    taskbars alike because the ring separates them from the tile, and the
+    glyph is the primary-label ink, at least 8:1 on both fills. The shape
+    carries the state as well (pause bars, an alert mark), never the color
+    alone.
+    """
+    try:
+        fill = {"paused": _DARK["warning"], "down": _DARK["danger"]}[state]
+    except KeyError:
+        raise ValueError(f"no tray badge for state {state!r}") from None
+    return fill, _DARK["text_on_accent"], _DARK["field"]
 
 
 def windows_font_families(available=None):
@@ -474,8 +609,17 @@ def emoji_family(system=None):
     return _LINUX_FAMILY
 
 
-def mono_family(system=None):
-    return _MONO_FAMILIES.get(system or current_os(), _MONO_FAMILIES["linux"])
+def mono_family(system=None, available=None):
+    """The monospace family; ``available`` is ``font.families()`` (Windows).
+
+    Without it Windows answers Consolas, which every supported Windows has.
+    """
+    system = system or current_os()
+    if system == "windows" and available is not None:
+        for family in _WINDOWS_MONO_PREFERENCE:
+            if family in available:
+                return family
+    return _MONO_FAMILIES.get(system, _MONO_FAMILIES["linux"])
 
 
 def symbol_family(system=None):
@@ -483,11 +627,12 @@ def symbol_family(system=None):
 
 
 def size_delta(system=None, default_size=None):
-    """Shift between the Windows point scale and this platform's system size.
+    """Shift between the call sites' point scale and this platform's system size.
 
-    Windows is the reference (0). Elsewhere the GUI's body size is pinned to
-    the platform's own ``TkDefaultFont`` size so a 10 pt Windows label does not
-    render two points below every native control around it.
+    Windows does not shift (0): it resolves pixel type roles instead. Elsewhere
+    the GUI's body size is pinned to the platform's own ``TkDefaultFont`` size
+    so a 10 pt label does not render two points below every native control
+    around it.
     """
     if (system or current_os()) == "windows" or not default_size:
         return 0
@@ -622,12 +767,26 @@ APPEARANCE_STATUS = {
     "dark": N_("Tema escuro fixo."),
 }
 
-_preference = "system"
+def default_preference(system=None):
+    """The appearance an install with no saved (or a malformed) choice gets.
+
+    The DS 2.7.1 Windows family defaults to Dark, with Light and System as
+    explicit choices; Linux renders the same family. macOS keeps System:
+    Aqua draws its buttons and checkboxes in the OS appearance whatever the
+    app picks, so a fixed default would put light bezels on a dark window.
+    """
+    return "system" if (system or current_os()) == "darwin" else "dark"
 
 
-def normalize_preference(value):
-    """Return one of ``system``, ``light`` or ``dark`` for persisted input."""
-    return value if value in APPEARANCE_CHOICES else "system"
+_preference = default_preference()
+
+
+def normalize_preference(value, system=None):
+    """Return one of ``system``, ``light`` or ``dark`` for persisted input.
+
+    Anything else (unset, misspelled) is :func:`default_preference`.
+    """
+    return value if value in APPEARANCE_CHOICES else default_preference(system)
 
 
 def set_preference(value):
@@ -652,6 +811,48 @@ def _windows_apps_use_light_theme():
         return bool(value)
     except (ImportError, OSError, TypeError, ValueError):
         return None
+
+
+def _windows_high_contrast():
+    """Read HCF_HIGHCONTRASTON without changing a Windows preference."""
+    class HIGHCONTRAST(ctypes.Structure):
+        # This GET returns a cached system pointer, despite the structure's
+        # published ownership note. Microsoft explicitly documents that
+        # discrepancy in its own consumer: never dereference or free it here.
+        # https://source.dot.net/System.Private.Windows.Core/Windows/Win32/PInvokeCore.SystemParametersInfo.cs.html
+        _fields_ = [("cbSize", ctypes.c_uint), ("dwFlags", ctypes.c_uint),
+                    ("lpszDefaultScheme", ctypes.c_void_p)]
+    state = HIGHCONTRAST()
+    try:
+        state.cbSize = ctypes.sizeof(state)
+        query = ctypes.windll.user32.SystemParametersInfoW
+        query.argtypes = [ctypes.c_uint, ctypes.c_uint, ctypes.c_void_p, ctypes.c_uint]
+        query.restype = ctypes.c_int
+        success = bool(query(0x0042, state.cbSize, ctypes.byref(state), 0))
+        return bool(success and state.dwFlags & 1)
+    except (AttributeError, OSError):
+        return False
+
+
+def windows_text_scale():
+    """Windows Text size is separate from display DPI; unreadable means 100%."""
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Accessibility") as key:
+            value, kind = winreg.QueryValueEx(key, "TextScaleFactor")
+        if kind == winreg.REG_DWORD and isinstance(value, int) and not isinstance(value, bool) and 100 <= value <= 225:
+            return value / 100
+    except (ImportError, OSError, TypeError, ValueError):
+        pass
+    return 1.0
+
+
+def windows_contrast_signature(widget):
+    """Identity of the active system colors for the contrast image cache."""
+    import hashlib
+    return hashlib.sha256(str(tuple(
+        widget.winfo_rgb(color) for color in sorted(set(palette("contrast", "windows").values()))
+    )).encode("ascii")).hexdigest()[:12]
 
 
 # ---------------------------------------------------------------------------
@@ -688,6 +889,35 @@ def _probe_kind(widget, system):
         return "light"
 
 
+def live_system_kind(system=None):
+    """The palette kind System resolves to now, when open windows follow the OS.
+
+    Only the System preference on Windows follows a live change: a fixed
+    choice never changes, and Aqua redraws its own controls in the OS
+    appearance. Read from the registry, so it needs no window. None when
+    open windows keep the palette they were built with.
+    """
+    system = system or current_os()
+    if system != "windows":
+        return None
+    if _windows_high_contrast():
+        return "contrast"
+    if _preference != "system":
+        # Leaving contrast restores the still-saved fixed appearance.
+        if _current is not None and _current.is_contrast:
+            return "dark" if _preference == "dark" else "windows"
+        return None
+    return _probe_kind(None, system)
+
+
+def display_scale(widget):
+    """Display pixels per DS pixel for ``widget``'s interpreter: 1.0 at 96 DPI.
+
+    ``tk scaling`` is pixels per point, 4/3 at 100%.
+    """
+    return float(widget.tk.call("tk", "scaling")) * 72 / 96
+
+
 def _probe_default_size(widget):
     try:
         return int(tkfont.nametofont("TkDefaultFont", root=widget).actual("size"))
@@ -711,16 +941,18 @@ def _probe_font_families(widget):
 
 
 def build_theme(kind, system=None, default_size=None, preference="system",
-                font_families=None):
+                font_families=None, scale=1.0, density=DEFAULT_DENSITY, text_scale=1.0,
+                contrast_signature=""):
     """Assemble a :class:`Theme`. Pure given its arguments.
 
     macOS "system" mode keeps Aqua's dynamic color names. A fixed light/dark
     choice there must use the opaque palette instead; otherwise Aqua resolves
     those names from the OS appearance and silently overrides the user.
     ``font_families`` is the installed set, which picks the Windows faces.
+    ``scale`` is display pixels per DS pixel (:func:`display_scale`).
     """
     system = system or current_os()
-    preference = normalize_preference(preference)
+    preference = normalize_preference(preference, system)
     colors = palette(kind, system)
     if system == "darwin" and preference != "system":
         colors = dict(_DARK if kind == "dark" else _LIGHT)
@@ -731,7 +963,7 @@ def build_theme(kind, system=None, default_size=None, preference="system",
         system=system,
         family=font_family(system, font_families),
         emoji_family=emoji_family(system),
-        mono_family=mono_family(system),
+        mono_family=mono_family(system, font_families),
         symbol_family=symbol_family(system),
         size_delta=size_delta(system, default_size),
         colors=colors,
@@ -739,6 +971,10 @@ def build_theme(kind, system=None, default_size=None, preference="system",
         strong_family=faces.get("text_strong"),
         display_family=faces.get("display"),
         display_strong_family=faces.get("display_strong"),
+        scale=scale,
+        density=density,
+        text_scale=text_scale,
+        contrast_signature=contrast_signature,
     )
 
 
@@ -754,7 +990,9 @@ def bind(widget=None, system=None):
     global _current
     system = system or current_os()
     chosen = _preference
-    if chosen == "dark":
+    if system == "windows" and _windows_high_contrast():
+        kind = "contrast"
+    elif chosen == "dark":
         kind = "dark"
     elif chosen == "light":
         kind = "light" if system == "darwin" else "windows"
@@ -769,8 +1007,17 @@ def bind(widget=None, system=None):
         _probe_font_families(widget)
         if widget is not None and system == "windows" else None
     )
+    signature = ""
+    if kind == "contrast" and widget is not None:
+        # A new Windows contrast palette needs fresh drawn images, even if
+        # HCF_HIGHCONTRASTON stayed on throughout the change.
+        signature = windows_contrast_signature(widget)
     _current = build_theme(
         kind, system, default_size, preference=chosen, font_families=families,
+        scale=display_scale(widget) if widget is not None else 1.0,
+        density=_density,
+        text_scale=windows_text_scale() if system == "windows" else 1.0,
+        contrast_signature=signature,
     )
     return _current
 
@@ -786,7 +1033,8 @@ def reset():
     """Drop the cached theme and preference (tests)."""
     global _current, _preference
     _current = None
-    _preference = "system"
+    _preference = default_preference()
+    set_density(DEFAULT_DENSITY)
 
 
 def ui_font(size=BODY_FONT_SIZE, weight=None):

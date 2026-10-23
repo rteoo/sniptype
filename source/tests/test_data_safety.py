@@ -261,29 +261,29 @@ class StaticEditorGuardTests(unittest.TestCase):
 
     # BUG 1: deleting a shadowed trigger from the static editor.
     def test_delete_of_a_dynamic_trigger_is_refused_and_saves_nothing(self):
-        confirm = mock.Mock(return_value=True)
         with mock.patch.object(self.app, "save_snippets") as save:
-            result = self.app._delete_static_snippet("xhi", confirm)
+            result = self.app._delete_static_snippet("xhi")
         self.assertEqual("dynamic", result)
-        confirm.assert_not_called()
         save.assert_not_called()
         # The preserved static and the dynamic callable both survive intact.
         self.assertEqual("meu texto importante", self.app.shadowed_static_snippets["xhi"])
         self.assertTrue(callable(self.app.snippets["xhi"]))
 
     def test_delete_of_a_plain_static_still_works(self):
-        confirm = mock.Mock(return_value=True)
-        result = self.app._delete_static_snippet("xname", confirm)
+        result = self.app._delete_static_snippet("xname")
         self.assertEqual("ok", result)
-        confirm.assert_called_once()
         self.assertNotIn("xname", self.app.snippets)
         self.assertNotIn("xname", self._on_disk())
 
-    def test_delete_asks_only_when_eligible(self):
-        confirm = mock.Mock(return_value=False)
-        self.assertEqual("cancelled", self.app._delete_static_snippet("xname", confirm))
-        confirm.assert_called_once()
+    def test_a_failed_delete_save_puts_the_snippet_back(self):
+        with mock.patch.object(self.app, "save_snippets", return_value=False):
+            self.assertEqual("error", self.app._delete_static_snippet("xname"))
         self.assertIn("xname", self.app.snippets)
+
+    def test_delete_of_a_missing_trigger_saves_nothing(self):
+        with mock.patch.object(self.app, "save_snippets") as save:
+            self.assertEqual("missing", self.app._delete_static_snippet("xnothing"))
+        save.assert_not_called()
 
 
 class DynamicToggleCollisionTests(unittest.TestCase):
@@ -311,14 +311,14 @@ class DynamicToggleCollisionTests(unittest.TestCase):
             return json.load(handle)
 
     def test_enabling_over_a_static_asks_and_a_refusal_changes_nothing(self):
-        with mock.patch.object(tx.messagebox, "askyesno", return_value=False) as ask:
+        with mock.patch.object(tx.ui_widgets, "confirm", return_value=None) as ask:
             self.assertFalse(self.app._toggle_registry_entry("xhi", True))
         ask.assert_called_once()
         self.assertEqual({}, self._override())
         self.assertEqual("meu texto importante", self.app.snippets["xhi"])
 
     def test_enabling_over_a_static_proceeds_when_confirmed(self):
-        with mock.patch.object(tx.messagebox, "askyesno", return_value=True):
+        with mock.patch.object(tx.ui_widgets, "confirm", return_value=tx.ui_widgets.PRIMARY):
             self.assertTrue(self.app._toggle_registry_entry("xhi", True))
         self.assertTrue(self._override()["xhi"]["enabled"])
         self.assertTrue(callable(self.app.snippets["xhi"]))
@@ -329,7 +329,7 @@ class DynamicToggleCollisionTests(unittest.TestCase):
 
     def test_enabling_without_a_collision_does_not_prompt(self):
         self.app._toggle_registry_entry("xfree", False)
-        with mock.patch.object(tx.messagebox, "askyesno") as ask:
+        with mock.patch.object(tx.ui_widgets, "confirm") as ask:
             self.assertTrue(self.app._toggle_registry_entry("xfree", True))
         ask.assert_not_called()
 
@@ -341,17 +341,17 @@ class DynamicToggleCollisionTests(unittest.TestCase):
                 "mappings": {},
             },
         }
-        with mock.patch.object(tx.messagebox, "askyesno") as ask:
+        with mock.patch.object(tx.ui_widgets, "confirm") as ask:
             self.assertTrue(self.app._confirm_dynamic_shadows_static("xhi"))
         ask.assert_not_called()
 
         self.app.dynamic_registry["xhi"]["trigger"] = "wxhi"
-        with mock.patch.object(tx.messagebox, "askyesno", return_value=False) as ask:
+        with mock.patch.object(tx.ui_widgets, "confirm", return_value=None) as ask:
             self.assertFalse(self.app._confirm_dynamic_shadows_static("xhi"))
         ask.assert_called_once()
 
     def test_disabling_never_prompts(self):
-        with mock.patch.object(tx.messagebox, "askyesno") as ask:
+        with mock.patch.object(tx.ui_widgets, "confirm") as ask:
             self.assertTrue(self.app._toggle_registry_entry("xfree", False))
         ask.assert_not_called()
 
@@ -414,7 +414,7 @@ class DynamicToggleMappingCollisionTests(unittest.TestCase):
             return json.load(handle)
 
     def test_enabling_over_a_mapping_trigger_asks_and_a_refusal_changes_nothing(self):
-        with mock.patch.object(tx.messagebox, "askyesno", return_value=False) as ask:
+        with mock.patch.object(tx.ui_widgets, "confirm", return_value=None) as ask:
             self.assertFalse(self.app._toggle_registry_entry("xcpf", True))
         ask.assert_called_once()
         self.assertEqual({}, self._override())
@@ -424,7 +424,7 @@ class DynamicToggleMappingCollisionTests(unittest.TestCase):
         )
 
     def test_enabling_over_a_mapping_trigger_proceeds_when_confirmed(self):
-        with mock.patch.object(tx.messagebox, "askyesno", return_value=True):
+        with mock.patch.object(tx.ui_widgets, "confirm", return_value=tx.ui_widgets.PRIMARY):
             self.assertTrue(self.app._toggle_registry_entry("xcpf", True))
         self.assertTrue(self._override()["xcpf"]["enabled"])
         # The mapping container survives the toggle's reload/save cycle intact.
@@ -434,7 +434,7 @@ class DynamicToggleMappingCollisionTests(unittest.TestCase):
 
     def test_enabling_without_a_mapping_collision_does_not_prompt(self):
         self.app._toggle_registry_entry("xfree", False)
-        with mock.patch.object(tx.messagebox, "askyesno") as ask:
+        with mock.patch.object(tx.ui_widgets, "confirm") as ask:
             self.assertTrue(self.app._toggle_registry_entry("xfree", True))
         ask.assert_not_called()
 

@@ -6,6 +6,7 @@ import shutil
 import tempfile
 import threading
 import unittest
+from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from unittest import mock
 
@@ -18,6 +19,7 @@ from runtime_support import (
     configure_logging,
     load_notification_history,
     normalize_clipboard_text,
+    notification_stamp,
     save_notification_history,
     truncate_notification_text,
 )
@@ -170,6 +172,27 @@ class NotificationHistoryTests(unittest.TestCase):
         history = [{"n": i} for i in range(5)]
         self.assertTrue(save_notification_history(self.path, history, limit=2))
         self.assertEqual([{"n": 3}, {"n": 4}], load_notification_history(self.path))
+
+    def test_a_dated_entry_reads_as_a_record_stamp(self):
+        now = datetime(2026, 10, 20, 14, 0)
+        for label, at, expected in (
+            ("today", "2026-10-20T11:15:03", "Hoje 11:15"),
+            ("yesterday", "2026-10-19T09:40:00", "Ontem 09:40"),
+            ("older this year", "2026-09-17T09:40:00", "17/09 09:40"),
+            ("last year", "2025-12-31T23:59:00", "31/12/2025"),
+        ):
+            with self.subTest(label):
+                entry = {"at": at, "time": at[11:], "message": "x", "kind": "status"}
+                self.assertEqual(expected, notification_stamp(entry, now))
+
+    def test_an_entry_from_before_dates_were_kept_still_renders_its_clock(self):
+        now = datetime(2026, 10, 20, 14, 0)
+        legacy = {"time": "11:15:03", "title": "SnipType", "message": "x", "kind": "status"}
+
+        self.assertEqual("11:15:03", notification_stamp(legacy, now))
+        self.assertEqual("11:15:03", notification_stamp({**legacy, "at": "not a date"}, now))
+        self.assertEqual("11:15:03", notification_stamp({**legacy, "at": None}, now))
+        self.assertEqual("--:--", notification_stamp({}, now))
 
     def test_save_returns_false_on_write_failure(self):
         with mock.patch.object(
@@ -341,10 +364,31 @@ class AppLoggerTests(unittest.TestCase):
         app_logger.info("informação")
         app_logger.warning("aviso")
         app_logger.error("erro")
+        app_logger.exception("falha")
 
         app_logger._logger.info.assert_called_once_with("informação")
         app_logger._logger.warning.assert_called_once_with("aviso")
         app_logger._logger.error.assert_called_once_with("erro")
+        app_logger._logger.exception.assert_called_once_with("falha")
+
+    def test_exception_records_the_active_traceback(self):
+        records = []
+        handler = logging.Handler()
+        handler.emit = records.append
+        name = "test_runtime_support.exception"
+        logger = logging.getLogger(name)
+        logger.addHandler(handler)
+        logger.propagate = False
+        self.addCleanup(logger.removeHandler, handler)
+
+        try:
+            raise TypeError("cannot pickle")
+        except TypeError:
+            AppLogger(name).exception("action failed")
+
+        self.assertEqual(1, len(records))
+        self.assertEqual(logging.ERROR, records[0].levelno)
+        self.assertIs(TypeError, records[0].exc_info[0])
 
 
 class TextInserterFallbackTests(unittest.TestCase):

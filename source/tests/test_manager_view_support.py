@@ -2,17 +2,54 @@ import unittest
 
 from manager_view_support import (
     FILTER_FAVORITES,
+    FILTER_DISABLED,
+    FILTER_PROBLEMS,
     FILTER_RECENT,
     UNGROUPED_FILTER,
     build_manager_rows,
     filter_manager_rows,
+    filter_static_rows,
     find_manager_target,
     format_trigger_pair,
+    manager_row_preview,
+    normalize_manager_view,
+    search_manager_rows,
 )
 from workflow_support import SnippetRef, WorkflowState
 
 
+class ManagerScrollAnchorNormalizationTests(unittest.TestCase):
+    def test_bounded_stable_anchor_and_legacy_fraction_round_trip(self):
+        for page, anchor in (("static", "sample"), ("mapping", "sample"),
+                             ("dynamic", "action:xdate"), ("backups", "synthetic-backup.json")):
+            with self.subTest(page=page):
+                state = {"pages": {page: {"scroll": 41 / 81, "top_row": anchor}}}
+                self.assertEqual(state, normalize_manager_view(state))
+        legacy = {"pages": {"mapping": {"scroll": 0.5}}}
+        self.assertEqual(legacy, normalize_manager_view(legacy))
+
+    def test_malformed_anchor_is_removed_without_losing_legacy_fraction(self):
+        for anchor in (None, 41, True, [], {}, "x" * 4097):
+            with self.subTest(anchor_type=type(anchor).__name__):
+                state = {"pages": {"mapping": {"scroll": 0.5, "top_row": anchor}}}
+                self.assertEqual({"pages": {"mapping": {"scroll": 0.5}}}, normalize_manager_view(state))
+        boundary = {"pages": {"mapping": {"top_row": "x" * 4096}}}
+        self.assertEqual(boundary, normalize_manager_view(boundary))
+
+
 class ManagerRowBuildTests(unittest.TestCase):
+    def test_direct_statics_win_mapping_routes_and_only_live_dynamics_shadow(self):
+        rows = build_manager_rows(
+            {"codeitem": "Static wins", "_codes": {"__prefix__": "code", "item": "Mapping"},
+             "xdisabled": "Still active", "xlive": lambda: "Runtime"},
+            dynamic_registry={"xdisabled": {"provider": "datetime", "enabled": False}},
+            shadowed_statics={"xlive": "Preserved"},
+        )
+        static = {row.key: row for row in rows if row.kind == "static"}
+        self.assertFalse(static["codeitem"].shadowed)
+        self.assertFalse(static["xdisabled"].shadowed)
+        self.assertTrue(static["xlive"].shadowed)
+
     def test_builds_ordered_immutable_rows_for_static_mapping_and_dynamic_items(self):
         snippets = {
             "xhello": "Hello",
@@ -65,6 +102,17 @@ class ManagerRowBuildTests(unittest.TestCase):
 
 
 class ManagerFilterTests(unittest.TestCase):
+    def test_disabled_and_conflicting_rows_keep_their_distinct_causes(self):
+        rows = build_manager_rows(
+            {"off": "saved", "collision": lambda: "runtime", "normal": "saved"},
+            {"groups": {"off-group": {"label": "Disabled", "enabled": False}},
+             "items": {"static": {"off": {"group_id": "off-group"}}}},
+            shadowed_statics={"collision": "preserved"},
+        )
+        self.assertEqual(["off"], [row.key for row in filter_manager_rows(rows, FILTER_DISABLED)])
+        self.assertEqual(["collision"], [row.key for row in filter_manager_rows(rows, FILTER_PROBLEMS)])
+        self.assertTrue(next(row for row in rows if row.kind == "dynamic").enabled)
+
     def setUp(self):
         self.rows = build_manager_rows(
             {
@@ -121,6 +169,105 @@ class ManagerFilterTests(unittest.TestCase):
             (SnippetRef("static", "two"),),
             tuple(row.ref for row in rows),
         )
+
+
+class StaticSearchTests(unittest.TestCase):
+    def _search(self, snippets, query, metadata=None):
+        rows = build_manager_rows(snippets, metadata)
+        return [row.stored_trigger for row in filter_static_rows(rows, query, snippets)]
+
+    def test_the_effective_trigger_the_list_shows_is_searchable(self):
+        # Regression: "sig → assig" was listed but "assig" found nothing.
+        metadata = {
+            "groups": {"mail": {"label": "Mail", "prefix": "as"}},
+            "items": {"static": {"sig": {"group_id": "mail"}}, "mappings": {}},
+        }
+
+        self.assertEqual(["sig"], self._search({"sig": "Atenciosamente"}, "assig", metadata))
+
+    def test_a_blank_query_keeps_every_static_row_in_trigger_order(self):
+        snippets = {
+            "xname": "Alex", "_cpf_numbers": {"fulano": "123"},
+            "xdyn": lambda: "value", "xemail": "a@b.com",
+        }
+        for query in ("", "   \t "):
+            with self.subTest(query=query):
+                self.assertEqual(["xemail", "xname"], self._search(snippets, query))
+
+    def test_triggers_rank_before_groups_and_content_then_exact_prefix_substring(self):
+        snippets = {
+            "zz": "texto com mail no meio",
+            "xmail2": "segundo",
+            "amail": "termina em mail",
+            "mail": "exato",
+            "grouped": "nada",
+            "mailbox": "prefixo",
+        }
+        metadata = {
+            "groups": {"g": {"label": "Mail"}},
+            "items": {"static": {"grouped": {"group_id": "g"}}, "mappings": {}},
+        }
+
+        self.assertEqual(
+            ["mail", "mailbox", "amail", "xmail2", "grouped", "zz"],
+            self._search(snippets, "MAIL", metadata),
+        )
+
+    def test_ungrouped_rows_do_not_match_the_placeholder_group_label(self):
+        self.assertEqual([], self._search({"xhi": "hello"}, "ungrouped"))
+
+    def test_content_matching_follows_the_literal_case_insensitive_rules(self):
+        rich_signature = {
+            "__kind__": "rich_text",
+            "text": "Assinatura principal",
+            "spans": [],
+        }
+        for case, snippets, query, expected in (
+            ("matches key and value",
+             {"xname": "Alex", "xemail": "contato@example.com"}, "example", ["xemail"]),
+            ("matches key and value",
+             {"xname": "Alex", "xemail": "contato@example.com"}, "name", ["xname"]),
+            ("matches rich text plain value", {"xsig": rich_signature}, "assinatura", ["xsig"]),
+            # A blind re.search would treat "(net)" as a group and ".*" as
+            # match-all; the filter must compare literally.
+            ("literal, not a regex",
+             {"xa": "Total (net) due", "xb": "plain text"}, "(net)", ["xa"]),
+            ("literal, not a regex", {"xa": "Total (net) due", "xb": "plain text"}, ".*", []),
+            ("metacharacter does not raise", {"xa": "array[0] value"}, "[", ["xa"]),
+            ("case-insensitive",
+             {"xinsc": "Inscrição estadual", "xother": "Cadastro"}, "INSCRIÇÃO", ["xinsc"]),
+            ("accent-sensitive",
+             {"xinsc": "Inscrição estadual", "xother": "Cadastro"}, "inscricao", []),
+            ("unicode key", {"xcafé": "espresso"}, "CAFÉ", ["xcafé"]),
+        ):
+            with self.subTest(case, query=query):
+                self.assertEqual(expected, self._search(snippets, query))
+
+
+class SwitcherSearchTests(unittest.TestCase):
+    def test_searches_all_kinds_and_saved_text_without_running_providers(self):
+        def forbidden():
+            self.fail("Searching must never execute a provider")
+
+        snippets = {"sig": "Signature", "_codes": {"__prefix__": "code", "mail": "Saved signature"},
+                    "clock": forbidden}
+        metadata = {"groups": {"g": {"label": "Mail", "prefix": "as"}},
+                    "items": {"static": {"sig": {"group_id": "g"}}}}
+        rows = build_manager_rows(snippets, metadata, {"clock": {"trigger": "now"}})
+        self.assertEqual(["sig"], [r.key for r in search_manager_rows(rows, "ASSIG", snippets)])
+        self.assertEqual(["mail", "sig"], [r.key for r in search_manager_rows(rows, "mail", snippets)])
+        self.assertEqual(["sig", "mail"], [r.key for r in search_manager_rows(rows, "signature", snippets)])
+        self.assertEqual(["clock"], [r.key for r in search_manager_rows(rows, "now", snippets)])
+        self.assertEqual("", manager_row_preview(rows[-1], snippets))
+        self.assertEqual(rows, search_manager_rows(rows, "  ", snippets))
+
+    def test_equal_effective_triggers_remain_distinct_and_queries_are_literal(self):
+        snippets = {"codeitem": "Static [value]", "_codes": {"__prefix__": "code", "item": "Mapping"}}
+        rows = build_manager_rows(snippets)
+        self.assertEqual(["static", "mapping"],
+                         [r.kind for r in search_manager_rows(rows, "codeitem", snippets)])
+        self.assertEqual(["codeitem"], [r.key for r in search_manager_rows(rows, "[", snippets)])
+        self.assertEqual((), search_manager_rows(rows, ".*", snippets))
 
 
 class ManagerNavigationTests(unittest.TestCase):

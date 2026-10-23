@@ -611,6 +611,33 @@ def toggle_mapping_favorite(metadata, container_key, item_key, favorite=None):
     return state
 
 
+def static_item_metadata(metadata, item_key):
+    """A detached copy of one static item's metadata, or None when it has none."""
+    item = dict(metadata or {}).get("items", {}).get("static", {}).get(item_key)
+    return copy.deepcopy(item) if item else None
+
+
+def mapping_item_metadata(metadata, container_key, item_key):
+    """A detached copy of one mapping item's metadata, or None when it has none."""
+    containers = dict(metadata or {}).get("items", {}).get("mappings", {})
+    item = containers.get(container_key, {}).get(item_key)
+    return copy.deepcopy(item) if item else None
+
+
+def restore_static_item_metadata(metadata, item_key, item):
+    """Put a static item's metadata (from :func:`static_item_metadata`) back."""
+    state = _mutable_metadata(metadata)
+    _item_container(state)[item_key] = copy.deepcopy(item)
+    return state
+
+
+def restore_mapping_item_metadata(metadata, container_key, item_key, item):
+    """Put a mapping item's metadata (from :func:`mapping_item_metadata`) back."""
+    state = _mutable_metadata(metadata)
+    _item_container(state, "mappings").setdefault(container_key, {})[item_key] = copy.deepcopy(item)
+    return state
+
+
 def duplicate_static_item_metadata(metadata, source_key, destination_key):
     """Copy static item metadata under a new key as a non-favorite item."""
     state = _mutable_metadata(metadata)
@@ -647,7 +674,11 @@ __all__ = [
     "create_group",
     "delete_group",
     "duplicate_static_item_metadata",
+    "mapping_item_metadata",
     "rename_static_item_metadata",
+    "restore_mapping_item_metadata",
+    "restore_static_item_metadata",
+    "static_item_metadata",
     "merge_metadata",
     "normalize_metadata",
     "remove_form_metadata",

@@ -8,11 +8,13 @@ Tk, disk, providers, or the clipboard.
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+import re
 
 from dynamic_registry import effective_trigger as registry_effective_trigger
 from dynamic_registry import is_enabled as registry_entry_enabled
 from group_policy import effective_trigger as static_effective_trigger
 from group_policy import get_group, get_static_item_metadata, static_item_enabled
+from rich_text_support import extract_plain_text
 from snippet_utils import get_dynamic_prefixes
 from workflow_support import SnippetRef
 
@@ -20,7 +22,77 @@ from workflow_support import SnippetRef
 FILTER_ALL = "all"
 FILTER_FAVORITES = "favorites"
 FILTER_RECENT = "recent"
+FILTER_DISABLED = "disabled"
+FILTER_PROBLEMS = "problems"
 UNGROUPED_FILTER = "ungrouped"
+
+MANAGER_PAGES = ("static", "mapping", "dynamic", "backups", "settings")
+_GEOMETRY = re.compile(r"([1-9][0-9]{0,4})x([1-9][0-9]{0,4})([+-][0-9]{1,6})([+-][0-9]{1,6})\Z")
+
+
+def normalize_manager_view(value):
+    """Accept only bounded, JSON-safe view state; never restore widget paths."""
+    if not isinstance(value, dict):
+        return {}
+    result = {}
+    if value.get("page") in MANAGER_PAGES:
+        result["page"] = value["page"]
+    geometry = value.get("geometry")
+    if isinstance(geometry, str) and _GEOMETRY.fullmatch(geometry):
+        result["geometry"] = geometry
+    pages = value.get("pages")
+    if isinstance(pages, dict):
+        result["pages"] = {}
+        for name in MANAGER_PAGES:
+            raw = pages.get(name)
+            if not isinstance(raw, dict):
+                continue
+            page = {}
+            for key in ("query", "filter", "group", "container", "focus", "row_focus", "selection", "top_row"):
+                item = raw.get(key)
+                if isinstance(item, str) and len(item) <= 4096:
+                    page[key] = item
+            scroll = raw.get("scroll")
+            if isinstance(scroll, (int, float)) and not isinstance(scroll, bool) and 0 <= scroll <= 1:
+                page["scroll"] = float(scroll)
+            ref = raw.get("target")
+            if isinstance(ref, dict):
+                try:
+                    target = SnippetRef(ref.get("kind"), ref.get("key"), ref.get("container"))
+                    if len(target.key) <= 4096 and (target.container is None or len(target.container) <= 4096):
+                        page["target"] = {"kind": target.kind, "key": target.key, "container": target.container}
+                except (TypeError, ValueError):
+                    pass
+            result["pages"][name] = page
+    return result
+
+
+def geometry_intersects_monitors(geometry, monitors):
+    """Validate absolute saved coordinates against real monitor rectangles.
+
+    The signed offsets in our settings represent absolute positions. Tk's
+    right/bottom-relative negative-offset syntax is deliberately not used here.
+    """
+    match = _GEOMETRY.fullmatch(geometry) if isinstance(geometry, str) else None
+    if match is None:
+        return False
+    width, height, x, y = map(int, match.groups())
+    return any(x < right and x + width > left and y < bottom and y + height > top
+               for left, top, right, bottom in monitors)
+
+
+def manager_geometry_for_tk(geometry):
+    """Convert saved absolute coordinates to Tk's explicit left/top syntax.
+
+    For example, saved ``800x600-1400+20`` must become
+    ``800x600+-1400+20``. Passing ``-1400`` directly to Tk would instead anchor
+    the window 1,400 pixels from the right edge of the primary desktop.
+    """
+    match = _GEOMETRY.fullmatch(geometry) if isinstance(geometry, str) else None
+    if match is None:
+        return None
+    width, height, x, y = map(int, match.groups())
+    return f"{width}x{height}+{x}+{y}"
 
 
 @dataclass(frozen=True)
@@ -34,6 +106,7 @@ class ManagerRow:
     group_label: str = "Ungrouped"
     favorite: bool = False
     enabled: bool = True
+    shadowed: bool = False
 
     @property
     def kind(self):
@@ -190,7 +263,7 @@ def _append_dynamic_rows(rows, snippets, dynamic_registry):
         )
 
 
-def build_manager_rows(snippets, metadata=None, dynamic_registry=None):
+def build_manager_rows(snippets, metadata=None, dynamic_registry=None, shadowed_statics=None):
     """Build ordered immutable rows from local runtime/library projections.
 
     Ordering is static snippets, mapping items, then registry dynamics.  Static
@@ -200,9 +273,16 @@ def build_manager_rows(snippets, metadata=None, dynamic_registry=None):
     """
     runtime = _as_mapping(snippets)
     rows = []
-    _append_static_rows(rows, runtime, metadata)
+    _append_static_rows(rows, {**runtime, **_as_mapping(shadowed_statics)}, metadata)
     _append_mapping_rows(rows, runtime, metadata)
     _append_dynamic_rows(rows, runtime, dynamic_registry)
+    dynamic_triggers = {row.effective_trigger for row in rows if row.kind == "dynamic" and row.enabled}
+    rows = [
+        ManagerRow(row.ref, row.stored_trigger, row.effective_trigger, row.group_id,
+                   row.group_label, row.favorite, row.enabled,
+                   row.kind == "static" and row.effective_trigger in dynamic_triggers)
+        for row in rows
+    ]
     return tuple(rows)
 
 
@@ -233,6 +313,10 @@ def filter_manager_rows(rows, filter_name=FILTER_ALL, *, workflow_state=None, gr
             for item in workflow_state.recent_items()
             if item in by_ref
         )
+    if filter_name == FILTER_DISABLED:
+        return tuple(row for row in rows if not row.enabled)
+    if filter_name == FILTER_PROBLEMS:
+        return tuple(row for row in rows if row.shadowed)
 
     if filter_name == UNGROUPED_FILTER:
         return tuple(
@@ -252,6 +336,98 @@ def filter_manager_rows(rows, filter_name=FILTER_ALL, *, workflow_state=None, gr
         # a group sidebar value and do not need a separate filter token.
         selected_group = filter_name
     return tuple(row for row in rows if row.group_id == selected_group)
+
+
+# Search rank: the matched field first (triggers, then the group label, then
+# content), then how it matched (exact, prefix, substring).
+_TRIGGER_FIELD, _GROUP_FIELD, _CONTENT_FIELD = range(3)
+_EXACT, _PREFIX, _SUBSTRING = range(3)
+
+
+def _match_rank(text, needle):
+    folded = text.casefold()
+    if folded == needle:
+        return _EXACT
+    if folded.startswith(needle):
+        return _PREFIX
+    if needle in folded:
+        return _SUBSTRING
+    return None
+
+
+def filter_static_rows(rows, query, snippets):
+    """Return the static rows that match ``query``, best match first.
+
+    A row matches on its stored trigger, its effective trigger (the one the
+    list shows after ``→``), its group's label or its plain-text content in
+    ``snippets``. Any trigger match outranks a group-label match, which
+    outranks a content match; within a field, exact beats prefix beats
+    substring. The query is a literal, case-insensitive substring, and accents
+    still count. Ties, and every row of a blank query, keep stored-trigger
+    order.
+    """
+    candidates = sorted(
+        (row for row in rows or () if row.kind == "static"),
+        key=lambda row: row.stored_trigger,
+    )
+    needle = query.strip().casefold()
+    if not needle:
+        return tuple(candidates)
+    ranked = []
+    for row in candidates:
+        fields = [
+            (_TRIGGER_FIELD, row.stored_trigger),
+            (_TRIGGER_FIELD, row.effective_trigger),
+            (_CONTENT_FIELD, extract_plain_text(snippets[row.stored_trigger])),
+        ]
+        # An ungrouped row's label is an internal placeholder, not text the
+        # list shows, so it must not make every ungrouped row match.
+        if row.group_id is not None:
+            fields.append((_GROUP_FIELD, row.group_label))
+        ranks = [
+            (field, rank)
+            for field, text in fields
+            if (rank := _match_rank(text, needle)) is not None
+        ]
+        if ranks:
+            ranked.append((min(ranks), row))
+    ranked.sort(key=lambda item: item[0])
+    return tuple(row for _rank, row in ranked)
+
+
+def manager_row_preview(row, snippets):
+    """Read saved text only; looking up a dynamic row never calls its provider."""
+    value = _as_mapping(snippets).get(row.stored_trigger)
+    if row.kind == "mapping":
+        value = _as_mapping(_as_mapping(snippets).get(row.container)).get(row.key)
+    if row.kind == "dynamic" or callable(value):
+        return ""
+    return extract_plain_text(value) if value is not None else ""
+
+
+def search_manager_rows(rows, query, snippets):
+    """Rank all kinds by literal trigger, group and saved-content matches.
+
+    Equal matches retain the projection's order, including distinct rows with
+    the same effective trigger. No provider or clipboard is consulted.
+    """
+    candidates = tuple(rows or ())
+    needle = query.strip().casefold()
+    if not needle:
+        return candidates
+    ranked = []
+    for row in candidates:
+        fields = [(_TRIGGER_FIELD, row.stored_trigger),
+                  (_TRIGGER_FIELD, row.effective_trigger),
+                  (_CONTENT_FIELD, manager_row_preview(row, snippets))]
+        if row.group_id is not None:
+            fields.append((_GROUP_FIELD, row.group_label))
+        ranks = [(field, rank) for field, text in fields
+                 if (rank := _match_rank(text, needle)) is not None]
+        if ranks:
+            ranked.append((min(ranks), row))
+    ranked.sort(key=lambda item: item[0])
+    return tuple(row for _rank, row in ranked)
 
 
 def navigation_target(row):
@@ -302,15 +478,23 @@ __all__ = [
     "FILTER_ALL",
     "FILTER_FAVORITES",
     "FILTER_RECENT",
+    "FILTER_DISABLED",
+    "FILTER_PROBLEMS",
     "ManagerRow",
     "NavigationTarget",
     "UNGROUPED_FILTER",
     "build_manager_rows",
     "build_navigation_target",
     "filter_manager_rows",
+    "filter_static_rows",
     "find_manager_target",
     "format_trigger_pair",
+    "geometry_intersects_monitors",
     "lookup_manager_target",
     "manager_rows_for_filter",
+    "manager_row_preview",
+    "manager_geometry_for_tk",
     "navigation_target",
+    "normalize_manager_view",
+    "search_manager_rows",
 ]

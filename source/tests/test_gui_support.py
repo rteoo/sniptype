@@ -2,7 +2,6 @@ import unittest
 from unittest import mock
 
 from gui_support import (
-    filter_static_snippets,
     focus_modal_input,
     iter_filtered_mapping_items,
     snippet_row_values,
@@ -10,7 +9,109 @@ from gui_support import (
 import gui_support
 
 
+class TreeScrollAnchorTests(unittest.TestCase):
+    class Tree:
+        def __init__(self, rows=None, first=41, total=81):
+            self.rows = tuple(rows if rows is not None else (f"sample{i:03d}" for i in range(80)))
+            self.first, self.total = first, total
+            self.operations = []
+
+        def get_children(self):
+            return self.rows
+
+        def yview(self, *args):
+            if args:
+                self.operations.append(("row", args[0]))
+                self.first = args[0]
+            return self.first / self.total, min(1, (self.first + 10) / self.total)
+
+        def yview_moveto(self, fraction):
+            self.operations.append(("fraction", fraction))
+            self.first = int(fraction * self.total + 0.5)
+
+        def bbox(self, row):
+            index = self.rows.index(row)
+            return (0, (index - self.first) * 20, 100, 20) if self.first <= index < self.first + 10 else ()
+
+    def test_row_identity_survives_81_to_80_total_when_fraction_loses_one_row(self):
+        source = self.Tree()
+        state = gui_support.capture_tree_scroll(source)
+        self.assertEqual({"scroll": 41 / 81, "top_row": "sample041"}, state)
+        legacy = self.Tree(first=0, total=80)
+        gui_support.restore_tree_scroll(legacy, {"scroll": state["scroll"]})
+        self.assertEqual(40, legacy.first)
+        restored = self.Tree(first=0, total=80)
+        gui_support.restore_tree_scroll(restored, state)
+        self.assertEqual([("row", 41)], restored.operations)
+        self.assertEqual(source.bbox("sample041"), restored.bbox("sample041"))
+
+    def test_legacy_missing_deleted_and_detached_anchors_keep_fraction_fallback(self):
+        for anchor in (None, "deleted", "detached"):
+            with self.subTest(anchor=anchor):
+                tree = self.Tree(rows=("attached",), first=0, total=1)
+                # An existing detached widget item must not be reattached or
+                # treated as a displayed row; get_children is authoritative.
+                tree.exists = lambda _row: True
+                state = {"scroll": 0.25}
+                if anchor is not None:
+                    state["top_row"] = anchor
+                gui_support.restore_tree_scroll(tree, state)
+                self.assertEqual([("fraction", 0.25)], tree.operations)
+
+    def test_current_displayed_order_wins_over_old_row_index(self):
+        tree = self.Tree(rows=("added", "anchor", "last"), first=0, total=3)
+        gui_support.restore_tree_scroll(tree, {"top_row": "anchor", "scroll": 0})
+        self.assertEqual([("row", 1)], tree.operations)
+
+    def test_expanded_preorder_counts_children_and_excludes_collapsed_descendants(self):
+        tree = self.Tree(rows=("section-a", "section-b"), first=0, total=4)
+        grouped = mock.Mock()
+        grouped.get_children.side_effect = lambda parent="": {
+            "": ("section-a", "section-b"), "section-a": ("child-a",), "section-b": ("child-b",)}[parent]
+        grouped.item.return_value = True
+        expanded = gui_support.expanded_tree_rows(grouped)
+        self.assertEqual(["section-a", "child-a", "section-b", "child-b"], expanded)
+        source = self.Tree(rows=expanded, first=3, total=4)
+        self.assertEqual({"scroll": 0.75, "top_row": "child-b"},
+                         gui_support.capture_tree_scroll(source, expanded))
+        gui_support.restore_tree_scroll(tree, {"top_row": "child-b"}, expanded)
+        self.assertEqual([("row", 3)], tree.operations)
+        tree.operations.clear()
+        grouped.item.side_effect = lambda row, option: row != "section-a"
+        collapsed = gui_support.expanded_tree_rows(grouped)
+        self.assertEqual(["section-a", "section-b", "child-b"], collapsed)
+        gui_support.restore_tree_scroll(tree, {"top_row": "child-b"}, collapsed)
+        self.assertEqual([("row", 2)], tree.operations)
+        tree.operations.clear()
+        gui_support.restore_tree_scroll(tree, {"top_row": "child-a", "scroll": 0.25}, collapsed)
+        self.assertEqual([("fraction", 0.25)], tree.operations)
+
+    def test_backup_basename_resolves_to_new_generated_iid(self):
+        source = self.Tree(rows=("I001", "I002"), first=1, total=2)
+        state = gui_support.capture_tree_scroll(source, row_keys={"I001": "first.json", "I002": "saved.json"})
+        self.assertEqual({"scroll": 0.5, "top_row": "saved.json"}, state)
+        restored = self.Tree(rows=("I081", "I082", "I083"), first=0, total=3)
+        gui_support.restore_tree_scroll(restored, state,
+                                       row_keys={"I081": "new.json", "I082": "first.json", "I083": "saved.json"})
+        self.assertEqual([("row", 2)], restored.operations)
+        restored.operations.clear()
+        gui_support.restore_tree_scroll(restored, {"scroll": 0.25}, row_keys={})
+        self.assertEqual([("fraction", 0.25)], restored.operations)
+
+    def test_empty_list_captures_no_anchor_and_keeps_legacy_default(self):
+        tree = self.Tree(rows=(), first=0, total=1)
+        self.assertEqual({"scroll": 0, "top_row": ""}, gui_support.capture_tree_scroll(tree))
+        gui_support.restore_tree_scroll(tree, {})
+        self.assertEqual([("fraction", 0)], tree.operations)
+
+
 class GuiSupportTests(unittest.TestCase):
+    def test_cell_ellipsis_respects_measured_width(self):
+        measure = lambda value: sum(9 if char == "W" else 3 for char in value)
+        self.assertEqual("Wi…", gui_support.ellipsize_text("WiWWW", 15, measure))
+        self.assertEqual("Wi", gui_support.ellipsize_text("Wi", 12, measure))
+        self.assertEqual("", gui_support.ellipsize_text("WWW", 2, measure))
+
     def test_modal_input_reveals_and_focuses_only_after_activation(self):
         events = []
         dialog = mock.Mock()
@@ -137,56 +238,6 @@ class GuiSupportTests(unittest.TestCase):
         dialog.destroy.assert_called_once_with()
         with self.assertRaisesRegex(RuntimeError, "native key failed"):
             cancel()
-
-    def test_filter_static_snippets_without_query_keeps_only_persisted_static_entries(self):
-        for old_test, snippets, query, expected in (
-            ("test_filter_static_snippets_without_query_keeps_only_persisted_static_entries",
-             {"xname": "Alex", "_cpf_numbers": {"fulano": "123"}, "xdyn": lambda: "value"},
-             "", {"xname": "Alex"}),
-            ("test_whitespace_only_query_behaves_like_an_empty_query",
-             {"xname": "Alex", "xemail": "a@b.com"},
-             "   \t ", {"xname": "Alex", "xemail": "a@b.com"}),
-        ):
-            with self.subTest(old_test):
-                self.assertEqual(expected, filter_static_snippets(snippets, query))
-
-    def test_filter_static_snippets_query_matching(self):
-        rich_signature = {
-            "__kind__": "rich_text",
-            "text": "Assinatura principal",
-            "spans": [],
-        }
-        for old_test, snippets, query, expected in (
-            ("test_filter_static_snippets_matches_key_and_value",
-             {"xname": "Alex", "xemail": "contato@example.com"},
-             "example", {"xemail": "contato@example.com"}),
-            ("test_filter_static_snippets_matches_key_and_value",
-             {"xname": "Alex", "xemail": "contato@example.com"},
-             "name", {"xname": "Alex"}),
-            ("test_filter_static_snippets_matches_rich_text_plain_value",
-             {"xsig": rich_signature}, "assinatura", {"xsig": rich_signature}),
-            # A blind re.search would treat "(net)" as a group and ".*" as
-            # match-all; the filter must compare literally.
-            ("test_query_is_a_literal_substring_not_a_regex",
-             {"xa": "Total (net) due", "xb": "plain text"},
-             "(net)", {"xa": "Total (net) due"}),
-            ("test_query_is_a_literal_substring_not_a_regex",
-             {"xa": "Total (net) due", "xb": "plain text"}, ".*", {}),
-            # An unbalanced bracket would blow up re.compile; str.__contains__ is safe.
-            ("test_regex_metacharacter_query_does_not_raise",
-             {"xa": "array[0] value"}, "[", {"xa": "array[0] value"}),
-            # Case folds: an all-caps accented query still matches.
-            ("test_matching_is_case_insensitive_but_accent_sensitive",
-             {"xinsc": "Inscrição estadual", "xother": "Cadastro"},
-             "INSCRIÇÃO", {"xinsc": "Inscrição estadual"}),
-            # Accents are not folded: the de-accented spelling does not match.
-            ("test_matching_is_case_insensitive_but_accent_sensitive",
-             {"xinsc": "Inscrição estadual", "xother": "Cadastro"}, "inscricao", {}),
-            ("test_unicode_key_match_is_case_insensitive",
-             {"xcafé": "espresso"}, "CAFÉ", {"xcafé": "espresso"}),
-        ):
-            with self.subTest(old_test, query=query):
-                self.assertEqual(expected, filter_static_snippets(snippets, query))
 
     def test_iter_filtered_mapping_items_query_matching(self):
         prefixed = {"__prefix__": "clw", "gtw": "gateway", "api": "api server"}

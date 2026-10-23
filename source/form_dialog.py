@@ -11,23 +11,45 @@ from datetime import date
 import threading
 import tkinter as tk
 
+import time_format
 import ui_theme
 import ui_widgets
 from i18n import N_, _
-from form_support import CompiledForm, FormValidationError, render_form
+from form_support import (
+    CompiledForm,
+    FormValidationError,
+    field_label,
+    format_date_input,
+    parse_date_input,
+    render_form,
+)
 
 
 def _date_default(field):
-    """Return a date field's initial ISO value without freezing ``today``."""
+    """A date field's initial text, as the person types dates; ``today`` is
+    resolved when the form opens, never frozen."""
     value = field.default
     if value == "today":
-        return date.today().isoformat()
-    return value
+        return format_date_input(date.today())
+    # Compiling the form validated the default; older ones are stored as ISO.
+    return format_date_input(parse_date_input(value))
 
 
 def month_grid(year, month):
     """Return calendar rows for the standard-library month picker."""
     return calendar.monthcalendar(year, month)
+
+
+def month_heading(year, month):
+    """The picker's title in the interface language: "Outubro 2026"."""
+    name = time_format.month_name(month)
+    return f"{name[:1].upper()}{name[1:]} {year}"
+
+
+def weekday_headings():
+    """Monday-first column heads in the interface language ("seg", "ter", ...),
+    in the order :func:`month_grid` lays the days out."""
+    return tuple(_(day).rstrip(".") for day in time_format.WEEKDAYS)
 
 
 class FormDialogController:
@@ -54,6 +76,10 @@ class FormDialogController:
         return values
 
     def _field_for_error(self, error):
+        names = set(self.compiled.field_names)
+        for name in getattr(error, "errors", ()):
+            if name in names:
+                return name
         message = str(error)
         for field in self.compiled.fields:
             if field.name in message:
@@ -102,13 +128,14 @@ class _DatePicker:
         self.window.title(_("Escolher data"))
         self.window.transient(self.parent)
         self.window.resizable(False, False)
-        self.window.configure(bg=self.theme.card)
+        self.window.configure(bg=self.theme.surface)
         ui_theme.prepare_window(self.window, self.theme)
         self._build()
+        self.window.bind("<Escape>", lambda _event: self._close())
         self.window.grab_set()
 
     def _build(self):
-        header = tk.Frame(self.window, **self.theme.toolbar_frame_colors())
+        header = tk.Frame(self.window, bg=self.theme.surface)
         header.pack(fill="x", padx=self.theme.space_md, pady=(self.theme.space_md, self.theme.space_sm))
         previous = ui_widgets.button(
             header, text="‹", command=lambda: self._move(-1), variant="subtle",
@@ -117,7 +144,7 @@ class _DatePicker:
         previous.pack(side="left")
         self._month_label = tk.Label(
             header, font=self.theme.font(weight="bold"), fg=self.theme.text,
-            bg=self.theme.card,
+            bg=self.theme.surface,
         )
         self._month_label.pack(side="left", expand=True)
         following = ui_widgets.button(
@@ -125,7 +152,7 @@ class _DatePicker:
             ui=self.theme,
         )
         following.pack(side="right")
-        self._grid = tk.Frame(self.window, **self.theme.toolbar_frame_colors())
+        self._grid = tk.Frame(self.window, bg=self.theme.surface)
         self._grid.pack(fill="both", expand=True, padx=self.theme.space_md, pady=self.theme.space_sm)
         self._draw_month()
 
@@ -143,18 +170,16 @@ class _DatePicker:
     def _draw_month(self):
         for child in self._grid.winfo_children():
             child.destroy()
-        self._month_label.configure(
-            text=f"{calendar.month_name[self._month]} {self._year}"
-        )
-        for column, name in enumerate(("Mo", "Tu", "We", "Th", "Fr", "Sa", "Su")):
+        self._month_label.configure(text=month_heading(self._year, self._month))
+        for column, name in enumerate(weekday_headings()):
             tk.Label(
                 self._grid, text=name, width=3, font=self.theme.font(weight="bold"),
-                fg=self.theme.text_muted, bg=self.theme.card,
+                fg=self.theme.text_muted, bg=self.theme.surface,
             ).grid(row=0, column=column, padx=1, pady=1)
         for row, week in enumerate(month_grid(self._year, self._month), start=1):
             for column, day in enumerate(week):
                 if not day:
-                    tk.Label(self._grid, text="", width=3, bg=self.theme.card).grid(
+                    tk.Label(self._grid, text="", width=3, bg=self.theme.surface).grid(
                         row=row, column=column, padx=1, pady=1
                     )
                     continue
@@ -165,7 +190,10 @@ class _DatePicker:
                 ).grid(row=row, column=column, padx=1, pady=1)
 
     def _select(self, day):
-        self.variable.set(date(self._year, self._month, day).isoformat())
+        self.variable.set(format_date_input(date(self._year, self._month, day)))
+        self._close()
+
+    def _close(self):
         self.window.grab_release()
         self.window.destroy()
         self.window = None
@@ -230,17 +258,16 @@ class FormDialog:
         return "break"
 
     def _label(self, parent, field):
-        label = field.label or field.name.replace("_", " ").title()
         tk.Label(
-            parent, text=label, anchor="w", bg=self.theme.card,
+            parent, text=field_label(field.name, field.label), anchor="w", bg=self.theme.surface,
             fg=self.theme.text, font=self.theme.font(),
         ).pack(fill="x", pady=(self.theme.space_sm, self.theme.space_xs))
 
     def _build_fields(self, parent):
         # A vertical frame is intentionally used instead of a second Tk root;
         # multiline fields own their own scrollbar and all controls share the
-        # process-wide GUI thread.
-        fields = ui_widgets.card(parent, padding=self.theme.space_md, ui=self.theme)
+        # process-wide GUI thread. The fields sit on the dialog surface itself.
+        fields = tk.Frame(parent, bg=self.theme.surface)
         fields.pack(fill="both", expand=True)
         for field in self.compiled.fields:
             self._label(fields, field)
@@ -263,7 +290,7 @@ class FormDialog:
                 control.pack(anchor="w")
                 self._variables[field.name] = variable
             elif field.type == "date":
-                control_frame = tk.Frame(fields, bg=self.theme.card)
+                control_frame = tk.Frame(fields, bg=self.theme.surface)
                 control_frame.pack(fill="x")
                 variable = tk.StringVar(self.window, value=_date_default(field))
                 control = ui_widgets.entry(control_frame, textvariable=variable, ui=self.theme)

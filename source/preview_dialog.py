@@ -206,7 +206,8 @@ class PreviewDialogController:
     def _build_widgets(self, window, _controller):
         window.configure(bg=self.theme.surface)
         ui_theme.prepare_window(window, self.theme)
-        frame = ui_widgets.card(window, padding=self.theme.space_md, ui=self.theme)
+        # The preview sits on the window surface itself, with no card inside.
+        frame = tk.Frame(window, bg=self.theme.surface)
         frame.pack(fill="both", expand=True, padx=self.theme.space_lg, pady=self.theme.space_lg)
         text_field, text_widget = ui_widgets.text_area(
             frame,
@@ -222,7 +223,7 @@ class PreviewDialogController:
             frame,
             text="",
             anchor="w",
-            bg=self.theme.card,
+            bg=self.theme.surface,
             fg=self.theme.warning,
             font=self.theme.caption_font(),
         )
@@ -231,6 +232,7 @@ class PreviewDialogController:
             frame, text=_("Fechar"), command=self.close, width=10, ui=self.theme,
         )
         close.pack(anchor="e", pady=(self.theme.space_sm, 0))
+        window.bind("<Escape>", lambda _event: self.close())
         return text_widget, status
 
     def show(self, result, *, title=N_("Prévia")):

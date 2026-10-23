@@ -12,7 +12,7 @@ import tkinter as tk
 import ui_theme
 import ui_widgets
 from i18n import N_, _
-from hotkey_support import ACTIONS, normalize_hotkeys
+from hotkey_support import ACTIONS, capture_hotkey, display_hotkey, normalize_hotkeys
 
 
 ACTION_LABELS = {
@@ -20,7 +20,7 @@ ACTION_LABELS = {
     "edit_last": N_("Editar último expandido"),
     "toggle_enabled": N_("Alternar expansão"),
 }
-HINT_TEXT = N_("Use combinações como <ctrl>+<shift>+m. Deixe vazio para desativar.")
+HINT_TEXT = N_("Pressione uma combinação, como Ctrl+Shift+M. Backspace limpa o atalho.")
 
 
 class HotkeyDialogController:
@@ -76,19 +76,26 @@ class HotkeyDialog:
     def __init__(self, parent, bindings=None, *, title=N_("Atalhos"), theme=None):
         self._owner_thread = threading.current_thread()
         self.parent = parent
+        self._opener = parent.focus_get()
         self.theme = theme or ui_theme.bind(parent)
         self.window = tk.Toplevel(parent)
         self.window.title(_(title))
         self.window.transient(parent)
         self.window.configure(bg=self.theme.surface)
         ui_theme.prepare_window(self.window, self.theme)
-        self.window.minsize(420, 260)
         self.window.protocol("WM_DELETE_WINDOW", self.cancel)
         self._controls = {}
         self._error_label = None
         self.controller = None
         self._bindings = bindings or {}
+        self._captured = {}
         self._build()
+        self.window.update_idletasks()
+        # Measure the real controls in this language, density and display scale.
+        width = min(max(420, self.window.winfo_reqwidth()), self.window.winfo_screenwidth())
+        height = min(max(260, self.window.winfo_reqheight()), self.window.winfo_screenheight())
+        self.window.minsize(width, height)
+        self.window.geometry(f"{width}x{height}")
 
     def _assert_owner(self):
         if threading.current_thread() is not self._owner_thread:
@@ -98,25 +105,51 @@ class HotkeyDialog:
         self._assert_owner()
         body = tk.Frame(self.window, bg=self.theme.surface)
         body.pack(fill="both", expand=True, padx=self.theme.space_lg, pady=self.theme.space_lg)
+        # Reserve the footer before any flexible content can consume its space.
+        ui_widgets.dialog_footer(
+            body, (_("Salvar"), self.save), self.cancel, ui=self.theme,
+        ).pack(side="bottom", fill="x", pady=(self.theme.space_md, 0))
 
         tk.Label(
             body, text=_(HINT_TEXT), anchor="w", justify="left",
             bg=self.theme.surface, fg=self.theme.text_muted, font=self.theme.caption_font(),
+            wraplength=min(self.theme.px(600), self.window.winfo_screenwidth()
+                           - 2 * self.theme.space_lg),
         ).pack(fill="x", pady=(0, self.theme.space_md))
 
-        card = ui_widgets.card(body, padding=(0, self.theme.space_xs), ui=self.theme)
-        card.pack(fill="both", expand=True)
+        # The rows sit on the dialog surface itself, with no card around them.
+        rows = tk.Frame(body, bg=self.theme.surface)
+        rows.pack(fill="both", expand=True)
         normalized, _invalid = normalize_hotkeys(self._bindings)
         for action in ACTIONS:
-            row = tk.Frame(card, bg=self.theme.card)
-            row.pack(fill="x", padx=self.theme.space_md, pady=self.theme.space_sm)
+            row = tk.Frame(rows, bg=self.theme.surface)
+            row.pack(fill="x", pady=self.theme.space_xs)
             tk.Label(
                 row, text=_(ACTION_LABELS[action]), anchor="w", width=24,
-                bg=self.theme.card, fg=self.theme.text, font=self.theme.font(),
+                bg=self.theme.surface, fg=self.theme.text, font=self.theme.font(),
             ).pack(side="left")
             control = ui_widgets.entry(row, ui=self.theme)
-            if normalized.get(action):
-                control.insert(0, normalized[action])
+            self._captured[action] = normalized.get(action) or ""
+            control.insert(0, display_hotkey(normalized.get(action)))
+            pressed_keys = set()
+
+            def capture(event, action=action, control=control, pressed_keys=pressed_keys):
+                if event.keysym in {"Tab", "ISO_Left_Tab"}:
+                    return None
+                pressed_keys.add(event.keysym)
+                binding = capture_hotkey(event.keysym, event.state,
+                                         control.tk.call("tk", "windowingsystem"), pressed_keys)
+                if binding == "<esc>":
+                    return None  # The dialog footer owns plain Escape.
+                if binding is not None:
+                    self._captured[action] = binding
+                    control.delete(0, tk.END)
+                    control.insert(0, display_hotkey(binding))
+                return "break"
+
+            control.bind("<KeyPress>", capture)
+            control.bind("<KeyRelease>", lambda event, keys=pressed_keys: keys.discard(event.keysym))
+            control.bind("<FocusOut>", lambda _event, keys=pressed_keys: keys.clear())
             control.pack(side="left", fill="x", expand=True)
             self._controls[action] = control
 
@@ -126,19 +159,8 @@ class HotkeyDialog:
         )
         self._error_label.pack(fill="x", pady=(self.theme.space_sm, 0))
 
-        buttons = tk.Frame(body, bg=self.theme.surface)
-        buttons.pack(fill="x", pady=(self.theme.space_md, 0))
-        ui_widgets.button(
-            buttons, text=_("Cancelar"), command=self.cancel, width=10, ui=self.theme,
-        ).pack(side="right")
-        ui_widgets.button(
-            buttons, text=_("Salvar"), command=self.save, width=10, variant="accent",
-            icon="save", ui=self.theme,
-        ).pack(side="right", padx=(0, self.theme.space_sm))
-
         self.controller = HotkeyDialogController(self._bindings, self._controls)
-        self.window.bind("<Escape>", lambda _event: self.cancel())
-        self.window.bind("<Return>", lambda _event: self.save())
+        self.controller.collect_values = lambda: dict(self._captured)
 
     def save(self):
         self._assert_owner()
@@ -159,6 +181,9 @@ class HotkeyDialog:
         except tk.TclError:
             pass
         self.window.destroy()
+        if self._opener is not None and self._opener.winfo_exists():
+            # Match DialogKit: X11 needs explicit focus after destroying its owner.
+            self._opener.focus_force()
 
     def run(self):
         """Wait for this window without grabbing every shared-root window."""

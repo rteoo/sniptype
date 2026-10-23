@@ -8,11 +8,15 @@ import math
 
 from hotkey_support import ACTIONS, normalize_hotkeys
 from i18n import LANGUAGES
+from manager_view_support import normalize_manager_view
 from snippet_utils import load_json_file, write_json_atomic
 
 
 RUNTIME_SETTING_DEFAULTS = {
-    "appearance": "system",
+    # None: no choice yet, so ui_theme applies its platform default (Dark on
+    # Windows, per the DS 2.7.1 Windows family).
+    "appearance": None,
+    "density": "compact",
     # None: no choice yet, so the interface follows the system language.
     "language": None,
     "terminator_mode": False,
@@ -46,8 +50,19 @@ def normalize_runtime_settings(settings):
     normalized = dict(settings) if isinstance(settings, dict) else {}
     invalid = {}
 
+    if "manager_view" in normalized:
+        view = normalize_manager_view(normalized["manager_view"])
+        if view != normalized["manager_view"]:
+            invalid["manager_view"] = view
+        normalized["manager_view"] = view
+
+    if "density" in normalized and normalized["density"] not in (
+        "compact", "comfortable", "touch",
+    ):
+        invalid["density"] = RUNTIME_SETTING_DEFAULTS["density"]
+
     if "appearance" in normalized and normalized["appearance"] not in {
-        "system", "light", "dark",
+        None, "system", "light", "dark",
     }:
         invalid["appearance"] = RUNTIME_SETTING_DEFAULTS["appearance"]
 
