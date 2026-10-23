@@ -53,14 +53,17 @@ Use `pythonw sniptype.pyw` after setup when you do not need console output.
 ### Releases and installer
 
 The current stable release is
-[`v1.2.0`](https://github.com/rteoo/sniptype/releases/tag/v1.2.0) for Windows;
-SnipType is also available from the Microsoft Store. v1.2.0 rebuilds the
-Windows manager on Windows 11 controls and fixes trigger detection around
-spaces, the numpad, pausing and window switches. It builds on v1.1.0's sidebar
-layout, v1.0.0's SnipType display name, English interface option and Windows
-Design System manager refresh, and on v0.15.0's dark
-theme and Configurações tab and v0.14.x's more reliable typing and pasting;
-voice transcription now lives in the independent Snipvoice project. For macOS,
+[`v1.3.0`](https://github.com/rteoo/sniptype/releases/tag/v1.3.0) for Windows;
+SnipType is also available from the Microsoft Store. v1.3.0 leads with
+expansion health and actionable recovery, with clearer readiness and failure
+states, preserved view and editing context, improved keyboard operation, and
+better contrast and text sizing. The v1.2.0 release rebuilt the Windows manager
+on Windows 11 controls and fixed trigger detection around spaces, the numpad,
+pausing and window switches. It builds on v1.1.0's sidebar layout, v1.0.0's
+SnipType display name, English interface option and Windows Design System
+manager refresh, and on v0.15.0's dark theme and Configurações tab and v0.14.x's
+more reliable typing and pasting; voice transcription now lives in the
+independent Snipvoice project. For macOS,
 the ARM64 build is available as the
 [`v0.14.4-beta.1` preview](https://github.com/rteoo/sniptype/releases/tag/v0.14.4-beta.1),
 at feature parity with v0.14.3. Versions before 1.0.0 were renumbered into
