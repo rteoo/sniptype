@@ -19,6 +19,16 @@ their original numbers.
 | 3.2.0, 3.2.1 | 0.9.0, 0.9.1 | 5.2.0-beta.1 | 1.0.0-beta.1 |
 | 3.3.0-beta, 3.3.0 | 0.10.0-beta.1, 0.10.0 | 5.2.0 | 1.0.0 |
 
+## [1.3.0] — 2026-10-22
+
+The manager now leads with expansion health and actionable recovery, with a consistent keyboard-first workflow.
+
+### Changed
+
+- Improve action feedback, search, editor draft preservation, collections, settings, and keyboard operation across the manager.
+- Clarify expansion readiness and failure states, and preserve the current view and editing context when the window is hidden or reopened.
+- Improve contrast and text sizing while keeping the Windows 11 and native macOS control styles.
+
 ## [1.2.0] — 2026-09-28
 
 Windows 11 controls for the manager, and more reliable trigger detection and
