@@ -17,6 +17,7 @@ import ui_theme
 from manager_bridge import ManagerBridge, ManagerProcess, find_manager_executable
 from rich_text_support import build_rich_text_payload
 from test_manager_runtime import make_real_app
+from workflow_support import SnippetRef
 
 
 def on_disk(app):
@@ -49,7 +50,7 @@ class BridgeTests(unittest.TestCase):
         return response["error"]
 
     def test_list_holds_static_snippets_only_with_one_line_previews(self):
-        items = {item["trigger"]: item for item in self.result("library.list")}
+        items = {item["trigger"]: item for item in self.result("library.list")["items"]}
         self.assertTrue({"hello", "sig", "fancy"} <= set(items))
         self.assertNotIn("_codes", items)
         self.assertNotIn("ccity", items)
@@ -119,7 +120,8 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual("missing", self.error("snippet.delete", trigger="nope")["code"])
 
     def test_get_returns_text_and_rich_flag(self):
-        self.assertEqual({"trigger": "fancy", "text": "Bold text", "rich": True},
+        self.assertEqual({"trigger": "fancy", "text": "Bold text", "rich": True, "effectiveTrigger": "fancy",
+                          "favorite": False, "groupId": None},
                          self.result("snippet.get", trigger="fancy"))
         self.assertEqual("missing", self.error("snippet.get", trigger="nope")["code"])
 
@@ -181,7 +183,7 @@ class MappingBridgeTests(unittest.TestCase):
 
     def test_get_returns_text_rich_flag_and_effective_trigger(self):
         self.assertEqual({"type": "_email_codes", "name": "work", "text": "work@example.com", "rich": False,
-                          "effectiveTrigger": "mailwork"},
+                          "effectiveTrigger": "mailwork", "favorite": False},
                          self.result("mapping.get", type="_email_codes", name="work"))
         self.assertEqual("missing", self.error("mapping.get", type="_email_codes", name="__prefix__")["code"])
 
@@ -252,6 +254,143 @@ class MappingBridgeTests(unittest.TestCase):
         self.assertEqual({"type": "_email_codes"}, self.result("mapping.deleteType", type="_email_codes"))
         self.assertNotIn("_email_codes", on_disk(self.app))
         self.assertEqual("missing_type", self.error("mapping.deleteType", type="_email_codes")["code"])
+
+
+class OrganizeBridgeTests(unittest.TestCase):
+    """Favorites, groups, Duplicar, Renomear and the list filters."""
+
+    def setUp(self):
+        self.app = make_real_app(self, {
+            "hello": "Hello there",
+            "sig": "Best,\nTeo",
+            "fancy": build_rich_text_payload("Bold text", [{"tag": "bold", "start": 0, "end": 4}]),
+            "_cpf_numbers": {"fulano": "123.456.789-00"},
+        })
+        self.bridge = ManagerBridge(self.app, version="9.9.9", channel="beta")
+
+    call, result, error = BridgeTests.call, BridgeTests.result, BridgeTests.error
+
+    def metadata(self):
+        return on_disk(self.app)["__sniptype__"]
+
+    def listed(self, **params):
+        return [item["trigger"] for item in self.result("library.list", **params)["items"]]
+
+    def new_group(self, label="Trabalho", **values):
+        answer = self.result("group.save", values={"label": label, **values})
+        self.assertEqual("saved", answer["status"], answer)
+        return answer["id"]
+
+    def test_favorite_is_saved_and_filters_the_list(self):
+        self.result("snippet.setFavorite", trigger="sig", favorite=True)
+        self.assertTrue(self.metadata()["items"]["static"]["sig"]["favorite"])
+        self.assertEqual(["sig"], self.listed(filter="favorites"))
+        self.result("snippet.setFavorite", trigger="sig", favorite=False)
+        self.assertEqual([], self.listed(filter="favorites"))
+
+    def test_mapping_favorite_is_saved_and_listed(self):
+        self.result("mapping.setFavorite", type="_cpf_numbers", name="fulano", favorite=True)
+        self.assertTrue(self.metadata()["items"]["mappings"]["_cpf_numbers"]["fulano"]["favorite"])
+        (item,) = self.result("mapping.list", type="_cpf_numbers")
+        self.assertTrue(item["favorite"])
+        self.assertTrue(self.result("mapping.get", type="_cpf_numbers", name="fulano")["favorite"])
+        self.assertEqual("missing", self.error("mapping.setFavorite", type="_cpf_numbers", name="nobody",
+                                               favorite=True)["code"])
+
+    def test_group_create_assign_filter_and_prefix(self):
+        group = self.new_group(prefix="w")
+        self.assertEqual([{"id": group, "label": "Trabalho", "prefix": "w", "enabled": True, "count": 0}],
+                         self.result("groups.list")["groups"])
+        self.result("snippet.setGroup", trigger="hello", group=group)
+        self.assertEqual(group, self.metadata()["items"]["static"]["hello"]["group_id"])
+        items = {item["trigger"]: item for item in self.result("library.list")["items"]}
+        self.assertEqual(("whello", group, "Trabalho"),
+                         (items["hello"]["effectiveTrigger"], items["hello"]["groupId"], items["hello"]["group"]))
+        self.assertEqual(["hello"], self.listed(group=group))
+        self.assertNotIn("hello", self.listed(group="__ungrouped__"))
+        self.assertEqual(("whello", group, False), tuple(
+            self.result("snippet.get", trigger="hello")[k] for k in ("effectiveTrigger", "groupId", "favorite")))
+        self.result("snippet.setGroup", trigger="hello", group="")
+        self.assertNotIn("group_id", self.metadata()["items"]["static"].get("hello", {}))
+
+    def test_group_dialog_values_and_validation(self):
+        form = self.result("group.form")
+        self.assertEqual("", form["values"]["label"])
+        self.assertEqual({"inherit", "immediate", "terminator"}, {c["value"] for c in form["terminators"]})
+        self.assertEqual({"all", "allow", "deny"}, {c["value"] for c in form["applicationModes"]})
+        self.assertEqual(("invalid", "label"), tuple(self.result("group.save", values={"label": " "})[k]
+                                                     for k in ("status", "field")))
+        self.assertEqual("prefix", self.result("group.save", values={"label": "X", "prefix": "a b"})["field"])
+        answer = self.result("group.save", values={"label": "Apps", "application_mode": "allow",
+                                                   "executables": "Code.exe\n\ncode.exe"})
+        stored = self.metadata()["groups"][answer["id"]]
+        self.assertEqual({"mode": "allow", "executables": ["code.exe"]}, stored["applications"])
+        self.assertEqual("Apps", self.result("group.form", id=answer["id"])["values"]["label"])
+
+    def test_group_prefix_that_collides_is_refused_on_the_prefix_field(self):
+        group = self.new_group()
+        self.result("snippet.setGroup", trigger="hello", group=group)
+        self.result("snippet.save", trigger="xhello", text="Other", confirmed=["warnings"])
+        answer = self.result("group.save", id=group, values={"label": "Trabalho", "prefix": "x"})
+        self.assertEqual(("invalid", "prefix"), (answer["status"], answer["field"]))
+        self.assertEqual("", self.metadata()["groups"][group]["prefix"])
+
+    def test_group_delete_ungroups_members_and_undo_brings_both_back(self):
+        group = self.new_group()
+        self.result("snippet.setGroup", trigger="hello", group=group)
+        token = self.result("group.delete", id=group)["undoToken"]
+        self.assertNotIn(group, self.metadata().get("groups", {}))
+        self.assertNotIn("group_id", self.metadata()["items"]["static"].get("hello", {}))
+        self.assertEqual("Hello there", on_disk(self.app)["hello"])
+        self.result("group.undoDelete", token=token)
+        self.assertIn(group, self.metadata()["groups"])
+        self.assertEqual(group, self.metadata()["items"]["static"]["hello"]["group_id"])
+        self.assertEqual("undo_expired", self.error("group.undoDelete", token=token)["code"])
+        self.assertEqual("missing_group", self.error("group.delete", id="nope")["code"])
+
+    def test_duplicate_copies_value_and_group_but_not_favorite(self):
+        group = self.new_group()
+        self.result("snippet.setGroup", trigger="fancy", group=group)
+        self.result("snippet.setFavorite", trigger="fancy", favorite=True)
+        self.assertEqual({"status": "duplicated", "trigger": "fancy2"},
+                         self.result("snippet.duplicate", trigger="fancy", destination=" fancy2 "))
+        disk = on_disk(self.app)
+        self.assertEqual(disk["fancy"], disk["fancy2"])
+        copied = self.metadata()["items"]["static"]["fancy2"]
+        self.assertEqual((group, False), (copied["group_id"], copied["favorite"]))
+        for destination in ("", "_x", "hello"):
+            self.assertEqual("invalid", self.result("snippet.duplicate", trigger="sig",
+                                                    destination=destination)["status"])
+        self.assertEqual("missing", self.error("snippet.duplicate", trigger="gone", destination="g2")["code"])
+
+    def test_rename_moves_value_and_metadata_and_asks_about_warnings(self):
+        self.result("snippet.setFavorite", trigger="sig", favorite=True)
+        self.assertEqual({"status": "renamed", "trigger": "sign"},
+                         self.result("snippet.rename", trigger="sig", destination="sign"))
+        disk = on_disk(self.app)
+        self.assertNotIn("sig", disk)
+        self.assertEqual("Best,\nTeo", disk["sign"])
+        self.assertTrue(self.metadata()["items"]["static"]["sign"]["favorite"])
+        self.assertEqual("invalid", self.result("snippet.rename", trigger="sign", destination="hello")["status"])
+        answer = self.result("snippet.rename", trigger="sign", destination="ello")
+        self.assertEqual(("confirm", "warnings"), (answer["status"], answer["check"]))
+        self.assertIn("sign", on_disk(self.app))
+        self.result("snippet.rename", trigger="sign", destination="ello", confirmed=["warnings"])
+        self.assertIn("ello", on_disk(self.app))
+
+    def test_failed_write_leaves_metadata_unchanged(self):
+        with mock.patch.object(self.app, "save_snippets", return_value=False):
+            self.assertEqual("save_failed", self.error("snippet.setFavorite", trigger="sig", favorite=True)["code"])
+            self.assertEqual("save_failed", self.error("snippet.duplicate", trigger="sig", destination="s2")["code"])
+        self.assertNotIn("s2", self.app.snippets)
+        self.assertEqual([], self.listed(filter="favorites"))
+
+    def test_recent_and_problem_filters(self):
+        self.app.workflow_state.record_success(SnippetRef("static", "sig"))
+        self.assertEqual(["sig"], self.listed(filter="recent"))
+        self.assertEqual([], self.listed(filter="problems"))
+        self.assertEqual("bad_params", self.error("library.list", filter="nope")["code"])
+        self.assertEqual(3, self.result("library.list", filter="recent")["total"])
 
 
 class FindExecutableTests(unittest.TestCase):

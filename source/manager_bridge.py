@@ -19,15 +19,40 @@ import os
 import subprocess
 import sys
 import threading
+import uuid
 
 import i18n
+import manager_actions
 import ui_theme
-from editor_session import mapping_draft_problem, mapping_type_key, mapping_type_problem, static_draft_problem
+from editor_session import (
+    mapping_draft_problem,
+    mapping_type_key,
+    mapping_type_problem,
+    static_draft_problem,
+    static_trigger_problem,
+)
+from group_dialog import (
+    APPLICATION_LABELS,
+    TERMINATOR_LABELS,
+    WINDOWS_POLICY_NOTE,
+    GroupDefinitionError,
+    GroupDialogController,
+    build_group_definition,
+)
+from group_policy import normalize_group
 from i18n import _
 from library_metadata import MetadataReadOnlyError, mapping_item_metadata, static_item_metadata
-from manager_actions import restore_mapping_item as manager_restore_mapping_item
-from manager_actions import restore_static as manager_restore_static
-from manager_view_support import manager_row_preview
+from manager_actions import TriggerCollisionError
+from manager_view_support import (
+    FILTER_ALL,
+    FILTER_DISABLED,
+    FILTER_FAVORITES,
+    FILTER_PROBLEMS,
+    FILTER_RECENT,
+    UNGROUPED_FILTER,
+    filter_manager_rows,
+    manager_row_preview,
+)
 from rich_text_support import extract_plain_text, is_rich_text_payload
 from snippet_utils import mapping_types
 
@@ -35,6 +60,14 @@ MANAGER_EXE_NAME = "sniptype-manager.exe" if sys.platform == "win32" else "snipt
 MANAGER_UI_SETTING = "manager_ui"
 DENSITY_CHOICES = ("compact", "comfortable", "touch")
 PREVIEW_LIMIT = 160
+LIST_FILTERS = (FILTER_ALL, FILTER_FAVORITES, FILTER_RECENT, FILTER_DISABLED, FILTER_PROBLEMS)
+# The group selector value for items in no group; real group ids are UUIDs.
+UNGROUPED = "__ungrouped__"
+
+
+def _read_only_message():
+    return _("Os metadados da biblioteca são somente leitura nesta versão; favoritos, grupos e formulários não "
+             "podem ser alterados.")
 
 
 class BridgeError(Exception):
@@ -64,12 +97,22 @@ class ManagerBridge:
             "snippet.save": self.snippet_save,
             "snippet.delete": self.snippet_delete,
             "snippet.undoDelete": self.snippet_undo_delete,
+            "snippet.duplicate": self.snippet_duplicate,
+            "snippet.rename": self.snippet_rename,
+            "snippet.setFavorite": self.snippet_set_favorite,
+            "snippet.setGroup": self.snippet_set_group,
+            "groups.list": self.groups_list,
+            "group.form": self.group_form,
+            "group.save": self.group_save,
+            "group.delete": self.group_delete,
+            "group.undoDelete": self.group_undo_delete,
             "mapping.types": self.mapping_types,
             "mapping.list": self.mapping_list,
             "mapping.get": self.mapping_get,
             "mapping.save": self.mapping_save,
             "mapping.delete": self.mapping_delete,
             "mapping.undoDelete": self.mapping_undo_delete,
+            "mapping.setFavorite": self.mapping_set_favorite,
             "mapping.createType": self.mapping_create_type,
             "mapping.deleteType": self.mapping_delete_type,
             "settings.set": self.settings_set,
@@ -120,7 +163,7 @@ class ManagerBridge:
         return None
 
     def open_classic_manager(self):
-        """Dynamics, forms, groups and backups still live in the Tk manager."""
+        """Dynamics, forms, formatting and backups still live in the Tk manager."""
         self.app.gui.submit(self.app._show_manager_window)
         return None
 
@@ -131,16 +174,29 @@ class ManagerBridge:
         value = self.app._manager_static_projection().get(trigger)
         return None if callable(value) else value
 
-    def library_list(self):
+    def library_list(self, filter=FILTER_ALL, group=None):
+        """Static rows, narrowed to one group (or ``UNGROUPED``) and then by ``filter``.
+
+        ``total`` counts every static snippet, so the list can say what a view
+        hides. Recentes keeps the order of use; every other view, library order.
+        """
+        if filter not in LIST_FILTERS:
+            raise BridgeError("bad_params", f"unsupported filter {filter!r}")
         projection = self.app._manager_static_projection()
+        rows = [row for row in self.app._manager_rows() if row.kind == "static"]
+        total = len(rows)
+        if group == UNGROUPED:
+            rows = filter_manager_rows(rows, UNGROUPED_FILTER)
+        elif group:
+            rows = filter_manager_rows(rows, "group", group_id=group)
+        rows = filter_manager_rows(rows, filter, workflow_state=self.app.workflow_state)
         items = []
-        for row in self.app._manager_rows():
-            if row.kind != "static":
-                continue
+        for row in rows:
             preview = " ".join(manager_row_preview(row, projection).split())
             items.append({
                 "trigger": row.stored_trigger,
                 "effectiveTrigger": row.effective_trigger,
+                "groupId": row.group_id,
                 "group": row.group_label if row.group_id else None,
                 "favorite": row.favorite,
                 "enabled": row.enabled,
@@ -148,13 +204,20 @@ class ManagerBridge:
                 "rich": is_rich_text_payload(projection.get(row.stored_trigger)),
                 "preview": preview[:PREVIEW_LIMIT],
             })
-        return items
+        return {"items": items, "total": total}
+
+    def _row(self, kind, name, container=None):
+        """The manager row of one item, for metadata a filtered list may not hold."""
+        return next((row for row in self.app._manager_rows()
+                     if row.kind == kind and row.stored_trigger == name and row.container == container), None)
 
     def snippet_get(self, trigger):
         value = self._stored(trigger)
-        if value is None:
+        row = self._row("static", trigger)
+        if value is None or row is None:
             raise BridgeError("missing", _("O snippet {name} não existe mais.").format(name=trigger))
-        return {"trigger": trigger, "text": extract_plain_text(value), "rich": is_rich_text_payload(value)}
+        return {"trigger": trigger, "text": extract_plain_text(value), "rich": is_rich_text_payload(value),
+                "effectiveTrigger": row.effective_trigger, "favorite": row.favorite, "groupId": row.group_id}
 
     def snippet_save(self, trigger, text, original=None, confirmed=()):
         """Save a plain-text static snippet.
@@ -232,7 +295,7 @@ class ManagerBridge:
             if provider is not None:
                 projection.pop(trigger, None)
                 dynamic_triggers = dynamic_triggers - {trigger}
-            restored = manager_restore_static(
+            restored = manager_actions.restore_static(
                 projection, app.library_metadata, trigger, value, item_metadata,
                 dynamic_triggers=dynamic_triggers,
             )
@@ -243,6 +306,196 @@ class ManagerBridge:
         if not app._persist_manager_static_action(restored):
             raise BridgeError("save_failed", _("Não foi possível gravar snippets.json. Verifique os logs."))
         return {"trigger": trigger}
+
+    def _commit(self, build, *, mappings=False):
+        """Run one ``manager_actions`` transaction and persist it, as the Tk handlers do.
+
+        ``build`` returns the ``ActionResult``; every refusal or failed write
+        becomes a ``BridgeError`` with the words the person sees.
+        """
+        app = self.app
+        read_only = getattr(app.library_metadata, "read_only", False)
+        try:
+            result = build()
+        except TriggerCollisionError as error:
+            raise BridgeError("collision", _("O trigger efetivo {trigger} já é usado por outro snippet.").format(
+                trigger=error.trigger)) from error
+        except MetadataReadOnlyError as error:
+            raise BridgeError("read_only", _read_only_message()) from error
+        except (KeyError, ValueError) as error:
+            app.logger.warning(f"Manager bridge action refused: {error}")
+            raise BridgeError("refused", str(error)) from error
+        persist = app._persist_manager_action if mappings else app._persist_manager_static_action
+        if not persist(result):
+            raise BridgeError("save_failed", _read_only_message() if read_only
+                              else _("Não foi possível salvar a alteração."))
+        return result
+
+    def _static_trigger(self, trigger):
+        """``trigger`` when it names a saved plain static snippet; a refusal otherwise."""
+        value = self.app._manager_static_projection().get(trigger)
+        if value is None:
+            raise BridgeError("missing", _("O snippet {name} não existe mais.").format(name=trigger))
+        if callable(value):
+            raise BridgeError("dynamic", _("'{trigger}' é um snippet dinâmico. Gerencie-o em Ações "
+                                           "dinâmicas.").format(trigger=trigger))
+        return trigger
+
+    def snippet_duplicate(self, trigger, destination):
+        """Copy a snippet, formatting and metadata included: ``duplicated`` or ``invalid``."""
+        app = self.app
+        source = self._static_trigger(trigger)
+        destination = destination.strip() if isinstance(destination, str) else ""
+        problem = static_trigger_problem(app.snippets, destination)
+        if problem:
+            return {"status": "invalid", "message": problem}
+        self._commit(lambda: manager_actions.duplicate_static(
+            app._manager_static_projection(), app.library_metadata, source, destination,
+            dynamic_triggers=app._manager_dynamic_triggers(),
+        ))
+        return {"status": "duplicated", "trigger": destination}
+
+    def snippet_rename(self, trigger, destination, confirmed=()):
+        """Rename a snippet with its metadata: ``renamed``, ``invalid`` or ``confirm`` (trigger warnings)."""
+        app = self.app
+        source = self._static_trigger(trigger)
+        destination = destination.strip() if isinstance(destination, str) else ""
+        problem = static_trigger_problem(app.snippets, destination, source)
+        if problem:
+            return {"status": "invalid", "message": problem}
+        if destination == source:
+            return {"status": "renamed", "trigger": source}
+        warnings = app._validate_trigger_warnings(destination)
+        if warnings and "warnings" not in confirmed:
+            return {
+                "status": "confirm",
+                "check": "warnings",
+                "title": _("Confirmar trigger"),
+                "message": _("Avisos sobre este trigger:\n\n• {warnings}").format(warnings="\n• ".join(warnings)),
+                "action": _("Renomear mesmo assim"),
+            }
+        self._commit(lambda: manager_actions.rename_static(
+            app._manager_static_projection(), app.library_metadata, source, destination,
+            dynamic_triggers=app._manager_dynamic_triggers(),
+        ))
+        return {"status": "renamed", "trigger": destination}
+
+    def snippet_set_favorite(self, trigger, favorite):
+        app = self.app
+        source = self._static_trigger(trigger)
+        self._commit(lambda: manager_actions.toggle_favorite(
+            app._manager_static_projection(), app.library_metadata, source, bool(favorite),
+            dynamic_triggers=app._manager_dynamic_triggers(),
+        ))
+        return {"trigger": source, "favorite": bool(favorite)}
+
+    def snippet_set_group(self, trigger, group):
+        """Put a snippet in group ``group``, or in no group when it is empty."""
+        app = self.app
+        source = self._static_trigger(trigger)
+        if group:
+            self._group(group)
+
+        def build():
+            if group:
+                return manager_actions.assign_item(
+                    app._manager_static_projection(), app.library_metadata, source, group,
+                    dynamic_triggers=app._manager_dynamic_triggers(),
+                )
+            return manager_actions.unassign_item(
+                app._manager_static_projection(), app.library_metadata, source,
+                dynamic_triggers=app._manager_dynamic_triggers(),
+            )
+
+        self._commit(build)
+        return {"trigger": source, "group": group or None}
+
+    # -- groups ------------------------------------------------------------
+
+    def _groups(self):
+        metadata = self.app.library_metadata
+        groups = metadata.get("groups", {}) if isinstance(metadata, dict) else {}
+        return groups if isinstance(groups, dict) else {}
+
+    def _group(self, group_id):
+        definition = self._groups().get(group_id)
+        if definition is None:
+            raise BridgeError("missing_group", _("O grupo não existe mais."))
+        return definition
+
+    def groups_list(self):
+        """Every group, in library order, and whether the library lets them change."""
+        metadata = self.app.library_metadata
+        listed = []
+        for group_id, definition in self._groups().items():
+            policy = normalize_group(group_id, definition)
+            static_members, _mappings = manager_actions.group_members(metadata, group_id)
+            listed.append({
+                "id": str(group_id), "label": policy.label or _("Sem nome"), "prefix": policy.prefix,
+                "enabled": policy.enabled, "count": len(static_members),
+            })
+        return {"readOnly": bool(getattr(metadata, "read_only", False)), "groups": listed}
+
+    def group_form(self, id=None):
+        """The values the group dialog opens with, and the words of its choices."""
+        values = GroupDialogController(self._group(id) if id else None).initial
+        if not id:
+            values["label"] = ""
+        return {
+            "values": values,
+            "terminators": [{"value": value, "label": _(label)} for value, label in TERMINATOR_LABELS.items()],
+            "applicationModes": [{"value": value, "label": _(label)} for value, label in APPLICATION_LABELS.items()],
+            "windowsNote": _(WINDOWS_POLICY_NOTE),
+        }
+
+    def group_save(self, values, id=None):
+        """Create (no ``id``) or update a group: ``saved`` with its id, or ``invalid`` with the field."""
+        app = self.app
+        if id:
+            self._group(id)
+        try:
+            definition = build_group_definition(values)
+        except GroupDefinitionError as error:
+            return {"status": "invalid", "field": error.field or "label", "message": str(error)}
+        group_id = id or str(uuid.uuid4())
+        action = manager_actions.update_group if id else manager_actions.create_group
+        try:
+            self._commit(lambda: action(
+                app._manager_static_projection(), app.library_metadata, group_id, definition,
+                dynamic_triggers=app._manager_dynamic_triggers(),
+            ))
+        except BridgeError as error:
+            if error.code != "collision":
+                raise
+            # Only a new prefix or a re-enabled group can make members collide.
+            return {"status": "invalid", "field": "prefix", "message": error.message}
+        return {"status": "saved", "id": group_id, "label": definition["label"]}
+
+    def group_delete(self, id):
+        """Delete a group; its snippets stay, in no group. The token brings both back."""
+        app = self.app
+        definition = copy.deepcopy(dict(self._group(id)))
+        static_members, mapping_members = manager_actions.group_members(app.library_metadata, id)
+        self._commit(lambda: manager_actions.delete_group(
+            app._manager_static_projection(), app.library_metadata, id,
+            dynamic_triggers=app._manager_dynamic_triggers(),
+        ))
+        token = self._remember_undo("group", (id, definition, static_members, mapping_members))
+        return {"undoToken": token, "label": definition.get("label") or _("Sem nome")}
+
+    def group_undo_delete(self, token):
+        app = self.app
+        group_id, definition, static_members, mapping_members = self._take_undo("group", token)
+        try:
+            self._commit(lambda: manager_actions.restore_group(
+                app._manager_static_projection(), app.library_metadata, group_id, definition,
+                static_items=static_members, mapping_items=mapping_members,
+                dynamic_triggers=app._manager_dynamic_triggers(),
+            ))
+        except BridgeError as error:
+            raise BridgeError(error.code, _("Não foi possível recriar o grupo {name}: {error}").format(
+                name=definition.get("label") or _("Sem nome"), error=error.message)) from error
+        return {"id": group_id}
 
     def _remember_undo(self, kind, entry):
         """Keep only the newest delete, as the Tk receipt does; return its token."""
@@ -301,8 +554,10 @@ class ManagerBridge:
         value = self._mapping_value(type, name)
         if value is None:
             raise BridgeError("missing", _("O item {name} não existe mais.").format(name=name))
+        row = self._row("mapping", name, type)
         return {"type": type, "name": name, "text": extract_plain_text(value),
-                "rich": is_rich_text_payload(value), "effectiveTrigger": info["prefix"] + name}
+                "rich": is_rich_text_payload(value), "effectiveTrigger": info["prefix"] + name,
+                "favorite": bool(row and row.favorite)}
 
     def mapping_save(self, type, name, text, original=None, confirmed=()):
         """Save a plain-text mapping item; answers like :meth:`snippet_save`."""
@@ -349,7 +604,7 @@ class ManagerBridge:
         app = self.app
         container, name, value, item_metadata = self._take_undo("mapping", token)
         try:
-            restored = manager_restore_mapping_item(
+            restored = manager_actions.restore_mapping_item(
                 app.snippets, app.library_metadata, container, name, value, item_metadata,
                 dynamic_triggers=app._manager_dynamic_triggers(),
             )
@@ -360,6 +615,17 @@ class ManagerBridge:
         if not app._persist_manager_action(restored):
             raise BridgeError("save_failed", _("Não foi possível gravar snippets.json. Verifique os logs."))
         return {"type": container, "name": name}
+
+    def mapping_set_favorite(self, type, name, favorite):
+        app = self.app
+        self._type(type)
+        if self._mapping_value(type, name) is None:
+            raise BridgeError("missing", _("O item {name} não existe mais.").format(name=name))
+        self._commit(lambda: manager_actions.toggle_mapping_favorite(
+            app.snippets, app.library_metadata, type, name, bool(favorite),
+            dynamic_triggers=app._manager_dynamic_triggers(),
+        ), mappings=True)
+        return {"type": type, "name": name, "favorite": bool(favorite)}
 
     def mapping_create_type(self, name, prefix):
         """Create a custom mapping type: ``{"status": "created", "key"}`` or ``{"status": "invalid", ...}``."""
