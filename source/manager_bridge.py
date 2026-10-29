@@ -20,9 +20,11 @@ import subprocess
 import sys
 import threading
 import uuid
+from datetime import datetime
 
 import i18n
 import manager_actions
+import time_format
 import ui_theme
 from dynamic_registry import effective_trigger, reference_entries_by_category, validate_rename
 from editor_session import (
@@ -42,6 +44,7 @@ from group_dialog import (
 )
 from group_policy import normalize_group
 from i18n import N_, _
+from backup_support import backup_time
 from library_metadata import MetadataReadOnlyError, mapping_item_metadata, static_item_metadata
 from manager_actions import TriggerCollisionError
 from manager_view_support import (
@@ -114,6 +117,13 @@ class ManagerBridge:
             "group.save": self.group_save,
             "group.delete": self.group_delete,
             "group.undoDelete": self.group_undo_delete,
+            "backups.list": self.backups_list,
+            "backup.create": self.backup_create,
+            "backup.preview": self.backup_preview,
+            "backup.restore": self.backup_restore,
+            "library.exportText": self.library_export_text,
+            "library.importPreview": self.library_import_preview,
+            "library.import": self.library_import,
             "dynamics.list": self.dynamics_list,
             "dynamic.setEnabled": self.dynamic_set_enabled,
             "dynamic.rename": self.dynamic_rename,
@@ -174,7 +184,7 @@ class ManagerBridge:
         return None
 
     def open_classic_manager(self):
-        """Dynamics, forms, formatting and backups still live in the Tk manager."""
+        """Forms and formatting still live in the Tk manager."""
         self.app.gui.submit(self.app._show_manager_window)
         return None
 
@@ -724,6 +734,85 @@ class ManagerBridge:
         if not app._rename_registry_entry(key, trigger):
             raise BridgeError("save_failed", _("Falha ao salvar o novo nome do snippet dinâmico."))
         return {"status": "renamed", "key": key, "trigger": trigger}
+
+    # -- backups, import and export -----------------------------------------
+
+    def _backup_path(self, name):
+        """The backup called ``name``; only a listed backup, so a name never reaches outside backups."""
+        for backup in self.app.backup_summaries():
+            if os.path.basename(backup["path"]) == name:
+                return backup["path"]
+        raise BridgeError("missing", _("O backup não existe mais."))
+
+    def backups_list(self):
+        """Every backup, newest first, as the Backups page lists it."""
+        now = datetime.now()
+        return [{
+            "name": os.path.basename(backup["path"]),
+            "when": time_format.stamp_with_age(backup["taken"], now),
+            "texts": backup["texts"],
+            "lists": backup["lists"],
+            "size": backup["size"],
+            "empty": backup["empty"],
+        } for backup in self.app.backup_summaries()]
+
+    def backup_create(self):
+        created = self.app.backup_now()
+        if not created:
+            raise BridgeError("save_failed", _("Falha ao criar backup. Verifique os logs."))
+        return {"name": os.path.basename(created)}
+
+    def backup_preview(self, name):
+        """What restoring a backup changes, for the question before it."""
+        path = self._backup_path(name)
+        counts, error = self.app.preview_restore(path)
+        if error:
+            raise BridgeError("invalid", error)
+        return {"name": name, "when": time_format.stamp_with_age(backup_time(path), datetime.now()),
+                "counts": counts}
+
+    def backup_restore(self, name):
+        """Put a backup in place of the library; the current library is backed up first."""
+        path = self._backup_path(name)
+        ok, error = self.app.restore_backup(path)
+        if not ok:
+            raise BridgeError("restore_failed", _("Falha ao restaurar: {error}").format(error=error))
+        return {"name": name, "when": time_format.absolute_stamp(backup_time(path), datetime.now())}
+
+    def library_export_text(self):
+        """The library file as it is on disk; the window saves it where the person chooses."""
+        try:
+            with open(self.app.snippets_file, encoding="utf-8") as handle:
+                text = handle.read()
+        except OSError as error:
+            raise BridgeError("export_failed", _("Falha ao exportar: {error}").format(error=error)) from error
+        return {"text": text, "fileName": "snippets-export.json"}
+
+    def _import_document(self, text):
+        """The library document in ``text``, or a refusal saying why it cannot be imported."""
+        if not isinstance(text, str):
+            raise BridgeError("bad_params", "text must be a string")
+        try:
+            data = json.loads(text)
+        except ValueError as error:
+            raise BridgeError("invalid", _("Arquivo inválido: {error}").format(error=error)) from error
+        document, error = self.app.read_import_document(data)
+        if error:
+            raise BridgeError("invalid", error)
+        return document
+
+    def library_import_preview(self, text):
+        """``{merge, replace}`` change counts for the file the window read."""
+        return self.app.import_change_counts(self._import_document(text))
+
+    def library_import(self, text, mode):
+        """Import the file the window read: ``merge`` or ``replace``, the current library backed up first."""
+        if mode not in ("merge", "replace"):
+            raise BridgeError("bad_params", f"unsupported mode {mode!r}")
+        ok, error = self.app.apply_import(self._import_document(text), mode)
+        if not ok:
+            raise BridgeError("import_failed", error)
+        return {"mode": mode}
 
     # -- settings ----------------------------------------------------------
 

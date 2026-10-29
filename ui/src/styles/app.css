@@ -156,6 +156,18 @@ code, .mono { font-family: var(--app-font-trigger); }
 .card .el-segment label { min-width: 84px; }
 .card .el-choice { padding: 0; }
 
+/* Backups: actions, then the backups as a table with Restaurar per row. */
+.settings-page > header .path { font-size: 12px; color: var(--native-muted); overflow-wrap: anywhere; user-select: text; }
+.backup-actions { display: flex; flex-wrap: wrap; gap: 8px; max-width: 760px; margin-bottom: 4px; }
+.backup-list { display: grid; gap: 8px; max-width: 760px; }
+table.backups { width: 100%; border-collapse: collapse; background: var(--native-content); border: 1px solid var(--native-line); border-radius: 6px; }
+table.backups th, table.backups td { padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--native-line); }
+table.backups th { font-size: var(--native-type-caption); font-weight: 600; color: var(--native-muted); }
+table.backups tr:last-child td { border-bottom: 0; }
+table.backups .num { text-align: right; font-variant-numeric: tabular-nums; }
+table.backups .action { text-align: right; width: 1%; white-space: nowrap; }
+table.backups td .el-button { min-height: 28px; padding: 2px 12px; }
+
 /* Dinâmicos: one card per snippet, a section per category. */
 .dynamic-toolbar { display: flex; align-items: center; gap: 16px; max-width: 760px; margin-bottom: 4px; }
 .dynamic-toolbar .search { flex: 1; margin: 0; }

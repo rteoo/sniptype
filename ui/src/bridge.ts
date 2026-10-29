@@ -68,6 +68,13 @@ export type DynamicToggleAnswer = { status: "saved"; key: string; enabled: boole
 export type DynamicRenameAnswer =
   | { status: "renamed"; key: string; trigger: string } | { status: "invalid"; message: string } | Confirmation;
 
+export interface ChangeCounts { new: number; overwritten: number; removed: number }
+export interface Backup {
+  name: string; when: string; texts: number | null; lists: number | null; size: number; empty: boolean;
+}
+export interface BackupPreview { name: string; when: string; counts: ChangeCounts }
+export interface ImportCounts { merge: ChangeCounts; replace: ChangeCounts }
+
 export interface MappingType { key: string; label: string; prefix: string; builtin: boolean; count: number }
 
 export interface MappingItem { name: string; effectiveTrigger: string; favorite: boolean; rich: boolean; preview: string }
