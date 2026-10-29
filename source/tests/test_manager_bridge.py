@@ -450,6 +450,66 @@ class DynamicBridgeTests(unittest.TestCase):
             self.assertEqual("save_failed", self.error("dynamic.setEnabled", key="xhoje", enabled=False)["code"])
 
 
+class BackupBridgeTests(unittest.TestCase):
+    """Backups, import and export: the window sends file contents, never paths."""
+
+    def setUp(self):
+        self.app = make_real_app(self, {"hello": "Hello there", "_cpf_numbers": {"fulano": "123.456.789-00"}})
+        self.bridge = ManagerBridge(self.app, version="9.9.9", channel="beta")
+
+    call, result, error = BridgeTests.call, BridgeTests.result, BridgeTests.error
+
+    def test_create_then_list_with_counts(self):
+        before = len(self.result("backups.list"))
+        name = self.result("backup.create")["name"]
+        listed = {backup["name"]: backup for backup in self.result("backups.list")}
+        self.assertEqual(before + 1, len(listed))
+        created = listed[name]
+        self.assertEqual((1, 1, False), (created["texts"], created["lists"], created["empty"]))
+        self.assertTrue(created["when"])
+
+    def test_preview_and_restore_bring_the_backup_back(self):
+        name = self.result("backup.create")["name"]
+        self.result("snippet.save", trigger="later", text="Added after the backup")
+        preview = self.result("backup.preview", name=name)
+        self.assertEqual(1, preview["counts"]["removed"])
+        count = len(self.result("backups.list"))
+        self.result("backup.restore", name=name)
+        self.assertNotIn("later", on_disk(self.app))
+        self.assertNotIn("later", self.app.snippets)
+        self.assertEqual(count + 1, len(self.result("backups.list")), "the replaced library is backed up first")
+
+    def test_only_listed_backups_can_be_named(self):
+        for name in ("../snippets.json", "snippets.json", "nope.json"):
+            self.assertEqual("missing", self.error("backup.restore", name=name)["code"], name)
+        self.assertIn("hello", on_disk(self.app))
+
+    def test_export_text_is_the_library_file(self):
+        exported = self.result("library.exportText")
+        with open(self.app.snippets_file, encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), exported["text"])
+        self.assertTrue(exported["fileName"].endswith(".json"))
+
+    def test_import_preview_merge_and_replace(self):
+        text = json.dumps({"hello": "Replaced", "fresh": "New one"})
+        counts = self.result("library.importPreview", text=text)
+        self.assertEqual({"new": 1, "overwritten": 1, "removed": 0}, counts["merge"])
+        self.assertEqual(1, counts["replace"]["removed"])
+        self.result("library.import", text=text, mode="merge")
+        disk = on_disk(self.app)
+        self.assertEqual(("Replaced", "New one"), (disk["hello"], disk["fresh"]))
+        self.assertIn("_cpf_numbers", disk)
+        self.result("library.import", text=json.dumps({"only": "This"}), mode="replace")
+        self.assertEqual({"only"}, {key for key in on_disk(self.app) if key != "__sniptype__"})
+
+    def test_import_refuses_what_is_not_a_library(self):
+        for text in ("not json", "[1, 2]"):
+            self.assertEqual("invalid", self.error("library.importPreview", text=text)["code"], text)
+            self.assertEqual("invalid", self.error("library.import", text=text, mode="merge")["code"], text)
+        self.assertEqual("bad_params", self.error("library.import", text="{}", mode="wipe")["code"])
+        self.assertIn("hello", on_disk(self.app))
+
+
 class FindExecutableTests(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)

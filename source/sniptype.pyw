@@ -989,6 +989,31 @@ class Sniptype:
             self.logger.error(f"Falha ao criar backup manual: {e}")
             return None
 
+    def backup_summaries(self):
+        """Every backup, newest first: path, time taken, size, and its texts and lists.
+
+        ``texts`` and ``lists`` are None for a file that is not a library
+        document; ``empty`` marks a valid backup with no items.
+        """
+        summaries = []
+        for path in list_backups(self.backups_dir):
+            try:
+                size = os.path.getsize(path)
+            except OSError:
+                size = 0
+            try:
+                data = load_json_file(path)
+                if not isinstance(data, dict):
+                    raise ValueError("not a library document")
+                snippets, _metadata = split_library_document(data)
+                lists = sum(key.startswith("_") and isinstance(value, dict) for key, value in snippets.items())
+                texts = len(snippets) - lists
+            except Exception:
+                texts = lists = None
+            summaries.append({"path": path, "taken": backup_time(path), "size": size,
+                              "texts": texts, "lists": lists, "empty": texts == 0 and lists == 0})
+        return summaries
+
     def _read_backup(self, backup_path):
         """Load and check a backup: ``(snippets, None)`` or ``(None, error_message)``."""
         try:
@@ -1064,9 +1089,14 @@ class Sniptype:
         The document is ``(snippets, metadata)``; hand it to :meth:`apply_import`.
         """
         try:
-            data = validate_static_snippets(load_json_file(src_path))
+            data = load_json_file(src_path)
         except Exception as e:
             return None, _("Arquivo inválido: {error}").format(error=e)
+        return self.read_import_document(data)
+
+    def read_import_document(self, data):
+        """:meth:`read_import_source` for JSON already decoded (the Tauri window reads the file itself)."""
+        data = validate_static_snippets(data)
         if data is None:
             return None, _("Arquivo inválido: o JSON precisa ser um objeto.")
         return split_library_document(data), None
@@ -3470,34 +3500,20 @@ class Sniptype:
         def refresh_backups():
             tree.delete(*tree.get_children())
             row_paths.clear()
-            for path in list_backups(self.backups_dir):
-                try:
-                    size_bytes = os.path.getsize(path)
-                except OSError:
-                    size_bytes = 0
-                try:
-                    data = load_json_file(path)
-                    if not isinstance(data, dict):
-                        raise ValueError("not a library document")
-                    snippets, _metadata = split_library_document(data)
-                    lists = sum(key.startswith("_") and isinstance(value, dict)
-                                for key, value in snippets.items())
-                    texts = len(snippets) - lists
-                    empty = not snippets
-                except Exception:
-                    texts = lists = _("inválido")
-                    empty = False
-                taken = backup_time(path)
+            for backup in self.backup_summaries():
+                taken = backup["taken"]
                 when = (taken.strftime("%d/%m/%Y %H:%M") + " · "
                         + time_format.relative_age(taken, datetime.now()))
-                if empty:
+                if backup["empty"]:
                     when += " · " + _("0 itens")
+                invalid = backup["texts"] is None
                 row = tree.insert(
                     "",
                     tk.END,
-                    values=(when, texts, lists, human_size(size_bytes)),
+                    values=(when, _("inválido") if invalid else backup["texts"],
+                            _("inválido") if invalid else backup["lists"], human_size(backup["size"])),
                 )
-                row_paths[row] = path
+                row_paths[row] = backup["path"]
             summary.set(_("{count} backups disponíveis").format(count=len(row_paths))
                         if row_paths else _("Nenhum backup. Use Criar backup para proteger a biblioteca."))
             restore_button.configure(state=tk.DISABLED)

@@ -181,18 +181,21 @@ with Novo, Editar and Excluir grupo with Desfazer), Mapeamentos (a type picker
 over the same list/detail, items with Desfazer, Favorito, Duplicar, Novo tipo,
 and Excluir tipo behind the typed type name), Dinâmicos (one card per
 built-in snippet in its category section, a switch to turn it on or off,
-Renomear, and a search over trigger and description) and Configurações
-(language, appearance, density, terminator mode, data folder); everything
-else hands off to the Tk manager.
+Renomear, and a search over trigger and description), Backups (the backups
+as a table with Restaurar per row, Criar backup, Exportar…, Importar… with
+Mesclar or Substituir tudo behind the typed SUBSTITUIR, Abrir pasta) and
+Configurações (language, appearance, density, terminator mode, data folder);
+everything else hands off to the Tk manager. Importar and Exportar use the
+WebView's own system pickers, owned by the window.
 
 - **Layers.** `ui/src/styles/teo/` holds verbatim copies of the design
   system's `native/foundations.css`, `native/elements.css`,
   `native/windows/tokens.css` and `native/windows/elements.css`; update them
   by re-copying. `ui/index.html` inlines `native/windows/assets/icons.svg`.
   `ui/src/styles/app.css` composes the window from those tokens only. The
-  family sprite has no symbol for Mapeamentos, Dinâmicos or a drop-down
-  chevron, so `ui/index.html` adds app-local `mapping` (a tag), `dynamic` (a
-  bolt) and `chevron-down` symbols drawn on the same 24 px grid, stroke and
+  family sprite has no symbol for Mapeamentos, Dinâmicos, Backups or a
+  drop-down chevron, so `ui/index.html` adds app-local `mapping` (a tag),
+  `dynamic` (a bolt), `backup` (an archive box) and `chevron-down` symbols drawn on the same 24 px grid, stroke and
   square caps; replace them if the family gains its own. Element ids never
   reuse a symbol id.
 - **Menus and metadata.** A drop-down is a labeled button with the chevron

@@ -7,7 +7,8 @@ import "./styles/app.css";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import {
-  type AppInfo, BridgeError, type Choice, type Confirmation, type CopyAnswer, type CreateTypeAnswer,
+  type AppInfo, type Backup, type BackupPreview, BridgeError, type ChangeCounts, type Choice, type Confirmation,
+  type CopyAnswer, type CreateTypeAnswer, type ImportCounts,
   type DynamicRenameAnswer, type DynamicSection, type DynamicToggleAnswer, type Group,
   type GroupForm, type Groups, type GroupSaveAnswer, type Library, type ListFilter, type MappingEntry,
   type MappingItem, type MappingSaveAnswer, type MappingType, type RenameAnswer, type SaveAnswer, type SaveCheck,
@@ -17,7 +18,7 @@ import { h, icon } from "./dom";
 import { setLanguage, t } from "./i18n";
 
 type Kind = "textos" | "mapeamentos";
-type Page = Kind | "dinamicos" | "settings";
+type Page = Kind | "dinamicos" | "backups" | "settings";
 
 /** One row of a collection: a static snippet, or an item of the selected mapping type. */
 interface Item {
@@ -95,6 +96,7 @@ const state = {
   view: { filter: "all" as ListFilter, group: "" },
   cardStatus: {} as Record<string, { text: string; error: boolean }>,
   dynamics: { sections: [] as DynamicSection[], query: "", receipt: "" },
+  backups: { items: [] as Backup[], receipt: "" },
 };
 
 const refs = {
@@ -907,7 +909,8 @@ function renderAll(): void {
   refs.infobar = h("div", { class: "infobar", role: "region", "aria-label": t("Avisos") });
   const kind = activeKind();
   const page = h("main", { class: "page" }, refs.infobar,
-    kind ? collectionPage(kind) : state.page === "dinamicos" ? dynamicsPage() : settingsPage());
+    kind ? collectionPage(kind) : state.page === "dinamicos" ? dynamicsPage()
+      : state.page === "backups" ? backupsPage() : settingsPage());
 
   root.replaceChildren(h("div", { class: "app" },
     h("nav", { class: "navigation", "aria-label": t("Seções") },
@@ -915,6 +918,7 @@ function renderAll(): void {
       navButton("textos", "library", t("Textos")),
       navButton("mapeamentos", "mapping", t("Mapeamentos")),
       navButton("dinamicos", "dynamic", t("Dinâmicos")),
+      navButton("backups", "backup", t("Backups")),
       navButton("settings", "settings", t("Configurações"), "settings"),
       h("p", { class: "version" }, state.info ? `${state.info.version} · ${state.info.channel}` : ""),
     ),
@@ -929,6 +933,8 @@ function renderAll(): void {
     renderReceipt();
   } else if (state.page === "dinamicos") {
     renderDynamics();
+  } else if (state.page === "backups") {
+    renderBackups();
   }
 }
 
@@ -943,6 +949,8 @@ async function showPage(page: Page): Promise<void> {
   } else if (page === "dinamicos") {
     refs.search?.focus();
     await refreshDynamics().catch((error) => console.error("refresh failed", error));
+  } else if (page === "backups") {
+    await refreshBackups().catch((error) => console.error("refresh failed", error));
   }
 }
 
@@ -1098,9 +1106,12 @@ function renderList(): void {
     }
     const empty = textos
       ? collection.items.length || narrowed ? t("Nenhum texto encontrado. Ctrl+N cria um com este trigger.")
-        : t("Nenhum texto ainda. Use Novo para criar o primeiro.")
+        : t("Nenhum texto ainda. Use Novo para criar o primeiro, ou importe uma biblioteca.")
       : collection.items.length ? t("Nenhum item corresponde à busca.") : t("Este tipo ainda não tem itens.");
-    host.replaceChildren(h("p", { class: "empty-list" }, empty));
+    // An empty library offers Importar beside Novo (DESIGN.md).
+    const offerImport = textos && !collection.total;
+    host.replaceChildren(h("div", { class: "empty-list" }, h("p", {}, empty),
+      offerImport ? h("button", { type: "button", class: "el-button", onclick: () => importLibrary() }, t("Importar…")) : null));
     return;
   }
   // ceiling: renders every row; virtualize if libraries beyond ~5k snippets feel slow.
@@ -1408,6 +1419,228 @@ function renderDynamics(): void {
     : [h("p", { class: "empty-list" }, t("Nenhum snippet dinâmico encontrado."))]));
 }
 
+// ---------------------------------------------------------------------------
+// Backups: restore a backup, make one now, export the library or import a file.
+
+async function refreshBackups(): Promise<void> {
+  state.backups.items = await request<Backup[]>("backups.list");
+  if (state.page === "backups") renderBackups();
+}
+
+function backupsReceipt(text: string): void {
+  state.backups.receipt = text;
+  if (state.page === "backups") renderBackups();
+}
+
+/** The receipt of something done from the page showing now. */
+function pageReceipt(text: string): void {
+  const kind = activeKind();
+  if (kind) showReceipt(kind, { text });
+  else backupsReceipt(text);
+}
+
+function countsText(counts: ChangeCounts): string {
+  return t("Novos: {new} · Sobrescritos: {overwritten} · Removidos: {removed}", { ...counts });
+}
+
+/** Settle every unsaved draft before the library is replaced under them. */
+async function resolveAllDrafts(): Promise<boolean> {
+  for (const kind of ["textos", "mapeamentos"] as Kind[]) {
+    if (!isDirty(kind)) continue;
+    if (!(await resolveDraft(kind))) return false;
+  }
+  return true;
+}
+
+/** After a restore or an import the editors open from the new library. */
+async function libraryReplaced(): Promise<void> {
+  for (const kind of ["textos", "mapeamentos"] as Kind[]) state.collections[kind].draft = null;
+  const kind = activeKind();
+  if (kind) {
+    await refreshList(kind);
+    renderDetail();
+  }
+  await refreshBackups();
+}
+
+async function createBackup(): Promise<void> {
+  try {
+    await request("backup.create");
+  } catch (error) {
+    await alertError(t("Criar backup"), error);
+    return;
+  }
+  backupsReceipt(t("Backup criado às {time}", { time: clock() }));
+  await refreshBackups();
+}
+
+async function restoreBackup(name: string): Promise<void> {
+  let preview: BackupPreview;
+  try {
+    preview = await request<BackupPreview>("backup.preview", { name });
+  } catch (error) {
+    await alertError(t("Restaurar backup"), error);
+    return;
+  }
+  const choice = await ask(t("Restaurar backup"),
+    t("Backup: {taken}\n{changes}\n\nA biblioteca atual é trocada por este backup. Antes, ela é salva em um novo backup.",
+      { taken: preview.when, changes: countsText(preview.counts) }),
+    [{ id: "ok", label: t("Restaurar backup"), tone: "primary" }, { id: "cancel", label: t("Cancelar") }]);
+  if (choice !== "ok" || !(await resolveAllDrafts())) return;
+  let restored: { when: string };
+  try {
+    restored = await request("backup.restore", { name });
+  } catch (error) {
+    await alertError(t("Restaurar backup"), error);
+    return;
+  }
+  backupsReceipt(t("Backup restaurado às {time} · {name}", { time: clock(), name: restored.when }));
+  await libraryReplaced();
+}
+
+interface SaveFilePicker {
+  showSaveFilePicker(options: { suggestedName: string; types: { description: string; accept: Record<string, string[]> }[] }):
+    Promise<{ name: string; createWritable(): Promise<{ write(data: string): Promise<void>; close(): Promise<void> }> }>;
+}
+
+async function exportLibrary(): Promise<void> {
+  let exported: { text: string; fileName: string };
+  try {
+    exported = await request("library.exportText");
+  } catch (error) {
+    await alertError(t("Exportar biblioteca"), error);
+    return;
+  }
+  let saved = exported.fileName;
+  try {
+    // The system save dialog belongs to this window; the app never sees where the copy goes.
+    const handle = await (window as unknown as SaveFilePicker).showSaveFilePicker({
+      suggestedName: exported.fileName, types: [{ description: "JSON", accept: { "application/json": [".json"] } }],
+    });
+    const writable = await handle.createWritable();
+    await writable.write(exported.text);
+    await writable.close();
+    saved = handle.name;
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") return;
+    await alertError(t("Exportar biblioteca"), t("Falha ao exportar: {error}", { error: errorText(error) }));
+    return;
+  }
+  pageReceipt(t("Biblioteca exportada às {time} · {name}", { time: clock(), name: saved }));
+}
+
+/** Importar…: called from a click, so the file picker opens while the click still counts. */
+function importLibrary(): void {
+  const input = h("input", { type: "file", accept: ".json,application/json" });
+  input.addEventListener("change", () => {
+    const file = input.files?.[0];
+    if (file) void importFile(file);
+  });
+  input.click();
+}
+
+async function importFile(file: File): Promise<void> {
+  const title = t("Importar biblioteca");
+  let text: string;
+  let counts: ImportCounts;
+  try {
+    text = await file.text();
+    counts = await request<ImportCounts>("library.importPreview", { text });
+  } catch (error) {
+    await alertError(title, error);
+    return;
+  }
+  const choice = await ask(title, t(
+    "Arquivo: {file}\n\nMesclar mantém a biblioteca atual e dá prioridade ao arquivo.\n{merge}\n\nSubstituir tudo troca a biblioteca pelo arquivo.\n{replace}\n\nAntes, a biblioteca atual é salva em um backup.",
+    { file: file.name, merge: countsText(counts.merge), replace: countsText(counts.replace) }), [
+    { id: "merge", label: t("Mesclar"), tone: "primary" },
+    { id: "replace", label: t("Substituir tudo…"), tone: "danger" },
+    { id: "cancel", label: t("Cancelar") },
+  ]);
+  if (choice === "cancel") return;
+  // Replacing drops every item the file lacks, so it takes the typed word too.
+  const word = t("SUBSTITUIR");
+  if (choice === "replace" && !(await formDialog({
+    title: t("Substituir tudo"),
+    message: t("A biblioteca inteira é trocada pelo conteúdo de {file}.\n{replace}\n\nAntes, a biblioteca atual é salva em um backup.",
+      { file: file.name, replace: countsText(counts.replace) }),
+    fields: [{ id: "word", label: t("Para confirmar, digite {word}", { word }), mono: true }],
+    action: t("Substituir tudo"),
+    danger: true,
+    confirmWord: word,
+    submit: async () => null,
+  }))) return;
+  if (!(await resolveAllDrafts())) return;
+  try {
+    await request("library.import", { text, mode: choice });
+  } catch (error) {
+    await alertError(title, error);
+    return;
+  }
+  pageReceipt(t("Biblioteca importada às {time} · {name}", { time: clock(), name: file.name }));
+  await libraryReplaced();
+}
+
+const backupsRefs = { list: null as HTMLElement | null, receipt: null as HTMLElement | null };
+
+function sizeText(bytes: number): string {
+  return bytes < 1024 ? `${bytes} B` : bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KB`
+    : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function backupsPage(): HTMLElement {
+  backupsRefs.list = h("div", { class: "backup-list" });
+  backupsRefs.receipt = h("div", { class: "receipt", role: "status", "aria-live": "polite" });
+  return h("div", { class: "settings-page" },
+    h("header", {},
+      h("h1", {}, t("Backups da biblioteca")),
+      h("p", { class: "muted" }, t("Cada alteração guarda a versão anterior aqui; os 30 backups mais recentes ficam guardados.")),
+      h("code", { class: "path" }, state.info?.dataDir ?? ""),
+    ),
+    h("div", { class: "backup-actions" },
+      h("button", { type: "button", class: "primary", onclick: () => void createBackup() }, icon("plus"), t("Criar backup")),
+      h("button", { type: "button", class: "el-button", onclick: () => void exportLibrary() }, t("Exportar…")),
+      h("button", { type: "button", class: "el-button", onclick: () => importLibrary() }, t("Importar…")),
+      h("button", { type: "button", class: "el-button", onclick: () => void request("app.openDataFolder") },
+        t("Abrir pasta")),
+    ),
+    backupsRefs.receipt,
+    backupsRefs.list,
+  );
+}
+
+function renderBackups(): void {
+  const host = backupsRefs.list;
+  if (!host || state.page !== "backups") return;
+  backupsRefs.receipt!.textContent = state.backups.receipt;
+  const items = state.backups.items;
+  if (!items.length) {
+    host.replaceChildren(h("p", { class: "empty-list" }, t("Nenhum backup. Use Criar backup para proteger a biblioteca.")));
+    return;
+  }
+  const count = (value: number | null) => value === null ? t("inválido") : String(value);
+  host.replaceChildren(
+    h("p", { class: "muted" }, t("{count} backups disponíveis", { count: items.length })),
+    h("table", { class: "backups" },
+      h("thead", {}, h("tr", {},
+        h("th", { scope: "col" }, t("Quando")), h("th", { scope: "col", class: "num" }, t("Textos")),
+        h("th", { scope: "col", class: "num" }, t("Listas")), h("th", { scope: "col", class: "num" }, t("Tamanho")),
+        h("th", { scope: "col" }, h("span", { class: "sr-only" }, t("Ações"))))),
+      h("tbody", {}, ...items.map((backup) => h("tr", {},
+        h("td", {}, backup.when, backup.empty ? h("span", { class: "muted" }, ` · ${t("0 itens")}`) : null),
+        h("td", { class: "num" }, count(backup.texts)),
+        h("td", { class: "num" }, count(backup.lists)),
+        h("td", { class: "num" }, sizeText(backup.size)),
+        h("td", { class: "action" }, h("button", {
+          type: "button", class: "el-button", disabled: backup.texts === null,
+          "aria-label": t("Restaurar backup de {when}", { when: backup.when }),
+          onclick: () => void restoreBackup(backup.name),
+        }, t("Restaurar"))),
+      ))),
+    ),
+  );
+}
+
 function settingsPage(): HTMLElement {
   const info = state.info!;
   const status = (card: string) => {
@@ -1462,7 +1695,7 @@ function settingsPage(): HTMLElement {
         h("button", { type: "button", class: "el-button", onclick: () => void request("app.openDataFolder") },
           t("Abrir pasta"))),
       card("classic", t("Gerenciador clássico"),
-        t("Formulários, formatação e backups continuam no gerenciador clássico por enquanto."),
+        t("Formulários e formatação continuam no gerenciador clássico por enquanto."),
         h("button", { type: "button", class: "el-button", onclick: () => void request("app.openClassicManager") },
           t("Abrir"))),
     ),
@@ -1512,7 +1745,8 @@ window.addEventListener("focus", () => {
   const kind = activeKind();
   const page = state.page;
   void refreshInfo()
-    .then(() => kind ? refreshList(kind) : page === "dinamicos" ? refreshDynamics() : undefined)
+    .then(() => kind ? refreshList(kind) : page === "dinamicos" ? refreshDynamics()
+      : page === "backups" ? refreshBackups() : undefined)
     .catch((error) => console.error("refresh failed", error));
 });
 
