@@ -116,7 +116,22 @@ code, .mono { font-family: var(--app-font-trigger); }
 .editor label { display: grid; gap: 6px; font-size: var(--native-type-caption); }
 .editor label > span { font-size: var(--native-type-body); }
 .editor .grow { flex: 1; min-height: 0; grid-template-rows: auto minmax(0, 1fr) auto; }
-.editor textarea { resize: none; line-height: 1.5; height: 100%; }
+.editor .text-field { display: grid; gap: 6px; grid-template-rows: auto auto minmax(0, 1fr) auto; font-size: var(--native-type-caption); }
+.editor .field-label { font-size: var(--native-type-body); }
+/* The formatting editor: plain text, styles drawn from its spans (richtext.ts). */
+.field.rich { white-space: pre-wrap; overflow-wrap: anywhere; overflow-y: auto; line-height: 1.5; min-height: 120px;
+  font-size: var(--native-type-body); cursor: text; }
+.field.rich:focus { border-bottom-color: var(--color-link); outline: none; box-shadow: inset 0 -1px var(--color-link); }
+.field.rich[aria-readonly=true] { cursor: default; }
+.rt-bold { font-weight: 700; }
+.rt-italic { font-style: italic; }
+.rt-underline { text-decoration: underline; }
+.rt-strike { text-decoration: line-through; }
+.rt-underline.rt-strike { text-decoration: underline line-through; }
+.rt-code { font-family: var(--app-font-trigger); font-size: .95em; }
+.format-bar { display: flex; flex-wrap: wrap; gap: 4px; }
+.format-bar .el-button { min-height: 28px; min-width: 32px; padding: 2px 8px; }
+.format-bar .rt-code { font-size: 12px; }
 .editor #trigger { font-family: var(--app-font-trigger); max-width: 360px; }
 .editor .hint { color: var(--native-muted); }
 .editor .el-message { margin: 0; }

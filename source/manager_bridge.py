@@ -61,7 +61,12 @@ from manager_view_support import (
     filter_manager_rows,
     manager_row_preview,
 )
-from rich_text_support import extract_plain_text, is_rich_text_payload
+from rich_text_support import (
+    build_rich_text_payload,
+    extract_plain_text,
+    is_rich_text_payload,
+    normalize_style_spans,
+)
 from snippet_utils import build_saveable_snippets, mapping_types
 
 MANAGER_EXE_NAME = "sniptype-manager.exe" if sys.platform == "win32" else "sniptype-manager"
@@ -83,6 +88,30 @@ DYNAMIC_CATEGORIES = {
 def _read_only_message():
     return _("Os metadados da biblioteca são somente leitura nesta versão; favoritos, grupos e formulários não "
              "podem ser alterados.")
+
+
+def _spans(value):
+    """The style spans of a stored value, as the editor draws them; none for plain text."""
+    if not is_rich_text_payload(value):
+        return []
+    return normalize_style_spans(value.get("spans"), len(value["text"]))
+
+
+def _edited_value(text, spans, existing):
+    """The value an editor's text and spans store.
+
+    ``spans`` None is a plain-text client: it may not overwrite a formatted
+    value, whose formatting it cannot see.
+    """
+    if not isinstance(text, str):
+        raise BridgeError("bad_params", "text must be a string")
+    if spans is None:
+        if is_rich_text_payload(existing):
+            raise BridgeError("rich", _("Este texto tem formatação; salve-o pelo editor com formatação."))
+        return text
+    if not isinstance(spans, list):
+        raise BridgeError("bad_params", "spans must be a list")
+    return build_rich_text_payload(text, spans)
 
 
 class BridgeError(Exception):
@@ -191,7 +220,7 @@ class ManagerBridge:
         return None
 
     def open_classic_manager(self):
-        """Forms and formatting still live in the Tk manager."""
+        """The Tk manager, still reachable while this window is a preview."""
         self.app.gui.submit(self.app._show_manager_window)
         return None
 
@@ -245,14 +274,16 @@ class ManagerBridge:
         if value is None or row is None:
             raise BridgeError("missing", _("O snippet {name} não existe mais.").format(name=trigger))
         return {"trigger": trigger, "text": extract_plain_text(value), "rich": is_rich_text_payload(value),
-                "effectiveTrigger": row.effective_trigger, "favorite": row.favorite, "groupId": row.group_id}
+                "spans": _spans(value), "effectiveTrigger": row.effective_trigger, "favorite": row.favorite,
+                "groupId": row.group_id}
 
-    def snippet_save(self, trigger, text, original=None, confirmed=()):
-        """Save a plain-text static snippet.
+    def snippet_save(self, trigger, text, original=None, confirmed=(), spans=None):
+        """Save a static snippet: its text and, from the formatting editor, its style spans.
 
         Answers ``{"status": "saved"}``, or ``{"status": "confirm", "check", ...}``
         when the person has to accept a replacement or trigger warnings first;
-        the UI repeats the request with that check in ``confirmed``.
+        the UI repeats the request with that check in ``confirmed``. Text whose
+        spans are all gone is stored plain again, as the classic editor does.
         """
         app = self.app
         trigger = trigger.strip() if isinstance(trigger, str) else ""
@@ -263,9 +294,7 @@ class ManagerBridge:
             raise BridgeError("invalid", _(problem))
 
         existing = self._stored(trigger)
-        if is_rich_text_payload(existing):
-            # Plain text from this editor would drop the formatting on disk.
-            raise BridgeError("rich", _("Textos formatados ainda são editados no gerenciador clássico."))
+        value = _edited_value(text, spans, existing)
         if existing is not None and trigger != original and "replace" not in confirmed:
             return {
                 "status": "confirm",
@@ -286,9 +315,9 @@ class ManagerBridge:
                         warnings="\n• ".join(warnings)),
                     "action": _("Salvar mesmo assim"),
                 }
-        if existing == text:
+        if existing == value:
             return {"status": "saved", "trigger": trigger}
-        if not app.save_static_snippet(trigger, text):
+        if not app.save_static_snippet(trigger, value):
             raise BridgeError("save_failed", _(
                 "Não foi possível gravar snippets.json, então nada foi salvo. O rascunho continua no "
                 "editor; verifique os logs e tente de novo."))
@@ -584,11 +613,11 @@ class ManagerBridge:
             raise BridgeError("missing", _("O item {name} não existe mais.").format(name=name))
         row = self._row("mapping", name, type)
         return {"type": type, "name": name, "text": extract_plain_text(value),
-                "rich": is_rich_text_payload(value), "effectiveTrigger": info["prefix"] + name,
-                "favorite": bool(row and row.favorite)}
+                "rich": is_rich_text_payload(value), "spans": _spans(value),
+                "effectiveTrigger": info["prefix"] + name, "favorite": bool(row and row.favorite)}
 
-    def mapping_save(self, type, name, text, original=None, confirmed=(), formFrom=None):
-        """Save a plain-text mapping item; answers like :meth:`snippet_save`.
+    def mapping_save(self, type, name, text, original=None, confirmed=(), formFrom=None, spans=None):
+        """Save a mapping item; answers like :meth:`snippet_save`.
 
         ``formFrom`` names the item of the same type a Duplicar copy was made
         from; its form comes along on this first save.
@@ -601,8 +630,7 @@ class ManagerBridge:
         if problem:
             raise BridgeError("invalid", _(problem))
         existing = self._mapping_value(type, name)
-        if is_rich_text_payload(existing):
-            raise BridgeError("rich", _("Textos formatados ainda são editados no gerenciador clássico."))
+        value = _edited_value(text, spans, existing)
         if existing is not None and name != original and "replace" not in confirmed:
             return {
                 "status": "confirm",
@@ -612,22 +640,22 @@ class ManagerBridge:
                              "editor.").format(name=name, type=info["label"]),
                 "action": _("Substituir"),
             }
-        metadata = self._copied_mapping_form(type, name, text, formFrom) if formFrom else None
-        if (existing != text or metadata is not None) and not self.app.save_mapping_item(
-                type, name, text, metadata=metadata):
+        metadata = self._copied_mapping_form(type, name, value, formFrom) if formFrom else None
+        if (existing != value or metadata is not None) and not self.app.save_mapping_item(
+                type, name, value, metadata=metadata):
             raise BridgeError("save_failed", _(
                 "Não foi possível gravar snippets.json, então nada foi salvo. O rascunho continua no "
                 "editor; verifique os logs e tente de novo."))
         return {"status": "saved", "type": type, "name": name}
 
-    def _copied_mapping_form(self, type, name, text, source):
+    def _copied_mapping_form(self, type, name, value, source):
         """The metadata that gives ``name`` the form of ``source``, or None when it has none."""
         app = self.app
         form = app._mapping_form_metadata(type, source)
         if form is None:
             return None
         mapping = app.snippets.get(type)
-        proposed = {**app.snippets, type: {**(mapping if isinstance(mapping, dict) else {}), name: text}}
+        proposed = {**app.snippets, type: {**(mapping if isinstance(mapping, dict) else {}), name: value}}
         try:
             return manager_actions.set_mapping_form(
                 proposed, app.library_metadata, type, name, form,

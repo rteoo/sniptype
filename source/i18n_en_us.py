@@ -657,8 +657,7 @@ EN_US = {
     "O formulário não corresponde ao texto: {error}": "The form does not match the text: {error}",
     "Os campos do rascunho não batem com o formulário salvo; eles aparecem vazios.": "The draft's fields do not match the saved form; they show empty.",
     "O snippet dinâmico {name} não existe mais.": "The dynamic snippet {name} no longer exists.",
-    "Textos formatados ainda são editados no gerenciador clássico.":
-    "Formatted texts are still edited in the classic manager.",
+    "Este texto tem formatação; salve-o pelo editor com formatação.": "This text has formatting; save it from the formatting editor.",
     "Não há exclusão para desfazer.": "There is no deletion to undo.",
     "Não foi possível gravar snippets.json. Verifique os logs.": "Could not write snippets.json. Check the logs.",
     "O novo gerenciador não foi encontrado; abrindo o gerenciador clássico.":

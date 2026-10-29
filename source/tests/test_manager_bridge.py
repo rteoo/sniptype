@@ -100,6 +100,19 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual("rich", self.error("snippet.save", trigger="fancy", text="flat", original="fancy")["code"])
         self.assertEqual(before, on_disk(self.app)["fancy"])
 
+    def test_spans_save_formatted_text_and_none_left_saves_it_plain(self):
+        spans = [{"tag": "italic", "start": 0, "end": 4}, {"tag": "code", "start": 5, "end": 9}]
+        self.result("snippet.save", trigger="fancy", text="Bold text", original="fancy", spans=spans)
+        stored = on_disk(self.app)["fancy"]
+        self.assertEqual(("rich_text", spans), (stored["__kind__"], stored["spans"]))
+        self.assertIn("<em>Bold</em>", stored["html"])
+        self.assertIn(r"\f1", stored["rtf"])
+        self.result("snippet.save", trigger="plain", text="Now bold", spans=[{"tag": "bold", "start": 4, "end": 8}])
+        self.assertTrue(on_disk(self.app)["plain"]["html"].endswith("<strong>bold</strong></div>"))
+        self.result("snippet.save", trigger="fancy", text="Bold text", original="fancy", spans=[])
+        self.assertEqual("Bold text", on_disk(self.app)["fancy"])
+        self.assertEqual("bad_params", self.error("snippet.save", trigger="x1", text="v", spans="bold")["code"])
+
     def test_failed_write_reports_and_rolls_memory_back(self):
         with mock.patch.object(self.app, "save_snippets", return_value=False):
             self.assertEqual("save_failed", self.error("snippet.save", trigger="new1", text="v")["code"])
@@ -120,7 +133,8 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual("missing", self.error("snippet.delete", trigger="nope")["code"])
 
     def test_get_returns_text_and_rich_flag(self):
-        self.assertEqual({"trigger": "fancy", "text": "Bold text", "rich": True, "effectiveTrigger": "fancy",
+        self.assertEqual({"trigger": "fancy", "text": "Bold text", "rich": True,
+                          "spans": [{"tag": "bold", "start": 0, "end": 4}], "effectiveTrigger": "fancy",
                           "favorite": False, "groupId": None},
                          self.result("snippet.get", trigger="fancy"))
         self.assertEqual("missing", self.error("snippet.get", trigger="nope")["code"])
@@ -163,6 +177,14 @@ class MappingBridgeTests(unittest.TestCase):
 
     call, result, error = BridgeTests.call, BridgeTests.result, BridgeTests.error
 
+    def test_formatted_items_save_with_spans_and_keep_them_without(self):
+        spans = [{"tag": "underline", "start": 0, "end": 4}]
+        self.result("mapping.save", type="_cpf_numbers", name="styled", text="Bold id", original="styled", spans=spans)
+        self.assertEqual(spans, on_disk(self.app)["_cpf_numbers"]["styled"]["spans"])
+        self.assertEqual(spans, self.result("mapping.get", type="_cpf_numbers", name="styled")["spans"])
+        self.assertEqual("rich", self.error("mapping.save", type="_cpf_numbers", name="styled", text="flat",
+                                            original="styled")["code"])
+
     def test_types_list_builtins_first_with_counts_and_prefixes(self):
         types = self.result("mapping.types")
         self.assertEqual(["_cnpj_numbers", "_cpf_numbers", "_email_codes"], [t["key"] for t in types])
@@ -183,7 +205,7 @@ class MappingBridgeTests(unittest.TestCase):
 
     def test_get_returns_text_rich_flag_and_effective_trigger(self):
         self.assertEqual({"type": "_email_codes", "name": "work", "text": "work@example.com", "rich": False,
-                          "effectiveTrigger": "mailwork", "favorite": False},
+                          "spans": [], "effectiveTrigger": "mailwork", "favorite": False},
                          self.result("mapping.get", type="_email_codes", name="work"))
         self.assertEqual("missing", self.error("mapping.get", type="_email_codes", name="__prefix__")["code"])
 

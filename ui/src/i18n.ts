@@ -7,10 +7,7 @@ const EN_US: Record<string, string> = {
   "0 itens": "0 items",
   "A biblioteca inteira é trocada pelo conteúdo de {file}.\n{replace}\n\nAntes, a biblioteca atual é salva em um backup.":
     "The whole library is swapped for the contents of {file}.\n{replace}\n\nThe current library is saved to a backup first.",
-  "A formatação de texto continua no gerenciador clássico por enquanto.":
-    "Text formatting stays in the classic manager for now.",
   "Abrir": "Open",
-  "Abrir gerenciador clássico": "Open classic manager",
   "Abrir pasta": "Open folder",
   "Adicionar": "Add",
   "Ajuste a aparência, a expansão e os dados do SnipType.": "Adjust SnipType's appearance, expansion and data.",
@@ -52,6 +49,7 @@ const EN_US: Record<string, string> = {
   "Conteúdo quando selecionado": "Content when selected",
   "Criar backup": "Create backup",
   "Criar tipo": "Create type",
+  "Código": "Code",
   "Dados": "Data",
   "Densidade": "Density",
   "Desativado às {time} · {name}": "Turned off at {time} · {name}",
@@ -74,8 +72,6 @@ const EN_US: Record<string, string> = {
   "Escolha um grupo no filtro para editar ou excluir.": "Pick a group in the filter to edit or delete it.",
   "Escuro": "Dark",
   "Espaço dos controles e das linhas.": "Spacing of controls and rows.",
-  "Este texto tem formatação. Esta janela mostra só o texto; edite a formatação no gerenciador clássico.":
-    "This text has formatting. This window shows only the text; edit the formatting in the classic manager.",
   "Este tipo ainda não tem itens.": "This type has no items yet.",
   "Ex.: tipo 'email' + prefixo 'mail' -> mailtrabalho": "E.g. type 'email' + prefix 'mail' -> mailwork",
   "Excluir": "Delete",
@@ -96,6 +92,7 @@ const EN_US: Record<string, string> = {
   "Fechar": "Close",
   "Feche esta janela e abra o gerenciador de novo pelo ícone da bandeja.":
     "Close this window and open the manager again from the tray icon.",
+  "Formatação": "Formatting",
   "Formato da data": "Date format",
   "Formulário": "Form",
   "Formulário salvo às {time} · {name}": "Form saved at {time} · {name}",
@@ -113,7 +110,8 @@ const EN_US: Record<string, string> = {
   "Idioma da interface. O texto dos snippets não muda.": "Interface language. Snippet text does not change.",
   "Importar biblioteca": "Import library",
   "Importar…": "Import…",
-  "Itens formatados são duplicados no gerenciador clássico.": "Formatted items are duplicated in the classic manager.",
+  "Itálico": "Italic",
+  "Limpar formatação": "Clear formatting",
   "Listas": "Lists",
   "Mapeamentos": "Mappings",
   "Mesclar": "Merge",
@@ -122,6 +120,7 @@ const EN_US: Record<string, string> = {
   "Mostrar todos": "Show all",
   "Mover para baixo": "Move down",
   "Mover para cima": "Move up",
+  "Negrito": "Bold",
   "Nenhum backup. Use Criar backup para proteger a biblioteca.":
     "No backups. Use Create backup to protect the library.",
   "Nenhum campo. Use Adicionar.": "No fields. Use Add.",
@@ -188,6 +187,7 @@ const EN_US: Record<string, string> = {
   "Salvo às {time} · {name}": "Saved at {time} · {name}",
   "Salvo.": "Saved.",
   "Selecionado por padrão": "Selected by default",
+  "Selecione o texto para formatar.": "Select the text to format.",
   "Selecione um item na lista ou crie um novo.": "Select an item in the list or create a new one.",
   "Selecione um texto na lista ou crie um novo.": "Select a text in the list or create a new one.",
   "Sem grupo": "No group",
@@ -195,8 +195,10 @@ const EN_US: Record<string, string> = {
   "Siga o tema do Windows ou escolha um fixo.": "Follow the Windows theme or choose a fixed one.",
   "Sistema": "System",
   "Snippets dinâmicos": "Dynamic snippets",
+  "Sublinhado": "Underline",
   "Substituir tudo": "Replace all",
   "Substituir tudo…": "Replace all…",
+  "Tachado": "Strikethrough",
   "Tamanho": "Size",
   "Terminador": "Terminator",
   "Texto": "Text",
@@ -212,6 +214,8 @@ const EN_US: Record<string, string> = {
   "Trigger da cópia de {trigger}": "Trigger for the copy of {trigger}",
   "Triggers que montam o texto na hora: datas, indicadores, cotações e links do WhatsApp.":
     "Triggers that build their text on the spot: dates, indicators, quotes and WhatsApp links.",
+  "Tudo o que ele faz também está nesta janela. Ele continua disponível enquanto esta janela é uma prévia.":
+    "Everything it does is also in this window. It stays available while this window is a preview.",
   "Um snippet dinâmico usa este trigger e tem prioridade.": "A dynamic snippet uses this trigger and takes priority.",
   "Valor": "Value",
   "Valor padrão": "Default value",
