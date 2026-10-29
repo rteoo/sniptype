@@ -213,5 +213,33 @@ exit /b %errorlevel%
         self.assertEqual({"recovery-marker.txt": b"keep"}, self._files(previous))
 
 
+MANAGER_SCRIPT = REPOSITORY_ROOT / "build_manager.bat"
+
+
+@unittest.skipUnless(os.name == "nt", "Windows batch packaging requires cmd.exe")
+class ManagerPackagingTests(unittest.TestCase):
+    """The release carries the Tauri manager window beside Sniptype.exe."""
+
+    def test_release_builds_the_manager_into_staging_before_promotion(self):
+        script = BUILD_SCRIPT.read_text(encoding="utf-8")
+        call = 'call "%REPO_DIR%\\build_manager.bat" "%STAGING_DIR%"'
+        self.assertIn(call, script)
+        build_at = script.index(call)
+        self.assertLess(build_at, script.index("call :promote_staged_release"))
+        # A failed manager build leaves the existing dist alone, as a failed PyInstaller run does.
+        self.assertIn("goto cleanup_and_fail", script[build_at:build_at + 300])
+
+    def test_manager_script_refuses_a_missing_destination(self):
+        missing = TEMP_ROOT / "build-manager-missing-destination"
+        self.assertFalse(missing.exists())
+        for args in ([], [str(missing)]):
+            result = subprocess.run(
+                ["cmd.exe", "/d", "/c", str(MANAGER_SCRIPT), *args],
+                capture_output=True, text=True, timeout=60,
+            )
+            self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+        self.assertFalse(missing.exists())
+
+
 if __name__ == "__main__":
     unittest.main()
