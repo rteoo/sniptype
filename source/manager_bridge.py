@@ -24,6 +24,7 @@ import uuid
 import i18n
 import manager_actions
 import ui_theme
+from dynamic_registry import effective_trigger, reference_entries_by_category, validate_rename
 from editor_session import (
     mapping_draft_problem,
     mapping_type_key,
@@ -40,7 +41,7 @@ from group_dialog import (
     build_group_definition,
 )
 from group_policy import normalize_group
-from i18n import _
+from i18n import N_, _
 from library_metadata import MetadataReadOnlyError, mapping_item_metadata, static_item_metadata
 from manager_actions import TriggerCollisionError
 from manager_view_support import (
@@ -54,7 +55,7 @@ from manager_view_support import (
     manager_row_preview,
 )
 from rich_text_support import extract_plain_text, is_rich_text_payload
-from snippet_utils import mapping_types
+from snippet_utils import build_saveable_snippets, mapping_types
 
 MANAGER_EXE_NAME = "sniptype-manager.exe" if sys.platform == "win32" else "sniptype-manager"
 MANAGER_UI_SETTING = "manager_ui"
@@ -63,6 +64,13 @@ PREVIEW_LIMIT = 160
 LIST_FILTERS = (FILTER_ALL, FILTER_FAVORITES, FILTER_RECENT, FILTER_DISABLED, FILTER_PROBLEMS)
 # The group selector value for items in no group; real group ids are UUIDs.
 UNGROUPED = "__ungrouped__"
+# The dynamic snippet sections, in the order the classic tab shows them.
+DYNAMIC_CATEGORIES = {
+    "datetime": N_("Data e Hora"),
+    "economy": N_("Indicadores Econômicos (Banco Central)"),
+    "stock": N_("Ações (B3 e US)"),
+    "whatsapp": "WhatsApp",  # i18n: not ui
+}
 
 
 def _read_only_message():
@@ -106,6 +114,9 @@ class ManagerBridge:
             "group.save": self.group_save,
             "group.delete": self.group_delete,
             "group.undoDelete": self.group_undo_delete,
+            "dynamics.list": self.dynamics_list,
+            "dynamic.setEnabled": self.dynamic_set_enabled,
+            "dynamic.rename": self.dynamic_rename,
             "mapping.types": self.mapping_types,
             "mapping.list": self.mapping_list,
             "mapping.get": self.mapping_get,
@@ -651,6 +662,68 @@ class ManagerBridge:
             raise BridgeError("save_failed", _("Não foi possível gravar snippets.json. Verifique os logs; o tipo "
                                                "não foi excluído."))
         return {"type": type}
+
+    # -- dynamic snippets --------------------------------------------------
+
+    def _dynamic_entry(self, key):
+        entry = self.app.dynamic_registry.get(key)
+        if not isinstance(entry, dict):
+            raise BridgeError("missing", _("O snippet dinâmico {name} não existe mais.").format(name=key))
+        return entry
+
+    def dynamics_list(self):
+        """Every registered dynamic snippet by section; ``key`` is the stable id the overrides use."""
+        sections = []
+        for category, entries in reference_entries_by_category(self.app.dynamic_registry).items():
+            sections.append({
+                "id": category,
+                "label": _(DYNAMIC_CATEGORIES.get(category, category)),
+                "items": [
+                    {"key": key, "trigger": trigger, "description": _(description) if description else "",
+                     "enabled": enabled}
+                    for key, trigger, description, enabled in entries
+                ],
+            })
+        return sections
+
+    def dynamic_set_enabled(self, key, enabled, confirmed=()):
+        """Turn one dynamic snippet on or off.
+
+        Turning on a trigger a static snippet or a mapping item already uses
+        answers ``confirm`` first; the shadowed value stays on disk.
+        """
+        app = self.app
+        self._dynamic_entry(key)
+        enabled = bool(enabled)
+        if enabled and "shadow" not in confirmed:
+            conflict = app._dynamic_shadow_conflict(key)
+            if conflict is not None:
+                title, message = conflict
+                return {"status": "confirm", "check": "shadow", "title": title, "message": message,
+                        "action": _("Ativar mesmo assim")}
+        if not app._toggle_registry_entry(key, enabled, confirmed=True):
+            raise BridgeError("save_failed", _("Falha ao salvar alteração do snippet dinâmico."))
+        return {"status": "saved", "key": key, "enabled": enabled}
+
+    def dynamic_rename(self, key, trigger, confirmed=()):
+        """Give a dynamic snippet another trigger: ``renamed``, ``invalid`` or ``confirm`` (warnings)."""
+        app = self.app
+        entry = self._dynamic_entry(key)
+        trigger = trigger.strip() if isinstance(trigger, str) else ""
+        if trigger and trigger == effective_trigger(key, entry):
+            return {"status": "renamed", "key": key, "trigger": trigger}
+        errors, warnings = validate_rename(
+            app.dynamic_registry, key, trigger,
+            build_saveable_snippets(app.snippets, app.shadowed_static_snippets), app.library_metadata,
+        )
+        if errors:
+            return {"status": "invalid", "message": "\n".join(errors)}
+        if warnings and "warnings" not in confirmed:
+            return {"status": "confirm", "check": "warnings", "title": _("Confirmar trigger"),
+                    "message": "\n".join(warnings), "action": _("Renomear mesmo assim")}
+        if not app._rename_registry_entry(key, trigger):
+            raise BridgeError("save_failed", _("Falha ao salvar o novo nome do snippet dinâmico."))
+        return {"status": "renamed", "key": key, "trigger": trigger}
 
     # -- settings ----------------------------------------------------------
 

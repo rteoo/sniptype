@@ -7663,13 +7663,15 @@ class Sniptype:
         if not self._toggle_registry_entry(key, enabled, parent=parent):
             var.set(not enabled)
 
-    def _toggle_registry_entry(self, key, enabled, *, parent=None):
+    def _toggle_registry_entry(self, key, enabled, *, parent=None, confirmed=False):
         """Enable/disable a dynamic trigger, persisting to the user override file.
 
         Keyed by the stable registry id so a renamed trigger still writes the
-        right override entry. Returns True when the change was applied.
+        right override entry. ``confirmed`` means the caller already settled
+        :meth:`_dynamic_shadow_conflict` with the person. Returns True when the
+        change was applied.
         """
-        if enabled and not self._confirm_dynamic_shadows_static(key, parent=parent):
+        if enabled and not confirmed and not self._confirm_dynamic_shadows_static(key, parent=parent):
             return False
 
         try:
@@ -7709,16 +7711,28 @@ class Sniptype:
     def _confirm_dynamic_shadows_static(self, key, *, parent=None):
         """Ask before enabling a dynamic trigger that shadows an existing trigger.
 
+        ``parent`` is the window that owns the question; see
+        :meth:`_dynamic_shadow_conflict` for what is asked.
+        """
+        conflict = self._dynamic_shadow_conflict(key)
+        if conflict is None:
+            return True
+        title, message = conflict
+        return ui_widgets.confirm(parent, title, message, _("Ativar mesmo assim")) == ui_widgets.PRIMARY
+
+    def _dynamic_shadow_conflict(self, key):
+        """The question enabling ``key`` needs, as ``(title, message)``, or None.
+
         ``validate_rename`` blocks both collisions when they come from a rename;
         the enable toggle reaches the same state, so it needs the same check.
         Enabling is allowed with confirmation: the shadowed value stays on disk
         (a static snippet in ``snippets.json``, or the mapping container a
         composed trigger like ``cpffulano`` is built from), and the dynamic
-        snippet is what expands. ``parent`` is the window that owns the question.
+        snippet is what expands.
         """
         trigger = effective_trigger(key, self.dynamic_registry.get(key, {}))
         if trigger.startswith("_"):
-            return True
+            return None
 
         static_snippets = build_saveable_snippets(
             self.snippets,
@@ -7740,14 +7754,12 @@ class Sniptype:
             self.logger.warning(
                 f"Ativar o snippet dinâmico '{trigger}' sobrepõe o snippet estático de mesmo nome."
             )
-            return ui_widgets.confirm(
-                parent,
+            return (
                 _("Trigger em conflito"),
                 _("Já existe um snippet estático com o trigger '{trigger}'.\n\nAo ativar o "
                   "dinâmico, é ele que passa a expandir. O texto estático continua salvo em "
                   "snippets.json, mas deixa de ser acionado.").format(trigger=trigger),
-                _("Ativar mesmo assim"),
-            ) == ui_widgets.PRIMARY
+            )
 
         # A mapping-composed trigger (e.g. ``cpffulano`` from the ``_cpf_numbers``
         # container) is never a direct key in ``self.snippets`` — it resolves via
@@ -7758,16 +7770,14 @@ class Sniptype:
             self.logger.warning(
                 f"Ativar o snippet dinâmico '{trigger}' sobrepõe um mapeamento dinâmico de mesmo nome."
             )
-            return ui_widgets.confirm(
-                parent,
+            return (
                 _("Trigger em conflito"),
                 _("Já existe um mapeamento dinâmico com o trigger '{trigger}'.\n\nAo ativar o "
                   "snippet dinâmico, é ele que passa a expandir. O valor mapeado continua "
                   "salvo no container de mapeamento, mas deixa de ser acionado.").format(trigger=trigger),
-                _("Ativar mesmo assim"),
-            ) == ui_widgets.PRIMARY
+            )
 
-        return True
+        return None
 
     def _create_dynamic_snippets_tab(self, parent, root):
         """Build the single tab listing every built-in dynamic snippet."""

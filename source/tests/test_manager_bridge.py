@@ -393,6 +393,63 @@ class OrganizeBridgeTests(unittest.TestCase):
         self.assertEqual(3, self.result("library.list", filter="recent")["total"])
 
 
+class DynamicBridgeTests(unittest.TestCase):
+    """Snippets dinâmicos: the bundled registry, toggled and renamed through the user overrides."""
+
+    def setUp(self):
+        self.app = make_real_app(self, {"hello": "Hello there", "xhj": "Static text under a dynamic trigger"})
+        self.bridge = ManagerBridge(self.app, version="9.9.9", channel="beta")
+
+    call, result, error = BridgeTests.call, BridgeTests.result, BridgeTests.error
+
+    def overrides(self):
+        if not os.path.exists(self.app.dynamic_registry_file):
+            return {}
+        with open(self.app.dynamic_registry_file, encoding="utf-8") as handle:
+            return json.load(handle)
+
+    def entry(self, key):
+        return next(item for section in self.result("dynamics.list") for item in section["items"]
+                    if item["key"] == key)
+
+    def test_list_holds_every_section_in_order_with_descriptions(self):
+        sections = self.result("dynamics.list")
+        self.assertEqual(["datetime", "economy", "stock", "whatsapp"], [s["id"] for s in sections])
+        self.assertEqual("Data e Hora", sections[0]["label"])
+        xhj = self.entry("xhj")
+        self.assertEqual(("xhj", True), (xhj["trigger"], xhj["enabled"]))
+        self.assertTrue(xhj["description"])
+        self.assertEqual(len(self.app.dynamic_registry), sum(len(s["items"]) for s in sections))
+
+    def test_disable_then_enable_over_a_static_asks_first(self):
+        self.assertEqual("saved", self.result("dynamic.setEnabled", key="xhj", enabled=False)["status"])
+        self.assertEqual({"enabled": False}, self.overrides()["xhj"])
+        self.assertFalse(self.entry("xhj")["enabled"])
+        answer = self.result("dynamic.setEnabled", key="xhj", enabled=True)
+        self.assertEqual(("confirm", "shadow"), (answer["status"], answer["check"]))
+        self.assertFalse(self.overrides()["xhj"]["enabled"])
+        self.result("dynamic.setEnabled", key="xhj", enabled=True, confirmed=["shadow"])
+        self.assertTrue(self.entry("xhj")["enabled"])
+        self.assertEqual("Static text under a dynamic trigger", on_disk(self.app)["xhj"])
+
+    def test_rename_validates_asks_about_warnings_and_persists(self):
+        for bad in ("_x", "hello", "two words", ""):
+            self.assertEqual("invalid", self.result("dynamic.rename", key="xhoje", trigger=bad)["status"], bad)
+        answer = self.result("dynamic.rename", key="xhoje", trigger="llo")
+        self.assertEqual(("confirm", "warnings"), (answer["status"], answer["check"]))
+        self.assertNotIn("xhoje", self.overrides())
+        self.assertEqual("renamed", self.result("dynamic.rename", key="xhoje", trigger="hojex")["status"])
+        self.assertEqual("hojex", self.overrides()["xhoje"]["trigger"])
+        self.assertEqual("hojex", self.entry("xhoje")["trigger"])
+        self.result("dynamic.rename", key="xhoje", trigger="xhoje")
+        self.assertNotIn("xhoje", self.overrides())
+
+    def test_unknown_key_and_failed_write(self):
+        self.assertEqual("missing", self.error("dynamic.setEnabled", key="nope", enabled=False)["code"])
+        with mock.patch.object(self.app, "_toggle_registry_entry", return_value=False):
+            self.assertEqual("save_failed", self.error("dynamic.setEnabled", key="xhoje", enabled=False)["code"])
+
+
 class FindExecutableTests(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
