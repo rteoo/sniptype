@@ -77,7 +77,7 @@ function readText(root: Node): string {
 }
 
 export function createRichEditor(options: {
-  id: string; value: RichValue; label: string; readOnly?: boolean; onChange: () => void;
+  id: string; value: RichValue; label: string; describedBy?: string; readOnly?: boolean; onChange: () => void;
 }): RichEditor {
   let text = options.value.text;
   let masks = masksFrom(text, options.value.spans);
@@ -87,6 +87,7 @@ export function createRichEditor(options: {
 
   const element = h("div", {
     id: options.id, class: "field rich", role: "textbox", "aria-multiline": "true", "aria-label": options.label,
+    "aria-describedby": options.describedBy,
     spellcheck: "false",
   });
 

@@ -93,8 +93,8 @@ code, .mono { font-family: var(--app-font-trigger); }
   display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 2px 10px;
   width: 100%; text-align: left; padding: 7px 12px; min-height: var(--windows-row-height, 40px);
 }
-.item[aria-current=true] { background: var(--native-selection); position: relative; }
-.item[aria-current=true]::before {
+.item[aria-selected=true] { background: var(--native-selection); position: relative; }
+.item[aria-selected=true]::before {
   content: ''; position: absolute; left: 0; top: 50%; transform: translateY(-50%);
   width: 3px; height: 16px; border-radius: 2px; background: var(--color-link);
 }
@@ -112,11 +112,12 @@ code, .mono { font-family: var(--app-font-trigger); }
 .primary { background: var(--color-action-primary-bg); color: var(--color-action-primary-text); border-color: var(--color-link); }
 .primary:hover { background: var(--color-action-primary-hover); }
 .danger { color: var(--color-danger-fg); }
-.editor { display: flex; flex-direction: column; gap: 16px; padding: 24px 32px; flex: 1; min-height: 0; max-width: 880px; width: 100%; }
+.editor { display: flex; flex-direction: column; gap: 16px; padding: 24px 32px; flex: 1; min-height: 0; max-width: 880px; width: 100%;
+  overflow-y: auto; }
 .editor label { display: grid; gap: 6px; font-size: var(--native-type-caption); }
 .editor label > span { font-size: var(--native-type-body); }
 .editor .grow { flex: 1; min-height: 0; grid-template-rows: auto minmax(0, 1fr) auto; }
-.editor .text-field { display: grid; gap: 6px; grid-template-rows: auto auto minmax(0, 1fr) auto; font-size: var(--native-type-caption); }
+.editor .text-field { display: grid; gap: 6px; grid-template-rows: auto auto minmax(120px, 1fr) auto; flex-shrink: 0; font-size: var(--native-type-caption); }
 .editor .field-label { font-size: var(--native-type-body); }
 /* The formatting editor: plain text, styles drawn from its spans (richtext.ts). */
 .field.rich { white-space: pre-wrap; overflow-wrap: anywhere; overflow-y: auto; line-height: 1.5; min-height: 120px;
@@ -242,6 +243,6 @@ dialog form { max-height: calc(100vh - 96px); overflow-y: auto; }
   .editor { padding: 20px; }
 }
 @media (forced-colors: active) {
-  .item[aria-current=true], .navigation button[aria-current=page] { outline: 2px solid Highlight; }
+  .item[aria-selected=true], .navigation button[aria-current=page] { outline: 2px solid Highlight; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
