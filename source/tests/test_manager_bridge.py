@@ -147,6 +147,113 @@ class BridgeTests(unittest.TestCase):
                          ["error"]["code"])
 
 
+class MappingBridgeTests(unittest.TestCase):
+    def setUp(self):
+        self.app = make_real_app(self, {
+            "hello": "Hello there",
+            "_cpf_numbers": {
+                "fulano": "123.456.789-00",
+                "styled": build_rich_text_payload("Bold id", [{"tag": "bold", "start": 0, "end": 4}]),
+            },
+            "_email_codes": {"__prefix__": "mail", "work": "work@example.com"},
+        })
+        self.bridge = ManagerBridge(self.app, version="9.9.9", channel="beta")
+
+    call, result, error = BridgeTests.call, BridgeTests.result, BridgeTests.error
+
+    def test_types_list_builtins_first_with_counts_and_prefixes(self):
+        types = self.result("mapping.types")
+        self.assertEqual(["_cnpj_numbers", "_cpf_numbers", "_email_codes"], [t["key"] for t in types])
+        by_key = {t["key"]: t for t in types}
+        self.assertEqual((0, True), (by_key["_cnpj_numbers"]["count"], by_key["_cnpj_numbers"]["builtin"]))
+        self.assertEqual(2, by_key["_cpf_numbers"]["count"])
+        self.assertEqual(("EMAIL", "mail", 1, False),
+                         tuple(by_key["_email_codes"][k] for k in ("label", "prefix", "count", "builtin")))
+
+    def test_list_holds_one_types_items_with_effective_triggers(self):
+        items = {item["name"]: item for item in self.result("mapping.list", type="_cpf_numbers")}
+        self.assertEqual({"fulano", "styled"}, set(items))
+        self.assertEqual(("cpffulano", "123.456.789-00", False),
+                         (items["fulano"]["effectiveTrigger"], items["fulano"]["preview"], items["fulano"]["rich"]))
+        self.assertTrue(items["styled"]["rich"])
+        self.assertEqual([], self.result("mapping.list", type="_cnpj_numbers"))
+        self.assertEqual("missing_type", self.error("mapping.list", type="_gone_codes")["code"])
+
+    def test_get_returns_text_rich_flag_and_effective_trigger(self):
+        self.assertEqual({"type": "_email_codes", "name": "work", "text": "work@example.com", "rich": False,
+                          "effectiveTrigger": "mailwork"},
+                         self.result("mapping.get", type="_email_codes", name="work"))
+        self.assertEqual("missing", self.error("mapping.get", type="_email_codes", name="__prefix__")["code"])
+
+    def test_save_new_item_reaches_disk_and_expands(self):
+        self.assertEqual({"status": "saved", "type": "_cpf_numbers", "name": "beltrano"},
+                         self.result("mapping.save", type="_cpf_numbers", name=" beltrano ", text="987.654.321-00"))
+        self.assertEqual("987.654.321-00", on_disk(self.app)["_cpf_numbers"]["beltrano"])
+        self.assertEqual(("987.654.321-00", len("cpfbeltrano")),
+                         tx.resolve_dynamic_pattern(self.app.snippets, "cpfbeltrano"))
+
+    def test_saving_into_a_builtin_type_without_items_creates_it(self):
+        self.result("mapping.save", type="_cnpj_numbers", name="acme", text="12.345.678/0001-90")
+        self.assertEqual({"acme": "12.345.678/0001-90"}, on_disk(self.app)["_cnpj_numbers"])
+
+    def test_writing_over_another_item_asks_first(self):
+        answer = self.result("mapping.save", type="_cpf_numbers", name="fulano", text="000", original=None)
+        self.assertEqual(("confirm", "replace"), (answer["status"], answer["check"]))
+        self.assertEqual("123.456.789-00", on_disk(self.app)["_cpf_numbers"]["fulano"])
+        self.result("mapping.save", type="_cpf_numbers", name="fulano", text="000", confirmed=["replace"])
+        self.assertEqual("000", on_disk(self.app)["_cpf_numbers"]["fulano"])
+
+    def test_invalid_and_rich_drafts_are_refused(self):
+        for name, text in (("", "v"), ("__prefix__", "v"), ("x", "  ")):
+            self.assertEqual("invalid", self.error("mapping.save", type="_cpf_numbers", name=name, text=text)["code"])
+        before = on_disk(self.app)["_cpf_numbers"]["styled"]
+        self.assertEqual("rich", self.error("mapping.save", type="_cpf_numbers", name="styled", text="flat",
+                                            original="styled")["code"])
+        self.assertEqual(before, on_disk(self.app)["_cpf_numbers"]["styled"])
+
+    def test_failed_write_rolls_memory_back(self):
+        with mock.patch.object(self.app, "save_snippets", return_value=False):
+            self.assertEqual("save_failed",
+                             self.error("mapping.save", type="_cpf_numbers", name="new1", text="v")["code"])
+            self.assertEqual("save_failed",
+                             self.error("mapping.save", type="_cnpj_numbers", name="acme", text="v")["code"])
+            self.assertEqual("save_failed", self.error("mapping.delete", type="_email_codes", name="work")["code"])
+        self.assertNotIn("new1", self.app.snippets["_cpf_numbers"])
+        self.assertNotIn("_cnpj_numbers", self.app.snippets)
+        self.assertEqual("work@example.com", self.app.snippets["_email_codes"]["work"])
+
+    def test_delete_then_undo_restores_the_item_on_disk(self):
+        token = self.result("mapping.delete", type="_email_codes", name="work")["undoToken"]
+        self.assertNotIn("work", on_disk(self.app)["_email_codes"])
+        self.assertEqual("undo_expired", self.error("snippet.undoDelete", token=token)["code"],
+                         "a static undo cannot spend a mapping token")
+        self.assertEqual({"type": "_email_codes", "name": "work"},
+                         self.result("mapping.undoDelete", token=token))
+        self.assertEqual("work@example.com", on_disk(self.app)["_email_codes"]["work"])
+        self.assertEqual("undo_expired", self.error("mapping.undoDelete", token=token)["code"])
+        self.assertEqual("missing", self.error("mapping.delete", type="_email_codes", name="nope")["code"])
+
+    def test_create_type_validates_then_persists(self):
+        self.assertEqual({"status": "invalid", "field": "prefix",
+                          "message": "O prefixo 'mail' já está em uso por outro tipo de mapeamento."},
+                         self.result("mapping.createType", name="contato", prefix="mail"))
+        self.assertEqual("name", self.result("mapping.createType", name="email", prefix="em")["field"])
+        self.assertEqual("name", self.result("mapping.createType", name="dois tipos", prefix="dt")["field"])
+        self.assertEqual({"status": "created", "key": "_phone_codes"},
+                         self.result("mapping.createType", name=" Phone ", prefix="TEL"))
+        self.assertEqual({"__prefix__": "tel"}, on_disk(self.app)["_phone_codes"])
+        self.assertIn("_phone_codes", [t["key"] for t in self.result("mapping.types")])
+
+    def test_delete_type_removes_custom_types_only(self):
+        self.assertEqual("builtin", self.error("mapping.deleteType", type="_cpf_numbers")["code"])
+        with mock.patch.object(self.app, "save_snippets", return_value=False):
+            self.assertEqual("save_failed", self.error("mapping.deleteType", type="_email_codes")["code"])
+        self.assertIn("_email_codes", self.app.snippets)
+        self.assertEqual({"type": "_email_codes"}, self.result("mapping.deleteType", type="_email_codes"))
+        self.assertNotIn("_email_codes", on_disk(self.app))
+        self.assertEqual("missing_type", self.error("mapping.deleteType", type="_email_codes")["code"])
+
+
 class FindExecutableTests(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)

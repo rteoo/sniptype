@@ -22,12 +22,14 @@ import threading
 
 import i18n
 import ui_theme
-from editor_session import static_draft_problem
+from editor_session import mapping_draft_problem, mapping_type_key, mapping_type_problem, static_draft_problem
 from i18n import _
-from library_metadata import MetadataReadOnlyError, static_item_metadata
+from library_metadata import MetadataReadOnlyError, mapping_item_metadata, static_item_metadata
+from manager_actions import restore_mapping_item as manager_restore_mapping_item
 from manager_actions import restore_static as manager_restore_static
 from manager_view_support import manager_row_preview
 from rich_text_support import extract_plain_text, is_rich_text_payload
+from snippet_utils import mapping_types
 
 MANAGER_EXE_NAME = "sniptype-manager.exe" if sys.platform == "win32" else "sniptype-manager"
 MANAGER_UI_SETTING = "manager_ui"
@@ -62,6 +64,14 @@ class ManagerBridge:
             "snippet.save": self.snippet_save,
             "snippet.delete": self.snippet_delete,
             "snippet.undoDelete": self.snippet_undo_delete,
+            "mapping.types": self.mapping_types,
+            "mapping.list": self.mapping_list,
+            "mapping.get": self.mapping_get,
+            "mapping.save": self.mapping_save,
+            "mapping.delete": self.mapping_delete,
+            "mapping.undoDelete": self.mapping_undo_delete,
+            "mapping.createType": self.mapping_create_type,
+            "mapping.deleteType": self.mapping_delete_type,
             "settings.set": self.settings_set,
         }
 
@@ -110,7 +120,7 @@ class ManagerBridge:
         return None
 
     def open_classic_manager(self):
-        """Mapeamentos, dynamics, forms and backups still live in the Tk manager."""
+        """Dynamics, forms, groups and backups still live in the Tk manager."""
         self.app.gui.submit(self.app._show_manager_window)
         return None
 
@@ -208,17 +218,12 @@ class ManagerBridge:
         if outcome == "error":
             raise BridgeError("save_failed", _("Não foi possível gravar snippets.json. Verifique os logs; a "
                                                "exclusão pode não ter sido salva."))
-        token = str(next(self._undo_ids))
-        self._undo = {token: (trigger, value, provider, item_metadata)}
-        return {"undoToken": token}
+        return {"undoToken": self._remember_undo("static", (trigger, value, provider, item_metadata))}
 
     def snippet_undo_delete(self, token):
         """Restore the snippet the last delete removed, with its metadata."""
         app = self.app
-        entry = self._undo.pop(token, None)
-        if entry is None:
-            raise BridgeError("undo_expired", _("Não há exclusão para desfazer."))
-        trigger, value, provider, item_metadata = entry
+        trigger, value, provider, item_metadata = self._take_undo("static", token)
         try:
             if provider is not None and app.snippets.get(trigger) is not provider:
                 raise ValueError(_("A ação dinâmica mudou desde a exclusão do snippet."))
@@ -238,6 +243,148 @@ class ManagerBridge:
         if not app._persist_manager_static_action(restored):
             raise BridgeError("save_failed", _("Não foi possível gravar snippets.json. Verifique os logs."))
         return {"trigger": trigger}
+
+    def _remember_undo(self, kind, entry):
+        """Keep only the newest delete, as the Tk receipt does; return its token."""
+        token = str(next(self._undo_ids))
+        self._undo = {token: (kind, entry)}
+        return token
+
+    def _take_undo(self, kind, token):
+        kept = self._undo.get(token)
+        if kept is None or kept[0] != kind:
+            raise BridgeError("undo_expired", _("Não há exclusão para desfazer."))
+        del self._undo[token]
+        return kept[1]
+
+    # -- mappings ----------------------------------------------------------
+
+    def _type(self, container):
+        """The listed mapping type ``container``, or a refusal when the library no longer has it."""
+        info = mapping_types(self.app.snippets).get(container)
+        if info is None:
+            raise BridgeError("missing_type", _("O tipo {type} não existe mais.").format(type=container))
+        return info
+
+    def _mapping_value(self, container, name):
+        mapping = self.app.snippets.get(container)
+        if not isinstance(mapping, dict) or name == "__prefix__":
+            return None
+        return mapping.get(name)
+
+    def mapping_types(self):
+        types = []
+        for key, info in mapping_types(self.app.snippets).items():
+            mapping = self.app.snippets.get(key)
+            count = sum(1 for name in mapping if name and name != "__prefix__") if isinstance(mapping, dict) else 0
+            types.append({"key": key, **info, "count": count})
+        return types
+
+    def mapping_list(self, type):
+        self._type(type)
+        items = []
+        for row in self.app._manager_rows():
+            if row.kind != "mapping" or row.container != type:
+                continue
+            preview = " ".join(manager_row_preview(row, self.app.snippets).split())
+            items.append({
+                "name": row.stored_trigger,
+                "effectiveTrigger": row.effective_trigger,
+                "favorite": row.favorite,
+                "rich": is_rich_text_payload(self._mapping_value(type, row.stored_trigger)),
+                "preview": preview[:PREVIEW_LIMIT],
+            })
+        return items
+
+    def mapping_get(self, type, name):
+        info = self._type(type)
+        value = self._mapping_value(type, name)
+        if value is None:
+            raise BridgeError("missing", _("O item {name} não existe mais.").format(name=name))
+        return {"type": type, "name": name, "text": extract_plain_text(value),
+                "rich": is_rich_text_payload(value), "effectiveTrigger": info["prefix"] + name}
+
+    def mapping_save(self, type, name, text, original=None, confirmed=()):
+        """Save a plain-text mapping item; answers like :meth:`snippet_save`."""
+        info = self._type(type)
+        name = name.strip() if isinstance(name, str) else ""
+        if not isinstance(text, str):
+            raise BridgeError("bad_params", "text must be a string")
+        problem = mapping_draft_problem(name, text)
+        if problem:
+            raise BridgeError("invalid", _(problem))
+        existing = self._mapping_value(type, name)
+        if is_rich_text_payload(existing):
+            raise BridgeError("rich", _("Textos formatados ainda são editados no gerenciador clássico."))
+        if existing is not None and name != original and "replace" not in confirmed:
+            return {
+                "status": "confirm",
+                "check": "replace",
+                "title": _("Substituir item"),
+                "message": _("O item {name} de {type} já existe. Salvar troca o texto dele pelo que está no "
+                             "editor.").format(name=name, type=info["label"]),
+                "action": _("Substituir"),
+            }
+        if existing != text and not self.app.save_mapping_item(type, name, text):
+            raise BridgeError("save_failed", _(
+                "Não foi possível gravar snippets.json, então nada foi salvo. O rascunho continua no "
+                "editor; verifique os logs e tente de novo."))
+        return {"status": "saved", "type": type, "name": name}
+
+    def mapping_delete(self, type, name):
+        """Delete one mapping item; the answer carries the token Desfazer sends back."""
+        app = self.app
+        self._type(type)
+        value = copy.deepcopy(self._mapping_value(type, name))
+        if value is None:
+            raise BridgeError("missing", _("O item {name} não existe mais.").format(name=name))
+        item_metadata = mapping_item_metadata(app.library_metadata, type, name)
+        if not app.delete_mapping_item(type, name):
+            raise BridgeError("save_failed", _("Não foi possível gravar snippets.json. Verifique os logs; a "
+                                               "exclusão não foi salva."))
+        return {"undoToken": self._remember_undo("mapping", (type, name, value, item_metadata))}
+
+    def mapping_undo_delete(self, token):
+        """Restore the item the last mapping delete removed, with its metadata."""
+        app = self.app
+        container, name, value, item_metadata = self._take_undo("mapping", token)
+        try:
+            restored = manager_restore_mapping_item(
+                app.snippets, app.library_metadata, container, name, value, item_metadata,
+                dynamic_triggers=app._manager_dynamic_triggers(),
+            )
+        except (KeyError, ValueError, MetadataReadOnlyError) as error:
+            app.logger.warning(f"Manager bridge mapping restore failed: {error}")
+            raise BridgeError("undo_failed", _("Não foi possível restaurar {name}: {error}").format(
+                name=name, error=error)) from error
+        if not app._persist_manager_action(restored):
+            raise BridgeError("save_failed", _("Não foi possível gravar snippets.json. Verifique os logs."))
+        return {"type": container, "name": name}
+
+    def mapping_create_type(self, name, prefix):
+        """Create a custom mapping type: ``{"status": "created", "key"}`` or ``{"status": "invalid", ...}``."""
+        app = self.app
+        type_name = name.strip().lower() if isinstance(name, str) else ""
+        prefix = prefix.strip().lower() if isinstance(prefix, str) else ""
+        problem = mapping_type_problem(mapping_types(app.snippets), app.snippets, type_name, prefix)
+        if problem:
+            field, message = problem
+            return {"status": "invalid", "field": field, "message": message}
+        key = mapping_type_key(type_name)
+        if not app.create_mapping_type(key, prefix):
+            raise BridgeError("save_failed", _("Não foi possível gravar snippets.json. Verifique os logs; o tipo "
+                                               "não foi criado."))
+        return {"status": "created", "key": key}
+
+    def mapping_delete_type(self, type):
+        """Delete a custom mapping type with every item; the UI has the person type its name first."""
+        info = self._type(type)
+        if info["builtin"]:
+            raise BridgeError("builtin", _("Não é possível excluir tipos padrão (CPF, CNPJ)."))
+        if not self.app.delete_mapping_type(type):
+            raise BridgeError("save_failed", _("Não foi possível gravar snippets.json. Verifique os logs; o tipo "
+                                               "não foi excluído."))
+        return {"type": type}
 
     # -- settings ----------------------------------------------------------
 

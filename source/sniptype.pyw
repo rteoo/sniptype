@@ -52,6 +52,7 @@ from snippet_utils import (
     get_default_snippets as get_static_default_snippets,
     library_change_counts,
     load_json_file,
+    mapping_types,
     merge_snippets,
     validate_static_snippets,
     write_json_atomic,
@@ -182,6 +183,8 @@ from editor_session import (
     NEW as EDITOR_NEW,
     EditorSession,
     mapping_draft_problem,
+    mapping_type_key,
+    mapping_type_problem,
     static_draft_problem,
 )
 from preview_dialog import PreviewDialogController
@@ -1977,6 +1980,57 @@ class Sniptype:
                 self.shadowed_static_snippets.pop(trigger, None)
             else:
                 self.shadowed_static_snippets[trigger] = previous_shadow
+            return False
+        self.refresh_runtime_indexes()
+        return True
+
+    def save_mapping_item(self, container, name, value, *, metadata=None):
+        """Store one mapping item (and ``metadata`` when given) and persist; False if nothing changed on disk."""
+        previous = self.snippets.get(container, _MISSING)
+        snapshot = dict(previous) if isinstance(previous, dict) else previous
+        previous_metadata = self.library_metadata
+        if metadata is not None:
+            self.library_metadata = metadata
+        if not isinstance(previous, dict):
+            self.snippets[container] = {}
+        self.snippets[container][name] = value
+        if not self.save_snippets(self.snippets):
+            self.library_metadata = previous_metadata
+            if previous is _MISSING:
+                self.snippets.pop(container, None)
+            else:
+                self.snippets[container] = snapshot
+            return False
+        self.refresh_runtime_indexes()
+        return True
+
+    def delete_mapping_item(self, container, name):
+        """Remove one mapping item and persist; False (and nothing removed) on a failed write.
+
+        Its metadata stays, so Desfazer can restore the item as it was.
+        """
+        mapping = self.snippets[container]
+        removed = mapping.pop(name)
+        if not self.save_snippets(self.snippets):
+            mapping[name] = removed
+            return False
+        self.refresh_runtime_indexes()
+        return True
+
+    def create_mapping_type(self, container, prefix):
+        """Add an empty mapping type and persist; False (and no type) on a failed write."""
+        self.snippets[container] = {"__prefix__": prefix}
+        if not self.save_snippets(self.snippets):
+            del self.snippets[container]
+            return False
+        self.refresh_runtime_indexes()
+        return True
+
+    def delete_mapping_type(self, container):
+        """Remove a mapping type with every item and persist; False (and the type kept) on a failed write."""
+        removed = self.snippets.pop(container)
+        if not self.save_snippets(self.snippets):
+            self.snippets[container] = removed
             return False
         self.refresh_runtime_indexes()
         return True
@@ -6414,27 +6468,15 @@ class Sniptype:
         mapping_type = tk.StringVar(value="_cpf_numbers")
 
         def get_mappings_info():
-            base = {
-                "_cpf_numbers": {"label": "CPF", "prefix": "cpf", "example": "cpffulano -> 123.456.789-00", "builtin": True},
-                "_cnpj_numbers": {"label": "CNPJ", "prefix": "cnpj", "example": "cnpjempresa1 -> 12.345.678/0001-90", "builtin": True},
+            examples = {
+                "_cpf_numbers": "cpffulano -> 123.456.789-00",
+                "_cnpj_numbers": "cnpjempresa1 -> 12.345.678/0001-90",
             }
-
-            for key, value in self.snippets.items():
-                if key.startswith("_") and key.endswith(("_numbers", "_codes")) and isinstance(value, dict) and key not in base:
-                    configured_prefix = value.get("__prefix__")
-                    prefix = (
-                        configured_prefix
-                        if isinstance(configured_prefix, str)
-                        else key[1:].replace("_numbers", "").replace("_codes", "")
-                    )
-                    type_label = key[1:].replace("_numbers", "").replace("_codes", "").upper()
-                    base[key] = {
-                        "label": type_label,
-                        "prefix": prefix,
-                        "example": f"{prefix}exemplo -> valor",  # i18n: not ui (persisted in the library)
-                        "builtin": False,
-                    }
-            return base
+            return {
+                key: {**info, "example": examples.get(
+                    key, f"{info['prefix']}exemplo -> valor")}  # i18n: not ui (persisted in the library)
+                for key, info in mapping_types(self.snippets).items()
+            }
 
         mappings_info = get_mappings_info()
 
@@ -6495,13 +6537,6 @@ class Sniptype:
                 return
             if not switch_type(selection[0]):
                 select_type_row(mapping_type.get())
-
-        def ensure_mapping_dict(current_type):
-            mapping = self.snippets.get(current_type)
-            if not isinstance(mapping, dict):
-                mapping = {}
-                self.snippets[current_type] = mapping
-            return mapping
 
         tk.Label(
             main,
@@ -7015,39 +7050,20 @@ class Sniptype:
             def save_new_type():
                 type_name = entry_type_name.get().strip().lower()
                 prefix = entry_prefix.get().strip().lower()
-
-                if not type_name or not prefix:
-                    refuse(_("Preencha todos os campos."), entry_prefix if type_name else entry_type_name)
-                    return
-                if not type_name.replace("_", "").isalnum():
-                    refuse(_("Use apenas letras, números e underscores."), entry_type_name)
-                    return
-                if not prefix.replace("_", "").isalnum():
-                    refuse(_("Use apenas letras, números e underscores."), entry_prefix)
+                problem = mapping_type_problem(mappings_info, self.snippets, type_name, prefix)
+                if problem:
+                    field, message = problem
+                    refuse(message, entry_type_name if field == "name" else entry_prefix)
                     return
 
-                if any(info.get("prefix") == prefix for info in mappings_info.values()):
-                    refuse(
-                        _("O prefixo '{prefix}' já está em uso por outro tipo de mapeamento.").format(prefix=prefix),
-                        entry_prefix,
-                    )
-                    return
-
-                map_key = f"_{type_name}_codes"
-                if map_key in self.snippets:
-                    refuse(_("Tipo '{type_name}' já existe.").format(type_name=type_name), entry_type_name)
-                    return
-
-                self.snippets[map_key] = {"__prefix__": prefix}
-                if not self.save_snippets(self.snippets):
-                    del self.snippets[map_key]
+                map_key = mapping_type_key(type_name)
+                if not self.create_mapping_type(map_key, prefix):
                     ui_widgets.alert(
                         dialog, _("Erro ao salvar"),
                         _("Não foi possível gravar snippets.json. Verifique os logs; o tipo não foi criado."),
                         tone="danger",
                     )
                     return
-                self.refresh_runtime_indexes()
                 dialog.destroy()
                 refresh_type_list()
                 self.receipt(N_("Tipo criado às {time}"), type_name, key=f"mapping-type-create:{type_name}")
@@ -7086,16 +7102,13 @@ class Sniptype:
             ):
                 return
 
-            removed_mapping = self.snippets.pop(current_type)
-            if not self.save_snippets(self.snippets):
-                self.snippets[current_type] = removed_mapping
+            if not self.delete_mapping_type(current_type):
                 ui_widgets.alert(
                     root, _("Erro ao salvar"),
                     _("Não foi possível gravar snippets.json. Verifique os logs; o tipo não foi excluído."),
                     tone="danger",
                 )
                 return
-            self.refresh_runtime_indexes()
 
             # The typed confirmation covered the type's items, open draft included.
             clear_editor()
@@ -7320,34 +7333,21 @@ class Sniptype:
             ):
                 return False
 
-            previous_mapping = self.snippets.get(current_type, _MISSING)
-            previous_mapping_snapshot = (
-                dict(previous_mapping)
-                if isinstance(previous_mapping, dict)
-                else previous_mapping
-            )
-            previous_metadata = self.library_metadata
+            metadata = None
             if copied_form["value"] is not None:
+                previous_mapping = self.snippets.get(current_type)
                 try:
                     proposed = {**self.snippets, current_type: {
                         **(previous_mapping if isinstance(previous_mapping, dict) else {}), name: value,
                     }}
-                    self.library_metadata = manager_set_mapping_form(
+                    metadata = manager_set_mapping_form(
                         proposed, self.library_metadata, current_type, name, copied_form["value"],
                         dynamic_triggers=self._manager_dynamic_triggers(),
                     ).metadata
                 except (KeyError, ValueError, MetadataReadOnlyError) as error:
                     ui_widgets.alert(root, _("Formulário"), str(error), tone="danger")
                     return False
-            mapping = ensure_mapping_dict(current_type)
-            mapping[name] = value
-
-            if not self.save_snippets(self.snippets):
-                self.library_metadata = previous_metadata
-                if previous_mapping is _MISSING:
-                    self.snippets.pop(current_type, None)
-                else:
-                    self.snippets[current_type] = previous_mapping_snapshot
+            if not self.save_mapping_item(current_type, name, value, metadata=metadata):
                 ui_widgets.alert(
                     root, _("Erro ao salvar"),
                     _("Não foi possível gravar snippets.json, então nada foi salvo. O rascunho "
@@ -7355,7 +7355,6 @@ class Sniptype:
                     tone="danger",
                 )
                 return False
-            self.refresh_runtime_indexes()
             session.mark_saved(name, name, value, copy.deepcopy(value), container=current_type)
             copied_form["value"] = None
             header.notice(None)
@@ -7378,20 +7377,17 @@ class Sniptype:
                 ui_widgets.alert(root, _("Excluir item"), _("Selecione um item."))
                 return
             current_type, name = item
-            mapping = self.snippets[current_type]
             # Deleting is reversible for a while (Desfazer), so it asks
             # nothing; the value and its metadata are kept until then.
             item_metadata = mapping_item_metadata(self.library_metadata, current_type, name)
-            removed_value = mapping.pop(name)
-            if not self.save_snippets(self.snippets):
-                mapping[name] = removed_value
+            removed_value = self.snippets[current_type][name]
+            if not self.delete_mapping_item(current_type, name):
                 ui_widgets.alert(
                     root, _("Erro ao salvar"),
                     _("Não foi possível gravar snippets.json. Verifique os logs; a exclusão não foi salva."),
                     tone="danger",
                 )
                 return
-            self.refresh_runtime_indexes()
             clear_editor()
             refresh_mapping_list()
 

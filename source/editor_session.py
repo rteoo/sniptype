@@ -13,7 +13,7 @@ text, so the caller takes the baseline from the editor right after a load.
 The stored value (``source``) is kept separately, for :meth:`reconcile`.
 """
 
-from i18n import N_
+from i18n import N_, _
 
 
 class _Missing:
@@ -145,7 +145,32 @@ def mapping_draft_problem(name, plain_text):
     return None
 
 
+
+def mapping_type_problem(types, snippets, type_name, prefix):
+    """Why a Novo tipo draft cannot be created, as ``(field, message)``, or None.
+
+    ``type_name`` and ``prefix`` arrive stripped and lowercased; ``types`` is
+    :func:`snippet_utils.mapping_types`. ``field`` (``"name"`` or ``"prefix"``)
+    names the entry the message is about.
+    """
+    if not type_name or not prefix:
+        return ("prefix" if type_name else "name"), _("Preencha todos os campos.")
+    for field, value in (("name", type_name), ("prefix", prefix)):
+        if not value.replace("_", "").isalnum():
+            return field, _("Use apenas letras, números e underscores.")
+    if any(info.get("prefix") == prefix for info in types.values()):
+        return "prefix", _("O prefixo '{prefix}' já está em uso por outro tipo de mapeamento.").format(prefix=prefix)
+    if mapping_type_key(type_name) in snippets:
+        return "name", _("Tipo '{type_name}' já existe.").format(type_name=type_name)
+    return None
+
+
+def mapping_type_key(type_name):
+    """The library key a new custom mapping type is stored under."""
+    return f"_{type_name}_codes"
+
 __all__ = [
     "CHANGED", "EDITOR_KINDS", "EMPTY", "EditorSession", "GONE", "ITEM", "MISSING",
-    "NEW", "UNCHANGED", "mapping_draft_problem", "static_draft_problem",
+    "NEW", "UNCHANGED", "mapping_draft_problem", "mapping_type_key", "mapping_type_problem",
+    "static_draft_problem",
 ]

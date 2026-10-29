@@ -140,6 +140,28 @@ def get_dynamic_prefixes(snippets):
     return prefixes
 
 
+def mapping_types(snippets):
+    """The mapping types a manager lists: ``{container: {"label", "prefix", "builtin"}}``.
+
+    CPF and CNPJ are listed even before their first item. Builtins come first,
+    then custom types, each group by label.
+    """
+    types = {
+        key: {"label": prefix.upper(), "prefix": prefix, "builtin": True}
+        for key, prefix in BUILTIN_DYNAMIC_PREFIXES.items()
+    }
+    for key, value in snippets.items():
+        if key.startswith("_") and key.endswith(("_numbers", "_codes")) and isinstance(value, dict) and key not in types:
+            derived = key[1:].replace("_numbers", "").replace("_codes", "")
+            configured = value.get("__prefix__")
+            types[key] = {
+                "label": derived.upper(),
+                "prefix": configured if isinstance(configured, str) else derived,
+                "builtin": False,
+            }
+    return dict(sorted(types.items(), key=lambda item: (not item[1]["builtin"], item[1]["label"])))
+
+
 def check_dynamic_pattern(snippets, text, prefixes=None):
     """Resolve a typed dynamic trigger to its mapped value."""
     resolved_prefixes = prefixes if prefixes is not None else get_dynamic_prefixes(snippets)
