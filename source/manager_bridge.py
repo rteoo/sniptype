@@ -136,6 +136,7 @@ class ManagerBridge:
             "app.info": self.app_info,
             "app.openDataFolder": self.open_data_folder,
             "app.openClassicManager": self.open_classic_manager,
+            "app.takeTarget": self.take_target,
             "library.list": self.library_list,
             "snippet.get": self.snippet_get,
             "snippet.save": self.snippet_save,
@@ -218,6 +219,14 @@ class ManagerBridge:
     def open_data_folder(self):
         self.app.open_data_folder()
         return None
+
+    def take_target(self):
+        """The item Editar o último item asked for (once), as ``{kind, key, container}``, or None."""
+        target = self.app._pending_manager_target
+        self.app._pending_manager_target = None
+        if target is None:
+            return None
+        return {"kind": target.kind, "key": target.key, "container": target.container}
 
     def open_classic_manager(self):
         """The Tk manager, still reachable while this window is a preview."""

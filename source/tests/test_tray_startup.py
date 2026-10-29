@@ -160,6 +160,9 @@ def make_startup_app():
     app.icon = None
     app._autostart_lock = threading.Lock()
     app._autostart_state = tx.AUTOSTART_ABSENT
+    app._manager_process = None
+    app._manager_process_lock = threading.Lock()
+    app._pending_manager_target = None
     app.is_admin = mock.Mock(return_value=False)
     app.load_tray_icon = mock.Mock(return_value="icon-image")
     return app
@@ -634,10 +637,10 @@ class AppVersionFormattingTests(unittest.TestCase):
             with self.subTest(name):
                 self.assertEqual(tx.format_app_version(*args), expected)
 
-    def test_running_build_is_the_1_3_0_stable_release(self):
-        self.assertEqual(tx.APP_VERSION, "1.3.0")
-        self.assertEqual(tx.RELEASE_CHANNEL, "stable")
-        self.assertEqual(tx.APP_DISPLAY_NAME, "SnipType v1.3.0")
+    def test_running_build_is_the_1_4_0_beta_release(self):
+        self.assertEqual(tx.APP_VERSION, "1.4.0")
+        self.assertEqual(tx.RELEASE_CHANNEL, "beta")
+        self.assertEqual(tx.APP_DISPLAY_NAME, "SnipType v1.4.0 beta")
 
     def test_older_source_without_a_channel_is_treated_as_stable(self):
         with mock.patch.object(tx, "__doc__", "Version: 9.8.7"):
@@ -648,13 +651,13 @@ class AppVersionFormattingTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Unsupported release channel"):
                 tx._read_release_metadata()
 
-    def test_windows_installer_matches_the_stable_metadata(self):
+    def test_windows_installer_matches_the_beta_metadata(self):
         repo_root = Path(__file__).resolve().parents[2]
         installer = (repo_root / "installer" / "sniptype.iss").read_text(
             encoding="utf-8-sig"
         )
-        self.assertIn('#define MyAppVersion "1.3.0"', installer)
-        self.assertIn('#define MyAppChannel "stable"', installer)
+        self.assertIn('#define MyAppVersion "1.4.0"', installer)
+        self.assertIn('#define MyAppChannel "beta"', installer)
         self.assertIn('#define MyAppName "SnipType"', installer)
         self.assertIn(
             "OutputBaseFilename=SniptypeSetup-{#MyInstallerVersion}",

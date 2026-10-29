@@ -19,6 +19,29 @@ their original numbers.
 | 3.2.0, 3.2.1 | 0.9.0, 0.9.1 | 5.2.0-beta.1 | 1.0.0-beta.1 |
 | 3.3.0-beta, 3.3.0 | 0.10.0-beta.1, 0.10.0 | 5.2.0 | 1.0.0 |
 
+## [1.4.0-beta.1] — 2026-10-29
+
+Windows prerelease of the rebuilt manager window.
+
+### Changed
+
+- The manager opens in a new window built on Tauri and the Teô design system:
+  Textos, Mapeamentos, Dinâmicos, Backups and Configurações, with favorites,
+  groups and filters, Duplicar and Renomear, forms and Prévia, formatting in
+  the text editor, and backups, import and export. Everything is saved through
+  the same library, backups and recovery as before.
+- "Editar o último item" opens the item in the new window.
+- The popups shown while typing in another program (ticker, WhatsApp, Preencher
+  campos) keep their current look.
+- To use the classic manager, set `"manager_ui": "tk"` in
+  `%USERPROFILE%\.sniptype\settings.json`; it also stays one click away in
+  Configurações.
+
+### Known issues
+
+- Form validation messages are in English.
+- The macOS build keeps the classic manager.
+
 ## [1.3.0] — 2026-10-22
 
 The manager now leads with expansion health and actionable recovery, with a consistent keyboard-first workflow.
