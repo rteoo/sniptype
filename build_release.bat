@@ -82,6 +82,15 @@ if not exist "%STAGING_DIR%" (
     goto cleanup_and_fail
 )
 
+REM The Tauri manager window ships beside Sniptype.exe, where the packaged app
+REM looks for it (manager_bridge.find_manager_executable).
+call "%REPO_DIR%\build_manager.bat" "%STAGING_DIR%"
+if errorlevel 1 (
+    echo.
+    echo Packaging failed while building the manager window. The existing dist was left unchanged.
+    goto cleanup_and_fail
+)
+
 REM No snippets are restored into the new dist: the app reads and writes user data
 REM in %USERPROFILE%\.sniptype, and the bundled seed stays as-is.
 

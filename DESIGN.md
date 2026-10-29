@@ -192,7 +192,9 @@ snippets shown as unavailable), formatting in the text editor of Textos and
 Mapeamentos (Negrito, Itálico, Sublinhado, Código, Tachado and Limpar
 formatação over the selection, Ctrl+B / I / U) and Configurações (language,
 appearance, density, terminator mode, data folder). The Tk manager stays one
-click away from Configurações while this window is a preview. Importar and Exportar use the
+click away from Configurações while this window is a preview. The popups
+shown while typing in another program (ticker, WhatsApp, Preencher campos)
+stay Tk, in-process, so they open at once and return focus for the paste. Importar and Exportar use the
 WebView's own system pickers, owned by the window.
 
 - **Layers.** `ui/src/styles/teo/` holds verbatim copies of the design
