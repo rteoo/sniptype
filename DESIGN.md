@@ -183,9 +183,14 @@ and Excluir tipo behind the typed type name), Dinâmicos (one card per
 built-in snippet in its category section, a switch to turn it on or off,
 Renomear, and a search over trigger and description), Backups (the backups
 as a table with Restaurar per row, Criar backup, Exportar…, Importar… with
-Mesclar or Substituir tudo behind the typed SUBSTITUIR, Abrir pasta) and
-Configurações (language, appearance, density, terminator mode, data folder);
-everything else hands off to the Tk manager. Importar and Exportar use the
+Mesclar or Substituir tudo behind the typed SUBSTITUIR, Abrir pasta),
+Formulário (a field list with Adicionar, Remover and Mover beside the
+selected field's Nome, Rótulo, Tipo and its type's settings, opening with the
+fields the text asks for when none are saved), Prévia (the editor's text with
+fields at their defaults, references resolved, and the clipboard and dynamic
+snippets shown as unavailable) and Configurações (language, appearance,
+density, terminator mode, data folder); text formatting still hands off to the
+Tk manager. Importar and Exportar use the
 WebView's own system pickers, owned by the window.
 
 - **Layers.** `ui/src/styles/teo/` holds verbatim copies of the design

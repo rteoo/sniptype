@@ -68,6 +68,17 @@ export type DynamicToggleAnswer = { status: "saved"; key: string; enabled: boole
 export type DynamicRenameAnswer =
   | { status: "renamed"; key: string; trigger: string } | { status: "invalid"; message: string } | Confirmation;
 
+export interface FormFieldDef {
+  name: string; type: string; default: string | boolean; label?: string;
+  options?: string[]; content?: string; output_format?: string;
+}
+export interface FormInfo {
+  saved: boolean; fields: FormFieldDef[]; variables: string[]; types: Choice[]; dateFormat: string; readOnly: boolean;
+}
+export type FormSaveAnswer =
+  | { status: "saved"; count: number } | { status: "invalid"; message: string; index: number | null };
+export interface Preview { text: string; status: string }
+
 export interface ChangeCounts { new: number; overwritten: number; removed: number }
 export interface Backup {
   name: string; when: string; texts: number | null; lists: number | null; size: number; empty: boolean;

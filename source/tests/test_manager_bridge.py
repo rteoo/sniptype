@@ -510,6 +510,70 @@ class BackupBridgeTests(unittest.TestCase):
         self.assertIn("hello", on_disk(self.app))
 
 
+class FormBridgeTests(unittest.TestCase):
+    """Formulário and Prévia, for statics and mapping items."""
+
+    def setUp(self):
+        self.app = make_real_app(self, {
+            "hello": "Hello there",
+            "letter": "Dear %%name%%, see you %%when%%.",
+            "sig": "Best, %%hello%%",
+            "_email_codes": {"__prefix__": "mail", "work": "Hi %%who%%"},
+        })
+        self.bridge = ManagerBridge(self.app, version="9.9.9", channel="beta")
+
+    call, result, error = BridgeTests.call, BridgeTests.result, BridgeTests.error
+
+    def metadata(self):
+        return on_disk(self.app)["__sniptype__"]
+
+    def test_get_without_a_form_offers_the_template_fields(self):
+        form = self.result("form.get", name="letter")
+        self.assertFalse(form["saved"])
+        self.assertEqual(["name", "when"], form["variables"])
+        self.assertEqual(["name", "when"], [field["name"] for field in form["fields"]])
+        self.assertEqual({"text", "multiline", "choice", "date", "optional"}, {t["value"] for t in form["types"]})
+        self.assertEqual([], self.result("form.get", name="sig")["variables"], "a snippet reference is no field")
+
+    def test_save_validates_then_persists_and_reopens(self):
+        fields = [{"name": "name", "type": "text", "default": "friend", "label": "Name"},
+                  {"name": "when", "type": "choice", "default": "", "options": ["soon", "later"]}]
+        self.assertEqual({"status": "saved", "count": 2}, self.result("form.save", name="letter", fields=fields))
+        stored = self.metadata()["items"]["static"]["letter"]["form"]["fields"]
+        self.assertEqual(("friend", "soon", ["soon", "later"]),
+                         (stored[0]["default"], stored[1]["default"], stored[1]["options"]))
+        self.assertTrue(self.result("form.get", name="letter")["saved"])
+        answer = self.result("form.save", name="letter", fields=fields[:1])
+        self.assertEqual("invalid", answer["status"])
+        self.assertIn("when", answer["message"])
+        bad = self.result("form.save", name="letter", fields=[{"name": "na me", "type": "text"}, fields[1]])
+        self.assertEqual(("invalid", 0), (bad["status"], bad["index"]))
+
+    def test_mapping_form_and_duplicate_keeps_it(self):
+        fields = [{"name": "who", "type": "text", "default": "team"}]
+        self.result("form.save", name="work", type="_email_codes", fields=fields)
+        self.assertEqual("team", self.metadata()["items"]["mappings"]["_email_codes"]["work"]["form"]["fields"][0]["default"])
+        self.result("mapping.save", type="_email_codes", name="home", text="Hi %%who%%", formFrom="work")
+        copied = self.metadata()["items"]["mappings"]["_email_codes"]["home"]["form"]
+        self.assertEqual("team", copied["fields"][0]["default"])
+        self.assertEqual("form", self.error("mapping.save", type="_email_codes", name="other",
+                                            text="No fields here", formFrom="work")["code"])
+        self.assertNotIn("other", on_disk(self.app)["_email_codes"])
+
+    def test_preview_fills_defaults_references_and_drafts(self):
+        self.result("form.save", name="letter", fields=[
+            {"name": "name", "type": "text", "default": "friend"},
+            {"name": "when", "type": "text", "default": "Monday"}])
+        self.assertEqual("Dear friend, see you Monday.", self.result("preview.get", name="letter")["text"])
+        self.assertEqual("Best, Hello there", self.result("preview.get", name="sig")["text"])
+        draft = self.result("preview.get", text="Copied: %%clipboard-paste%%")
+        self.assertIn("clipboard-paste", draft["status"])
+        drifted = self.result("preview.get", name="letter", text="Only %%name%%")
+        self.assertEqual("Only ", drifted["text"])
+        self.assertTrue(drifted["status"])
+        self.assertEqual("missing", self.error("form.get", name="nope")["code"])
+
+
 class FindExecutableTests(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)

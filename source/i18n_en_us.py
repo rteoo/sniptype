@@ -653,6 +653,9 @@ EN_US = {
     "O trigger efetivo {trigger} já é usado por outro snippet.": "The effective trigger {trigger} is already used by another snippet.",
     "O grupo não existe mais.": "The group no longer exists.",
     "O backup não existe mais.": "The backup no longer exists.",
+    "O formulário copiado não serve para este texto: {error}": "The copied form does not fit this text: {error}",
+    "O formulário não corresponde ao texto: {error}": "The form does not match the text: {error}",
+    "Os campos do rascunho não batem com o formulário salvo; eles aparecem vazios.": "The draft's fields do not match the saved form; they show empty.",
     "O snippet dinâmico {name} não existe mais.": "The dynamic snippet {name} no longer exists.",
     "Textos formatados ainda são editados no gerenciador clássico.":
     "Formatted texts are still edited in the classic manager.",
