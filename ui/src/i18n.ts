@@ -92,6 +92,7 @@ const EN_US: Record<string, string> = {
   "Fechar": "Close",
   "Feche esta janela e abra o gerenciador de novo pelo ícone da bandeja.":
     "Close this window and open the manager again from the tray icon.",
+  "Filtrar por grupo": "Filter by group",
   "Formatação": "Formatting",
   "Formato da data": "Date format",
   "Formulário": "Form",
@@ -174,10 +175,11 @@ const EN_US: Record<string, string> = {
   "Renomear": "Rename",
   "Renomear snippet": "Rename snippet",
   "Renomear trigger": "Rename trigger",
+  "Renomear {trigger}": "Rename {trigger}",
   "Restaurado às {time} · {name}": "Restored at {time} · {name}",
   "Restaurar": "Restore",
   "Restaurar backup": "Restore backup",
-  "Restaurar backup de {when}": "Restore the backup from {when}",
+  "Restaurar o backup {index} de {count}: {when}": "Restore backup {index} of {count}: {when}",
   "Rótulo": "Label",
   "SUBSTITUIR": "REPLACE",
   "Salvar": "Save",
@@ -224,6 +226,7 @@ const EN_US: Record<string, string> = {
   "Vem antes do trigger de cada snippet do grupo. Ex.: prefixo 'w' + trigger 'oi' -> woi":
     "Goes before the trigger of every snippet in the group. E.g. prefix 'w' + trigger 'hi' -> whi",
   "desativado": "disabled",
+  "favorito": "favorite",
   "formatado": "formatted",
   "inválido": "invalid",
   "novo item": "new item",

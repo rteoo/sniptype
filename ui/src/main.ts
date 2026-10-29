@@ -266,7 +266,7 @@ type Problem = { field: string; message: string } | null;
 type Control = HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
 
 function fieldControl(field: FormField, describedBy: string): Control {
-  const common = { id: `dialog-${field.id}`, "aria-describedby": describedBy };
+  const common = { id: `dialog-${field.id}`, "aria-labelledby": `dialog-${field.id}-label`, "aria-describedby": describedBy };
   const textClass = field.mono ? "field mono" : "field";
   if (field.kind === "switch") {
     return h("input", { ...common, type: "checkbox", role: "switch", class: "el-switch", checked: field.value === true });
@@ -333,15 +333,15 @@ function formDialog(options: {
       options.message ? h("p", {}, options.message) : null,
       ...options.fields.map((field) => {
         const error = h("span", { id: `dialog-${field.id}-error`, class: "error", role: "alert" });
-        const control = fieldControl(field, error.id);
+        const hint = field.hint ? h("span", { class: "hint", id: `dialog-${field.id}-hint` }, field.hint) : null;
+        const control = fieldControl(field, [hint?.id, error.id].filter(Boolean).join(" "));
         controls.set(field.id, control);
         errors.set(field.id, error);
-        const hint = field.hint ? h("span", { class: "hint" }, field.hint) : null;
+        const label = h("span", { id: `dialog-${field.id}-label` }, field.label);
         // The family styles a switch only inside its .el-choice label.
         const row = field.kind === "switch"
-          ? h("div", { class: "dialog-field" }, h("label", { class: "el-choice" }, control, h("span", {}, field.label)),
-            hint, error)
-          : h("label", { class: "dialog-field" }, h("span", {}, field.label), control, hint, error);
+          ? h("div", { class: "dialog-field" }, h("label", { class: "el-choice" }, control, label), hint, error)
+          : h("label", { class: "dialog-field" }, label, control, hint, error);
         rows.set(field.id, row);
         return row;
       }),
@@ -372,6 +372,8 @@ function menuButton(label: string, entries: () => { label: string; disabled?: bo
         type: "button", role: "menuitem", disabled: entry.disabled,
         onclick: () => {
           menu.hidePopover();
+          // What the entry opens returns focus here when it closes.
+          button.focus();
           entry.run();
         },
       }, entry.label)));
@@ -1001,7 +1003,7 @@ function collectionPage(kind: Kind): HTMLElement {
     },
   });
   const title = textos ? t("Textos") : t("Mapeamentos");
-  refs.items = h("div", { class: "items", role: "list", "aria-label": title, onkeydown: onListKey });
+  refs.items = h("div", { class: "items", role: "listbox", "aria-label": title, onkeydown: onListKey });
   refs.count = h("span");
   refs.receipt = h("div", { class: "receipt", role: "status", "aria-live": "polite" });
   refs.detail = h("section", { class: "detail", "aria-label": t("Editor") });
@@ -1057,7 +1059,7 @@ function renderViewBar(): void {
       onchange: (event: Event) => void setView({ filter: (event.target as HTMLSelectElement).value as ListFilter }),
     }, ...listFilters().map(([value, label]) => h("option", { value, selected: value === state.view.filter }, label))),
     h("select", {
-      class: "field", "aria-label": t("Grupo"),
+      class: "field", "aria-label": t("Filtrar por grupo"),
       onchange: (event: Event) => void setView({ group: (event.target as HTMLSelectElement).value }),
     },
     h("option", { value: "", selected: state.view.group === "" }, t("Todos os grupos")),
@@ -1127,10 +1129,13 @@ function renderList(): void {
       offerImport ? h("button", { type: "button", class: "el-button", onclick: () => importLibrary() }, t("Importar…")) : null));
     return;
   }
+  // One Tab stop for the whole list: the open item, else the first one.
+  const tabStop = items.some((item) => item.name === current) ? current : items[0].name;
   // ceiling: renders every row; virtualize if libraries beyond ~5k snippets feel slow.
   host.replaceChildren(...items.map((item) => h("button", {
-    type: "button", class: "item", role: "listitem", "data-name": item.name,
-    "aria-current": item.name === current ? "true" : "false",
+    type: "button", class: "item", role: "option", "data-name": item.name,
+    "aria-selected": item.name === current ? "true" : "false", tabindex: item.name === tabStop ? "0" : "-1",
+    "aria-label": itemLabel(item),
     onclick: () => void openItem(kind, item.name),
   },
   h("span", { class: "trigger" }, item.effectiveTrigger === item.name
@@ -1144,7 +1149,21 @@ function renderList(): void {
     item.enabled === false ? h("span", { class: "el-badge" }, t("desativado")) : null,
   ),
   h("span", { class: "preview" }, item.preview || "—"))));
-  host.querySelector<HTMLElement>(".item[aria-current=true]")?.scrollIntoView({ block: "nearest" });
+  host.querySelector<HTMLElement>(".item[aria-selected=true]")?.scrollIntoView({ block: "nearest" });
+}
+
+/** What a screen reader says for a row: its trigger, its badges in words, then its text. */
+function itemLabel(item: Item): string {
+  const trigger = item.effectiveTrigger === item.name ? item.name : `${item.name} → ${item.effectiveTrigger}`;
+  return [
+    trigger,
+    item.favorite ? t("favorito") : "",
+    item.rich ? t("formatado") : "",
+    item.shadowed ? t("sombreado") : "",
+    item.group ?? "",
+    item.enabled === false ? t("desativado") : "",
+    item.preview,
+  ].filter(Boolean).join(", ");
 }
 
 function onListKey(event: KeyboardEvent): void {
@@ -1156,7 +1175,7 @@ function onListKey(event: KeyboardEvent): void {
     const sibling = event.key === "ArrowDown" ? target.nextElementSibling : target.previousElementSibling;
     if (sibling instanceof HTMLElement) sibling.focus();
     else if (event.key === "ArrowUp") refs.search?.focus();
-  } else if (event.key === "Delete" && target.getAttribute("aria-current") === "true") {
+  } else if (event.key === "Delete" && target.getAttribute("aria-selected") === "true") {
     event.preventDefault();
     void deleteCurrent(kind);
   }
@@ -1241,7 +1260,7 @@ function renderDetail(): void {
     type: "button", class: "primary", title: "Ctrl+S", onclick: () => void save(kind),
   }, icon("check"), t("Salvar"));
   refs.saveState = h("span", { class: "state", role: "status" });
-  refs.effective = h("span", { class: "hint", "aria-live": "polite" });
+  refs.effective = h("span", { class: "hint", id: "name-hint", "aria-live": "polite" });
   const onInput = (field: "name") => (event: Event) => {
     draft[field] = (event.target as HTMLInputElement).value;
     updateSaveState();
@@ -1254,7 +1273,8 @@ function renderDetail(): void {
   refs.meta = draft.original ? h("div", { class: "meta-row" }) : null;
   const formatHint = h("span", { class: "hint", "aria-live": "polite" });
   const editor = createRichEditor({
-    id: "text", label: textos ? t("Texto") : t("Valor"), value: { text: draft.text, spans: draft.spans },
+    id: "text", label: textos ? t("Texto") : t("Valor"), describedBy: "text-hint",
+    value: { text: draft.text, spans: draft.spans },
     onChange: () => {
       ({ text: draft.text, spans: draft.spans } = editor.value());
       draft.rich = draft.spans.length > 0;
@@ -1278,9 +1298,10 @@ function renderDetail(): void {
       h("h2", {}, heading),
       refs.meta,
       h("label", {},
-        h("span", {}, textos ? t("Trigger") : t("Identificador")),
+        h("span", { id: "name-label" }, textos ? t("Trigger") : t("Identificador")),
         h("input", {
           id: "name", class: "field", value: draft.name, autocomplete: "off",
+          "aria-labelledby": "name-label", "aria-describedby": "name-hint",
           spellcheck: "false", oninput: onInput("name"),
         }),
         refs.effective,
@@ -1289,7 +1310,7 @@ function renderDetail(): void {
         h("span", { class: "field-label", id: "text-label" }, textos ? t("Texto") : t("Valor")),
         formatBar(editor, formatHint),
         editor.element,
-        h("span", { class: "hint" }, textos ? t("Variáveis como %%clipboard-paste%% são resolvidas na expansão.")
+        h("span", { class: "hint", id: "text-hint" }, textos ? t("Variáveis como %%clipboard-paste%% são resolvidas na expansão.")
           : t("O texto que entra no lugar do trigger."), " ", formatHint),
       ),
     ),
@@ -1389,11 +1410,15 @@ async function editForm(kind: Kind): Promise<void> {
       : [h("p", { class: "muted" }, t("Nenhum campo. Use Adicionar."))]));
   };
 
-  const input = (label: string, value: string, set: (value: string) => void, extra: Record<string, unknown> = {}) =>
-    h("label", { class: "dialog-field" }, h("span", {}, label), h("input", {
+  let fieldIds = 0;
+  const input = (label: string, value: string, set: (value: string) => void, extra: Record<string, unknown> = {}) => {
+    const id = `form-field-${fieldIds += 1}`;
+    return h("label", { class: "dialog-field" }, h("span", { id: `${id}-label` }, label), h("input", {
       class: extra.mono ? "field mono" : "field", value, autocomplete: "off", spellcheck: "false",
+      "aria-labelledby": `${id}-label`, "aria-describedby": extra.hint ? `${id}-hint` : undefined,
       oninput: (event: Event) => set((event.target as HTMLInputElement).value),
-    }), extra.hint ? h("span", { class: "hint" }, String(extra.hint)) : null);
+    }), extra.hint ? h("span", { class: "hint", id: `${id}-hint` }, String(extra.hint)) : null);
+  };
 
   const renderEditor = () => {
     const field = fields[selected];
@@ -1673,7 +1698,10 @@ function renderDynamics(): void {
         h("div", { class: "stack" },
           h("code", { class: "trigger" }, item.key === item.trigger ? item.trigger : `${item.key} → ${item.trigger}`),
           h("span", { class: "muted" }, item.description)),
-        h("button", { type: "button", class: "el-button", onclick: () => void renameDynamic(item.key, item.trigger) },
+        h("button", {
+          type: "button", class: "el-button", "aria-label": t("Renomear {trigger}", { trigger: item.trigger }),
+          onclick: () => void renameDynamic(item.key, item.trigger),
+        },
           t("Renomear")),
       )));
   });
@@ -1885,19 +1913,22 @@ function renderBackups(): void {
   const count = (value: number | null) => value === null ? t("inválido") : String(value);
   host.replaceChildren(
     h("p", { class: "muted" }, t("{count} backups disponíveis", { count: items.length })),
-    h("table", { class: "backups" },
+    h("table", { class: "backups", "aria-label": t("Backups da biblioteca") },
       h("thead", {}, h("tr", {},
         h("th", { scope: "col" }, t("Quando")), h("th", { scope: "col", class: "num" }, t("Textos")),
         h("th", { scope: "col", class: "num" }, t("Listas")), h("th", { scope: "col", class: "num" }, t("Tamanho")),
         h("th", { scope: "col" }, h("span", { class: "sr-only" }, t("Ações"))))),
-      h("tbody", {}, ...items.map((backup) => h("tr", {},
+      h("tbody", {}, ...items.map((backup, index) => h("tr", {},
         h("td", {}, backup.when, backup.empty ? h("span", { class: "muted" }, ` · ${t("0 itens")}`) : null),
         h("td", { class: "num" }, count(backup.texts)),
         h("td", { class: "num" }, count(backup.lists)),
         h("td", { class: "num" }, sizeText(backup.size)),
         h("td", { class: "action" }, h("button", {
           type: "button", class: "el-button", disabled: backup.texts === null,
-          "aria-label": t("Restaurar backup de {when}", { when: backup.when }),
+          // Two backups can share a minute, so the position keeps every button's name apart.
+          "aria-label": t("Restaurar o backup {index} de {count}: {when}", {
+            index: index + 1, count: items.length, when: backup.when,
+          }),
           onclick: () => void restoreBackup(backup.name),
         }, t("Restaurar"))),
       ))),
@@ -1912,7 +1943,7 @@ function settingsPage(): HTMLElement {
     return entry ? h("span", { class: `status${entry.error ? " error" : ""}`, role: "status" }, entry.text) : null;
   };
   const segment = (card: string, key: string, current: string, choices: [string, string][]) =>
-    h("div", { class: "el-segment", role: "radiogroup", "aria-label": card },
+    h("div", { class: "el-segment", role: "radiogroup", "aria-labelledby": `card-${card}` },
       ...choices.map(([value, label]) => h("label", {},
         h("input", {
           type: "radio", name: key, value, checked: value === current,

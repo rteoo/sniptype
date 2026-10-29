@@ -220,8 +220,16 @@ WebView's own system pickers, owned by the window.
   model above holds unchanged. The editor saves text plus style spans in the
   same rich-text payload the classic editor writes, and a text with no styles
   left is saved plain again.
-- **Open gates.** Narrator pass, high-contrast pass and the 1180 × 760
-  minimum have not been verified for this window.
+- **Accessibility (2026-10-29).** Checked through the WebView2 accessibility
+  tree, which is what Narrator reads: every control has its own name; list
+  rows are options of a single-Tab-stop listbox named by trigger, badges and
+  text; field hints and errors are descriptions, not part of the name; dialogs
+  are named by their title and return focus on close. Text contrast is at
+  least 4.82:1 in dark and 5.05:1 in light on every page. Emulated forced
+  colors keep every control outlined and the current row and page marked in
+  Highlight. At the 720 × 480 minimum the editor column scrolls instead of
+  squeezing the text box. Still open: a pass with Narrator itself and with a
+  real Windows contrast theme.
 
 ## Deviations
 
