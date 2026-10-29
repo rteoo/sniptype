@@ -19,7 +19,8 @@ design system's `DESIGN.md`, `native/windows/tokens.css`, `patterns.md` and
   active and offers the pause command without a trip to the tray. No
   decorative dashboard precedes the collection.
 - **Stack:** Python with Tkinter/ttk (Tcl/Tk 8.6 on Windows), Pillow for the
-  drawn control faces, pystray for the tray. No WinUI, no web view.
+  drawn control faces, pystray for the tray. No WinUI. An opt-in Tauri
+  (WebView2) manager is in preview; see Tauri manager (preview).
 - **Platforms:** Windows 10 and 11 x64 are the supported desktop. macOS
   (Apple Silicon) is a beta that keeps native Aqua controls. Linux runs the
   same Windows-family theme in CI only.
@@ -169,6 +170,30 @@ shifted so the body role matches the platform's default size.
   beside the group filter, never an icon-only menu.
 - The supported Windows minimum is 1180 × 760 and the default is 1280 × 800.
   At the minimum, the text editor's actions fit on one row.
+
+## Tauri manager (preview)
+
+`ui/` is a Tauri 2 + TypeScript rebuild of the manager, opened instead of the
+Tk window only when `settings.json` has `"manager_ui": "tauri"`. Its first
+slice is Textos (list, search, editor, delete with Desfazer) and
+Configurações (language, appearance, density, terminator mode, data folder);
+everything else hands off to the Tk manager.
+
+- **Layers.** `ui/src/styles/teo/` holds verbatim copies of the design
+  system's `native/foundations.css`, `native/elements.css`,
+  `native/windows/tokens.css` and `native/windows/elements.css`; update them
+  by re-copying. `ui/index.html` inlines `native/windows/assets/icons.svg`.
+  `ui/src/styles/app.css` composes the window from those tokens only.
+- **Same decisions as above.** Dark default, the three densities through the
+  family's `data-density`, the NavigationView rail with the 3 × 16 px copper
+  pill, list/detail Textos, system fonts only (no web families bundled), and
+  triggers in Cascadia Mono first.
+- **Persistence.** The window owns no data: every request goes through
+  `source/manager_bridge.py` and the app's own save path, so the persistence
+  model above holds unchanged. Plain text never overwrites a rich-text value;
+  formatted snippets are read-only there until the editor gains formatting.
+- **Open gates.** Narrator pass, high-contrast pass and the 1180 × 760
+  minimum have not been verified for this window.
 
 ## Deviations
 

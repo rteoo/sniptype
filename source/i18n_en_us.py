@@ -647,4 +647,13 @@ EN_US = {
     "F2: identifier · Ctrl+D: duplicate\nCtrl+S: save",
     "F2: identificador · Ctrl+D: duplicar\nDelete: excluir · Desfazer disponível":
     "F2: identifier · Ctrl+D: duplicate\nDelete: delete · Undo available",
+    "O snippet {name} não existe mais.": "The snippet {name} no longer exists.",
+    "Textos formatados ainda são editados no gerenciador clássico.":
+    "Formatted texts are still edited in the classic manager.",
+    "Não há exclusão para desfazer.": "There is no deletion to undo.",
+    "Não foi possível gravar snippets.json. Verifique os logs.": "Could not write snippets.json. Check the logs.",
+    "O novo gerenciador não foi encontrado; abrindo o gerenciador clássico.":
+    "The new manager was not found; opening the classic manager.",
+    "O novo gerenciador não abriu; abrindo o gerenciador clássico.":
+    "The new manager did not open; opening the classic manager.",
 }

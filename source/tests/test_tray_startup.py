@@ -154,6 +154,7 @@ def make_startup_app():
     app.gui = mock.Mock()
     app.task_runner = mock.Mock()
     app.snippets = {}
+    app.settings = {}
     app.enabled = True
     app.capture_error = None
     app.icon = None
