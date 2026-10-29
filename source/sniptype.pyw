@@ -186,6 +186,7 @@ from editor_session import (
     mapping_type_key,
     mapping_type_problem,
     static_draft_problem,
+    static_trigger_problem,
 )
 from preview_dialog import PreviewDialogController
 from manager_actions import (
@@ -6246,14 +6247,7 @@ class Sniptype:
             )
 
         def new_trigger_problem(value, current=None):
-            """Why ``value`` cannot be a new stored trigger, or None."""
-            if not value:
-                return _("Informe um trigger.")
-            if value.startswith("_"):
-                return _("Triggers com '_' são reservados.")
-            if value != current and value in self.snippets:
-                return _("O trigger '{new_trigger}' já existe.").format(new_trigger=value)
-            return None
+            return static_trigger_problem(self.snippets, value, current)
 
         def on_duplicate():
             # The copy opens in the editor, so a draft is settled first.

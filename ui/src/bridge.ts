@@ -21,6 +21,7 @@ export interface AppInfo {
 export interface LibraryItem {
   trigger: string;
   effectiveTrigger: string;
+  groupId: string | null;
   group: string | null;
   favorite: boolean;
   enabled: boolean;
@@ -29,22 +30,47 @@ export interface LibraryItem {
   preview: string;
 }
 
-export interface Snippet { trigger: string; text: string; rich: boolean }
+/** A filtered view of the static library; `total` counts every static snippet. */
+export interface Library { items: LibraryItem[]; total: number }
+
+export type ListFilter = "all" | "favorites" | "recent" | "disabled" | "problems";
+
+export interface Snippet {
+  trigger: string; text: string; rich: boolean; effectiveTrigger: string; favorite: boolean; groupId: string | null;
+}
 
 export type SaveCheck = "replace" | "warnings";
-export type SaveAnswer =
-  | { status: "saved"; trigger: string }
-  | { status: "confirm"; check: SaveCheck; title: string; message: string; action: string };
+export type Confirmation = { status: "confirm"; check: SaveCheck; title: string; message: string; action: string };
+export type SaveAnswer = { status: "saved"; trigger: string } | Confirmation;
+
+export type CopyAnswer = { status: "duplicated"; trigger: string } | { status: "invalid"; message: string };
+export type RenameAnswer =
+  | { status: "renamed"; trigger: string } | { status: "invalid"; message: string } | Confirmation;
+
+export interface Group { id: string; label: string; prefix: string; enabled: boolean; count: number }
+export interface Groups { readOnly: boolean; groups: Group[] }
+
+export interface Choice { value: string; label: string }
+export interface GroupValues {
+  label: string; notes: string; prefix: string; enabled: boolean;
+  terminator: string; application_mode: string; executables: string;
+}
+export interface GroupForm {
+  values: GroupValues; terminators: Choice[]; applicationModes: Choice[]; windowsNote: string;
+}
+export type GroupSaveAnswer =
+  | { status: "saved"; id: string; label: string }
+  | { status: "invalid"; field: keyof GroupValues; message: string };
 
 export interface MappingType { key: string; label: string; prefix: string; builtin: boolean; count: number }
 
 export interface MappingItem { name: string; effectiveTrigger: string; favorite: boolean; rich: boolean; preview: string }
 
-export interface MappingEntry { type: string; name: string; text: string; rich: boolean; effectiveTrigger: string }
+export interface MappingEntry {
+  type: string; name: string; text: string; rich: boolean; effectiveTrigger: string; favorite: boolean;
+}
 
-export type MappingSaveAnswer =
-  | { status: "saved"; type: string; name: string }
-  | { status: "confirm"; check: SaveCheck; title: string; message: string; action: string };
+export type MappingSaveAnswer = { status: "saved"; type: string; name: string } | Confirmation;
 
 export type CreateTypeAnswer =
   | { status: "created"; key: string }

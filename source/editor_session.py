@@ -133,6 +133,20 @@ def static_draft_problem(trigger, plain_text):
     return None
 
 
+def static_trigger_problem(snippets, trigger, current=None):
+    """Why ``trigger`` cannot be the stored trigger of a copy or a rename, or None.
+
+    ``current`` is the trigger being renamed, which may keep its own name.
+    """
+    if not trigger:
+        return _("Informe um trigger.")
+    if trigger.startswith("_"):
+        return _("Triggers com '_' são reservados.")
+    if trigger != current and trigger in snippets:
+        return _("O trigger '{new_trigger}' já existe.").format(new_trigger=trigger)
+    return None
+
+
 def mapping_draft_problem(name, plain_text):
     """Why a Mapeamentos draft cannot be saved yet, as a message id, or None."""
     name = name.strip()
@@ -143,7 +157,6 @@ def mapping_draft_problem(name, plain_text):
     if not plain_text.strip():
         return N_("Informe um valor.")
     return None
-
 
 
 def mapping_type_problem(types, snippets, type_name, prefix):
@@ -169,8 +182,9 @@ def mapping_type_key(type_name):
     """The library key a new custom mapping type is stored under."""
     return f"_{type_name}_codes"
 
+
 __all__ = [
     "CHANGED", "EDITOR_KINDS", "EMPTY", "EditorSession", "GONE", "ITEM", "MISSING",
     "NEW", "UNCHANGED", "mapping_draft_problem", "mapping_type_key", "mapping_type_problem",
-    "static_draft_problem",
+    "static_draft_problem", "static_trigger_problem",
 ]
