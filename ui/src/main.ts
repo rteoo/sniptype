@@ -2056,10 +2056,32 @@ void appWindow.onCloseRequested(async (event) => {
   await appWindow.destroy();
 });
 
+/** Editar o último item: open the item the app points at, on its own page. */
+async function takeTarget(): Promise<void> {
+  const target = await request<{ kind: string; key: string; container: string | null } | null>("app.takeTarget");
+  if (!target) return;
+  if (target.kind === "dynamic") {
+    state.dynamics.query = target.key;
+    await showPage("dinamicos");
+    renderDynamics();
+    return;
+  }
+  const kind: Kind = target.kind === "mapping" ? "mapeamentos" : "textos";
+  if (kind === "mapeamentos" && target.container && target.container !== state.type) {
+    if (state.page !== "mapeamentos") await showPage("mapeamentos");
+    await switchType(target.container);
+    if (state.type !== target.container) return;
+  }
+  await showPage(kind);
+  await openItem(kind, target.key);
+}
+
 async function onAppEvent(name: string): Promise<void> {
   if (name === "focus") {
     await appWindow.unminimize();
     await appWindow.setFocus();
+  } else if (name === "target") {
+    await takeTarget();
   }
 }
 
@@ -2079,6 +2101,7 @@ async function main(): Promise<void> {
   }
   renderAll();
   refs.search?.focus();
+  await takeTarget().catch((error) => console.error("target failed", error));
 }
 
 void main();

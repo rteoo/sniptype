@@ -671,14 +671,42 @@ class OpenManagerRoutingTests(unittest.TestCase):
         app.notify_error = mock.Mock()
         app._manager_process = None
         app._manager_process_lock = threading.Lock()
+        app._pending_manager_target = None
         return app
 
-    def test_classic_manager_is_the_default(self):
+    def test_tauri_window_is_the_default(self):
         app = self._app({})
+        process = mock.Mock(alive=True)
+        with mock.patch.object(tx, "find_manager_executable", return_value="m.exe"), \
+                mock.patch.object(tx, "ManagerProcess", return_value=process) as spawn:
+            app.open_manager()
+        spawn.assert_called_once()
+        app.gui.submit.assert_not_called()
+
+    def test_classic_manager_when_chosen(self):
+        app = self._app({"manager_ui": "tk"})
         with mock.patch.object(tx, "find_manager_executable") as find:
             app.open_manager()
         find.assert_not_called()
         app.gui.submit.assert_called_once_with(app._show_manager_window)
+
+    def test_default_without_the_binary_opens_the_classic_manager_quietly(self):
+        app = self._app({})
+        with mock.patch.object(tx, "find_manager_executable", return_value=None):
+            app.open_manager()
+        app.notify_error.assert_not_called()
+        app.gui.submit.assert_called_once_with(app._show_manager_window)
+
+    def test_edit_last_target_reaches_a_running_window_once(self):
+        app = self._app({})
+        app._pending_manager_target = SnippetRef("static", "sig")
+        process = mock.Mock(alive=True)
+        app._manager_process = process
+        app.open_manager()
+        process.send.assert_called_once_with({"event": "target"})
+        bridge = ManagerBridge(app, version="9.9.9", channel="beta")
+        self.assertEqual({"kind": "static", "key": "sig", "container": None}, bridge.take_target())
+        self.assertIsNone(bridge.take_target())
 
     def test_flag_starts_the_tauri_window_once_then_focuses_it(self):
         app = self._app({"manager_ui": "tauri"})

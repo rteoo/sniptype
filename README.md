@@ -69,6 +69,11 @@ the ARM64 build is available as the
 at feature parity with v0.14.3. Versions before 1.0.0 were renumbered into
 `0.x`; the [changelog](CHANGELOG.md) maps the old numbers.
 
+The [`v1.4.0-beta.1` Windows prerelease](https://github.com/rteoo/sniptype/releases/tag/v1.4.0-beta.1)
+opens the rebuilt manager window. The beta installer upgrades the same per-user
+installation as stable and uses the same snippet library; close the running
+app before switching channels. Reinstall v1.3.0 to return to stable.
+
 The installer and the Store version use the same snippet library in
 `%USERPROFILE%\.sniptype` and only one of them runs at a time; uninstall the
 installer version after switching to the Store.

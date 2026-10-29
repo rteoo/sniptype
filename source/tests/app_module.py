@@ -53,3 +53,8 @@ sniptype = _load()
 import i18n  # noqa: E402
 
 i18n.system_language = lambda: i18n.DEFAULT_LANGUAGE
+
+# The Tauri manager is the default window, and a built one sits in ui/ on a
+# developer machine: point the app at a binary that does not exist so tests
+# get the classic manager unless they mock find_manager_executable.
+os.environ["SNIPTYPE_MANAGER_EXE"] = os.path.join(SOURCE_DIR, "tests", "tmp", "no-manager-window.exe")
