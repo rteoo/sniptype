@@ -1,0 +1,43 @@
+/* Copied verbatim from teo-design-system 2.7.1, native/foundations.css. Update by re-copying, not by editing. */
+/* Native shared identity. No web-font imports or web component dependencies. */
+:root {
+  color-scheme: dark;
+  --color-bg-canvas: #11151B;
+  --color-text-primary: #F2EFE9;
+  --color-text-muted: #A8B0BC;
+  --color-border-subtle: #343E4C;
+  --color-link: #EDB47C;
+  --color-action-primary-bg: #E6A05A;
+  --color-action-primary-text: #15100A;
+  --color-action-primary-hover: #EDB47C;
+  --color-focus-ring: #F0C293;
+  --color-success-fg: #73E0A1;
+  --color-success-bg: #13271D;
+  --color-danger-fg: #FF8A85;
+  --color-danger-bg: #351718;
+  --native-font-mono: ui-monospace, Consolas, monospace;
+  --native-space-1: 4px;
+  --native-space-2: 8px;
+  --native-space-3: 12px;
+  --native-space-4: 16px;
+  --native-space-6: 24px;
+  --native-space-8: 32px;
+  --native-motion-fast: 120ms;
+}
+[data-theme=light] {
+  color-scheme: light;
+  --color-bg-canvas: #F5F3EE;
+  --color-text-primary: #202630;
+  --color-text-muted: #626972;
+  --color-border-subtle: #D8D9D9;
+  --color-link: #A0520A;
+  --color-action-primary-hover: #D99551;
+  --color-focus-ring: #263C56;
+  --color-success-fg: #16643B;
+  --color-success-bg: #E6F6EC;
+  --color-danger-fg: #9B2C2C;
+  --color-danger-bg: #FCE8E8;
+}
+html { -webkit-text-size-adjust: 100%; }
+body { -webkit-font-smoothing: antialiased; }
+@media (prefers-reduced-motion: reduce) { :root { --native-motion-fast: 0ms; } }

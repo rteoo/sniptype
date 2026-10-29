@@ -1,0 +1,47 @@
+/* Copied verbatim from teo-design-system 2.7.1, native/windows/elements.css. Update by re-copying, not by editing. */
+/* Fluent-style compact command, field and selection treatments. */
+[data-platform=windows] .el-button { border-radius:4px; }
+[data-platform=windows] .el-field input { border-bottom-width:2px; }
+[data-platform=windows] .el-field input:focus { border-bottom-color:var(--color-link); }
+[data-platform=windows] .el-segment { background:transparent; border:1px solid var(--native-field-border); border-radius:4px; }
+[data-platform=windows] .el-segment input:checked+span { border-color:transparent; background:var(--native-selection); box-shadow:inset 0 -2px var(--color-link); }
+[data-platform=windows] .el-list-row { background:var(--native-list); }
+[data-platform=windows] .el-list-row:nth-child(2n) { background:var(--native-content); }
+[data-platform=windows] .el-badge { border-radius:4px; }
+
+
+.win-table-scroll { overflow-x:auto; }
+.win-table { border-collapse:collapse; width:100%; }
+.win-table caption { text-align:left; padding:12px 0; font-weight:600; }
+.win-table th,.win-table td { text-align:left; padding:4px 12px; border-bottom:1px solid var(--native-line); height:var(--windows-row-height,32px); }
+.win-table th { font-weight:600; }
+.win-table th button { min-height:var(--native-control-height); padding:4px; white-space:nowrap; }
+.win-table .number { text-align:right; font-variant-numeric:tabular-nums; }
+.win-table tr[data-selected=true] { background:var(--native-selection); }
+.win-table input { width:18px; height:18px; min-height:0; accent-color:var(--color-link); }
+.win-table td:first-child,.win-table th:first-child { min-width:var(--native-control-height); }
+.win-table label { display:flex; align-items:center; justify-content:center; min-height:var(--native-control-height); cursor:pointer; }
+[data-platform=windows] .el-segment span { min-height:var(--native-control-height); }
+@media(forced-colors:active) { .win-table tr[data-selected=true] { outline:1px solid Highlight; }.win-table th[aria-sort] { border-bottom:2px solid Highlight; } }
+
+.win-table th:first-child { text-align:center; }
+
+/* Align controls, excluding their labels, and retain wrapping at narrow widths. */
+.win-filters { align-items:flex-end; }
+.win-filters .el-field { margin:0; max-width:100%; }
+[data-platform=windows] .win-filters input,
+[data-platform=windows] .win-filters select,
+[data-platform=windows] .win-filters .el-button {
+  min-height:max(40px,var(--native-control-height));
+  padding:8px 12px;
+  line-height:1.45;
+}
+
+/* Quiet grouped surfaces borrow the macOS hierarchy, with Fluent geometry. */
+[data-platform=windows] .kit-card { border-radius:8px; }
+[data-platform=windows] .el-button { padding:4px 12px; }
+[data-platform=windows] .el-field input { border-bottom-width:1px; }
+[data-platform=windows] .el-list-row:nth-child(2n) { background:var(--native-list); }
+[data-platform=windows] .el-segment { background:var(--native-selection); border-color:transparent; }
+[data-platform=windows] .el-segment input:checked+span { background:var(--native-content); box-shadow:inset 0 -2px var(--color-link); }
+[data-platform=windows] .win-filters .el-button { padding:8px 12px; }

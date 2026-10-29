@@ -1,0 +1,39 @@
+/* Copied verbatim from teo-design-system 2.7.1, native/windows/tokens.css. Update by re-copying, not by editing. */
+/* windows family source tokens; browser metrics are px, native mappings are in README.md. */
+[data-platform=windows] {
+  --native-font: 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
+  --native-font-mono: 'Cascadia Code', Consolas, monospace;
+  --native-type-body: 14px;
+  --native-type-title: 28px;
+  --native-type-heading: 18px;
+  --native-type-caption: 12px;
+  --native-control-height: 32px;
+  --native-control-radius: 4px;
+  --native-icon-grid: 20px;
+  --native-icon-stroke: 1.5;
+  --native-field-border: #999ca3;
+  --native-bg: #292929;
+  --native-panel: #232323;
+  --native-content: #1c1c1e;
+  --native-selection: #484848;
+  --native-line: #454545;
+  --native-muted: #bcbcbc;
+  --native-nav: #292929;
+  --native-list: #232323;
+}
+[data-theme=light] [data-platform=windows] {
+  --native-field-border: #7b8088;
+  --native-bg: #e9e8e7;
+  --native-panel: #f6f5f4;
+  --native-content: #ffffff;
+  --native-selection: #e8e6e3;
+  --native-line: #d8d8d8;
+  --native-muted: #606060;
+  --native-nav: #e9e8e7;
+  --native-list: #f6f5f4;
+}
+
+
+/* Density changes target sizes, never the approved text scale or appearance. */
+[data-platform=windows][data-density=comfortable] { --native-control-height:40px; --windows-row-height:44px; }
+[data-platform=windows][data-density=touch] { --native-control-height:44px; --windows-row-height:48px; }

@@ -108,6 +108,7 @@ from workflow_support import SnippetRef, WorkflowState
 from validation_support import validate_trigger
 import health_support
 import i18n
+from manager_bridge import MANAGER_UI_SETTING, ManagerBridge, ManagerProcess, find_manager_executable
 import macos_permissions
 import time_format
 import tray_support
@@ -431,6 +432,9 @@ class Sniptype:
         # of it, marshaled onto its thread. Started in run().
         self.gui = GuiThread(logger=self.logger)
         self.manager_window = None
+        # The Tauri manager window (opt-in via settings "manager_ui": "tauri").
+        self._manager_process = None
+        self._manager_process_lock = threading.Lock()
         self._pending_manager_target = None
         self.macos_permission_window = None
         self._manager_notebook = None
@@ -1955,6 +1959,28 @@ class Sniptype:
         else:
             self.snippets[trigger] = value
 
+    def save_static_snippet(self, trigger, value):
+        """Store one static snippet and persist the library; False if nothing changed on disk.
+
+        On a failed write memory goes back to what it was, so every manager
+        shows exactly what ``snippets.json`` holds.
+        """
+        previous = self.snippets.get(trigger, EDITOR_MISSING)
+        previous_shadow = self.shadowed_static_snippets.get(trigger, EDITOR_MISSING)
+        self._store_static_snippet(trigger, value)
+        if not self.save_snippets(self.snippets):
+            if previous is EDITOR_MISSING:
+                self.snippets.pop(trigger, None)
+            else:
+                self.snippets[trigger] = previous
+            if previous_shadow is EDITOR_MISSING:
+                self.shadowed_static_snippets.pop(trigger, None)
+            else:
+                self.shadowed_static_snippets[trigger] = previous_shadow
+            return False
+        self.refresh_runtime_indexes()
+        return True
+
     def _delete_static_snippet(self, trigger, *, include_shadowed=False):
         """Delete a static snippet by trigger, guarding shadowed dynamics.
 
@@ -2170,7 +2196,10 @@ class Sniptype:
         try:
             if action == "edit_last":
                 self._pending_manager_target = self.workflow_state.last_successful_item
-            if action in ("open_manager", "edit_last"):
+            if action == "open_manager":
+                self.open_manager()
+            elif action == "edit_last":
+                # Jumping to an item is a classic-manager feature for now.
                 self.gui.submit(self._show_manager_window)
             elif action == "toggle_enabled":
                 self.gui.submit(self._toggle_enabled_from_hotkey)
@@ -2723,7 +2752,7 @@ class Sniptype:
     def manage_snippets_gui(self, icon, item):
         """Open (or re-focus) the snippet manager window."""
         try:
-            self.gui.submit(self._show_manager_window)
+            self.open_manager()
         except Exception as e:
             self.logger.error(f"Erro ao abrir gerenciador: {e}")
             self.notify_error(
@@ -2731,6 +2760,36 @@ class Sniptype:
                 key="gui-open-error",
                 cooldown_seconds=5,
             )
+
+    def open_manager(self):
+        """Show the manager the person chose: the Tauri window or the classic Tk one."""
+        if self.settings.get(MANAGER_UI_SETTING) == "tauri" and self._open_tauri_manager():
+            return
+        self.gui.submit(self._show_manager_window)
+
+    def _open_tauri_manager(self):
+        """Start or raise the Tauri manager; False, after saying why, when it cannot run."""
+        with self._manager_process_lock:
+            process = self._manager_process
+            if process is not None and process.alive:
+                process.focus()
+                return True
+            executable = find_manager_executable()
+            if executable is None:
+                self.logger.error("Tauri manager executable not found; opening the classic manager.")
+                self.notify_error(_("O novo gerenciador não foi encontrado; abrindo o gerenciador clássico."),
+                                  key="manager-ui-missing", cooldown_seconds=5)
+                return False
+            bridge = ManagerBridge(self, version=APP_VERSION, channel=RELEASE_CHANNEL)
+            try:
+                self._manager_process = ManagerProcess(
+                    self, executable, bridge, log_path=os.path.join(self.logs_dir, "manager-ui.log"))
+            except OSError as e:
+                self.logger.error(f"Tauri manager failed to start ({executable}): {e}")
+                self.notify_error(_("O novo gerenciador não abriu; abrindo o gerenciador clássico."),
+                                  key="manager-ui-start", cooldown_seconds=5)
+                return False
+            return True
 
     def _manager_rows(self):
         """Return the immutable local projection used by manager navigation."""
@@ -6042,20 +6101,8 @@ class Sniptype:
             # Saving over a live dynamic trigger records the static for disk but
             # leaves the callable in the merged map, so the trigger keeps
             # expanding as the dynamic snippet this session (see helper).
-            previous = self.snippets.get(trigger, EDITOR_MISSING)
-            previous_shadow = self.shadowed_static_snippets.get(trigger, EDITOR_MISSING)
-            self._store_static_snippet(trigger, value)
-            if not self.save_snippets(self.snippets):
-                # Nothing reached disk, so memory goes back too; the draft
-                # stays in the editor for another try.
-                if previous is EDITOR_MISSING:
-                    self.snippets.pop(trigger, None)
-                else:
-                    self.snippets[trigger] = previous
-                if previous_shadow is EDITOR_MISSING:
-                    self.shadowed_static_snippets.pop(trigger, None)
-                else:
-                    self.shadowed_static_snippets[trigger] = previous_shadow
+            if not self.save_static_snippet(trigger, value):
+                # The draft stays in the editor for another try.
                 ui_widgets.alert(
                     root, _("Erro ao salvar"),
                     _("Não foi possível gravar snippets.json, então nada foi salvo. O rascunho "
@@ -6063,7 +6110,6 @@ class Sniptype:
                     tone="danger",
                 )
                 return False
-            self.refresh_runtime_indexes()
             session.mark_saved(trigger, trigger, value, copy.deepcopy(stored_value(trigger)))
             header.notice(None)
             self.receipt(N_("Salvo às {time}"), trigger, key=f"save-static:{trigger}")
@@ -8729,6 +8775,9 @@ class Sniptype:
 
     def _finish_quit(self, icon):
         self.enabled = False
+        process = getattr(self, "_manager_process", None)
+        if process is not None:
+            process.close()
         if self.listener:
             self.listener.stop()
         self.gui.stop()

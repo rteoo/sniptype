@@ -15,3 +15,6 @@ source/tests/tmp/
 *.DS_Store
 .claude/settings.local.json
 private-history-backup-*.bundle
+ui/node_modules/
+ui/src-tauri/target/
+ui/src-tauri/gen/
