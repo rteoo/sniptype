@@ -9,7 +9,8 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   type AppInfo, type Backup, type BackupPreview, BridgeError, type ChangeCounts, type Choice, type Confirmation,
   type CopyAnswer, type CreateTypeAnswer, type ImportCounts,
-  type DynamicRenameAnswer, type DynamicSection, type DynamicToggleAnswer, type Group,
+  type DynamicRenameAnswer, type DynamicSection, type DynamicToggleAnswer, type FormFieldDef, type FormInfo,
+  type FormSaveAnswer, type Group, type Preview,
   type GroupForm, type Groups, type GroupSaveAnswer, type Library, type ListFilter, type MappingEntry,
   type MappingItem, type MappingSaveAnswer, type MappingType, type RenameAnswer, type SaveAnswer, type SaveCheck,
   type Snippet, request, startBridge,
@@ -40,7 +41,8 @@ interface Entry { name: string; text: string; rich: boolean; effectiveTrigger: s
  * What an editor holds. `original` is the saved name it was opened from (null
  * for a new one); `type` is the mapping type a Mapeamentos draft belongs to.
  * `favorite`, `groupId` and `effectiveTrigger` describe the saved item and
- * change at once, never as part of the draft.
+ * change at once, never as part of the draft. `formFrom` names the mapping
+ * item a Duplicar copy came from, whose form the first save carries over.
  */
 interface Draft {
   type: string | null;
@@ -53,6 +55,7 @@ interface Draft {
   favorite: boolean;
   groupId: string | null;
   effectiveTrigger: string;
+  formFrom?: string | null;
 }
 
 interface Receipt { text: string; undo?: () => Promise<void> }
@@ -145,6 +148,7 @@ const sources: Record<Kind, Source> = {
     save: async (draft, confirmed) => {
       const answer = await request<MappingSaveAnswer>("mapping.save", {
         type: draft.type, name: draft.name, text: draft.text, original: draft.original, confirmed,
+        formFrom: draft.formFrom ?? null,
       });
       return answer.status === "saved" ? { status: "saved", name: answer.name } : answer;
     },
@@ -534,7 +538,9 @@ async function save(kind: Kind, confirmed: SaveCheck[] = []): Promise<boolean> {
     ]);
     return choice === "ok" ? save(kind, [...confirmed, answer.check]) : false;
   }
-  Object.assign(draft, { original: answer.name, name: answer.name, savedName: answer.name, savedText: draft.text });
+  Object.assign(draft, {
+    original: answer.name, name: answer.name, savedName: answer.name, savedText: draft.text, formFrom: null,
+  });
   const shown = kind === "textos" ? answer.name : t("{name} em {type}", { name: answer.name, type: typeLabel(draft.type) });
   showReceipt(kind, { text: t("Salvo às {time} · {name}", { time: clock(), name: shown }) });
   // Saving under another name makes it another item, with that item's metadata.
@@ -614,8 +620,8 @@ async function duplicateCurrent(kind: Kind): Promise<void> {
   const source = collection.draft;
   if (!source?.original) return;
   if (kind === "mapeamentos") {
-    // A mapping copy is a new draft of the same type; it is saved under the identifier given to it.
-    collection.draft = newDraft(source.type, "", source.savedText);
+    // A mapping copy is a new draft of the same type, saved under the identifier given to it, form included.
+    collection.draft = { ...newDraft(source.type, "", source.savedText), formFrom: source.original };
     renderList();
     renderDetail();
     document.getElementById("name")?.focus();
@@ -1222,6 +1228,7 @@ function renderDetail(): void {
       }, t("Duplicar")) : null,
       draft.original && textos ? h("button", { type: "button", title: "F2", onclick: () => void renameCurrent() },
         t("Renomear")) : null,
+      h("button", { type: "button", onclick: () => void showPreview(kind) }, t("Prévia")),
       draft.original ? h("button", { type: "button", class: "danger", title: "Delete", onclick: () => void deleteCurrent(kind) },
         t("Excluir")) : null,
       refs.saveState,
@@ -1276,8 +1283,229 @@ function renderMeta(): void {
   host.replaceChildren(...(group ? [group] : []), h("button", {
     type: "button", class: "el-button", "aria-pressed": String(draft.favorite), disabled: locked, title,
     onclick: () => void setFavorite(kind, !draft.favorite),
-  }, icon("favorite"), t("Favorito")));
+  }, icon("favorite"), t("Favorito")), h("button", {
+    type: "button", class: "el-button", onclick: () => void editForm(kind),
+  }, t("Formulário…")));
   updateSaveState();
+}
+
+// ---------------------------------------------------------------------------
+// Formulário: the fields a snippet asks for when it expands. Prévia: what it types.
+
+/** The saved item a form or a preview is about, as the bridge names it. */
+function formTarget(kind: Kind, draft: Draft): Record<string, unknown> {
+  return kind === "mapeamentos" ? { name: draft.original, type: draft.type } : { name: draft.original };
+}
+
+/** Only the keys a field of `field.type` keeps, as the classic editor stores them. */
+function storedField(field: FormFieldDef): FormFieldDef {
+  const base: FormFieldDef = { name: field.name.trim(), type: field.type, default: field.default };
+  if (field.label?.trim()) base.label = field.label.trim();
+  if (field.type === "optional") return { ...base, default: field.default === true, content: field.content ?? "" };
+  const text = typeof field.default === "string" ? field.default : "";
+  if (field.type === "choice") return { ...base, default: text, options: (field.options ?? []).filter((o) => o !== "") };
+  if (field.type === "date") return { ...base, default: text, output_format: field.output_format ?? "" };
+  return { ...base, default: text };
+}
+
+/** A field switched to `type` gets that type's starting values where it has none. */
+function retype(field: FormFieldDef, type: string, dateFormat: string): void {
+  field.type = type;
+  if (type === "optional") {
+    field.default = field.default === true;
+    field.content ??= "";
+  } else {
+    if (typeof field.default !== "string") field.default = "";
+    if (type === "choice" && !field.options?.length) field.options = [t("Opção 1")];
+    if (type === "date") {
+      field.output_format ||= dateFormat;
+      field.default ||= "today";
+    }
+  }
+}
+
+async function editForm(kind: Kind): Promise<void> {
+  const draft = state.collections[kind].draft;
+  if (!draft?.original) return;
+  let info: FormInfo;
+  try {
+    info = await request<FormInfo>("form.get", formTarget(kind, draft));
+  } catch (error) {
+    await alertError(t("Formulário"), error);
+    return;
+  }
+  const fields: FormFieldDef[] = info.fields.map((field) => ({ ...field, options: field.options ? [...field.options] : undefined }));
+  let selected = fields.length ? 0 : -1;
+  const list = h("div", { class: "field-list", role: "listbox", "aria-label": t("Campos do formulário") });
+  const editor = h("div", { class: "field-editor" });
+  const error = h("p", { class: "error", role: "alert" });
+  const typeLabel = (type: string) => info.types.find((choice) => choice.value === type)?.label ?? type;
+
+  const renderList = () => {
+    list.replaceChildren(...(fields.length ? fields.map((field, index) => h("button", {
+      type: "button", role: "option", "aria-selected": String(index === selected),
+      onclick: () => {
+        selected = index;
+        renderList();
+        renderEditor();
+      },
+    }, h("span", { class: "mono" }, field.name || t("(sem nome)")), h("span", { class: "muted" }, typeLabel(field.type))))
+      : [h("p", { class: "muted" }, t("Nenhum campo. Use Adicionar."))]));
+  };
+
+  const input = (label: string, value: string, set: (value: string) => void, extra: Record<string, unknown> = {}) =>
+    h("label", { class: "dialog-field" }, h("span", {}, label), h("input", {
+      class: extra.mono ? "field mono" : "field", value, autocomplete: "off", spellcheck: "false",
+      oninput: (event: Event) => set((event.target as HTMLInputElement).value),
+    }), extra.hint ? h("span", { class: "hint" }, String(extra.hint)) : null);
+
+  const renderEditor = () => {
+    const field = fields[selected];
+    if (!field) {
+      editor.replaceChildren();
+      return;
+    }
+    const typeSpecific: HTMLElement[] = [];
+    if (field.type === "choice") {
+      typeSpecific.push(h("label", { class: "dialog-field" }, h("span", {}, t("Opções (uma por linha)")),
+        h("textarea", {
+          class: "field", rows: 4, spellcheck: "false", value: (field.options ?? []).join("\n"),
+          oninput: (event: Event) => { field.options = (event.target as HTMLTextAreaElement).value.split("\n"); },
+        })));
+    } else if (field.type === "date") {
+      typeSpecific.push(input(t("Formato da data"), field.output_format ?? "", (value) => { field.output_format = value; },
+        { mono: true, hint: t("Como a data entra no texto, por exemplo %d/%m/%Y.") }));
+    } else if (field.type === "optional") {
+      typeSpecific.push(input(t("Conteúdo quando selecionado"), field.content ?? "", (value) => { field.content = value; }));
+    }
+    editor.replaceChildren(
+      input(t("Nome"), field.name, (value) => {
+        field.name = value;
+        renderList();
+      }, { mono: true, hint: t("O %%nome%% que o texto usa.") }),
+      input(t("Rótulo"), field.label ?? "", (value) => { field.label = value; }, { hint: t("O que o formulário mostra; vazio usa o nome.") }),
+      h("label", { class: "dialog-field" }, h("span", {}, t("Tipo")), h("select", {
+        class: "field",
+        onchange: (event: Event) => {
+          retype(field, (event.target as HTMLSelectElement).value, info.dateFormat);
+          renderList();
+          renderEditor();
+        },
+      }, ...info.types.map((choice) => h("option", { value: choice.value, selected: choice.value === field.type }, choice.label)))),
+      field.type === "optional"
+        ? h("div", { class: "dialog-field" }, h("label", { class: "el-choice" }, h("input", {
+          type: "checkbox", role: "switch", class: "el-switch", checked: field.default === true,
+          onchange: (event: Event) => { field.default = (event.target as HTMLInputElement).checked; },
+        }), h("span", {}, t("Selecionado por padrão"))))
+        : input(t("Valor padrão"), String(field.default ?? ""), (value) => { field.default = value; },
+          field.type === "date" ? { hint: t("today, ou uma data como 31/12/2026.") } : {}),
+      ...typeSpecific,
+    );
+  };
+
+  const move = (delta: number) => {
+    const target = selected + delta;
+    if (selected < 0 || target < 0 || target >= fields.length) return;
+    [fields[selected], fields[target]] = [fields[target], fields[selected]];
+    selected = target;
+    renderList();
+    renderEditor();
+  };
+
+  let saved = false;
+  const submit = h("button", { type: "submit", class: "primary", disabled: info.readOnly }, t("Salvar"));
+  const dialog = h("dialog", { class: "wide", "aria-labelledby": "dialog-title" },
+    h("form", {
+      method: "dialog",
+      onsubmit: async (event: Event) => {
+        event.preventDefault();
+        submit.disabled = true;
+        let answer: FormSaveAnswer;
+        try {
+          answer = await request<FormSaveAnswer>("form.save", { ...formTarget(kind, draft), fields: fields.map(storedField) });
+        } catch (failure) {
+          error.textContent = errorText(failure);
+          submit.disabled = false;
+          return;
+        }
+        submit.disabled = false;
+        if (answer.status === "invalid") {
+          error.textContent = answer.message;
+          if (answer.index !== null && answer.index < fields.length) {
+            selected = answer.index;
+            renderList();
+            renderEditor();
+          }
+          return;
+        }
+        saved = true;
+        dialog.close();
+      },
+    },
+    h("h2", { id: "dialog-title" }, t("Formulário — {name}", { name: draft.original })),
+    h("p", { class: "muted" }, info.variables.length
+      ? t("Campos que o texto pede: {names}", { names: info.variables.map((name) => `%%${name}%%`).join(", ") })
+      : t("O texto não pede campos de formulário.")),
+    info.readOnly ? h("p", { class: "muted" }, readOnlyMessage()) : null,
+    h("div", { class: "form-editor" },
+      h("div", { class: "field-column" }, list,
+        h("div", { class: "field-actions" },
+          h("button", {
+            type: "button", class: "el-button", onclick: () => {
+              fields.push({ name: "", type: "text", default: "" });
+              selected = fields.length - 1;
+              renderList();
+              renderEditor();
+              editor.querySelector("input")?.focus();
+            },
+          }, icon("plus"), t("Adicionar")),
+          h("button", {
+            type: "button", class: "el-button danger", onclick: () => {
+              if (selected < 0) return;
+              fields.splice(selected, 1);
+              selected = Math.min(selected, fields.length - 1);
+              renderList();
+              renderEditor();
+            },
+          }, t("Remover")),
+          h("button", { type: "button", class: "el-button", onclick: () => move(-1) }, t("Mover para cima")),
+          h("button", { type: "button", class: "el-button", onclick: () => move(1) }, t("Mover para baixo")),
+        )),
+      editor),
+    error,
+    h("menu", {}, submit, h("button", { type: "button", onclick: () => dialog.close() }, t("Cancelar"))),
+    ),
+  );
+  renderList();
+  renderEditor();
+  await new Promise<void>((resolve) => {
+    dialog.addEventListener("close", () => resolve());
+    openDialog(dialog, list.querySelector("button") ?? submit);
+  });
+  if (saved) showReceipt(kind, { text: t("Formulário salvo às {time} · {name}", { time: clock(), name: draft.original }) });
+}
+
+/** Prévia: the editor's text as expansion would type it, fields at their defaults. */
+async function showPreview(kind: Kind): Promise<void> {
+  const draft = state.collections[kind].draft;
+  if (!draft) return;
+  // A formatted item is read-only here, so its saved value is what shows.
+  const params = { ...(draft.original ? formTarget(kind, draft) : kind === "mapeamentos" ? { type: draft.type } : {}),
+    ...(draft.rich ? {} : { text: draft.text }) };
+  let preview: Preview;
+  try {
+    preview = await request<Preview>("preview.get", params);
+  } catch (error) {
+    await alertError(t("Prévia"), error);
+    return;
+  }
+  const dialog = h("dialog", { class: "wide", "aria-labelledby": "dialog-title" },
+    h("h2", { id: "dialog-title" }, draft.original ? t("Prévia — {name}", { name: draft.original }) : t("Prévia")),
+    h("pre", { class: "preview-text", tabindex: "0" }, preview.text || " "),
+    preview.status ? h("p", { class: "muted" }, preview.status) : null,
+    h("menu", {}, h("button", { type: "button", class: "primary", onclick: () => dialog.close() }, t("Fechar"))),
+  );
+  openDialog(dialog, dialog.querySelector("button"));
 }
 
 // ---------------------------------------------------------------------------
@@ -1695,7 +1923,7 @@ function settingsPage(): HTMLElement {
         h("button", { type: "button", class: "el-button", onclick: () => void request("app.openDataFolder") },
           t("Abrir pasta"))),
       card("classic", t("Gerenciador clássico"),
-        t("Formulários e formatação continuam no gerenciador clássico por enquanto."),
+        t("A formatação de texto continua no gerenciador clássico por enquanto."),
         h("button", { type: "button", class: "el-button", onclick: () => void request("app.openClassicManager") },
           t("Abrir"))),
     ),

@@ -27,6 +27,10 @@ import manager_actions
 import time_format
 import ui_theme
 from dynamic_registry import effective_trigger, reference_entries_by_category, validate_rename
+from form_editor_dialog import FormEditorController, type_label
+from form_support import DEFAULT_DATE_FORMAT, FIELD_TYPES, FormValidationError, compile_form
+from preview_dialog import build_preview_model
+from preview_support import resolve_preview
 from editor_session import (
     mapping_draft_problem,
     mapping_type_key,
@@ -127,6 +131,9 @@ class ManagerBridge:
             "dynamics.list": self.dynamics_list,
             "dynamic.setEnabled": self.dynamic_set_enabled,
             "dynamic.rename": self.dynamic_rename,
+            "form.get": self.form_get,
+            "form.save": self.form_save,
+            "preview.get": self.preview_get,
             "mapping.types": self.mapping_types,
             "mapping.list": self.mapping_list,
             "mapping.get": self.mapping_get,
@@ -580,8 +587,12 @@ class ManagerBridge:
                 "rich": is_rich_text_payload(value), "effectiveTrigger": info["prefix"] + name,
                 "favorite": bool(row and row.favorite)}
 
-    def mapping_save(self, type, name, text, original=None, confirmed=()):
-        """Save a plain-text mapping item; answers like :meth:`snippet_save`."""
+    def mapping_save(self, type, name, text, original=None, confirmed=(), formFrom=None):
+        """Save a plain-text mapping item; answers like :meth:`snippet_save`.
+
+        ``formFrom`` names the item of the same type a Duplicar copy was made
+        from; its form comes along on this first save.
+        """
         info = self._type(type)
         name = name.strip() if isinstance(name, str) else ""
         if not isinstance(text, str):
@@ -601,11 +612,30 @@ class ManagerBridge:
                              "editor.").format(name=name, type=info["label"]),
                 "action": _("Substituir"),
             }
-        if existing != text and not self.app.save_mapping_item(type, name, text):
+        metadata = self._copied_mapping_form(type, name, text, formFrom) if formFrom else None
+        if (existing != text or metadata is not None) and not self.app.save_mapping_item(
+                type, name, text, metadata=metadata):
             raise BridgeError("save_failed", _(
                 "Não foi possível gravar snippets.json, então nada foi salvo. O rascunho continua no "
                 "editor; verifique os logs e tente de novo."))
         return {"status": "saved", "type": type, "name": name}
+
+    def _copied_mapping_form(self, type, name, text, source):
+        """The metadata that gives ``name`` the form of ``source``, or None when it has none."""
+        app = self.app
+        form = app._mapping_form_metadata(type, source)
+        if form is None:
+            return None
+        mapping = app.snippets.get(type)
+        proposed = {**app.snippets, type: {**(mapping if isinstance(mapping, dict) else {}), name: text}}
+        try:
+            return manager_actions.set_mapping_form(
+                proposed, app.library_metadata, type, name, form,
+                dynamic_triggers=app._manager_dynamic_triggers(),
+            ).metadata
+        except (KeyError, ValueError, MetadataReadOnlyError) as error:
+            raise BridgeError("form", _("O formulário copiado não serve para este texto: {error}").format(
+                error=error)) from error
 
     def mapping_delete(self, type, name):
         """Delete one mapping item; the answer carries the token Desfazer sends back."""
@@ -672,6 +702,90 @@ class ManagerBridge:
             raise BridgeError("save_failed", _("Não foi possível gravar snippets.json. Verifique os logs; o tipo "
                                                "não foi excluído."))
         return {"type": type}
+
+    # -- forms and preview -------------------------------------------------
+
+    def _form_target(self, name, type=None):
+        """``(stored value, saved form or None)`` of a static snippet, or of a mapping item when ``type`` is given."""
+        app = self.app
+        if type:
+            self._type(type)
+            value = self._mapping_value(type, name)
+            if value is None:
+                raise BridgeError("missing", _("O item {name} não existe mais.").format(name=name))
+            return value, app._mapping_form_metadata(type, name)
+        value = self._stored(name)
+        if value is None:
+            raise BridgeError("missing", _("O snippet {name} não existe mais.").format(name=name))
+        return value, app._static_form_metadata(name)
+
+    def form_get(self, name, type=None):
+        """The fields the form dialog opens with.
+
+        Without a saved form, the fields are the ones expansion already asks
+        for (each ``%%variable%%`` that is not a snippet, a mapping or the
+        clipboard), as plain text fields.
+        """
+        value, form = self._form_target(name, type)
+        template = extract_plain_text(value)
+        variables = [field.name for field in compile_form(template, None, self.app.snippets).fields]
+        if form is not None:
+            fields = copy.deepcopy(form.get("fields", []))
+        else:
+            fields = [{"name": variable, "type": "text", "default": ""} for variable in variables]
+        return {
+            "saved": form is not None,
+            "fields": fields,
+            "variables": variables,
+            "types": [{"value": field_type, "label": type_label(field_type)} for field_type in FIELD_TYPES],
+            "dateFormat": DEFAULT_DATE_FORMAT,
+            "readOnly": bool(getattr(self.app.library_metadata, "read_only", False)),
+        }
+
+    def form_save(self, name, fields, type=None):
+        """Validate a form against the saved text and store it: ``saved``, or ``invalid`` with the field index."""
+        app = self.app
+        value, _form = self._form_target(name, type)
+        controller = FormEditorController(fields, app.snippets, template=extract_plain_text(value))
+        try:
+            form = controller.save()
+        except FormValidationError:
+            return {"status": "invalid", "message": controller.error, "index": controller.invalid_index}
+        if type:
+            self._commit(lambda: manager_actions.set_mapping_form(
+                app.snippets, app.library_metadata, type, name, form,
+                dynamic_triggers=app._manager_dynamic_triggers(),
+            ), mappings=True)
+        else:
+            self._commit(lambda: manager_actions.set_form(
+                app._manager_static_projection(), app.library_metadata, name, form,
+                dynamic_triggers=app._manager_dynamic_triggers(),
+            ))
+        return {"status": "saved", "count": len(form["fields"])}
+
+    def preview_get(self, name=None, type=None, text=None):
+        """What expanding would type, without the clipboard or a provider.
+
+        ``text`` is the editor's plain draft; without it the saved value is
+        previewed. The saved item's form fills its fields with their defaults;
+        a draft whose fields no longer match it is previewed without the form.
+        """
+        value, form = self._form_target(name, type) if name else (None, None)
+        notes = []
+        if text is not None:
+            if not isinstance(text, str):
+                raise BridgeError("bad_params", "text must be a string")
+            value = text
+        try:
+            result = resolve_preview(value, self.app.snippets, form)
+        except FormValidationError as error:
+            if text is None:
+                raise BridgeError("form", _("O formulário não corresponde ao texto: {error}").format(
+                    error=error)) from error
+            result = resolve_preview(value, self.app.snippets, None)
+            notes.append(_("Os campos do rascunho não batem com o formulário salvo; eles aparecem vazios."))
+        model = build_preview_model(result)
+        return {"text": model.text, "status": "\n".join(note for note in (model.status_text, *notes) if note)}
 
     # -- dynamic snippets --------------------------------------------------
 
