@@ -35,8 +35,11 @@ export interface Library { items: LibraryItem[]; total: number }
 
 export type ListFilter = "all" | "favorites" | "recent" | "disabled" | "problems";
 
+export interface StyleSpan { tag: "bold" | "italic" | "underline" | "code" | "strike"; start: number; end: number }
+
 export interface Snippet {
-  trigger: string; text: string; rich: boolean; effectiveTrigger: string; favorite: boolean; groupId: string | null;
+  trigger: string; text: string; rich: boolean; spans: StyleSpan[]; effectiveTrigger: string; favorite: boolean;
+  groupId: string | null;
 }
 
 export type SaveCheck = "replace" | "warnings" | "shadow";
@@ -91,7 +94,8 @@ export interface MappingType { key: string; label: string; prefix: string; built
 export interface MappingItem { name: string; effectiveTrigger: string; favorite: boolean; rich: boolean; preview: string }
 
 export interface MappingEntry {
-  type: string; name: string; text: string; rich: boolean; effectiveTrigger: string; favorite: boolean;
+  type: string; name: string; text: string; rich: boolean; spans: StyleSpan[]; effectiveTrigger: string;
+  favorite: boolean;
 }
 
 export type MappingSaveAnswer = { status: "saved"; type: string; name: string } | Confirmation;

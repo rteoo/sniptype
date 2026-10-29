@@ -188,9 +188,11 @@ Formulário (a field list with Adicionar, Remover and Mover beside the
 selected field's Nome, Rótulo, Tipo and its type's settings, opening with the
 fields the text asks for when none are saved), Prévia (the editor's text with
 fields at their defaults, references resolved, and the clipboard and dynamic
-snippets shown as unavailable) and Configurações (language, appearance,
-density, terminator mode, data folder); text formatting still hands off to the
-Tk manager. Importar and Exportar use the
+snippets shown as unavailable), formatting in the text editor of Textos and
+Mapeamentos (Negrito, Itálico, Sublinhado, Código, Tachado and Limpar
+formatação over the selection, Ctrl+B / I / U) and Configurações (language,
+appearance, density, terminator mode, data folder). The Tk manager stays one
+click away from Configurações while this window is a preview. Importar and Exportar use the
 WebView's own system pickers, owned by the window.
 
 - **Layers.** `ui/src/styles/teo/` holds verbatim copies of the design
@@ -213,8 +215,9 @@ WebView's own system pickers, owned by the window.
   triggers in Cascadia Mono first.
 - **Persistence.** The window owns no data: every request goes through
   `source/manager_bridge.py` and the app's own save path, so the persistence
-  model above holds unchanged. Plain text never overwrites a rich-text value;
-  formatted snippets are read-only there until the editor gains formatting.
+  model above holds unchanged. The editor saves text plus style spans in the
+  same rich-text payload the classic editor writes, and a text with no styles
+  left is saved plain again.
 - **Open gates.** Narrator pass, high-contrast pass and the 1180 × 760
   minimum have not been verified for this window.
 

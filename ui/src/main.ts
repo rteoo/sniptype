@@ -17,6 +17,7 @@ import {
 } from "./bridge";
 import { h, icon } from "./dom";
 import { setLanguage, t } from "./i18n";
+import { createRichEditor, type RichEditor, type Span, type Style } from "./richtext";
 
 type Kind = "textos" | "mapeamentos";
 type Page = Kind | "dinamicos" | "backups" | "settings";
@@ -34,13 +35,14 @@ interface Item {
 }
 
 /** A saved item as the editor opens it, metadata included (the list may be filtered). */
-interface Entry { name: string; text: string; rich: boolean; effectiveTrigger: string; favorite: boolean;
-  groupId: string | null }
+interface Entry { name: string; text: string; rich: boolean; spans: Span[]; effectiveTrigger: string;
+  favorite: boolean; groupId: string | null }
 
 /**
  * What an editor holds. `original` is the saved name it was opened from (null
  * for a new one); `type` is the mapping type a Mapeamentos draft belongs to.
- * `favorite`, `groupId` and `effectiveTrigger` describe the saved item and
+ * `spans` are the text's styles (`savedSpans` as JSON, to compare); `rich`
+ * says it has any. `favorite`, `groupId` and `effectiveTrigger` describe the saved item and
  * change at once, never as part of the draft. `formFrom` names the mapping
  * item a Duplicar copy came from, whose form the first save carries over.
  */
@@ -49,9 +51,11 @@ interface Draft {
   original: string | null;
   name: string;
   text: string;
+  spans: Span[];
   rich: boolean;
   savedName: string;
   savedText: string;
+  savedSpans: string;
   favorite: boolean;
   groupId: string | null;
   effectiveTrigger: string;
@@ -130,7 +134,7 @@ const sources: Record<Kind, Source> = {
     },
     save: async (draft, confirmed) => {
       const answer = await request<SaveAnswer>("snippet.save", {
-        trigger: draft.name, text: draft.text, original: draft.original, confirmed,
+        trigger: draft.name, text: draft.text, spans: draft.spans, original: draft.original, confirmed,
       });
       return answer.status === "saved" ? { status: "saved", name: answer.trigger } : answer;
     },
@@ -147,7 +151,7 @@ const sources: Record<Kind, Source> = {
     get: async (name) => ({ ...(await request<MappingEntry>("mapping.get", { type: state.type, name })), groupId: null }),
     save: async (draft, confirmed) => {
       const answer = await request<MappingSaveAnswer>("mapping.save", {
-        type: draft.type, name: draft.name, text: draft.text, original: draft.original, confirmed,
+        type: draft.type, name: draft.name, text: draft.text, spans: draft.spans, original: draft.original, confirmed,
         formFrom: draft.formFrom ?? null,
       });
       return answer.status === "saved" ? { status: "saved", name: answer.name } : answer;
@@ -436,15 +440,15 @@ async function refreshList(kind: Kind): Promise<void> {
 
 function draftFrom(entry: Entry, type: string | null): Draft {
   return {
-    type, original: entry.name, name: entry.name, text: entry.text, rich: entry.rich,
-    savedName: entry.name, savedText: entry.text,
+    type, original: entry.name, name: entry.name, text: entry.text, spans: entry.spans, rich: entry.rich,
+    savedName: entry.name, savedText: entry.text, savedSpans: JSON.stringify(entry.spans),
     favorite: entry.favorite, groupId: entry.groupId, effectiveTrigger: entry.effectiveTrigger,
   };
 }
 
-function newDraft(type: string | null, name: string, text = ""): Draft {
+function newDraft(type: string | null, name: string, text = "", spans: Span[] = []): Draft {
   return {
-    type, original: null, name, text, rich: false, savedName: name, savedText: "",
+    type, original: null, name, text, spans, rich: spans.length > 0, savedName: name, savedText: "", savedSpans: "[]",
     favorite: false, groupId: null, effectiveTrigger: name,
   };
 }
@@ -463,8 +467,9 @@ async function reloadEntry(kind: Kind): Promise<void> {
 
 function isDirty(kind: Kind): boolean {
   const draft = state.collections[kind].draft;
-  if (!draft || draft.rich) return false;
-  return draft.name.trim() !== draft.savedName || draft.text !== draft.savedText;
+  if (!draft) return false;
+  return draft.name.trim() !== draft.savedName || draft.text !== draft.savedText
+    || JSON.stringify(draft.spans) !== draft.savedSpans;
 }
 
 /** Settle an unsaved draft before it would be dropped. True when it is safe to continue. */
@@ -485,7 +490,7 @@ async function resolveDraft(kind: Kind): Promise<boolean> {
   if (choice !== "discard") return false;
   // Descartar drops the edits now, so a caller that keeps the editor (Duplicar, Renomear) shows the saved item.
   if (draft.original === null) state.collections[kind].draft = null;
-  else Object.assign(draft, { name: draft.savedName, text: draft.savedText });
+  else Object.assign(draft, { name: draft.savedName, text: draft.savedText, spans: JSON.parse(draft.savedSpans) });
   if (state.page === kind) renderDetail();
   return true;
 }
@@ -522,7 +527,7 @@ async function newItem(kind: Kind): Promise<void> {
 /** Salvar and Ctrl+S. True when nothing is left unsaved. */
 async function save(kind: Kind, confirmed: SaveCheck[] = []): Promise<boolean> {
   const draft = state.collections[kind].draft;
-  if (!draft || draft.rich || !isDirty(kind)) return true;
+  if (!draft || !isDirty(kind)) return true;
   let answer: Saved | Confirmation;
   try {
     answer = await sources[kind].save(draft, confirmed);
@@ -539,7 +544,8 @@ async function save(kind: Kind, confirmed: SaveCheck[] = []): Promise<boolean> {
     return choice === "ok" ? save(kind, [...confirmed, answer.check]) : false;
   }
   Object.assign(draft, {
-    original: answer.name, name: answer.name, savedName: answer.name, savedText: draft.text, formFrom: null,
+    original: answer.name, name: answer.name, savedName: answer.name, savedText: draft.text,
+    savedSpans: JSON.stringify(draft.spans), formFrom: null,
   });
   const shown = kind === "textos" ? answer.name : t("{name} em {type}", { name: answer.name, type: typeLabel(draft.type) });
   showReceipt(kind, { text: t("Salvo às {time} · {name}", { time: clock(), name: shown }) });
@@ -621,7 +627,8 @@ async function duplicateCurrent(kind: Kind): Promise<void> {
   if (!source?.original) return;
   if (kind === "mapeamentos") {
     // A mapping copy is a new draft of the same type, saved under the identifier given to it, form included.
-    collection.draft = { ...newDraft(source.type, "", source.savedText), formFrom: source.original };
+    collection.draft = { ...newDraft(source.type, "", source.savedText, JSON.parse(source.savedSpans)),
+      formFrom: source.original };
     renderList();
     renderDetail();
     document.getElementById("name")?.focus();
@@ -1179,6 +1186,34 @@ function updateSaveState(): void {
   document.title = isDirty("textos") || isDirty("mapeamentos") ? "• SnipType" : "SnipType";
 }
 
+/** Negrito, Itálico, Sublinhado, Código, Tachado and Limpar formatação, over the editor's selection. */
+function formatBar(editor: RichEditor, hint: HTMLElement): HTMLElement {
+  const styles: [Style, string, string, string][] = [
+    ["bold", "B", t("Negrito"), "Ctrl+B"], ["italic", "I", t("Itálico"), "Ctrl+I"],
+    ["underline", "U", t("Sublinhado"), "Ctrl+U"], ["code", "</>", t("Código"), ""],
+    ["strike", "S", t("Tachado"), ""],
+  ];
+  // The buttons never take focus from a mouse click, so the selection they act on stays put.
+  const keep = (event: Event) => event.preventDefault();
+  return h("div", { class: "format-bar", role: "toolbar", "aria-label": t("Formatação"), "aria-controls": "text" },
+    ...styles.map(([style, glyph, label, keys]) => h("button", {
+      type: "button", class: `el-button rt-${style}`, title: keys ? `${label} (${keys})` : label, "aria-label": label,
+      onmousedown: keep,
+      onclick: () => {
+        if (!editor.toggle(style)) hint.textContent = t("Selecione o texto para formatar.");
+        editor.focus();
+      },
+    }, glyph)),
+    h("button", {
+      type: "button", class: "el-button", onmousedown: keep,
+      onclick: () => {
+        editor.clear();
+        editor.focus();
+      },
+    }, t("Limpar formatação")),
+  );
+}
+
 function renderDetail(): void {
   const host = refs.detail;
   const kind = activeKind();
@@ -1203,12 +1238,12 @@ function renderDetail(): void {
   }
 
   refs.saveButton = h("button", {
-    type: "button", class: "primary", title: "Ctrl+S", hidden: draft.rich, onclick: () => void save(kind),
+    type: "button", class: "primary", title: "Ctrl+S", onclick: () => void save(kind),
   }, icon("check"), t("Salvar"));
   refs.saveState = h("span", { class: "state", role: "status" });
   refs.effective = h("span", { class: "hint", "aria-live": "polite" });
-  const onInput = (field: "name" | "text") => (event: Event) => {
-    draft[field] = (event.target as HTMLInputElement | HTMLTextAreaElement).value;
+  const onInput = (field: "name") => (event: Event) => {
+    draft[field] = (event.target as HTMLInputElement).value;
     updateSaveState();
   };
   const heading = textos
@@ -1217,15 +1252,21 @@ function renderDetail(): void {
     : t("Novo item em {type}", { type: typeLabel(draft.type) });
 
   refs.meta = draft.original ? h("div", { class: "meta-row" }) : null;
-  // A mapping copy starts as plain text, so formatting would be lost on the way.
-  const copyBlocked = !textos && draft.rich;
+  const formatHint = h("span", { class: "hint", "aria-live": "polite" });
+  const editor = createRichEditor({
+    id: "text", label: textos ? t("Texto") : t("Valor"), value: { text: draft.text, spans: draft.spans },
+    onChange: () => {
+      ({ text: draft.text, spans: draft.spans } = editor.value());
+      draft.rich = draft.spans.length > 0;
+      formatHint.textContent = "";
+      updateSaveState();
+    },
+  });
   host.replaceChildren(
     h("div", { class: "commands" },
       refs.saveButton,
-      draft.original ? h("button", {
-        type: "button", title: copyBlocked ? t("Itens formatados são duplicados no gerenciador clássico.") : "Ctrl+D",
-        disabled: copyBlocked, onclick: () => void duplicateCurrent(kind),
-      }, t("Duplicar")) : null,
+      draft.original ? h("button", { type: "button", title: "Ctrl+D", onclick: () => void duplicateCurrent(kind) },
+        t("Duplicar")) : null,
       draft.original && textos ? h("button", { type: "button", title: "F2", onclick: () => void renameCurrent() },
         t("Renomear")) : null,
       h("button", { type: "button", onclick: () => void showPreview(kind) }, t("Prévia")),
@@ -1236,25 +1277,20 @@ function renderDetail(): void {
     h("div", { class: "editor" },
       h("h2", {}, heading),
       refs.meta,
-      draft.rich ? h("div", { class: "el-message", role: "note" },
-        t("Este texto tem formatação. Esta janela mostra só o texto; edite a formatação no gerenciador clássico."),
-        " ",
-        h("button", { type: "button", class: "el-button quiet", onclick: () => void request("app.openClassicManager") },
-          t("Abrir gerenciador clássico")),
-      ) : null,
       h("label", {},
         h("span", {}, textos ? t("Trigger") : t("Identificador")),
         h("input", {
-          id: "name", class: "field", value: draft.name, readOnly: draft.rich, autocomplete: "off",
+          id: "name", class: "field", value: draft.name, autocomplete: "off",
           spellcheck: "false", oninput: onInput("name"),
         }),
         refs.effective,
       ),
-      h("label", { class: "grow" },
-        h("span", {}, textos ? t("Texto") : t("Valor")),
-        h("textarea", { id: "text", class: "field", value: draft.text, readOnly: draft.rich, oninput: onInput("text") }),
-        textos ? h("span", { class: "hint" }, t("Variáveis como %%clipboard-paste%% são resolvidas na expansão."))
-          : h("span", { class: "hint" }, t("O texto que entra no lugar do trigger.")),
+      h("div", { class: "grow text-field" },
+        h("span", { class: "field-label", id: "text-label" }, textos ? t("Texto") : t("Valor")),
+        formatBar(editor, formatHint),
+        editor.element,
+        h("span", { class: "hint" }, textos ? t("Variáveis como %%clipboard-paste%% são resolvidas na expansão.")
+          : t("O texto que entra no lugar do trigger."), " ", formatHint),
       ),
     ),
   );
@@ -1489,9 +1525,9 @@ async function editForm(kind: Kind): Promise<void> {
 async function showPreview(kind: Kind): Promise<void> {
   const draft = state.collections[kind].draft;
   if (!draft) return;
-  // A formatted item is read-only here, so its saved value is what shows.
+  // The editor's text, unsaved edits included; formatting does not change what is typed.
   const params = { ...(draft.original ? formTarget(kind, draft) : kind === "mapeamentos" ? { type: draft.type } : {}),
-    ...(draft.rich ? {} : { text: draft.text }) };
+    text: draft.text };
   let preview: Preview;
   try {
     preview = await request<Preview>("preview.get", params);
@@ -1923,7 +1959,7 @@ function settingsPage(): HTMLElement {
         h("button", { type: "button", class: "el-button", onclick: () => void request("app.openDataFolder") },
           t("Abrir pasta"))),
       card("classic", t("Gerenciador clássico"),
-        t("A formatação de texto continua no gerenciador clássico por enquanto."),
+        t("Tudo o que ele faz também está nesta janela. Ele continua disponível enquanto esta janela é uma prévia."),
         h("button", { type: "button", class: "el-button", onclick: () => void request("app.openClassicManager") },
           t("Abrir"))),
     ),
