@@ -648,6 +648,8 @@ EN_US = {
     "F2: identificador · Ctrl+D: duplicar\nDelete: excluir · Desfazer disponível":
     "F2: identifier · Ctrl+D: duplicate\nDelete: delete · Undo available",
     "O snippet {name} não existe mais.": "The snippet {name} no longer exists.",
+    "O item {name} não existe mais.": "The item {name} no longer exists.",
+    "O tipo {type} não existe mais.": "The type {type} no longer exists.",
     "Textos formatados ainda são editados no gerenciador clássico.":
     "Formatted texts are still edited in the classic manager.",
     "Não há exclusão para desfazer.": "There is no deletion to undo.",

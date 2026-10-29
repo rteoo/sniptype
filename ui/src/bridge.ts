@@ -36,6 +36,20 @@ export type SaveAnswer =
   | { status: "saved"; trigger: string }
   | { status: "confirm"; check: SaveCheck; title: string; message: string; action: string };
 
+export interface MappingType { key: string; label: string; prefix: string; builtin: boolean; count: number }
+
+export interface MappingItem { name: string; effectiveTrigger: string; favorite: boolean; rich: boolean; preview: string }
+
+export interface MappingEntry { type: string; name: string; text: string; rich: boolean; effectiveTrigger: string }
+
+export type MappingSaveAnswer =
+  | { status: "saved"; type: string; name: string }
+  | { status: "confirm"; check: SaveCheck; title: string; message: string; action: string };
+
+export type CreateTypeAnswer =
+  | { status: "created"; key: string }
+  | { status: "invalid"; field: "name" | "prefix"; message: string };
+
 export class BridgeError extends Error {
   constructor(readonly code: string, message: string) {
     super(message);

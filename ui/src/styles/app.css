@@ -63,6 +63,9 @@ code, .mono { font-family: var(--app-font-trigger); }
 .textos { display: grid; grid-template-columns: minmax(260px, 360px) minmax(0, 1fr); flex: 1; min-height: 0; }
 .collection { display: flex; flex-direction: column; min-height: 0; padding: 20px 12px 8px 20px; background: var(--native-list); }
 .heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.type-bar { display: flex; gap: 8px; margin: 0 8px 12px 0; }
+.type-bar select { flex: 1; min-width: 0; }
+.type-bar button { flex-shrink: 0; }
 .search { position: relative; margin-right: 8px; }
 .search .tp-i { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--native-muted); pointer-events: none; }
 .search input { padding-left: 38px; }
@@ -150,6 +153,10 @@ dialog menu { display: flex; gap: 8px; justify-content: flex-end; padding: 0; ma
 dialog menu button { min-width: 96px; border-color: var(--native-field-border); background: var(--native-content); }
 dialog menu button.primary { background: var(--color-action-primary-bg); border-color: var(--color-link); }
 dialog menu button.danger-fill { background: var(--color-danger-bg); color: var(--color-danger-fg); border-color: var(--color-danger-fg); }
+dialog .dialog-field { display: grid; gap: 6px; margin-top: 16px; font-size: var(--native-type-caption); }
+dialog .dialog-field > span:first-child { font-size: var(--native-type-body); }
+dialog .dialog-field .hint { color: var(--native-muted); }
+dialog .dialog-field .error { color: var(--color-danger-fg); min-height: 1lh; }
 
 .fatal { margin: auto; max-width: 480px; padding: 32px; display: grid; gap: 12px; }
 
