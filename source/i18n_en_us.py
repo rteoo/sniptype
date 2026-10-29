@@ -652,6 +652,7 @@ EN_US = {
     "O tipo {type} não existe mais.": "The type {type} no longer exists.",
     "O trigger efetivo {trigger} já é usado por outro snippet.": "The effective trigger {trigger} is already used by another snippet.",
     "O grupo não existe mais.": "The group no longer exists.",
+    "O snippet dinâmico {name} não existe mais.": "The dynamic snippet {name} no longer exists.",
     "Textos formatados ainda são editados no gerenciador clássico.":
     "Formatted texts are still edited in the classic manager.",
     "Não há exclusão para desfazer.": "There is no deletion to undo.",

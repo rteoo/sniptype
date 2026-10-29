@@ -7,7 +7,8 @@ import "./styles/app.css";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import {
-  type AppInfo, BridgeError, type Choice, type Confirmation, type CopyAnswer, type CreateTypeAnswer, type Group,
+  type AppInfo, BridgeError, type Choice, type Confirmation, type CopyAnswer, type CreateTypeAnswer,
+  type DynamicRenameAnswer, type DynamicSection, type DynamicToggleAnswer, type Group,
   type GroupForm, type Groups, type GroupSaveAnswer, type Library, type ListFilter, type MappingEntry,
   type MappingItem, type MappingSaveAnswer, type MappingType, type RenameAnswer, type SaveAnswer, type SaveCheck,
   type Snippet, request, startBridge,
@@ -16,7 +17,7 @@ import { h, icon } from "./dom";
 import { setLanguage, t } from "./i18n";
 
 type Kind = "textos" | "mapeamentos";
-type Page = Kind | "settings";
+type Page = Kind | "dinamicos" | "settings";
 
 /** One row of a collection: a static snippet, or an item of the selected mapping type. */
 interface Item {
@@ -93,6 +94,7 @@ const state = {
   // Textos' view: a list filter and a group ("" for every group, UNGROUPED for none).
   view: { filter: "all" as ListFilter, group: "" },
   cardStatus: {} as Record<string, { text: string; error: boolean }>,
+  dynamics: { sections: [] as DynamicSection[], query: "", receipt: "" },
 };
 
 const refs = {
@@ -162,7 +164,7 @@ function readOnlyMessage(): string {
 }
 
 function isKind(page: Page): page is Kind {
-  return page !== "settings";
+  return page === "textos" || page === "mapeamentos";
 }
 
 function activeKind(): Kind | null {
@@ -904,13 +906,15 @@ function renderAll(): void {
 
   refs.infobar = h("div", { class: "infobar", role: "region", "aria-label": t("Avisos") });
   const kind = activeKind();
-  const page = h("main", { class: "page" }, refs.infobar, kind ? collectionPage(kind) : settingsPage());
+  const page = h("main", { class: "page" }, refs.infobar,
+    kind ? collectionPage(kind) : state.page === "dinamicos" ? dynamicsPage() : settingsPage());
 
   root.replaceChildren(h("div", { class: "app" },
     h("nav", { class: "navigation", "aria-label": t("Seções") },
       h("div", { class: "brand" }, icon("document"), h("span", {}, "SnipType")),
       navButton("textos", "library", t("Textos")),
       navButton("mapeamentos", "mapping", t("Mapeamentos")),
+      navButton("dinamicos", "dynamic", t("Dinâmicos")),
       navButton("settings", "settings", t("Configurações"), "settings"),
       h("p", { class: "version" }, state.info ? `${state.info.version} · ${state.info.channel}` : ""),
     ),
@@ -923,6 +927,8 @@ function renderAll(): void {
     renderList();
     renderDetail();
     renderReceipt();
+  } else if (state.page === "dinamicos") {
+    renderDynamics();
   }
 }
 
@@ -934,6 +940,9 @@ async function showPage(page: Page): Promise<void> {
   if (isKind(page)) {
     refs.search?.focus();
     await refreshList(page).catch((error) => console.error("refresh failed", error));
+  } else if (page === "dinamicos") {
+    refs.search?.focus();
+    await refreshDynamics().catch((error) => console.error("refresh failed", error));
   }
 }
 
@@ -953,7 +962,7 @@ function collectionPage(kind: Kind): HTMLElement {
   const collection = state.collections[kind];
   const textos = kind === "textos";
   refs.search = h("input", {
-    id: "search", type: "search", class: "field", value: collection.query, autocomplete: "off", spellcheck: "false",
+    id: "search-field", type: "search", class: "field", value: collection.query, autocomplete: "off", spellcheck: "false",
     placeholder: textos ? t("Buscar por trigger ou texto") : t("Buscar por identificador ou valor"),
     "aria-label": textos ? t("Buscar textos") : t("Buscar itens"),
     oninput: (event: Event) => {
@@ -1260,6 +1269,145 @@ function renderMeta(): void {
   updateSaveState();
 }
 
+// ---------------------------------------------------------------------------
+// Dinâmicos: the built-in snippets that compute their text, on or off and renamed in place.
+
+async function refreshDynamics(): Promise<void> {
+  state.dynamics.sections = await request<DynamicSection[]>("dynamics.list");
+  if (state.page === "dinamicos") renderDynamics();
+}
+
+function dynamicsReceipt(text: string): void {
+  state.dynamics.receipt = text;
+  if (state.page === "dinamicos") renderDynamics();
+}
+
+async function setDynamicEnabled(key: string, trigger: string, enabled: boolean): Promise<void> {
+  const confirmed: SaveCheck[] = [];
+  for (;;) {
+    let answer: DynamicToggleAnswer;
+    try {
+      answer = await request<DynamicToggleAnswer>("dynamic.setEnabled", { key, enabled, confirmed });
+    } catch (error) {
+      await alertError(enabled ? t("Ativar") : t("Desativar"), error);
+      break;
+    }
+    if (answer.status === "saved") {
+      dynamicsReceipt(enabled ? t("Ativado às {time} · {name}", { time: clock(), name: trigger })
+        : t("Desativado às {time} · {name}", { time: clock(), name: trigger }));
+      break;
+    }
+    const choice = await ask(answer.title, answer.message, [
+      { id: "ok", label: answer.action, tone: "primary" }, { id: "cancel", label: t("Cancelar") },
+    ]);
+    if (choice !== "ok") break;
+    confirmed.push(answer.check);
+  }
+  // Redraw from the app either way, so a refused switch snaps back.
+  await refreshDynamics();
+}
+
+async function renameDynamic(key: string, trigger: string): Promise<void> {
+  let renamed: string | null = null;
+  await formDialog({
+    title: t("Renomear trigger"),
+    message: t("Identificador armazenado: {key}", { key }),
+    fields: [{ id: "trigger", label: t("Novo trigger de {trigger}", { trigger }), mono: true, value: trigger }],
+    action: t("Renomear"),
+    submit: async (values) => {
+      const confirmed: SaveCheck[] = [];
+      for (;;) {
+        let answer: DynamicRenameAnswer;
+        try {
+          answer = await request<DynamicRenameAnswer>("dynamic.rename", {
+            key, trigger: String(values.trigger), confirmed,
+          });
+        } catch (error) {
+          return { field: "trigger", message: errorText(error) };
+        }
+        if (answer.status === "invalid") return { field: "trigger", message: answer.message };
+        if (answer.status === "renamed") {
+          renamed = answer.trigger;
+          return null;
+        }
+        const choice = await ask(answer.title, answer.message, [
+          { id: "ok", label: answer.action, tone: "primary" }, { id: "cancel", label: t("Cancelar") },
+        ]);
+        if (choice !== "ok") return { field: "trigger", message: "" };
+        confirmed.push(answer.check);
+      }
+    },
+  });
+  if (renamed === null || renamed === trigger) return;
+  dynamicsReceipt(t("Renomeado às {time} · {name}", { time: clock(), name: renamed }));
+  await refreshDynamics();
+}
+
+const dynamicsRefs = {
+  list: null as HTMLElement | null, count: null as HTMLElement | null, receipt: null as HTMLElement | null,
+};
+
+function dynamicsPage(): HTMLElement {
+  refs.search = h("input", {
+    id: "search-field", type: "search", class: "field", value: state.dynamics.query, autocomplete: "off",
+    spellcheck: "false", placeholder: t("Buscar por trigger ou descrição"), "aria-label": t("Buscar snippets dinâmicos"),
+    oninput: (event: Event) => {
+      state.dynamics.query = (event.target as HTMLInputElement).value;
+      renderDynamics();
+    },
+  });
+  dynamicsRefs.list = h("div", { class: "dynamic-sections" });
+  dynamicsRefs.count = h("span", { class: "muted" });
+  dynamicsRefs.receipt = h("div", { class: "receipt", role: "status", "aria-live": "polite" });
+  return h("div", { class: "settings-page" },
+    h("header", {},
+      h("h1", {}, t("Snippets dinâmicos")),
+      h("p", { class: "muted" }, t("Triggers que montam o texto na hora: datas, indicadores, cotações e links do WhatsApp.")),
+    ),
+    h("div", { class: "dynamic-toolbar" },
+      h("div", { class: "search" }, icon("search"), refs.search), dynamicsRefs.count),
+    dynamicsRefs.receipt,
+    dynamicsRefs.list,
+  );
+}
+
+function renderDynamics(): void {
+  const host = dynamicsRefs.list;
+  if (!host || state.page !== "dinamicos") return;
+  const needle = fold(state.dynamics.query.trim());
+  let total = 0;
+  let shown = 0;
+  const sections = state.dynamics.sections.map((section) => {
+    const items = section.items.filter((item) => {
+      total += 1;
+      return !needle || fold([section.label, item.key, item.trigger, item.description].join(" ")).includes(needle);
+    });
+    shown += items.length;
+    if (!items.length) return null;
+    const headingId = `dynamic-${section.id}`;
+    return h("section", { class: "cards", "aria-labelledby": headingId },
+      h("h2", { id: headingId, class: "section-title" }, section.label),
+      ...items.map((item) => h("div", { class: `card dynamic${item.enabled ? "" : " off"}` },
+        h("label", { class: "el-choice" },
+          h("input", {
+            type: "checkbox", role: "switch", class: "el-switch", checked: item.enabled,
+            "aria-label": t("{trigger} ativo", { trigger: item.trigger }),
+            onchange: (event: Event) => void setDynamicEnabled(item.key, item.trigger,
+              (event.target as HTMLInputElement).checked),
+          })),
+        h("div", { class: "stack" },
+          h("code", { class: "trigger" }, item.key === item.trigger ? item.trigger : `${item.key} → ${item.trigger}`),
+          h("span", { class: "muted" }, item.description)),
+        h("button", { type: "button", class: "el-button", onclick: () => void renameDynamic(item.key, item.trigger) },
+          t("Renomear")),
+      )));
+  });
+  dynamicsRefs.count!.textContent = t("{shown} de {total}", { shown, total });
+  dynamicsRefs.receipt!.textContent = state.dynamics.receipt;
+  host.replaceChildren(...(shown ? sections.filter((section) => section !== null)
+    : [h("p", { class: "empty-list" }, t("Nenhum snippet dinâmico encontrado."))]));
+}
+
 function settingsPage(): HTMLElement {
   const info = state.info!;
   const status = (card: string) => {
@@ -1314,7 +1462,7 @@ function settingsPage(): HTMLElement {
         h("button", { type: "button", class: "el-button", onclick: () => void request("app.openDataFolder") },
           t("Abrir pasta"))),
       card("classic", t("Gerenciador clássico"),
-        t("Snippets dinâmicos, formulários e backups continuam no gerenciador clássico por enquanto."),
+        t("Formulários, formatação e backups continuam no gerenciador clássico por enquanto."),
         h("button", { type: "button", class: "el-button", onclick: () => void request("app.openClassicManager") },
           t("Abrir"))),
     ),
@@ -1328,6 +1476,12 @@ document.addEventListener("keydown", (event) => {
   if (document.querySelector("dialog[open], .menu:popover-open")) return;
   const ctrl = event.ctrlKey || event.metaKey;
   const kind = activeKind();
+  if (state.page === "dinamicos" && ctrl && event.key.toLowerCase() === "f") {
+    event.preventDefault();
+    refs.search?.focus();
+    refs.search?.select();
+    return;
+  }
   if (!kind) return;
   if (event.key === "F2" && kind === "textos") {
     event.preventDefault();
@@ -1356,7 +1510,10 @@ document.addEventListener("keydown", (event) => {
 // import): look again whenever the person comes back to it.
 window.addEventListener("focus", () => {
   const kind = activeKind();
-  void refreshInfo().then(() => kind && refreshList(kind)).catch((error) => console.error("refresh failed", error));
+  const page = state.page;
+  void refreshInfo()
+    .then(() => kind ? refreshList(kind) : page === "dinamicos" ? refreshDynamics() : undefined)
+    .catch((error) => console.error("refresh failed", error));
 });
 
 void appWindow.onCloseRequested(async (event) => {

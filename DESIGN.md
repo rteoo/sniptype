@@ -179,19 +179,22 @@ Textos (list, search, editor, delete with Desfazer, Duplicar, Renomear,
 Favorito, Grupo, the Exibir and group filters, and the labeled **Grupos** menu
 with Novo, Editar and Excluir grupo with Desfazer), Mapeamentos (a type picker
 over the same list/detail, items with Desfazer, Favorito, Duplicar, Novo tipo,
-and Excluir tipo behind the typed type name) and Configurações (language,
-appearance, density, terminator mode, data folder); everything else hands off
-to the Tk manager.
+and Excluir tipo behind the typed type name), Dinâmicos (one card per
+built-in snippet in its category section, a switch to turn it on or off,
+Renomear, and a search over trigger and description) and Configurações
+(language, appearance, density, terminator mode, data folder); everything
+else hands off to the Tk manager.
 
 - **Layers.** `ui/src/styles/teo/` holds verbatim copies of the design
   system's `native/foundations.css`, `native/elements.css`,
   `native/windows/tokens.css` and `native/windows/elements.css`; update them
   by re-copying. `ui/index.html` inlines `native/windows/assets/icons.svg`.
   `ui/src/styles/app.css` composes the window from those tokens only. The
-  family sprite has no symbol for Mapeamentos or a drop-down chevron, so
-  `ui/index.html` adds app-local `mapping` (a tag) and `chevron-down`
-  symbols drawn on the same 24 px grid, stroke and square caps; replace them
-  if the family gains its own.
+  family sprite has no symbol for Mapeamentos, Dinâmicos or a drop-down
+  chevron, so `ui/index.html` adds app-local `mapping` (a tag), `dynamic` (a
+  bolt) and `chevron-down` symbols drawn on the same 24 px grid, stroke and
+  square caps; replace them if the family gains its own. Element ids never
+  reuse a symbol id.
 - **Menus and metadata.** A drop-down is a labeled button with the chevron
   opening a popover menu (arrow keys, Escape returns focus). Favorito and
   Grupo sit under the editor's title and apply at once, like the classic

@@ -39,7 +39,7 @@ export interface Snippet {
   trigger: string; text: string; rich: boolean; effectiveTrigger: string; favorite: boolean; groupId: string | null;
 }
 
-export type SaveCheck = "replace" | "warnings";
+export type SaveCheck = "replace" | "warnings" | "shadow";
 export type Confirmation = { status: "confirm"; check: SaveCheck; title: string; message: string; action: string };
 export type SaveAnswer = { status: "saved"; trigger: string } | Confirmation;
 
@@ -61,6 +61,12 @@ export interface GroupForm {
 export type GroupSaveAnswer =
   | { status: "saved"; id: string; label: string }
   | { status: "invalid"; field: keyof GroupValues; message: string };
+
+export interface DynamicItem { key: string; trigger: string; description: string; enabled: boolean }
+export interface DynamicSection { id: string; label: string; items: DynamicItem[] }
+export type DynamicToggleAnswer = { status: "saved"; key: string; enabled: boolean } | Confirmation;
+export type DynamicRenameAnswer =
+  | { status: "renamed"; key: string; trigger: string } | { status: "invalid"; message: string } | Confirmation;
 
 export interface MappingType { key: string; label: string; prefix: string; builtin: boolean; count: number }
 

@@ -9,11 +9,15 @@ const EN_US: Record<string, string> = {
   "Ajuste a aparência, a expansão e os dados do SnipType.": "Adjust SnipType's appearance, expansion and data.",
   "Alterações não salvas": "Unsaved changes",
   "Aparência": "Appearance",
+  "Ativado às {time} · {name}": "Turned on at {time} · {name}",
+  "Ativar": "Activate",
   "Avisos": "Notices",
   "Biblioteca, backups e logs ficam nesta pasta.": "The library, backups and logs live in this folder.",
   "Buscar itens": "Search items",
   "Buscar por identificador ou valor": "Search by identifier or value",
+  "Buscar por trigger ou descrição": "Search by trigger or description",
   "Buscar por trigger ou texto": "Search by trigger or text",
+  "Buscar snippets dinâmicos": "Search dynamic snippets",
   "Buscar textos": "Search texts",
   "Cancelar": "Cancel",
   "Claro": "Light",
@@ -25,13 +29,16 @@ const EN_US: Record<string, string> = {
   "Criar tipo": "Create type",
   "Dados": "Data",
   "Densidade": "Density",
+  "Desativado às {time} · {name}": "Turned off at {time} · {name}",
   "Desativados": "Disabled",
+  "Desativar": "Deactivate",
   "Descartar": "Discard",
   "Desfazer": "Undo",
   "Desfazer exclusão": "Undo deletion",
   "Digite o prefixo {prefix} e o identificador para expandir.":
     "Type the prefix {prefix} and the identifier to expand.",
   "Digite {trigger} para expandir.": "Type {trigger} to expand.",
+  "Dinâmicos": "Dynamic",
   "Duplicado às {time} · {name}": "Duplicated at {time} · {name}",
   "Duplicar": "Duplicate",
   "Duplicar snippet": "Duplicate snippet",
@@ -60,6 +67,8 @@ const EN_US: Record<string, string> = {
   "Favoritos": "Favorites",
   "Feche esta janela e abra o gerenciador de novo pelo ícone da bandeja.":
     "Close this window and open the manager again from the tray icon.",
+  "Formulários, formatação e backups continuam no gerenciador clássico por enquanto.":
+    "Forms, formatting and backups stay in the classic manager for now.",
   "Gerenciador clássico": "Classic manager",
   "Grupo": "Group",
   "Grupo ativo": "Group enabled",
@@ -67,6 +76,7 @@ const EN_US: Record<string, string> = {
   "Grupo criado às {time} · {name}": "Group created at {time} · {name}",
   "Grupos": "Groups",
   "Identificador": "Identifier",
+  "Identificador armazenado: {key}": "Stored identifier: {key}",
   "Idioma": "Language",
   "Idioma da interface. O texto dos snippets não muda.": "Interface language. Snippet text does not change.",
   "Itens formatados são duplicados no gerenciador clássico.": "Formatted items are duplicated in the classic manager.",
@@ -75,6 +85,7 @@ const EN_US: Record<string, string> = {
   "Modo terminador": "Terminator mode",
   "Mostrar todos": "Show all",
   "Nenhum item corresponde à busca.": "No items match the search.",
+  "Nenhum snippet dinâmico encontrado.": "No dynamic snippets found.",
   "Nenhum texto ainda. Use Novo para criar o primeiro.": "No texts yet. Use New to create the first one.",
   "Nenhum texto encontrado. Ctrl+N cria um com este trigger.": "No text found. Ctrl+N creates one with this trigger.",
   "Nenhum texto nesta visualização.": "No texts in this view.",
@@ -109,6 +120,7 @@ const EN_US: Record<string, string> = {
   "Renomeado às {time} · {name}": "Renamed at {time} · {name}",
   "Renomear": "Rename",
   "Renomear snippet": "Rename snippet",
+  "Renomear trigger": "Rename trigger",
   "Restaurado às {time} · {name}": "Restored at {time} · {name}",
   "Salvar": "Save",
   "Salvar item": "Save item",
@@ -122,8 +134,7 @@ const EN_US: Record<string, string> = {
   "Seções": "Sections",
   "Siga o tema do Windows ou escolha um fixo.": "Follow the Windows theme or choose a fixed one.",
   "Sistema": "System",
-  "Snippets dinâmicos, formulários e backups continuam no gerenciador clássico por enquanto.":
-    "Dynamic snippets, forms and backups stay in the classic manager for now.",
+  "Snippets dinâmicos": "Dynamic snippets",
   "Terminador": "Terminator",
   "Texto": "Text",
   "Textos": "Texts",
@@ -135,6 +146,8 @@ const EN_US: Record<string, string> = {
   "Toque": "Touch",
   "Trigger": "Trigger",
   "Trigger da cópia de {trigger}": "Trigger for the copy of {trigger}",
+  "Triggers que montam o texto na hora: datas, indicadores, cotações e links do WhatsApp.":
+    "Triggers that build their text on the spot: dates, indicators, quotes and WhatsApp links.",
   "Um snippet dinâmico usa este trigger e tem prioridade.": "A dynamic snippet uses this trigger and takes priority.",
   "Valor": "Value",
   "Variáveis como %%clipboard-paste%% são resolvidas na expansão.":
@@ -152,6 +165,7 @@ const EN_US: Record<string, string> = {
   "{shown} de {total}": "{shown} of {total}",
   "{total} itens": "{total} items",
   "{total} textos": "{total} texts",
+  "{trigger} ativo": "{trigger} on",
 };
 
 let catalog: Record<string, string> = {};
