@@ -183,6 +183,8 @@ class ManagerBridge:
             "app.editLast": self.edit_last,
             "hotkeys.capture": self.hotkeys_capture,
             "hotkeys.save": self.hotkeys_save,
+            "hotkeys.recording": self.hotkeys_recording,
+            "window.focus": self.window_focus,
             "health.run": self.health_run,
             "health.dismiss": self.health_dismiss,
             "library.list": self.library_list,
@@ -350,6 +352,18 @@ class ManagerBridge:
         """A key pressed in a hotkey field, as stored syntax: ``binding`` None to ignore it, ``""`` to clear."""
         binding = hotkey_support.dom_hotkey(key, code, ctrl=ctrl, alt=alt, shift=shift, meta=meta)
         return {"binding": binding, "display": hotkey_support.display_hotkey(binding) if binding else ""}
+
+    def hotkeys_recording(self, active):
+        """A hotkey field took or left the focus: while it has it, the global hotkeys only record."""
+        self.app._hotkey_field_active = bool(active)
+        if active:
+            self.app.hotkey_router.reset()
+        return None
+
+    def window_focus(self, focused):
+        """The window gained or lost the input focus (it asks again for what changed meanwhile)."""
+        self.app._manager_window_focused = bool(focused)
+        return None
 
     def hotkeys_save(self, bindings):
         """Validate and save all three hotkeys at once, as the classic dialog does."""
@@ -1368,4 +1382,7 @@ class ManagerProcess:
             if raw:
                 self._answer(raw)
         self.process.wait()
+        # A closed window holds no focus and records nothing.
+        self.app._manager_window_focused = False
+        self.app._hotkey_field_active = False
         self.app.logger.info(f"Manager window closed (exit {self.process.returncode}).")

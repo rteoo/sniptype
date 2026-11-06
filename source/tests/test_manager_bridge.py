@@ -1011,6 +1011,66 @@ class DataAndNotificationsTests(unittest.TestCase):
                                       self.call("notifications.list", errorsOnly=True)["result"]])
 
 
+class HotkeyRecordingTests(unittest.TestCase):
+    """Pressing an existing hotkey while recording one records it; it does not run its action."""
+
+    def setUp(self):
+        self.app = make_real_app(self, {"hello": "Hello there"})
+        self.app.icon = None
+        self.bridge = ManagerBridge(self.app, version="9.9.9", channel="stable")
+        self.dispatched = []
+        self.app.hotkey_router = tx.HotkeyRouter({"toggle_enabled": "<ctrl>+<f8>"}, self.dispatched.append)
+
+    def call(self, method, **params):
+        response = self.bridge.handle({"id": 1, "method": method, "params": params})
+        self.assertNotIn("error", response, response)
+
+    def press_ctrl_f8(self):
+        from pynput.keyboard import Key
+        for key in (Key.ctrl_l, Key.f8):
+            self.app.on_press(key)
+        for key in (Key.f8, Key.ctrl_l):
+            self.app.on_release(key)
+
+    def test_a_focused_hotkey_field_in_the_focused_window_suspends_the_hotkeys(self):
+        self.call("window.focus", focused=True)
+        self.call("hotkeys.recording", active=True)
+        self.press_ctrl_f8()
+        self.assertEqual([], self.dispatched)
+        self.call("hotkeys.recording", active=False)
+        self.press_ctrl_f8()
+        self.assertEqual(["toggle_enabled"], self.dispatched)
+
+    def test_a_field_left_focused_behind_another_program_suspends_nothing(self):
+        self.call("hotkeys.recording", active=True)
+        self.call("window.focus", focused=False)
+        self.press_ctrl_f8()
+        self.assertEqual(["toggle_enabled"], self.dispatched)
+
+    def test_closing_the_window_clears_both_flags(self):
+        self.call("window.focus", focused=True)
+        self.call("hotkeys.recording", active=True)
+        process = mock.Mock()
+        process.stdout = iter(())
+        process.returncode = 0
+        with mock.patch("threading.Thread"):
+            manager = ManagerProcess(self.app, "m.exe", self.bridge, popen=lambda *args, **kwargs: process)
+        manager._read_requests()
+        self.assertFalse(self.app._hotkeys_suspended())
+
+    def test_the_classic_dialog_suspends_them_while_it_is_open(self):
+        seen = []
+
+        def dialog(_parent, _bindings):
+            seen.append(self.app._hotkeys_suspended())
+            return None
+
+        with mock.patch("hotkey_dialog.run_hotkey_dialog", dialog):
+            self.app._show_hotkey_settings(mock.Mock())
+        self.assertEqual([True], seen)
+        self.assertFalse(self.app._hotkeys_suspended())
+
+
 class ManagerEventPushTests(unittest.TestCase):
     """The app tells a running window when its state or its library changed."""
 

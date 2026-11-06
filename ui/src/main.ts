@@ -2459,6 +2459,9 @@ function hotkeyField(action: string, label: string, display: string): HTMLElemen
   return h("input", {
     id: `hotkey-${action}`, class: "field hotkey", readonly: true, value: display || t("Desativado"),
     "aria-label": label, "aria-describedby": "hotkeys-hint",
+    // While the field has the focus, pressing an existing hotkey records it instead of running it.
+    onfocus: () => void request("hotkeys.recording", { active: true }).catch(() => undefined),
+    onblur: () => void request("hotkeys.recording", { active: false }).catch(() => undefined),
     onkeydown: (event: KeyboardEvent) => {
       if (event.key === "Tab" || (event.key === "Escape" && !event.ctrlKey && !event.altKey && !event.metaKey)) {
         if (event.key === "Escape") (event.target as HTMLElement).blur();
@@ -2547,8 +2550,10 @@ document.addEventListener("keydown", (event) => {
 // The library may change behind this window (a tray reload, a restore, an
 // import): look again whenever the person comes back to it.
 window.addEventListener("focus", () => {
+  void request("window.focus", { focused: true }).catch(() => undefined);
   void refreshVisible().catch((error) => console.error("refresh failed", error));
 });
+window.addEventListener("blur", () => void request("window.focus", { focused: false }).catch(() => undefined));
 
 void appWindow.onCloseRequested(async (event) => {
   const dirty = (["textos", "mapeamentos"] as Kind[]).filter(isDirty);
@@ -2802,6 +2807,8 @@ async function main(): Promise<void> {
   });
   window.clearTimeout(showAnyway);
   await appWindow.show();
+  // A window that opens focused may never fire "focus": say where the focus is now.
+  void request("window.focus", { focused: document.hasFocus() }).catch(() => undefined);
   // Maximized only once shown: a hidden window maximized first restores to its default place.
   if (maximize) await appWindow.maximize();
   void appWindow.onMoved(scheduleWindowSave);
