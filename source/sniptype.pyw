@@ -2154,7 +2154,10 @@ class Sniptype:
         with self._notification_lock:
             icon = self.icon
         in_window = kind == "status" and self._manager_visible
-        if not icon and not in_window:
+        # The Tauri window takes routine status while it has the input focus, as the Tk one
+        # does: the person is looking at it, so a toast would only repeat it.
+        in_tauri = kind == "status" and not in_window and self._tauri_window_focused()
+        if not icon and not in_window and not in_tauri:
             return False
 
         text = truncate_notification_text(message)
@@ -2170,7 +2173,7 @@ class Sniptype:
         with self._notification_lock:
             # A receipt for what the person just did replaces the line, so it
             # needs no cooldown; anything that can still become a toast keeps it.
-            if key and not (in_window and in_manager):
+            if key and not ((in_window or in_tauri) and in_manager):
                 now = time.time()
                 last_sent = self.notification_timestamps.get(key, 0)
                 if (now - last_sent) < cooldown_seconds:
@@ -2183,6 +2186,9 @@ class Sniptype:
 
         save_notification_history(self.notification_history_file, history_snapshot)
 
+        if in_tauri:
+            self._push_manager_event("receipt", text=text)
+            return True
         if in_window:
             # The window is Tk's: the receipt is drawn on the GUI thread, which
             # also sees whether the person is looking at it.
@@ -2939,16 +2945,22 @@ class Sniptype:
                 return False
             return True
 
-    def _push_manager_event(self, name):
-        """Tell a running Tauri window that ``name`` changed: ``state`` or ``library``. Any thread.
+    def _push_manager_event(self, name, **data):
+        """Tell a running Tauri window that ``name`` changed: ``state``, ``library`` or ``receipt``. Any thread.
 
         ``state`` covers expansion, health and the last expansion; ``library``
-        means the library on disk was replaced or read again. The window asks
-        for what it needs; without one this does nothing.
+        means the library on disk was replaced or read again; the window asks
+        for what it needs. ``receipt`` carries its ``text`` for the status
+        line. Without a window this does nothing.
         """
         process = getattr(self, "_manager_process", None)
         if process is not None and process.alive:
-            process.send({"event": name})
+            process.send({"event": name, **data})
+
+    def _tauri_window_focused(self):
+        """True while the Tauri manager runs and has the input focus."""
+        process = getattr(self, "_manager_process", None)
+        return bool(getattr(self, "_manager_window_focused", False) and process is not None and process.alive)
 
     def _manager_rows(self):
         """Return the immutable local projection used by manager navigation."""
