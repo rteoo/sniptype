@@ -8077,23 +8077,22 @@ class Sniptype:
 
     def create_icon_image(self):
         """The tray icon drawn from scratch, for a build without ``sniptype.ico``."""
+        # The small mark of sniptype-icon-small.svg: navy tile and rim, cream
+        # text cursor, copper trigger dot.
         size = 64
-        ring_color = (38, 92, 255, 255)
-        accent_color = (27, 43, 65, 255)
-        mark_color = (255, 255, 255, 255)
+        tile_color = (38, 60, 86, 255)
+        rim_color = (95, 122, 156, 255)
+        ink_color = (242, 239, 233, 255)
+        dot_color = (230, 160, 90, 255)
 
         image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
         dc = ImageDraw.Draw(image)
 
-        # Outer rounded tile for better legibility at small tray sizes.
-        dc.rounded_rectangle((8, 8, 56, 56), radius=16, fill=ring_color)
-        dc.rounded_rectangle((13, 13, 51, 51), radius=12, fill=accent_color)
-
-        # Stylized expansion mark: a stem plus three offset rails.
-        dc.rounded_rectangle((20, 17, 27, 47), radius=4, fill=mark_color)
-        dc.rounded_rectangle((29, 17, 44, 24), radius=4, fill=mark_color)
-        dc.rounded_rectangle((29, 29, 44, 36), radius=4, fill=mark_color)
-        dc.rounded_rectangle((29, 41, 40, 48), radius=4, fill=mark_color)
+        dc.rounded_rectangle((0, 0, 63, 63), radius=14, fill=tile_color, outline=rim_color, width=2)
+        dc.rounded_rectangle((35, 12, 41, 51), radius=3, fill=ink_color)
+        dc.rounded_rectangle((28, 11, 48, 17), radius=3, fill=ink_color)
+        dc.rounded_rectangle((28, 46, 48, 52), radius=3, fill=ink_color)
+        dc.ellipse((10, 13, 26, 29), fill=dot_color, outline=tile_color, width=2)
 
         return image
 
