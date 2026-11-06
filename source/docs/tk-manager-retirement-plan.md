@@ -131,7 +131,7 @@ packaged build:
 |---|---|---|
 | 1–2 expansion state, health actions, push events | rteoo/sniptype#63 | in review |
 | 3 draft conflicts and the stale-save guard | rteoo/sniptype#64 | in review |
-| 4 Inserir variável | rteoo/sniptype#62 (another session; also `%%` completion and new tokens) | in review |
+| 4 Inserir variável | rteoo/sniptype#62, with #65 (another session; also `%%` completion and new tokens) | merged |
 | 5 hotkeys in Configurações | rteoo/sniptype#66 | in review |
 | 6 keyboard workflow | rteoo/sniptype#67 | in review |
 | 7 window state | rteoo/sniptype#68 | in review |
