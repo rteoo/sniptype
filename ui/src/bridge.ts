@@ -82,6 +82,10 @@ export type FormSaveAnswer =
   | { status: "saved"; count: number } | { status: "invalid"; message: string; index: number | null };
 export interface Preview { text: string; status: string }
 
+/** What `%%name%%` can reference, by the name the app resolves. */
+export interface Variable { name: string; detail: string }
+export interface Variables { snippets: Variable[]; dynamics: Variable[]; mappings: Variable[] }
+
 export interface ChangeCounts { new: number; overwritten: number; removed: number }
 export interface Backup {
   name: string; when: string; texts: number | null; lists: number | null; size: number; empty: boolean;

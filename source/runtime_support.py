@@ -373,6 +373,27 @@ class TextInserter:
                 "Não foi possível restaurar a área de transferência anterior."
             )
 
+    def move_caret_left(self, count):
+        """Move the caret back ``count`` characters; False when Windows refused.
+
+        Sent after the paste and the clipboard restore, so the target has
+        already applied the paste these keys follow. On Windows it is one
+        tagged batch, which the listener ignores.
+        """
+        if count <= 0:
+            return True
+        if self.batch_keyboard is not None:
+            if not self.batch_keyboard.caret_left(count):
+                self.logger.warning("Windows bloqueou o posicionamento do cursor.")
+                return False
+            return True
+        from pynput.keyboard import Key
+
+        for _ in range(count):
+            self.keyboard_controller.press(Key.left)
+            self.keyboard_controller.release(Key.left)
+        return True
+
     def _send_paste_shortcut(self):
         """Send the paste chord; False when Windows rejected the batch.
 

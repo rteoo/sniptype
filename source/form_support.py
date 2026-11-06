@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 import re
 
+from builtin_tokens import builtin_kind
 from i18n import _
 from snippet_utils import get_dynamic_prefixes
 
@@ -78,6 +79,8 @@ def _variable_names(template):
 def _variable_kind(name, snippets):
     if name == "clipboard-paste":
         return "clipboard"
+    if builtin_kind(name) is not None:
+        return "builtin"
     if name in snippets:
         return "reference"
     for prefix, mapping_key in get_dynamic_prefixes(snippets).items():
