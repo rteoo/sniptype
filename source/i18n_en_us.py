@@ -300,6 +300,11 @@ EN_US = {
     "Informe um trigger.": "Enter a trigger.",
     "Triggers com '_' são reservados.": "Triggers starting with '_' are reserved.",
     "Informe um valor para o snippet.": "Enter a value for the snippet.",
+    # builtin_tokens: condition blocks
+    "Condição desconhecida. Use morning, afternoon, night, weekday, weekend ou mon, tue, wed, thu, fri, sat, sun.": "Unknown condition. Use morning, afternoon, night, weekday, weekend or mon, tue, wed, thu, fri, sat, sun.",
+    "%%_elif%%, %%_else%% ou %%_endif%% sem um %%_if%% antes.": "%%_elif%%, %%_else%% or %%_endif%% without an %%_if%% before it.",
+    "%%_elif%% ou %%_else%% depois do %%_else%% da mesma condição.": "%%_elif%% or %%_else%% after the %%_else%% of the same condition.",
+    "Falta um %%_endif%% para fechar a condição.": "An %%_endif%% is missing to close the condition.",
     "Erro ao salvar": "Save failed",
     "Selecione um snippet.": "Select a snippet.",
     "'{trigger}' é um snippet dinâmico. Gerencie-o em Ações dinâmicas.": "'{trigger}' is a dynamic snippet. Manage it in Dynamic actions.",

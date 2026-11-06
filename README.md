@@ -146,6 +146,22 @@ For example, `Hello, %%name%%` asks for `name` and inserts the completed text.
 Variables also work in rich-text snippets; style spans are normalized after
 substitution.
 
+A condition block keeps only the text whose condition holds when the snippet
+expands:
+
+```text
+%%_if:morning%%Bom dia, %%nome%%
+%%_elif:afternoon%%Boa tarde, %%nome%%
+%%_else%%Boa noite, %%nome%%
+%%_endif%%
+```
+
+The conditions are `morning` (05:00–11:59), `afternoon` (12:00–17:59), `night`
+(18:00–04:59), `weekday`, `weekend`, and `mon` to `sun`. Blocks can nest. A line
+break touching a marker is layout and is not inserted. A branch that does not
+apply never asks for its form fields or runs its dynamic snippets.
+**Inserir > Condição…** in the editor writes the block for you.
+
 ## Metadata and workflow
 
 New manager state is stored under the reserved `__sniptype__` entry in

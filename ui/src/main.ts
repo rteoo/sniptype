@@ -1529,6 +1529,10 @@ async function completionCandidates(exclude: string | null): Promise<Candidate[]
     { name: "_date+1d", detail: t("Data de amanhã") },
     { name: "_enter", detail: t("Pressiona Enter (envia mensagens e formulários)") },
     { name: "_tab", detail: t("Pressiona Tab (vai para o próximo campo)") },
+    { name: "_if:morning", detail: t("Início de uma condição (morning, afternoon, night, weekday, weekend, mon…sun)") },
+    { name: "_elif:afternoon", detail: t("Senão, se outra condição valer") },
+    { name: "_else", detail: t("Senão: quando nenhuma condição anterior vale") },
+    { name: "_endif", detail: t("Fim da condição") },
     ...variables.snippets, ...variables.dynamics, ...variables.mappings,
   ];
 }
@@ -1652,6 +1656,54 @@ async function insertDate(editor: RichEditor): Promise<void> {
   if (done) editor.insert(inserted);
 }
 
+/** Same conditions as CONDITIONS in source/builtin_tokens.py. */
+function conditionChoices(): Choice[] {
+  return [
+    { value: "morning", label: t("Manhã (5h às 11h59)") },
+    { value: "afternoon", label: t("Tarde (12h às 17h59)") },
+    { value: "night", label: t("Noite (18h às 4h59)") },
+    { value: "weekday", label: t("Dia útil (segunda a sexta)") },
+    { value: "weekend", label: t("Fim de semana") },
+    { value: "mon", label: t("Segunda-feira") }, { value: "tue", label: t("Terça-feira") },
+    { value: "wed", label: t("Quarta-feira") }, { value: "thu", label: t("Quinta-feira") },
+    { value: "fri", label: t("Sexta-feira") }, { value: "sat", label: t("Sábado") },
+    { value: "sun", label: t("Domingo") },
+  ];
+}
+// Snippet text, which stays Portuguese like every other snippet output.
+const GREETING_BLOCK =
+  "%%_if:morning%%Bom dia\n%%_elif:afternoon%%Boa tarde\n%%_else%%Boa noite\n%%_endif%%";
+
+async function insertCondition(editor: RichEditor): Promise<void> {
+  let inserted = "";
+  const done = await formDialog({
+    title: t("Inserir condição"),
+    message: t("Só o texto da condição que vale na hora da expansão é inserido. Escreva cada texto logo depois do seu marcador."),
+    fields: [
+      {
+        id: "when", label: t("Quando"), kind: "select", value: "greeting",
+        options: [
+          { value: "greeting", label: t("Saudação: bom dia, boa tarde ou boa noite") },
+          ...conditionChoices(),
+        ],
+      },
+      {
+        id: "otherwise", label: t("Texto para os outros casos (senão)"), kind: "switch", value: true,
+        shownWhen: (values) => values.when !== "greeting",
+      },
+    ],
+    action: t("Inserir"),
+    submit: async (values) => {
+      const when = String(values.when);
+      inserted = when === "greeting"
+        ? GREETING_BLOCK
+        : `%%_if:${when}%%\n${values.otherwise ? "%%_else%%\n" : ""}%%_endif%%`;
+      return null;
+    },
+  });
+  if (done) editor.insert(inserted);
+}
+
 async function insertField(editor: RichEditor): Promise<void> {
   let name = "";
   const done = await formDialog({
@@ -1688,6 +1740,7 @@ function insertMenu(editor: RichEditor, exclude: string | null): HTMLElement {
     { label: t("Área de transferência"), icon: "bi-clipboard", run: () => editor.insert("%%clipboard-paste%%") },
     { label: t("Snippet existente…"), icon: "bi-journal-text", run: () => void insertReference(editor, exclude) },
     { label: t("Data e hora…"), icon: "bi-calendar-event", run: () => void insertDate(editor) },
+    { label: t("Condição…"), icon: "bi-signpost-split", run: () => void insertCondition(editor) },
     { label: t("Posição do cursor"), icon: "bi-cursor-text", run: () => editor.insert("%%_cursor%%") },
     { label: t("Campo de formulário…"), icon: "bi-input-cursor-text", run: () => void insertField(editor) },
     { label: t("Tecla Enter"), icon: "bi-arrow-return-left", run: () => editor.insert("%%_enter%%") },

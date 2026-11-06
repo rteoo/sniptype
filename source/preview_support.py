@@ -3,8 +3,8 @@
 from dataclasses import dataclass
 from datetime import datetime
 
-from builtin_tokens import KEYS, render_date
-from form_support import compile_form, render_form_values
+from builtin_tokens import KEYS, render_date, resolve_conditions
+from form_support import compile_form, fields_used_in, render_form_values
 from rich_text_support import extract_plain_text, is_rich_text_payload, rebuild_rich_text
 from snippet_utils import check_dynamic_pattern, get_dynamic_prefixes
 from variable_support import VARIABLE_RE, classify_variable
@@ -35,12 +35,17 @@ def resolve_preview(value, snippets, form_fields=None, form_values=None):
     replacement is selected from the original template in one regex pass, so
     replacement text containing ``%%tokens%%`` remains literal.
     """
-    text = extract_plain_text(value)
+    now = datetime.now()
+    # The branch that holds now, as an expansion would pick it.
+    text = resolve_conditions(extract_plain_text(value), now)
+    if form_fields is not None:
+        form_fields = fields_used_in(form_fields, text)
     compiled = compile_form(text, form_fields, snippets)
-    rendered_fields = render_form_values(compiled, form_values or {})
+    rendered_fields = render_form_values(compiled, {
+        name: typed for name, typed in (form_values or {}).items() if name in compiled.field_names
+    })
     prefixes = get_dynamic_prefixes(snippets)
     unavailable = []
-    now = datetime.now()
 
     def replace(match):
         name = match.group(1)
@@ -60,9 +65,9 @@ def resolve_preview(value, snippets, form_fields=None, form_values=None):
             unavailable.append(name)
             return DYNAMIC_PLACEHOLDER_TEMPLATE.format(name=name)
         if kind == "snippet_ref":
-            return extract_plain_text(snippets[name])
+            return resolve_conditions(extract_plain_text(snippets[name]), now)
         mapped, _mapping_key = check_dynamic_pattern(snippets, name, prefixes)
-        return extract_plain_text(mapped)
+        return resolve_conditions(extract_plain_text(mapped), now)
 
     resolved_text = VARIABLE_RE.sub(replace, text)
     payload = rebuild_rich_text(value, resolved_text) if is_rich_text_payload(value) else resolved_text

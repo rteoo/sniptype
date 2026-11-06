@@ -203,6 +203,19 @@ def infer_legacy_fields(template, snippets=None):
     )
 
 
+def fields_used_in(fields, template):
+    """The field definitions whose placeholder ``template`` still holds.
+
+    A condition block can drop a branch, and the fields only that branch used
+    with it; the saved definition still lists them. Entries that are not
+    definitions stay, for ``compile_form`` to reject.
+    """
+    if not isinstance(fields, (list, tuple)):
+        return fields
+    names = set(_variable_names(template))
+    return [field for field in fields if not isinstance(field, dict) or field.get("name") in names]
+
+
 def compile_form(template, fields=None, snippets=None):
     """Compile a snippet template and validate its metadata definitions."""
     if not isinstance(template, str):
@@ -325,6 +338,7 @@ __all__ = [
     "FormValidationError",
     "compile_form",
     "field_label",
+    "fields_used_in",
     "format_date_input",
     "infer_legacy_fields",
     "parse_date_input",

@@ -19,6 +19,22 @@ their original numbers.
 | 3.2.0, 3.2.1 | 0.9.0, 0.9.1 | 5.2.0-beta.1 | 1.0.0-beta.1 |
 | 3.3.0-beta, 3.3.0 | 0.10.0-beta.1, 0.10.0 | 5.2.0 | 1.0.0 |
 
+## [Unreleased]
+
+### Added
+
+- Condition blocks: `%%_if:morning%%Bom dia%%_elif:afternoon%%Boa tarde%%_else%%Boa noite%%_endif%%`
+  keeps only the text whose condition holds when the snippet expands. The
+  conditions are `morning`, `afternoon`, `night`, `weekday`, `weekend` and `mon`
+  to `sun`. **Inserir > Condição…** writes the block, Prévia shows today's
+  branch, and Salvar refuses a block that is not closed.
+
+### Fixed
+
+- A snippet with a form definition (any typed field, such as Choice) opened
+  an invisible form on Windows. Every later dialog was then refused with
+  "Outro diálogo já está aberto" until SnipType restarted. Broken since 0.14.0.
+
 ## [1.5.0-beta.1] — 2026-11-06
 
 The manager window does everything the classic manager did on Windows, and

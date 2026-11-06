@@ -173,7 +173,7 @@ from variable_support import (
     resolve_form_variables,
     resolve_inline,
 )
-from form_support import compile_form, render_form
+from form_support import compile_form, fields_used_in, render_form
 from builtin_tokens import plan_insertion
 from form_dialog import FormDialog
 from preview_support import resolve_preview
@@ -1729,7 +1729,7 @@ class Sniptype:
                 if form_metadata is not None:
                     compiled_form = compile_form(
                         plain,
-                        form_metadata.get("fields", []),
+                        fields_used_in(form_metadata.get("fields", []), plain),
                         self.snippets,
                     )
                     form_names = list(compiled_form.field_names)

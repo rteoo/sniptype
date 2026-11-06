@@ -40,6 +40,7 @@ from form_support import DEFAULT_DATE_FORMAT, FIELD_TYPES, FormValidationError, 
 from preview_dialog import build_preview_model
 from preview_support import resolve_preview
 from runtime_support import NOTIFICATION_KIND_LABELS, notification_stamp
+from builtin_tokens import ConditionError
 from editor_session import (
     CHANGED,
     GONE,
@@ -1038,6 +1039,8 @@ class ManagerBridge:
             value = text
         try:
             result = resolve_preview(value, self.app.snippets, form)
+        except ConditionError as error:
+            raise BridgeError("invalid", str(error)) from error
         except FormValidationError as error:
             if text is None:
                 raise BridgeError("form", _("O formulário não corresponde ao texto: {error}").format(
