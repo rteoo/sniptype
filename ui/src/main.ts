@@ -29,6 +29,7 @@ interface Item {
   effectiveTrigger: string;
   preview: string;
   rich: boolean;
+  keys: boolean;
   favorite: boolean;
   group?: string | null;
   enabled?: boolean;
@@ -364,8 +365,9 @@ function formDialog(options: {
  * A drop-down menu behind a labeled button with a chevron (DESIGN.md: never
  * icon-only). `entries` is read each time it opens, so it reflects the view.
  */
-function menuButton(label: string, entries: () => { label: string; disabled?: boolean; run: () => void }[],
-  attrs: Record<string, unknown> = {}): HTMLElement {
+function menuButton(label: string,
+  entries: () => { label: string; icon?: string; disabled?: boolean; run: () => void }[],
+  attrs: Record<string, unknown> = {}, leading?: string): HTMLElement {
   const menu = h("div", { class: "menu", popover: "auto", role: "menu", "aria-label": label });
   const button = h("button", {
     type: "button", class: "el-button", "aria-haspopup": "menu", "aria-expanded": "false", ...attrs,
@@ -378,14 +380,14 @@ function menuButton(label: string, entries: () => { label: string; disabled?: bo
           button.focus();
           entry.run();
         },
-      }, entry.label)));
+      }, entry.icon ? icon(entry.icon) : null, entry.label)));
       const box = button.getBoundingClientRect();
       menu.style.top = `${box.bottom + 4}px`;
       menu.style.left = `${box.left}px`;
       menu.showPopover();
       menu.querySelector<HTMLElement>("button:not([disabled])")?.focus();
     },
-  }, label, icon("chevron-down"));
+  }, leading ? icon(leading) : null, label, icon("chevron-down"));
   menu.addEventListener("toggle", (event) =>
     button.setAttribute("aria-expanded", String((event as Event & { newState: string }).newState === "open")));
   menu.addEventListener("keydown", (event) => {
@@ -1145,6 +1147,8 @@ function renderList(): void {
   h("span", { class: "badges" },
     item.favorite ? icon("favorite") : null,
     item.rich ? h("span", { class: "el-badge" }, t("formatado")) : null,
+    item.keys ? h("span", { class: "el-badge", title: t("Pressiona Enter ou Tab ao expandir.") },
+      icon("bi-keyboard"), t("teclas")) : null,
     item.shadowed ? h("span", { class: "el-badge", title: t("Um snippet dinâmico usa este trigger e tem prioridade.") },
       t("sombreado")) : null,
     item.group ? h("span", { class: "el-badge" }, item.group) : null,
@@ -1161,6 +1165,7 @@ function itemLabel(item: Item): string {
     trigger,
     item.favorite ? t("favorito") : "",
     item.rich ? t("formatado") : "",
+    item.keys ? t("teclas") : "",
     item.shadowed ? t("sombreado") : "",
     item.group ?? "",
     item.enabled === false ? t("desativado") : "",
@@ -1210,28 +1215,28 @@ function updateSaveState(): void {
 /** Negrito, Itálico, Sublinhado, Código, Tachado and Limpar formatação, over the editor's selection. */
 function formatBar(editor: RichEditor, hint: HTMLElement): HTMLElement {
   const styles: [Style, string, string, string][] = [
-    ["bold", "B", t("Negrito"), "Ctrl+B"], ["italic", "I", t("Itálico"), "Ctrl+I"],
-    ["underline", "U", t("Sublinhado"), "Ctrl+U"], ["code", "</>", t("Código"), ""],
-    ["strike", "S", t("Tachado"), ""],
+    ["bold", "bi-type-bold", t("Negrito"), "Ctrl+B"], ["italic", "bi-type-italic", t("Itálico"), "Ctrl+I"],
+    ["underline", "bi-type-underline", t("Sublinhado"), "Ctrl+U"], ["code", "bi-code-slash", t("Código"), ""],
+    ["strike", "bi-type-strikethrough", t("Tachado"), ""],
   ];
   // The buttons never take focus from a mouse click, so the selection they act on stays put.
   const keep = (event: Event) => event.preventDefault();
   return h("div", { class: "format-bar", role: "toolbar", "aria-label": t("Formatação"), "aria-controls": "text" },
-    ...styles.map(([style, glyph, label, keys]) => h("button", {
-      type: "button", class: `el-button rt-${style}`, title: keys ? `${label} (${keys})` : label, "aria-label": label,
+    ...styles.map(([style, symbol, label, keys]) => h("button", {
+      type: "button", class: "el-button", title: keys ? `${label} (${keys})` : label, "aria-label": label,
       onmousedown: keep,
       onclick: () => {
         if (!editor.toggle(style)) hint.textContent = t("Selecione o texto para formatar.");
         editor.focus();
       },
-    }, glyph)),
+    }, icon(symbol))),
     h("button", {
       type: "button", class: "el-button", onmousedown: keep,
       onclick: () => {
         editor.clear();
         editor.focus();
       },
-    }, t("Limpar formatação")),
+    }, icon("bi-eraser"), t("Limpar formatação")),
   );
 }
 
@@ -1267,6 +1272,8 @@ async function completionCandidates(exclude: string | null): Promise<Candidate[]
     { name: "_date", detail: t("Data de hoje (dd/MM/yyyy)") },
     { name: "_date:HH:mm", detail: t("Hora atual (HH:mm)") },
     { name: "_date+1d", detail: t("Data de amanhã") },
+    { name: "_enter", detail: t("Pressiona Enter (envia mensagens e formulários)") },
+    { name: "_tab", detail: t("Pressiona Tab (vai para o próximo campo)") },
     ...variables.snippets, ...variables.dynamics, ...variables.mappings,
   ];
 }
@@ -1423,12 +1430,14 @@ async function insertField(editor: RichEditor): Promise<void> {
 /** Inserir: every kind of variable, so nobody has to know the syntax. */
 function insertMenu(editor: RichEditor, exclude: string | null): HTMLElement {
   return menuButton(t("Inserir"), () => [
-    { label: t("Área de transferência"), run: () => editor.insert("%%clipboard-paste%%") },
-    { label: t("Snippet existente…"), run: () => void insertReference(editor, exclude) },
-    { label: t("Data e hora…"), run: () => void insertDate(editor) },
-    { label: t("Posição do cursor"), run: () => editor.insert("%%_cursor%%") },
-    { label: t("Campo de formulário…"), run: () => void insertField(editor) },
-  ], { title: t("Inserir variável (ou digite %%)") });
+    { label: t("Área de transferência"), icon: "bi-clipboard", run: () => editor.insert("%%clipboard-paste%%") },
+    { label: t("Snippet existente…"), icon: "bi-journal-text", run: () => void insertReference(editor, exclude) },
+    { label: t("Data e hora…"), icon: "bi-calendar-event", run: () => void insertDate(editor) },
+    { label: t("Posição do cursor"), icon: "bi-cursor-text", run: () => editor.insert("%%_cursor%%") },
+    { label: t("Campo de formulário…"), icon: "bi-input-cursor-text", run: () => void insertField(editor) },
+    { label: t("Tecla Enter"), icon: "bi-arrow-return-left", run: () => editor.insert("%%_enter%%") },
+    { label: t("Tecla Tab"), icon: "bi-arrow-bar-right", run: () => editor.insert("%%_tab%%") },
+  ], { title: t("Inserir variável (ou digite %%)") }, "bi-braces");
 }
 
 function renderDetail(): void {

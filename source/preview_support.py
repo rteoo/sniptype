@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 
-from builtin_tokens import render_date
+from builtin_tokens import KEYS, render_date
 from form_support import compile_form, render_form_values
 from rich_text_support import extract_plain_text, is_rich_text_payload, rebuild_rich_text
 from snippet_utils import check_dynamic_pattern, get_dynamic_prefixes
@@ -12,6 +12,7 @@ from variable_support import VARIABLE_RE, classify_variable
 
 CLIPBOARD_PLACEHOLDER = "‹clipboard›"
 CURSOR_PLACEHOLDER = "‹cursor›"
+KEY_PLACEHOLDERS = {"enter": "‹Enter›", "tab": "‹Tab›"}
 DYNAMIC_PLACEHOLDER_TEMPLATE = "‹dynamic:{name}›"
 
 
@@ -28,8 +29,8 @@ def resolve_preview(value, snippets, form_fields=None, form_values=None):
 
     Static and mapping references use the local in-memory library and
     ``%%_date…%%`` renders the current date. Clipboard and callable dynamic
-    references become explicit placeholders, and ``%%_cursor%%`` shows where
-    the caret will end. Form values are rendered from supplied values or their
+    references become explicit placeholders, ``%%_cursor%%`` shows where the
+    caret will end and ``%%_enter%%``/``%%_tab%%`` show the key they press. Form values are rendered from supplied values or their
     configured defaults. Every
     replacement is selected from the original template in one regex pass, so
     replacement text containing ``%%tokens%%`` remains literal.
@@ -53,6 +54,8 @@ def resolve_preview(value, snippets, form_fields=None, form_values=None):
             return render_date(name, now)
         if kind == "cursor":
             return CURSOR_PLACEHOLDER
+        if kind == "key":
+            return KEY_PLACEHOLDERS[KEYS[name]]
         if kind == "dynamic_ref":
             unavailable.append(name)
             return DYNAMIC_PLACEHOLDER_TEMPLATE.format(name=name)
@@ -70,6 +73,7 @@ __all__ = [
     "CLIPBOARD_PLACEHOLDER",
     "CURSOR_PLACEHOLDER",
     "DYNAMIC_PLACEHOLDER_TEMPLATE",
+    "KEY_PLACEHOLDERS",
     "PreviewResult",
     "resolve_preview",
 ]

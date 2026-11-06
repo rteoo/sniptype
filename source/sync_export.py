@@ -262,7 +262,8 @@ def _resolve_export_text(raw_text, classification_map, prefixes):
     Only ``snippet_ref`` and ``mapping_ref`` are substituted, and ``%%_cursor%%``
     is dropped: the phone inserts text without a caret position, and the text
     is the same without it. ``%%_date…%%`` is not baked (it would ship a stale
-    date) and stays as a residual token, so the phone refuses the entry.
+    date) and, like a key token, stays as a residual one, so the phone refuses
+    the entry.
     ``clipboard``, ``dynamic_ref`` and ``form_field`` are preserved as tokens and
     reported in the ``input`` block, because baking them would leak the desktop's
     clipboard, ship a stale number that looks live, or need a user who is not here.

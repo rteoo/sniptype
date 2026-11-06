@@ -173,7 +173,7 @@ from variable_support import (
     resolve_inline,
 )
 from form_support import compile_form, render_form
-from builtin_tokens import split_cursor
+from builtin_tokens import plan_insertion
 from form_dialog import FormDialog
 from preview_support import resolve_preview
 from editor_session import (
@@ -1656,7 +1656,7 @@ class Sniptype:
 
             try:
                 time.sleep(0.05)
-                inserted = self._insert_template_result(snippet)
+                inserted = self._insert_template_result(snippet, keys=False)
                 if inserted is False:
                     return False
 
@@ -1742,7 +1742,7 @@ class Sniptype:
                 if is_rich_text_payload(raw):
                     result = rebuild_rich_text(raw, result)
                 time.sleep(0.05)
-                inserted = self._insert_template_result(result)
+                inserted = self._insert_template_result(result, keys=True)
                 return inserted is not False
 
             result = func()
@@ -1767,14 +1767,21 @@ class Sniptype:
             )
             return False
 
-    def _insert_template_result(self, payload):
+    def _insert_template_result(self, payload, keys):
         """Insert a resolved snippet and record where %%_cursor%% leaves the caret.
 
-        ``_run_expansion`` moves the caret only after it re-emits the
-        terminator, which belongs after the expansion's last character.
+        A snippet that presses keys goes in as a sequence of pastes and keys;
+        anything else is one paste. Only the slow route passes ``keys=True``:
+        it is the route whose context check counts keystrokes, so key snippets
+        are routed there (``key_triggers``) and the fast route never presses one. ``_run_expansion`` moves the caret only
+        after it re-emits the terminator, which belongs after the expansion's
+        last character.
         """
-        payload, caret_back = split_cursor(payload)
-        inserted = self.text_inserter.insert_text(payload)
+        steps, caret_back = plan_insertion(payload, keys=keys)
+        if any(kind == "key" for kind, _value in steps):
+            inserted = self.text_inserter.insert_steps(steps)
+        else:
+            inserted = self.text_inserter.insert_text(steps[0][1])
         if inserted is not False:
             self._expansion_context.caret_back = caret_back
         return inserted
@@ -2609,6 +2616,7 @@ class Sniptype:
         slow_route = (
             effective in trigger_index.get("slow_triggers", ())
             or effective in trigger_index.get("form_triggers", ())
+            or effective in trigger_index.get("key_triggers", ())
         )
         # The text target this trigger was typed into: an int read plus one
         # user32 call, cheap enough for the listener. The worker compares it
@@ -2708,6 +2716,7 @@ class Sniptype:
                 slow_route = (
                     effective in self.trigger_index["slow_triggers"]
                     or effective in self.trigger_index["form_triggers"]
+                    or effective in self.trigger_index["key_triggers"]
                 )
             if slow_route:
                 outcome = self.run_slow_snippet(lookup)

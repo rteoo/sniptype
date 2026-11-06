@@ -182,6 +182,14 @@ class VariablesBridgeTests(unittest.TestCase):
         self.assertTrue(dynamics)
         self.assertTrue(all(callable(self.app.snippets[name]) for name in dynamics))
 
+    def test_rows_say_which_snippets_press_keys(self):
+        self.result("snippet.save", trigger="login", text="user%%_tab%%pass%%_enter%%")
+        self.result("mapping.save", type="_cpf_numbers", name="tabbed", text="1%%_tab%%2")
+        library = {item["trigger"]: item["keys"] for item in self.result("library.list")["items"]}
+        self.assertEqual({"hello": False, "sig": False, "login": True}, library)
+        mappings = {item["name"]: item["keys"] for item in self.result("mapping.list", type="_cpf_numbers")}
+        self.assertEqual({"fulano": False, "tabbed": True}, mappings)
+
     def test_a_name_the_resolver_would_not_reach_is_left_out(self):
         dynamic = self.result("variables.list")["dynamics"][0]["name"]
         self.app.snippets.pop(dynamic)

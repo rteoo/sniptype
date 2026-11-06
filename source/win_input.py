@@ -26,6 +26,8 @@ import sys
 INJECTION_TAG = 0x534E4950
 
 VK_BACK = 0x08
+VK_TAB = 0x09
+VK_RETURN = 0x0D
 VK_CONTROL = 0x11
 VK_MENU = 0x12
 VK_LEFT = 0x25
@@ -109,6 +111,16 @@ def backspace_events(count):
     return events
 
 
+# The keys a snippet can press (builtin_tokens.KEYS), by name.
+KEY_VKS = {"enter": VK_RETURN, "tab": VK_TAB}
+
+
+def key_events(name):
+    """One press and release of the snippet key ``name``."""
+    vk = KEY_VKS[name]
+    return [(vk, True), (vk, False)]
+
+
 def caret_left_events(count):
     """``count`` Left-arrow press/release pairs, as ``(vk, is_press)``."""
     events = []
@@ -171,6 +183,9 @@ class BatchKeyboard:
 
     def caret_left(self, count):
         return send_key_events(caret_left_events(count))
+
+    def press(self, name):
+        return send_key_events(key_events(name))
 
 
 def ctrl_or_alt_held():

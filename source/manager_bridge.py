@@ -68,7 +68,7 @@ from rich_text_support import (
     normalize_style_spans,
 )
 from snippet_utils import build_saveable_snippets, get_dynamic_prefixes, mapping_types
-from variable_support import classify_variable
+from variable_support import classify_variable, has_key_tokens
 
 MANAGER_EXE_NAME = "sniptype-manager.exe" if sys.platform == "win32" else "sniptype-manager"
 DENSITY_CHOICES = ("compact", "comfortable", "touch")
@@ -263,6 +263,7 @@ class ManagerBridge:
                 "enabled": row.enabled,
                 "shadowed": row.shadowed,
                 "rich": is_rich_text_payload(projection.get(row.stored_trigger)),
+                "keys": has_key_tokens(extract_plain_text(projection.get(row.stored_trigger))),
                 "preview": preview[:PREVIEW_LIMIT],
             })
         return {"items": items, "total": total}
@@ -606,6 +607,7 @@ class ManagerBridge:
                 "effectiveTrigger": row.effective_trigger,
                 "favorite": row.favorite,
                 "rich": is_rich_text_payload(self._mapping_value(type, row.stored_trigger)),
+                "keys": has_key_tokens(extract_plain_text(self._mapping_value(type, row.stored_trigger))),
                 "preview": preview[:PREVIEW_LIMIT],
             })
         return items

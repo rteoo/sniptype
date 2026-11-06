@@ -11,6 +11,7 @@ from datetime import datetime
 import time_format
 from clipboard_support import Clipboard
 from platform_support import default_insertion_timings
+from builtin_tokens import steps_text
 from rich_text_support import extract_plain_text
 from snippet_utils import write_json_atomic
 from i18n import _
@@ -372,6 +373,79 @@ class TextInserter:
             self.logger.warning(
                 "Não foi possível restaurar a área de transferência anterior."
             )
+
+    def insert_steps(self, steps):
+        """Paste text steps and press key steps in order; False when the sequence stopped.
+
+        ``steps`` come from ``builtin_tokens.plan_insertion``. One clipboard
+        snapshot covers the whole sequence and is restored after it. Nothing is
+        ever typed: a step that cannot be sent stops the sequence, what was sent
+        stays sent (an Enter cannot be taken back), and the rest goes to the
+        clipboard as text, with a notice that says so.
+        """
+        with _CLIPBOARD_PASTE_LOCK:
+            snapshot_taken, previous_text = Clipboard.read_text()
+            if not snapshot_taken:
+                self.logger.warning(
+                    "Área de transferência ocupada por outro programa; o conteúdo "
+                    "anterior não pôde ser salvo e não será restaurado."
+                )
+            last_plain = None
+            for index, (kind, value) in enumerate(steps):
+                # Checked before every step, so a sequence the person types or
+                # clicks into stops instead of interleaving with them.
+                if kind == "text":
+                    if not Clipboard.set_content(value):
+                        return self._stop_steps(steps, index, "failed")
+                    time.sleep(self.settle_delay)
+                    if not self._target_is_current():
+                        return self._stop_steps(steps, index, "stale")
+                    if not self._send_paste_shortcut():
+                        return self._stop_steps(steps, index, "blocked")
+                    # The target reads this text before the next step replaces it.
+                    time.sleep(self.restore_delay)
+                    last_plain = extract_plain_text(value)
+                else:
+                    if not self._target_is_current():
+                        return self._stop_steps(steps, index, "stale")
+                    if not self._press_key(value):
+                        return self._stop_steps(steps, index, "blocked")
+            if previous_text is not None and last_plain is not None:
+                self._restore_clipboard(last_plain, previous_text)
+            return True
+
+    def _press_key(self, name):
+        """Press a snippet key; False when Windows rejected it."""
+        if self.batch_keyboard is not None:
+            return self.batch_keyboard.press(name)
+        from pynput.keyboard import Key
+
+        key = {"enter": Key.enter, "tab": Key.tab}[name]
+        self.keyboard_controller.press(key)
+        self.keyboard_controller.release(key)
+        return True
+
+    def _stop_steps(self, steps, index, reason):
+        """Leave the unsent rest of a sequence on the clipboard and say where it stopped."""
+        rest = steps_text(steps[index:])
+        copied = Clipboard.set_content(rest)
+        why = {
+            "stale": _("Você digitou, clicou ou trocou de janela durante a expansão."),
+            "blocked": _("O Windows bloqueou a entrada (janela em execução como administrador?)."),
+            "failed": _("A área de transferência não aceitou o texto."),
+        }[reason]
+        if index == 0:
+            outcome = (_("Nada foi inserido; o snippet está na área de transferência, sem as teclas: use Ctrl+V.")
+                       if copied else _("Nada foi inserido, e o snippet não pôde ser copiado."))
+        else:
+            outcome = (_("Parte do snippet já foi enviada; o restante está na área de transferência, "
+                         "sem as teclas: use Ctrl+V.")
+                       if copied else _("Parte do snippet já foi enviada, e o restante não pôde ser copiado."))
+        message = f"{why} {outcome}"
+        self.logger.warning(message)
+        if self.notify:
+            self.notify(message, key="paste-steps")
+        return False
 
     def move_caret_left(self, count):
         """Move the caret back ``count`` characters; False when Windows refused.
