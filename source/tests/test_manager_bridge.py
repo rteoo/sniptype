@@ -173,6 +173,41 @@ class BridgeTests(unittest.TestCase):
                          ["error"]["code"])
 
 
+class VariablesBridgeTests(unittest.TestCase):
+    def setUp(self):
+        self.app = make_real_app(self, {
+            "hello": "Hello there",
+            "sig": "Best,\nTeo",
+            "_cpf_numbers": {"fulano": "123.456.789-00"},
+        })
+        self.bridge = ManagerBridge(self.app, version="9.9.9", channel="beta")
+
+    call, result = BridgeTests.call, BridgeTests.result
+
+    def test_lists_every_resolvable_name_with_a_one_line_detail(self):
+        variables = self.result("variables.list")
+        snippets = {item["name"]: item["detail"] for item in variables["snippets"]}
+        self.assertEqual({"hello": "Hello there", "sig": "Best, Teo"}, snippets)
+        self.assertEqual(["cpffulano"], [item["name"] for item in variables["mappings"]])
+        self.assertIn("123.456.789-00", variables["mappings"][0]["detail"])
+        dynamics = {item["name"] for item in variables["dynamics"]}
+        self.assertTrue(dynamics)
+        self.assertTrue(all(callable(self.app.snippets[name]) for name in dynamics))
+
+    def test_rows_say_which_snippets_press_keys(self):
+        self.result("snippet.save", trigger="login", text="user%%_tab%%pass%%_enter%%")
+        self.result("mapping.save", type="_cpf_numbers", name="tabbed", text="1%%_tab%%2")
+        library = {item["trigger"]: item["keys"] for item in self.result("library.list")["items"]}
+        self.assertEqual({"hello": False, "sig": False, "login": True}, library)
+        mappings = {item["name"]: item["keys"] for item in self.result("mapping.list", type="_cpf_numbers")}
+        self.assertEqual({"fulano": False, "tabbed": True}, mappings)
+
+    def test_a_name_the_resolver_would_not_reach_is_left_out(self):
+        dynamic = self.result("variables.list")["dynamics"][0]["name"]
+        self.app.snippets.pop(dynamic)
+        self.assertNotIn(dynamic, {item["name"] for item in self.result("variables.list")["dynamics"]})
+
+
 class MappingBridgeTests(unittest.TestCase):
     def setUp(self):
         self.app = make_real_app(self, {

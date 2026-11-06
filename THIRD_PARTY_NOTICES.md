@@ -9,6 +9,7 @@ The application depends on the following separately licensed projects:
 | `pystray` | System-tray integration | [PyPI](https://pypi.org/project/pystray/) |
 | `Pillow` | Image and icon handling | [Pillow license](https://github.com/python-pillow/Pillow/blob/main/LICENSE) |
 | `yfinance` | Optional market-data lookups | [PyPI](https://pypi.org/project/yfinance/) |
+| Bootstrap Icons 1.13.2 | Editor toolbar and Inserir icons, inlined in `ui/index.html` | [MIT](https://github.com/twbs/icons/blob/v1.13.2/LICENSE), Copyright (c) 2019-2024 The Bootstrap Authors |
 
 The exact versions used by a build are recorded in
 `source/requirements*.txt`. Before publishing a packaged build, include the
