@@ -13,7 +13,7 @@ import {
   type FormSaveAnswer, type Group, type HealthAnswer, type HotkeySaveAnswer, type Preview,
   type GroupForm, type Groups, type GroupSaveAnswer, type Library, type ListFilter, type MappingEntry,
   type MappingItem, type MappingSaveAnswer, type MappingType, type RenameAnswer, type SaveAnswer, type SaveCheck,
-  type Snippet, request, startBridge,
+  type Snippet, type SwitcherRow, request, startBridge,
 } from "./bridge";
 import { h, icon } from "./dom";
 import { setLanguage, t } from "./i18n";
@@ -2193,6 +2193,36 @@ document.addEventListener("keydown", (event) => {
   if (document.querySelector("dialog[open], .menu:popover-open")) return;
   const ctrl = event.ctrlKey || event.metaKey;
   const kind = activeKind();
+  // Keys every page answers: the switcher, Editar último, the sections, the shortcut sheet.
+  if (ctrl && !event.altKey && !event.shiftKey) {
+    const page = PAGES[Number(event.key) - 1];
+    if (/^[1-5]$/.test(event.key) && page) {
+      event.preventDefault();
+      void showPage(page);
+      return;
+    }
+    const global = event.key.toLowerCase();
+    if (global === "k") {
+      event.preventDefault();
+      showSwitcher();
+      return;
+    }
+    if (global === "e") {
+      event.preventDefault();
+      if (state.info?.canEditLast) void request("app.editLast").catch((error) => console.error("edit last failed", error));
+      return;
+    }
+    if (event.key === "/") {
+      event.preventDefault();
+      showShortcuts();
+      return;
+    }
+  }
+  if (kind && event.key === "Escape" && !ctrl && !event.altKey) {
+    event.preventDefault();
+    void escapeEditor(kind);
+    return;
+  }
   if (state.page === "dinamicos" && ctrl && event.key.toLowerCase() === "f") {
     event.preventDefault();
     refs.search?.focus();
@@ -2251,6 +2281,11 @@ async function takeTarget(): Promise<void> {
     (document.querySelector(".hotkey") as HTMLElement | null)?.focus();
     return;
   }
+  await openTarget(target);
+}
+
+/** Show one item where it lives: a text, a mapping item in its type, or a dynamic snippet. */
+async function openTarget(target: { kind: string; key: string; container: string | null }): Promise<void> {
   if (target.kind === "dynamic") {
     state.dynamics.query = target.key;
     await showPage("dinamicos");
@@ -2266,6 +2301,127 @@ async function takeTarget(): Promise<void> {
   await showPage(kind);
   await openItem(kind, target.key);
 }
+
+// ---------------------------------------------------------------------------
+// Ctrl+K switcher, Ctrl+/ shortcut sheet, Esc.
+
+/** Ctrl+K: find any item by trigger, group or content and open it, or create a text from the query. */
+function showSwitcher(): void {
+  let rows: SwitcherRow[] = [];
+  const list = h("select", { id: "switcher-list", class: "field switcher-list", size: 12, "aria-label": t("Resultados") });
+  const create = h("button", { type: "button", class: "el-button", hidden: true }, "");
+  let generation = 0;
+  const fill = async (query: string) => {
+    const mine = ++generation;
+    const found = await request<SwitcherRow[]>("switcher.search", { query }).catch(() => [] as SwitcherRow[]);
+    if (mine !== generation) return;
+    rows = found;
+    list.replaceChildren(...rows.map((row, index) => h("option", { value: String(index) },
+      `${row.label} · ${row.trigger}${row.preview ? ` — ${row.preview}` : ""}`)));
+    if (rows.length) list.selectedIndex = 0;
+    const name = query.trim();
+    create.hidden = !name;
+    create.textContent = t("Criar \"{query}\"", { query: name });
+  };
+  const search = h("input", {
+    type: "search", class: "field", autocomplete: "off", spellcheck: "false",
+    placeholder: t("Pesquisar snippets"), "aria-label": t("Pesquisar snippets"), "aria-controls": "switcher-list",
+    oninput: () => void fill(search.value),
+    onkeydown: (event: KeyboardEvent) => {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        const next = list.selectedIndex + (event.key === "ArrowDown" ? 1 : -1);
+        if (next >= 0 && next < rows.length) list.selectedIndex = next;
+      }
+    },
+  });
+  let chosen: SwitcherRow | null = null;
+  let creating = false;
+  const dialog = h("dialog", { class: "switcher", "aria-labelledby": "dialog-title" },
+    h("form", {
+      method: "dialog",
+      onsubmit: (event: Event) => {
+        event.preventDefault();
+        chosen = rows[list.selectedIndex] ?? null;
+        if (chosen) dialog.close();
+      },
+    },
+    h("h2", { id: "dialog-title" }, t("Alternar snippet")),
+    search,
+    list,
+    h("menu", {},
+      h("button", { type: "submit", class: "primary" }, t("Abrir")),
+      create,
+      h("button", { type: "button", onclick: () => dialog.close() }, t("Cancelar")))),
+  );
+  create.addEventListener("click", () => {
+    creating = true;
+    dialog.close();
+  });
+  list.addEventListener("dblclick", () => dialog.querySelector("form")!.requestSubmit());
+  dialog.addEventListener("close", () => {
+    const query = search.value.trim();
+    if (chosen) void openTarget(chosen);
+    else if (creating && query) void createFromSwitcher(query);
+  });
+  void fill("");
+  openDialog(dialog, search);
+}
+
+async function createFromSwitcher(query: string): Promise<void> {
+  await showPage("textos");
+  state.collections.textos.query = query;
+  renderAll();
+  await newItem("textos");
+}
+
+const shortcuts = (): [string, string][] => [
+  ["Ctrl+N", t("Novo com a busca")],
+  ["Ctrl+S", t("Salvar")],
+  ["Ctrl+D", t("Duplicar item salvo")],
+  ["F2", t("Renomear texto")],
+  ["Delete", t("Excluir na lista (Desfazer disponível)")],
+  ["Esc", t("Limpar busca / descartar rascunho com confirmação")],
+  ["Ctrl+K", t("Alternar snippet")],
+  ["Ctrl+E", t("Editar último")],
+  ["Ctrl+F", t("Buscar")],
+  ["Ctrl+1–5", t("Seções")],
+  ["↓ / Enter", t("Na busca: focar a lista")],
+  ["Ctrl+B / I / U", t("Negrito / itálico / sublinhado")],
+  ["Ctrl+/", t("Esta lista")],
+];
+
+function showShortcuts(): void {
+  const dialog = h("dialog", { "aria-labelledby": "dialog-title" },
+    h("h2", { id: "dialog-title" }, t("Teclado do gerenciador")),
+    h("dl", { class: "shortcuts" }, ...shortcuts().flatMap(([keys, what]) => [h("dt", {}, keys), h("dd", {}, what)])),
+    h("menu", {}, h("button", { type: "button", class: "primary", onclick: () => dialog.close() }, t("OK"))),
+  );
+  openDialog(dialog, dialog.querySelector("button"));
+}
+
+/** Esc in a collection: clear the search first, then offer to drop the draft. */
+async function escapeEditor(kind: Kind): Promise<void> {
+  const collection = state.collections[kind];
+  if (document.activeElement === refs.search && collection.query) {
+    collection.query = "";
+    refs.search!.value = "";
+    renderList();
+    return;
+  }
+  if (!isDirty(kind)) return;
+  const draft = collection.draft!;
+  const choice = await ask(t("Descartar alterações?"),
+    t("{name} tem alterações que ainda não foram salvas.", { name: draft.name.trim() || draft.savedName || t("novo snippet") }),
+    [{ id: "discard", label: t("Descartar"), tone: "danger" }, { id: "cancel", label: t("Cancelar") }]);
+  if (choice !== "discard" || collection.draft !== draft) return;
+  if (draft.original === null) collection.draft = null;
+  else Object.assign(draft, { name: draft.savedName, text: draft.savedText, spans: JSON.parse(draft.savedSpans) });
+  renderList();
+  renderDetail();
+}
+
+const PAGES: Page[] = ["textos", "mapeamentos", "dinamicos", "backups", "settings"];
 
 async function onAppEvent(name: string): Promise<void> {
   if (name === "focus") {

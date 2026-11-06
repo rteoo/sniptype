@@ -55,6 +55,13 @@ code, .mono { font-family: var(--app-font-trigger); }
 .expansion button { display: flex; align-items: center; gap: 8px; justify-content: flex-start; }
 .infobar .actions { display: flex; gap: 8px; margin-top: 6px; }
 
+/* Ctrl+K switcher and the Ctrl+/ shortcut sheet. */
+dialog.switcher { width: min(640px, calc(100vw - 48px)); }
+.switcher-list { width: 100%; margin-top: 8px; }
+dl.shortcuts { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0 0 8px; }
+dl.shortcuts dt { font-family: var(--app-font-trigger, monospace); }
+dl.shortcuts dd { margin: 0; }
+
 /* Atalhos de teclado: label | recorded chord | Desativar. */
 .hotkey-rows { display: grid; gap: 8px; }
 .hotkey-row { display: grid; grid-template-columns: minmax(140px, 1fr) minmax(160px, 220px) auto; gap: 8px; align-items: center; }
