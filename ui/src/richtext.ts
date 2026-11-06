@@ -28,6 +28,14 @@ export interface RichEditor {
   clear(): void;
   setReadOnly(readOnly: boolean): void;
   focus(): void;
+  /** Replace the selection (or the last one, when focus is elsewhere) with plain text, caret after it. */
+  insert(inserted: string): void;
+  /** The text before the caret, or null without a caret in the editor. */
+  beforeCaret(): string | null;
+  /** Replace the `count` characters before the caret with `inserted`. */
+  replaceBeforeCaret(count: number, inserted: string): void;
+  /** Where the caret is on screen, for a popup that follows it. */
+  caretRect(): DOMRect | null;
 }
 
 function masksFrom(text: string, spans: Span[]): number[] {
@@ -119,7 +127,16 @@ export function createRichEditor(options: {
     return last ? [last, last.data.length] : [element, 0];
   };
 
+  // The selection when the editor last had one, so a menu or dialog that took
+  // focus can still insert where the person left the caret.
+  let saved: [number, number] | null = null;
+  const inside = () => {
+    const current = window.getSelection();
+    return !!current && current.rangeCount > 0 && element.contains(current.anchorNode);
+  };
+
   const select = (start: number, end: number) => {
+    saved = [start, end];
     const current = window.getSelection();
     if (!current) return;
     const range = document.createRange();
@@ -215,6 +232,12 @@ export function createRichEditor(options: {
     options.onChange();
   };
 
+  for (const name of ["keyup", "mouseup", "input"]) {
+    element.addEventListener(name, () => {
+      if (inside()) saved = selection();
+    });
+  }
+
   let composing = false;
   element.addEventListener("compositionstart", () => { composing = true; });
   element.addEventListener("compositionend", () => {
@@ -301,6 +324,27 @@ export function createRichEditor(options: {
       element.setAttribute("aria-readonly", String(readOnly));
     },
     focus: () => element.focus(),
+    insert: (inserted) => {
+      const [start, end] = inside() ? selection() : saved ?? [text.length, text.length];
+      element.focus();
+      replace(Math.min(start, text.length), Math.min(end, text.length), inserted);
+    },
+    beforeCaret: () => {
+      if (!inside()) return null;
+      const [start, end] = selection();
+      return start === end ? text.slice(0, start) : null;
+    },
+    replaceBeforeCaret: (count, inserted) => {
+      const [start] = selection();
+      replace(Math.max(0, start - count), start, inserted);
+    },
+    caretRect: () => {
+      if (!inside()) return null;
+      const range = window.getSelection()!.getRangeAt(0).cloneRange();
+      const rects = range.getClientRects();
+      // A collapsed range at a line start can have no rects; the editor's own box is the fallback.
+      return rects.length ? rects[rects.length - 1] : element.getBoundingClientRect();
+    },
   };
   editor.setReadOnly(!!options.readOnly);
   return editor;
