@@ -441,6 +441,12 @@ class Sniptype:
         # The Tauri manager window; the classic Tk one only when it cannot run.
         self._manager_process = None
         self._manager_process_lock = threading.Lock()
+        # Whether the Tauri window has the input focus, and whether a hotkey field in it does;
+        # both come from the window (window.focus, hotkeys.recording) and reset when it closes.
+        self._manager_window_focused = False
+        self._hotkey_field_active = False
+        # The classic hotkey dialog is open: it records chords the same way.
+        self._hotkey_dialog_open = False
         self._pending_manager_target = None
         # A page of the Tauri window to show next ("settings"), taken once like the target.
         self._pending_manager_page = None
@@ -2367,7 +2373,7 @@ class Sniptype:
         try:
             if not injected:
                 self._input_generation += 1
-            if self.hotkey_router.press(key):
+            if not self._hotkeys_suspended() and self.hotkey_router.press(key):
                 self.typed_text = ""
                 return
             if not self.enabled:
@@ -2408,6 +2414,15 @@ class Sniptype:
                 key="listener-error",
                 cooldown_seconds=10,
             )
+
+    def _hotkeys_suspended(self):
+        """True while a hotkey is being recorded, so pressing an existing one only records it.
+
+        The window's field counts only while the window has the focus: a field
+        left focused behind another program must not turn the hotkeys off.
+        """
+        return getattr(self, "_hotkey_dialog_open", False) or (
+            getattr(self, "_hotkey_field_active", False) and getattr(self, "_manager_window_focused", False))
 
     def on_release(self, key):
         """Release hotkey state without touching GUI, disk, or snippet data."""
@@ -2859,7 +2874,12 @@ class Sniptype:
         except Exception:
             pass
 
-        result = run_hotkey_dialog(parent, self.settings.get("hotkeys", {}))
+        self._hotkey_dialog_open = True
+        self.hotkey_router.reset()
+        try:
+            result = run_hotkey_dialog(parent, self.settings.get("hotkeys", {}))
+        finally:
+            self._hotkey_dialog_open = False
         if result is None:
             return
         if self._save_hotkey_bindings(result):

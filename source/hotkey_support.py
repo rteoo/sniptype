@@ -118,8 +118,16 @@ _MODIFIERS = frozenset({Key.alt, Key.ctrl, Key.shift, Key.cmd})
 
 def _canonical_key(key):
     key = _MODIFIER_ALIASES.get(key, key)
+    # pynput parses "<f8>" to a bare KeyCode while the listener reports Key.f8, whose
+    # KeyCode can also carry platform flags (the extended-key bit on PageUp, arrows...)
+    # that KeyCode equality compares. Named keys other than the modifiers, which both
+    # sides keep as Key, are compared by their virtual-key code alone.
+    if isinstance(key, Key) and key not in _MODIFIERS:
+        key = key.value
     if isinstance(key, KeyCode) and isinstance(key.char, str):
         return KeyCode.from_char(key.char.casefold())
+    if isinstance(key, KeyCode) and key.vk is not None:
+        return KeyCode.from_vk(key.vk)
     return key
 
 
