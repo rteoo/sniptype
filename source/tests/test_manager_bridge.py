@@ -58,6 +58,18 @@ class BridgeTests(unittest.TestCase):
         self.assertTrue(items["fancy"]["rich"])
         self.assertFalse(items["hello"]["rich"])
 
+    def test_switcher_ranks_every_kind_like_the_classic_one(self):
+        rows = self.result("switcher.search", query="")
+        self.assertEqual({"static", "mapping", "dynamic"}, {row["kind"] for row in rows})
+        self.assertLessEqual(len(rows), ManagerBridge.SWITCHER_LIMIT)
+        hello = self.result("switcher.search", query="hello")[0]
+        self.assertEqual({"kind": "static", "key": "hello", "container": None, "label": "Texto",
+                          "trigger": "hello", "preview": "Hello there"}, hello)
+        city = next(row for row in self.result("switcher.search", query="Goiânia") if row["kind"] == "mapping")
+        self.assertEqual(("city", "_codes", "Mapeamento"), (city["key"], city["container"], city["label"]))
+        content = [row["key"] for row in self.result("switcher.search", query="Best,")]
+        self.assertEqual(["sig"], content)
+
     def test_info_reports_version_language_and_settings(self):
         info = self.result("app.info")
         self.assertEqual(("9.9.9", "beta", "pt-BR"), (info["version"], info["channel"], info["language"]))

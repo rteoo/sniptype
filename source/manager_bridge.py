@@ -69,6 +69,7 @@ from manager_view_support import (
     UNGROUPED_FILTER,
     filter_manager_rows,
     manager_row_preview,
+    search_manager_rows,
 )
 from rich_text_support import (
     build_rich_text_payload,
@@ -209,6 +210,7 @@ class ManagerBridge:
             "form.get": self.form_get,
             "form.save": self.form_save,
             "preview.get": self.preview_get,
+            "switcher.search": self.switcher_search,
             "draft.check": self.draft_check,
             "variables.list": self.variables_list,
             "mapping.types": self.mapping_types,
@@ -427,6 +429,21 @@ class ManagerBridge:
         return {"trigger": trigger, "text": extract_plain_text(value), "rich": is_rich_text_payload(value),
                 "spans": _spans(value), "effectiveTrigger": row.effective_trigger, "favorite": row.favorite,
                 "groupId": row.group_id, "revision": revision(value)}
+
+    # Kinds as the switcher names them (the classic switcher's words).
+    _SWITCHER_KINDS = {"static": N_("Texto"), "mapping": N_("Mapeamento"), "dynamic": N_("Ação dinâmica")}
+    SWITCHER_LIMIT = 50
+
+    def switcher_search(self, query=""):
+        """Ctrl+K: every kind of item ranked for ``query``, as the classic switcher ranks them."""
+        app = self.app
+        projection = app._manager_static_projection()
+        rows = search_manager_rows(app._manager_rows(), query if isinstance(query, str) else "", projection)
+        return [{
+            "kind": row.ref.kind, "key": row.ref.key, "container": row.ref.container,
+            "label": _(self._SWITCHER_KINDS[row.ref.kind]), "trigger": row.effective_trigger,
+            "preview": " ".join(manager_row_preview(row, projection).split())[:120],
+        } for row in rows[:self.SWITCHER_LIMIT]]
 
     def draft_check(self, kind, key, base, container=None):
         """What the library now holds under an open draft's item: ``unchanged``, ``changed`` or ``gone``.

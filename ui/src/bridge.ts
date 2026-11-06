@@ -28,6 +28,12 @@ export interface AppInfo {
   issues: Issue[];
 }
 
+/** One Ctrl+K row: the item it opens and how it reads. */
+export interface SwitcherRow {
+  kind: "static" | "mapping" | "dynamic"; key: string; container: string | null;
+  label: string; trigger: string; preview: string;
+}
+
 export interface HealthAnswer { page: string | null; receipt: string | null }
 
 /** One workflow hotkey: `binding` is the stored pynput syntax (null when off), `display` how it reads. */
