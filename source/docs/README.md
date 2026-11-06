@@ -8,7 +8,7 @@ not certification of the current release.
 
 | Category | Documents and scope |
 | --- | --- |
-| Active contracts and plans | [Sync format](sync-design.md): implemented desktop export and historical mobile consumer requirements; desktop metadata remains local. [TextExpander features 2–4](textexpander-features-2-4-plan.md): source implementation and automated validation complete; release smoke pending. |
+| Active contracts and plans | [Sync format](sync-design.md): implemented desktop export and historical mobile consumer requirements; desktop metadata remains local. [TextExpander features 2–4](textexpander-features-2-4-plan.md): source implementation and automated validation complete; release smoke pending. [Tk manager retirement](tk-manager-retirement-plan.md): proposed phases for Tauri parity, the macOS window and deleting the Tk manager. |
 | Implemented design records | [Variables and tray](features-plan.md), [WhatsApp actions](whatsapp-plan.md), and [WhatsApp v2](whatsapp_v2-plan.md). Current behavior is in the linked source/tests, not old rollout commands. |
 | Platform design and historical host evidence | [Tk/AppKit threading](macos-threading.md) and [macOS insertion](macos-insertion.md). A new Mac package still needs physical focus, TCC, paste, and startup checks. |
 | Historical audits and plans | [July audit](audit-report.md), [phased remediation](improvement-plan.md), [original refactor proposal](refactor-plan.md), and [September cleanup audit](cleanup-audit-2026-09.md). Dates, counts, and unresolved-at-audit labels are snapshots. |
