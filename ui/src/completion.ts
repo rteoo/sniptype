@@ -4,6 +4,7 @@
 import { h } from "./dom";
 import { t } from "./i18n";
 import type { RichEditor } from "./richtext";
+import { chip, type TokenInfo } from "./tokens";
 
 export interface Candidate { name: string; detail: string }
 
@@ -33,7 +34,9 @@ export function rank(candidates: Candidate[], query: string): Candidate[] {
 }
 
 /** Wire the popup to `editor`; returns the popup, which the caller places beside the editor. */
-export function attachCompletion(editor: RichEditor, load: () => Promise<Candidate[]>): HTMLElement {
+export function attachCompletion(
+  editor: RichEditor, load: () => Promise<Candidate[]>, describe: (name: string) => TokenInfo,
+): HTMLElement {
   const id = `${editor.element.id}-completion`;
   const list = h("div", { id, class: "menu completion", popover: "manual", role: "listbox", "aria-label": t("Variáveis") });
   const target = editor.element;
@@ -60,7 +63,7 @@ export function attachCompletion(editor: RichEditor, load: () => Promise<Candida
       // The editor keeps focus and caret while an option is clicked.
       onmousedown: (event: Event) => event.preventDefault(),
       onclick: () => accept(candidate),
-    }, h("span", { class: "mono" }, `%%${candidate.name}%%`), h("span", { class: "muted" }, candidate.detail))));
+    }, chip(`%%${candidate.name}%%`, describe(candidate.name)), h("span", { class: "muted" }, candidate.detail))));
     target.setAttribute("aria-activedescendant", `${id}-${active}`);
   };
 

@@ -28,6 +28,11 @@ their original numbers.
   conditions are `morning`, `afternoon`, `night`, `weekday`, `weekend` and `mon`
   to `sun`. **Inserir > Condição…** writes the block, Prévia shows today's
   branch, and Salvar refuses a block that is not closed.
+- The editor draws each variable as a chip with its own icon and a readable
+  label ("Área de transferência", "Data · HH:mm", "Se manhã", a field or
+  snippet name) instead of the raw `%%name%%`. A chip moves, deletes and copies
+  as one piece; typing a closed `%%name%%` turns it into one. The `%%` list,
+  the list previews and Formulário show the same chips. Stored text is unchanged.
 
 ### Fixed
 

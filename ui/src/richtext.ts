@@ -7,7 +7,12 @@
 // composition work), then the model is read back from the DOM and redrawn.
 // Enter, paste, drop, undo and redo are handled here, because the browser's
 // versions would add markup or would not know about the redraws.
+//
+// A complete `%%name%%` token is drawn as a chip the browser cannot edit inside
+// (tokens.ts): the model keeps the token's text, and every offset counts the
+// chip as that text, so the caret only ever stands before or after one.
 import { h } from "./dom";
+import { chip, type TokenInfo, TOKEN } from "./tokens";
 
 export type Style = "bold" | "italic" | "underline" | "code" | "strike";
 export interface Span { tag: Style; start: number; end: number }
@@ -36,6 +41,8 @@ export interface RichEditor {
   replaceBeforeCaret(count: number, inserted: string): void;
   /** Where the caret is on screen, for a popup that follows it. */
   caretRect(): DOMRect | null;
+  /** Redraw the chips, after what a token names may have changed (the library loaded). */
+  refresh(): void;
 }
 
 function masksFrom(text: string, spans: Span[]): number[] {
@@ -65,12 +72,19 @@ export function spansFrom(masks: number[]): Span[] {
   return spans.sort((a, b) => a.start - b.start || a.end - b.end || a.tag.localeCompare(b.tag));
 }
 
-/** The text a DOM subtree shows: text nodes as they are, a <br> as a line break (the end marker excluded). */
+/** The chip `node` sits in, if any. */
+function chipOf(node: Node | null): HTMLElement | null {
+  const element = node instanceof HTMLElement ? node : node?.parentElement ?? null;
+  return element?.closest<HTMLElement>("[data-token]") ?? null;
+}
+
+/** The text a DOM subtree shows: text nodes as they are, a chip as its token, a <br> as a line break (the end marker excluded). */
 function readText(root: Node): string {
   let text = "";
   const walk = (node: Node) => {
     for (const child of node.childNodes) {
       if (child.nodeType === Node.TEXT_NODE) text += (child as Text).data;
+      else if (child instanceof HTMLElement && child.dataset.token !== undefined) text += child.dataset.token;
       else if (child instanceof HTMLBRElement) {
         if (!child.hasAttribute("data-end")) text += "\n";
       } else if (child instanceof HTMLElement) {
@@ -86,6 +100,8 @@ function readText(root: Node): string {
 
 export function createRichEditor(options: {
   id: string; value: RichValue; label: string; describedBy?: string; readOnly?: boolean; onChange: () => void;
+  /** How a token reads as a chip; without it tokens stay text. */
+  describe?: (name: string) => TokenInfo;
 }): RichEditor {
   let text = options.value.text;
   let masks = masksFrom(text, options.value.spans);
@@ -99,10 +115,17 @@ export function createRichEditor(options: {
     spellcheck: "false",
   });
 
-  const offsetOf = (node: Node, offset: number): number => {
+  /** The model offset of a DOM position; one inside a chip counts as before it, or after it with `after`. */
+  const offsetOf = (node: Node, offset: number, after = false): number => {
     const range = document.createRange();
     range.setStart(element, 0);
-    range.setEnd(node, offset);
+    const inChip = chipOf(node);
+    if (inChip && element.contains(inChip)) {
+      if (after) range.setEndAfter(inChip);
+      else range.setEndBefore(inChip);
+    } else {
+      range.setEnd(node, offset);
+    }
     return readText(range.cloneContents()).length;
   };
 
@@ -111,20 +134,37 @@ export function createRichEditor(options: {
     if (!current || !current.rangeCount || !element.contains(current.anchorNode)) return [text.length, text.length];
     const range = current.getRangeAt(0);
     const start = offsetOf(range.startContainer, range.startOffset);
-    const end = offsetOf(range.endContainer, range.endOffset);
+    const end = offsetOf(range.endContainer, range.endOffset, !range.collapsed);
     return [Math.min(start, end), Math.max(start, end)];
   };
 
+  /** The DOM position of a model offset; a chip is its token's length, entered only at its edges. */
   const positionOf = (offset: number): [Node, number] => {
-    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
     let remaining = offset;
-    let last: Text | null = null;
-    for (let node = walker.nextNode() as Text | null; node; node = walker.nextNode() as Text | null) {
-      if (remaining <= node.data.length) return [node, remaining];
-      remaining -= node.data.length;
-      last = node;
-    }
-    return last ? [last, last.data.length] : [element, 0];
+    const visit = (parent: Node): [Node, number] | null => {
+      const children = [...parent.childNodes];
+      for (let index = 0; index < children.length; index += 1) {
+        const child = children[index];
+        if (child.nodeType === Node.TEXT_NODE) {
+          const length = (child as Text).data.length;
+          if (remaining <= length) return [child, remaining];
+          remaining -= length;
+        } else if (child instanceof HTMLElement && child.dataset.token !== undefined) {
+          if (remaining === 0) return [parent, index];
+          const length = child.dataset.token.length;
+          if (remaining <= length) return [parent, index + 1];
+          remaining -= length;
+        } else if (child instanceof HTMLElement) {
+          const found = visit(child);
+          if (found) return found;
+        }
+      }
+      return null;
+    };
+    const found = visit(element);
+    if (found) return found;
+    // Past the last character: just before the end marker.
+    return [element, Math.max(0, element.childNodes.length - 1)];
   };
 
   // The selection when the editor last had one, so a menu or dialog that took
@@ -146,17 +186,31 @@ export function createRichEditor(options: {
     current.addRange(range);
   };
 
+  const classes = (mask: number) => STYLES.filter((style) => mask & BITS[style]).map((style) => `rt-${style}`).join(" ");
+
   const render = () => {
     const runs: Node[] = [];
+    // Where each token starts, and where it ends.
+    const tokens = new Map<number, number>();
+    if (options.describe) {
+      for (const match of text.matchAll(TOKEN)) tokens.set(match.index, match.index + match[0].length);
+    }
     let i = 0;
     while (i < text.length) {
+      const tokenEnd = tokens.get(i);
+      if (tokenEnd !== undefined) {
+        // A chip takes the styles of its first character.
+        runs.push(chip(text.slice(i, tokenEnd), options.describe!(text.slice(i + 2, tokenEnd - 2)), classes(masks[i])));
+        i = tokenEnd;
+        continue;
+      }
       const mask = masks[i];
       let j = i + 1;
-      while (j < text.length && masks[j] === mask) j += 1;
+      while (j < text.length && masks[j] === mask && !tokens.has(j)) j += 1;
       const node = document.createTextNode(text.slice(i, j));
       if (mask) {
         const span = document.createElement("span");
-        span.className = STYLES.filter((style) => mask & BITS[style]).map((style) => `rt-${style}`).join(" ");
+        span.className = classes(mask);
         span.append(node);
         runs.push(span);
       } else {
@@ -231,6 +285,35 @@ export function createRichEditor(options: {
     select(snapshot.start, snapshot.end);
     options.onChange();
   };
+
+  // What leaves the editor is the model's text, so a chip travels as its token, not its label.
+  const carry = (event: ClipboardEvent | DragEvent) => {
+    const [start, end] = selection();
+    if (end <= start) return false;
+    const data = event instanceof ClipboardEvent ? event.clipboardData : event.dataTransfer;
+    if (!data) return false;
+    data.setData("text/plain", text.slice(start, end));
+    return true;
+  };
+  element.addEventListener("copy", (event) => {
+    if (carry(event)) event.preventDefault();
+  });
+  element.addEventListener("cut", (event) => {
+    if (!carry(event)) return;
+    event.preventDefault();
+    if (element.contentEditable === "false") return;
+    const [start, end] = selection();
+    replace(start, end, "");
+  });
+  element.addEventListener("dragstart", (event) => { carry(event); });
+  // Clicking a chip selects all of it, so typing or Delete replaces the whole token.
+  element.addEventListener("click", (event) => {
+    const clicked = chipOf(event.target as Node);
+    if (!clicked || !element.contains(clicked)) return;
+    const index = [...clicked.parentNode!.childNodes].indexOf(clicked);
+    const start = offsetOf(clicked.parentNode!, index);
+    select(start, start + clicked.dataset.token!.length);
+  });
 
   for (const name of ["keyup", "mouseup", "input"]) {
     element.addEventListener(name, () => {
@@ -344,6 +427,11 @@ export function createRichEditor(options: {
       const rects = range.getClientRects();
       // A collapsed range at a line start can have no rects; the editor's own box is the fallback.
       return rects.length ? rects[rects.length - 1] : element.getBoundingClientRect();
+    },
+    refresh: () => {
+      const keep = inside() ? selection() : null;
+      render();
+      if (keep) select(...keep);
     },
   };
   editor.setReadOnly(!!options.readOnly);

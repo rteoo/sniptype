@@ -21,6 +21,7 @@ import { attachCompletion, type Candidate } from "./completion";
 import { h, icon } from "./dom";
 import { setLanguage, t } from "./i18n";
 import { createRichEditor, type RichEditor, type Span, type Style } from "./richtext";
+import { chip, describeToken, libraryFrom, type TokenLibrary, withChips } from "./tokens";
 
 type Kind = "textos" | "mapeamentos";
 type Page = Kind | "dinamicos" | "backups" | "settings";
@@ -128,6 +129,22 @@ const refs = {
   viewBar: null as HTMLElement | null,
   meta: null as HTMLElement | null,
 };
+
+// What each `%%name%%` names in the library, so its chip shows the right kind; null until loaded.
+let tokenLibrary: TokenLibrary | null = null;
+// The text editor on screen, redrawn when the library changes what its tokens name.
+let textEditor: RichEditor | null = null;
+
+async function loadTokenLibrary(): Promise<void> {
+  try {
+    tokenLibrary = libraryFrom(await request<Variables>("variables.list"));
+  } catch (error) {
+    console.error("variables did not load", error);
+    return;
+  }
+  textEditor?.refresh();
+  if (activeKind()) renderList();
+}
 
 const sources: Record<Kind, Source> = {
   textos: {
@@ -1409,7 +1426,7 @@ function renderList(): void {
     item.group ? h("span", { class: "el-badge" }, item.group) : null,
     item.enabled === false ? h("span", { class: "el-badge" }, t("desativado")) : null,
   ),
-  h("span", { class: "preview" }, item.preview || "—"))));
+  h("span", { class: "preview" }, ...(item.preview ? withChips(item.preview, tokenLibrary) : ["—"])))));
   host.querySelector<HTMLElement>(".item[aria-selected=true]")?.scrollIntoView({ block: "nearest" });
 }
 
@@ -1793,6 +1810,7 @@ function renderDetail(): void {
   const editor = createRichEditor({
     id: "text", label: textos ? t("Texto") : t("Valor"), describedBy: "text-hint",
     value: { text: draft.text, spans: draft.spans },
+    describe: (name) => describeToken(name, tokenLibrary),
     onChange: () => {
       ({ text: draft.text, spans: draft.spans } = editor.value());
       draft.rich = draft.spans.length > 0;
@@ -1800,6 +1818,7 @@ function renderDetail(): void {
       updateSaveState();
     },
   });
+  textEditor = editor;
   host.replaceChildren(
     h("div", { class: "commands" },
       refs.saveButton,
@@ -1829,7 +1848,7 @@ function renderDetail(): void {
         h("span", { class: "field-label", id: "text-label" }, textos ? t("Texto") : t("Valor")),
         h("div", { class: "editor-tools" }, formatBar(editor, formatHint), insertMenu(editor, exclude)),
         editor.element,
-        attachCompletion(editor, () => completionCandidates(exclude)),
+        attachCompletion(editor, () => completionCandidates(exclude), (name) => describeToken(name, tokenLibrary)),
         h("span", { class: "hint", id: "text-hint" }, textos ? t("Digite %% para inserir uma variável, ou use Inserir.")
           : t("O texto que entra no lugar do trigger."), " ", formatHint),
       ),
@@ -2025,9 +2044,10 @@ async function editForm(kind: Kind): Promise<void> {
       },
     },
     h("h2", { id: "dialog-title" }, t("Formulário — {name}", { name: draft.original })),
-    h("p", { class: "muted" }, info.variables.length
-      ? t("Campos que o texto pede: {names}", { names: info.variables.map((name) => `%%${name}%%`).join(", ") })
-      : t("O texto não pede campos de formulário.")),
+    info.variables.length
+      ? h("p", { class: "muted chips" }, t("Campos que o texto pede:"), " ",
+        ...info.variables.map((name) => chip(`%%${name}%%`, describeToken(name, tokenLibrary))))
+      : h("p", { class: "muted" }, t("O texto não pede campos de formulário.")),
     info.readOnly ? h("p", { class: "muted" }, readOnlyMessage()) : null,
     h("div", { class: "form-editor" },
       h("div", { class: "field-column" }, list,
@@ -2855,6 +2875,7 @@ async function onAppEvent({ event: name, text }: AppEvent): Promise<void> {
     // The app pushes this after a reload or a restore: a Desfazer receipt described the library that was there.
     for (const kind of ["textos", "mapeamentos"] as Kind[]) state.collections[kind].receipt = null;
     await refreshVisible().catch((error) => console.error("refresh failed", error));
+    await loadTokenLibrary();
   } else if (name === "receipt" && text) {
     // A tray or hotkey command while the person is in this window: its receipt, not a toast.
     pageReceipt(text);
@@ -2947,6 +2968,7 @@ async function main(): Promise<void> {
   if (savedPage && savedPage !== state.page) await showPage(savedPage);
   renderAll();
   refs.search?.focus();
+  void loadTokenLibrary();
   await takeTarget().catch((error) => console.error("target failed", error));
 }
 
