@@ -1,6 +1,6 @@
 # Tk manager retirement plan
 
-Status: proposed, nothing implemented
+Status: phase 0 skipped (Teô's call, 2026-11-06); phase 1 in review as stacked PRs
 
 Date: 2026-11-05
 
@@ -122,6 +122,21 @@ away again in phase 3.
 
 Each gap becomes a bridge method that reuses the existing app method, which is
 the rule in AGENTS.md. Order follows impact.
+
+Progress (2026-11-06). Each slice is one PR, stacked in this order; each was
+driven in the real window over CDP against an in-process app, not in a
+packaged build:
+
+| Gap | Pull request | State |
+|---|---|---|
+| 1–2 expansion state, health actions, push events | rteoo/sniptype#63 | in review |
+| 3 draft conflicts and the stale-save guard | rteoo/sniptype#64 | in review |
+| 4 Inserir variável | rteoo/sniptype#62, with #65 (another session; also `%%` completion and new tokens) | merged |
+| 5 hotkeys in Configurações | rteoo/sniptype#66 | in review |
+| 6 keyboard workflow | rteoo/sniptype#67 | in review |
+| 7 window state | rteoo/sniptype#68 | in review |
+| 8 data card and notifications | rteoo/sniptype#69 | in review |
+| 9 small items | — | empty-library Importar already existed; tray and hotkey receipts on the window's status line and Mostrar na lista remain |
 
 1. **Push events from the app to the window.** Add
    `ManagerProcess.send({"event": "library"})` and `{"event": "health"}` from

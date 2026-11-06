@@ -55,6 +55,23 @@ code, .mono { font-family: var(--app-font-trigger); }
 .expansion button { display: flex; align-items: center; gap: 8px; justify-content: flex-start; }
 .infobar .actions { display: flex; gap: 8px; margin-top: 6px; }
 
+/* Dados: each destination with Copiar, and the last copy or export under it. */
+.card.data { grid-template-columns: minmax(0, 1fr); }
+.card.data .control { grid-column: 1; grid-row: auto; }
+.data-rows { display: grid; gap: 10px; margin: 8px 0; }
+.data-row { display: grid; grid-template-columns: minmax(140px, auto) minmax(0, 1fr) auto; gap: 4px 12px; align-items: center; }
+.data-row code { overflow-wrap: anywhere; }
+.data-row .transfer { grid-column: 2 / -1; display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  font-size: var(--native-type-caption); color: var(--native-muted); }
+.data-row .transfer.failed { color: var(--color-link); background: var(--native-selection); padding: 8px 12px; border-radius: 4px; }
+/* Notificações. */
+dialog.notices-dialog { width: min(760px, calc(100vw - 48px)); }
+.notices { max-height: 50vh; overflow-y: auto; margin: 8px 0; }
+.notices table { width: 100%; border-collapse: collapse; }
+.notices th, .notices td { text-align: left; padding: 4px 8px; vertical-align: top; }
+.notices td:first-child { white-space: nowrap; }
+.notices tr.error td { color: var(--color-danger-fg); }
+
 /* Ctrl+K switcher and the Ctrl+/ shortcut sheet. */
 dialog.switcher { width: min(640px, calc(100vw - 48px)); }
 .switcher-list { width: 100%; margin-top: 8px; }

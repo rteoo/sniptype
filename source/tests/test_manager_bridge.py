@@ -968,6 +968,49 @@ class WindowPlaceTests(unittest.TestCase):
         persist.assert_not_called()
 
 
+class DataAndNotificationsTests(unittest.TestCase):
+    """The Dados card's destinations and the Notificações history."""
+
+    def setUp(self):
+        self.app = make_real_app(self, {"hello": "Hello there"})
+        self.app.icon = None
+        self.bridge = ManagerBridge(self.app, version="9.9.9", channel="stable")
+
+    def call(self, method, **params):
+        return self.bridge.handle({"id": 1, "method": method, "params": params})
+
+    def transfers(self):
+        return {row["kind"]: row for row in self.call("app.info")["result"]["transfers"]}
+
+    def test_destinations_are_off_until_settings_name_them(self):
+        self.assertEqual({"copy": {"kind": "copy", "dir": None, "status": None, "failed": False},
+                          "export": {"kind": "export", "dir": None, "status": None, "failed": False}},
+                         self.transfers())
+        self.assertEqual("not_found", self.call("data.openTransfer", kind="export")["error"]["code"])
+
+    def test_a_failed_export_says_so_and_opens_its_folder_without_creating_it(self):
+        self.app.settings["sync_export_dir"] = "~/sniptype-sync-test"
+        self.app.last_sync = {"ok": False, "at": "2026-11-06T09:30:00", "error": "disk full"}
+        row = self.transfers()["export"]
+        self.assertEqual(("~/sniptype-sync-test", True), (row["dir"], row["failed"]))
+        self.assertIn("disk full", row["status"])
+        with mock.patch.object(self.app, "_open_in_shell") as open_in_shell:
+            self.assertIsNone(self.call("data.openTransfer", kind="export")["result"])
+        open_in_shell.assert_called_once_with(os.path.expanduser("~/sniptype-sync-test"))
+
+    def test_history_is_newest_first_and_can_show_errors_only(self):
+        self.app.notification_history = [
+            {"time": "09:00:00", "at": "2026-11-06T09:00:00", "message": "Salvo", "kind": "status"},
+            {"time": "09:05:00", "at": "2026-11-06T09:05:00", "message": "Falhou", "kind": "error"},
+        ]
+        rows = self.call("notifications.list")["result"]
+        self.assertEqual(["Falhou", "Salvo"], [row["message"] for row in rows])
+        self.assertEqual(("error", "Erro"), (rows[0]["kind"], rows[0]["kindLabel"]))
+        self.assertTrue(rows[0]["when"])
+        self.assertEqual(["Falhou"], [row["message"] for row in
+                                      self.call("notifications.list", errorsOnly=True)["result"]])
+
+
 class ManagerEventPushTests(unittest.TestCase):
     """The app tells a running window when its state or its library changed."""
 

@@ -12,8 +12,10 @@ import {
   type DynamicRenameAnswer, type DynamicSection, type DynamicToggleAnswer, type FormFieldDef, type FormInfo,
   type FormSaveAnswer, type Group, type HealthAnswer, type HotkeySaveAnswer, type Preview,
   type GroupForm, type Groups, type GroupSaveAnswer, type Library, type ListFilter, type MappingEntry,
-  type MappingItem, type MappingSaveAnswer, type MappingType, type RenameAnswer, type SaveAnswer, type SaveCheck,
-  type Snippet, type SwitcherRow, type Variable, type Variables, type WindowState, request, startBridge,
+  type MappingItem, type MappingSaveAnswer, type MappingType, type Notice, type RenameAnswer, type SaveAnswer,
+  type SaveCheck,
+  type Snippet, type SwitcherRow, type Transfer, type Variable, type Variables, type WindowState, request,
+  startBridge,
 } from "./bridge";
 import { attachCompletion, type Candidate } from "./completion";
 import { h, icon } from "./dom";
@@ -1085,6 +1087,74 @@ function renderStatus(): void {
       title: t("Editar último"), "aria-label": t("Editar último"),
       onclick: () => void request("app.editLast").catch((error) => alertError(t("Editar último"), error)),
     }, icon("document"), h("span", { class: "label" }, t("Editar último"))),
+    h("button", {
+      type: "button", class: "el-button", title: t("Notificações"), "aria-label": t("Notificações"),
+      onclick: () => void showNotifications(),
+    }, icon("bell"), h("span", { class: "label" }, t("Notificações"))),
+  );
+}
+
+/** Notificações: what the app has said, newest first; errors are marked by word as well as color. */
+async function showNotifications(): Promise<void> {
+  const body = h("div", { class: "notices", role: "region", "aria-label": t("Últimas notificações"), tabindex: 0 });
+  const errorsOnly = h("input", { type: "checkbox", role: "switch", class: "el-switch", id: "notices-errors" });
+  const fill = async () => {
+    let rows: Notice[];
+    try {
+      rows = await request<Notice[]>("notifications.list", { errorsOnly: errorsOnly.checked });
+    } catch (error) {
+      body.replaceChildren(h("p", { class: "error" }, errorText(error)));
+      return;
+    }
+    if (!rows.length) {
+      body.replaceChildren(h("p", { class: "muted" },
+        errorsOnly.checked ? t("Nenhum erro registrado.") : t("Nenhuma notificação registrada ainda.")));
+      return;
+    }
+    body.replaceChildren(h("table", {},
+      h("thead", {}, h("tr", {}, h("th", {}, t("Quando")), h("th", {}, t("Tipo")), h("th", {}, t("Mensagem")))),
+      h("tbody", {}, ...rows.map((row) => h("tr", { class: row.kind === "error" ? "error" : undefined },
+        h("td", {}, row.when), h("td", {}, row.kindLabel), h("td", {}, row.message))))));
+  };
+  errorsOnly.addEventListener("change", () => void fill());
+  const dialog = h("dialog", { class: "notices-dialog", "aria-labelledby": "dialog-title" },
+    h("h2", { id: "dialog-title" }, t("Histórico de notificações")),
+    h("label", { class: "el-choice", for: "notices-errors" }, errorsOnly, t("Somente erros")),
+    body,
+    h("menu", {}, h("button", { type: "button", class: "primary", onclick: () => dialog.close() }, t("Fechar"))),
+  );
+  await fill();
+  openDialog(dialog, dialog.querySelector("menu button"));
+}
+
+async function copyText(text: string, card: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text);
+    state.cardStatus[card] = { text: t("Copiado."), error: false };
+  } catch (error) {
+    state.cardStatus[card] = { text: errorText(error), error: true };
+  }
+  renderAll();
+}
+
+/** One destination of the Dados card: the folder with Copiar, and the last run under it. */
+function transferRow(transfer: Transfer): HTMLElement {
+  const label = transfer.kind === "copy" ? t("Cópia espelho") : t("Pacote de sincronização");
+  const off = transfer.kind === "copy" ? t("Desativada") : t("Desativado");
+  return h("div", { class: "data-row" },
+    h("span", {}, label),
+    transfer.dir ? h("code", {}, transfer.dir) : h("span", { class: "muted" }, off),
+    transfer.dir ? h("button", { type: "button", class: "el-button", onclick: () => void copyText(transfer.dir!, "data") },
+      t("Copiar")) : h("span", {}),
+    transfer.status ? h("div", { class: `transfer${transfer.failed ? " failed" : ""}`, role: transfer.failed ? "alert" : undefined },
+      h("span", {}, transfer.status),
+      ...(transfer.failed ? [
+        h("button", { type: "button", class: "el-button",
+          onclick: () => void request("data.openTransfer", { kind: transfer.kind })
+            .catch((error) => alertError(t("Abrir pasta"), error)) }, t("Abrir pasta")),
+        h("button", { type: "button", class: "el-button",
+          onclick: () => void runHealth("retry_sync") }, t("Tentar agora")),
+      ] : [])) : null,
   );
 }
 
@@ -2339,10 +2409,20 @@ function settingsPage(): HTMLElement {
             type: "button", class: "el-button", disabled: !hotkey.binding,
             onclick: () => void saveHotkey(hotkey.action, null),
           }, t("Desativar")))))),
-      card("data", t("Dados"),
-        h("span", { class: "stack" }, t("Biblioteca, backups e logs ficam nesta pasta."), h("code", {}, info.dataDir)),
-        h("button", { type: "button", class: "el-button", onclick: () => void request("app.openDataFolder") },
-          t("Abrir pasta"))),
+      h("section", { class: "card data", "aria-labelledby": "card-data" },
+        h("h2", { id: "card-data" }, t("Dados")),
+        h("p", {}, t("Biblioteca, backups e logs ficam nesta pasta.")),
+        status("data"),
+        h("div", { class: "data-rows" },
+          h("div", { class: "data-row" },
+            h("span", {}, t("Pasta de dados")), h("code", {}, info.dataDir),
+            h("button", { type: "button", class: "el-button", onclick: () => void copyText(info.dataDir, "data") },
+              t("Copiar"))),
+          ...info.transfers.map(transferRow)),
+        h("p", { class: "muted" }, t("A cópia espelho e o pacote de sincronização são definidos em settings.json.")),
+        h("div", { class: "control" },
+          h("button", { type: "button", class: "el-button", onclick: () => void request("app.openDataFolder") },
+            t("Abrir pasta")))),
     ),
   );
 }

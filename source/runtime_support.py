@@ -14,11 +14,12 @@ from platform_support import default_insertion_timings
 from builtin_tokens import steps_text
 from rich_text_support import extract_plain_text
 from snippet_utils import write_json_atomic
-from i18n import _
+from i18n import N_, _
 
 
 LOGGER_NAME = "sniptype"
 NOTIFICATION_HISTORY_LIMIT = 120
+NOTIFICATION_KIND_LABELS = {"error": N_("Erro"), "status": N_("Status"), "info": N_("Info")}
 
 
 def load_notification_history(path, limit=NOTIFICATION_HISTORY_LIMIT):

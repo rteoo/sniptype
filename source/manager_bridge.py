@@ -37,6 +37,7 @@ from form_editor_dialog import FormEditorController, type_label
 from form_support import DEFAULT_DATE_FORMAT, FIELD_TYPES, FormValidationError, compile_form
 from preview_dialog import build_preview_model
 from preview_support import resolve_preview
+from runtime_support import NOTIFICATION_KIND_LABELS, notification_stamp
 from editor_session import (
     CHANGED,
     GONE,
@@ -225,6 +226,8 @@ class ManagerBridge:
             "mapping.deleteType": self.mapping_delete_type,
             "settings.set": self.settings_set,
             "window.save": self.window_save,
+            "data.openTransfer": self.data_open_transfer,
+            "notifications.list": self.notifications_list,
         }
 
     def handle(self, message):
@@ -266,6 +269,7 @@ class ManagerBridge:
             "lastExpansion": app._last_expansion_text(),
             "hotkeys": self._hotkeys(),
             "window": normalize_manager_window(app.settings.get("manager_window")),
+            "transfers": self._transfers(),
             "canEditLast": app._manager_target(app.workflow_state.last_successful_item) is not None
             if app.workflow_state.last_successful_item is not None else False,
             "issues": [
@@ -1225,6 +1229,44 @@ class ManagerBridge:
             app.refresh_runtime_indexes()
         return self.app_info()
 
+
+    # The two optional destinations, by the health vocabulary of what happens there.
+    _TRANSFERS = (("copy", "mirror_dir", "last_mirror"), ("export", "sync_export_dir", "last_sync"))
+
+    def _transfers(self):
+        """Cópia espelho and Pacote de sincronização: the folder, and what the last copy or export did."""
+        app = self.app
+        rows = []
+        for kind, setting, record in self._TRANSFERS:
+            directory = app.settings.get(setting)
+            if not isinstance(directory, str) or not directory:
+                rows.append({"kind": kind, "dir": None, "status": None, "failed": False})
+                continue
+            status, failed = health_support.describe_transfer(kind, getattr(app, record, None), datetime.now())
+            rows.append({"kind": kind, "dir": directory, "status": status, "failed": failed})
+        return rows
+
+    def data_open_transfer(self, kind):
+        """Abrir pasta on a failed copy or export: the destination as set, never created."""
+        directory = next((self.app.settings.get(setting) for name, setting, _record in self._TRANSFERS
+                          if name == kind), None)
+        if not isinstance(directory, str) or not directory:
+            raise BridgeError("not_found", f"no {kind} folder is set")
+        self.app._open_in_shell(os.path.expanduser(directory))
+        return None
+
+    def notifications_list(self, errorsOnly=False):
+        """Notificações: the kept history, newest first, optionally errors only."""
+        now = datetime.now()
+        rows = []
+        for entry in reversed(list(self.app.notification_history)):
+            kind = entry.get("kind", "info")
+            if errorsOnly and kind != "error":
+                continue
+            rows.append({"when": notification_stamp(entry, now), "kind": kind,
+                         "kindLabel": _(NOTIFICATION_KIND_LABELS.get(kind, kind)),
+                         "message": entry.get("message", "")})
+        return rows
 
     def window_save(self, value):
         """Remember where the window is and which page it shows, for the next time it opens."""
