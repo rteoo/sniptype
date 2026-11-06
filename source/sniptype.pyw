@@ -84,6 +84,7 @@ from runtime_support import (
     truncate_notification_text,
     LOG_FILE_NAME,
     NOTIFICATION_HISTORY_LIMIT,
+    NOTIFICATION_KIND_LABELS,
     notification_stamp,
 )
 from backup_support import (
@@ -315,7 +316,6 @@ BUFFER_RESET_KEYS = frozenset(
 EDITOR_CONTENT_MIN_HEIGHT = 140
 
 # Display labels for the persisted notification ``kind`` values.
-NOTIFICATION_KIND_LABELS = {"error": N_("Erro"), "status": N_("Status"), "info": N_("Info")}
 
 # An open manager checks the Windows app theme this often while the
 # appearance is System (see _check_system_appearance). A registry read costs

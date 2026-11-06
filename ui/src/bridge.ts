@@ -27,6 +27,7 @@ export interface AppInfo {
   hotkeys: Hotkey[];
   /** Where the window was last (physical pixels), and its page; {} the first time. */
   window: WindowState;
+  transfers: Transfer[];
   issues: Issue[];
 }
 
@@ -37,6 +38,11 @@ export interface SwitcherRow {
 }
 
 export interface HealthAnswer { page: string | null; receipt: string | null }
+
+/** Cópia espelho (`copy`) or Pacote de sincronização (`export`): its folder, and what the last run did. */
+export interface Transfer { kind: "copy" | "export"; dir: string | null; status: string | null; failed: boolean }
+
+export interface Notice { when: string; kind: string; kindLabel: string; message: string }
 
 export interface WindowState {
   x?: number; y?: number; width?: number; height?: number; maximized?: boolean; page?: string;
