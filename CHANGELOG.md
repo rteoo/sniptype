@@ -19,7 +19,10 @@ their original numbers.
 | 3.2.0, 3.2.1 | 0.9.0, 0.9.1 | 5.2.0-beta.1 | 1.0.0-beta.1 |
 | 3.3.0-beta, 3.3.0 | 0.10.0-beta.1, 0.10.0 | 5.2.0 | 1.0.0 |
 
-## [Unreleased]
+## [1.5.0-beta.2] — 2026-11-06
+
+Snippets can change with the time of day, the editor shows variables as
+chips, and forms with typed fields now open on Windows.
 
 ### Added
 
