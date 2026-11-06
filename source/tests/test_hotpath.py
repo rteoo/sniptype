@@ -103,6 +103,31 @@ class WorkflowHotkeyIntegrationTests(unittest.TestCase):
         self.app.on_press(KeyCode.from_char("m"))
         self.assertEqual(1, self.app.task_runner.start.call_count)
 
+    @unittest.skipUnless(sys.platform == "win32", "the Windows listener's key translation")
+    def test_ctrl_letter_and_digit_hotkeys_fire_as_the_windows_listener_reports_them(self):
+        import ctypes
+
+        # An unstarted listener installs no hook; its translator is what the running one uses.
+        self.app.listener = tx.keyboard.Listener()
+        self.app.hotkey_router = tx.HotkeyRouter(
+            {"open_manager": "<ctrl>+m", "toggle_enabled": "<ctrl>+<shift>+1"},
+            self.app._dispatch_hotkey_action,
+        )
+
+        def reported(vk, char):
+            # What pynput's Windows listener builds: the character with Ctrl or Shift applied.
+            return KeyCode(vk=vk, char=char, _scan=ctypes.windll.user32.MapVirtualKeyW(vk, 0))
+
+        self.app.on_press(Key.ctrl_l)
+        self.app.on_press(reported(0x4D, "\r"))
+        self.app.on_release(reported(0x4D, "\r"))
+        self.app.on_press(Key.shift_l)
+        self.app.on_press(reported(0x31, None))
+        self.assertEqual(
+            ["open_manager", "toggle_enabled"],
+            [call.args[1] for call in self.app.task_runner.start.call_args_list],
+        )
+
     def test_edit_last_and_toggle_actions_queue_safe_seams(self):
         reference = tx.SnippetRef("static", "xhi")
         self.app.workflow_state.record_success(reference)

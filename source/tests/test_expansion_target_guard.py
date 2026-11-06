@@ -322,6 +322,16 @@ class ExpansionTargetGuardTests(_GuardFixture):
         self.assertEqual(["<>"], self.pasted)
         self.assertEqual([("type", " "), ("left", 2)], order)
 
+    def test_terminator_leaves_the_caret_after_it_without_a_cursor_token(self):
+        self.app.terminator_mode = True
+        self._cursor_snippet("SECOND")
+        self._type("xcur ")
+        self._run_worker(0)
+
+        self.assertEqual(["SECOND"], self.pasted)
+        self.app.keyboard_controller.type.assert_called_once_with(" ")
+        self.app.text_inserter.move_caret_left.assert_not_called()
+
     def test_caret_stays_put_when_the_target_moved_on(self):
         self._cursor_snippet("a%%_cursor%%b")
         self._type("xcur")

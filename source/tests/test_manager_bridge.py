@@ -837,6 +837,11 @@ class ExpansionStateAndHealthTests(unittest.TestCase):
         self.assertTrue(answer["receipt"].startswith("Expansão retomada às"))
         self.assertTrue(self.app.enabled)
 
+    def test_resume_after_a_hotkey_already_resumed_does_not_pause_again(self):
+        self.app.enabled = True
+        self.assertEqual({"page": None, "receipt": None}, self.result("health.run", action="resume"))
+        self.assertTrue(self.app.enabled)
+
     def test_page_actions_name_the_page_and_others_reuse_the_app(self):
         self.assertEqual({"page": "backups", "receipt": None}, self.result("health.run", action="open_backups"))
         self.assertEqual("dinamicos", self.result("health.run", action="open_dynamic")["page"])

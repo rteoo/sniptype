@@ -249,7 +249,8 @@ function ask(title: string, message: string, buttons: DialogButton[]): Promise<s
     );
     // Escape and the backdrop mean the last, cancelling button.
     dialog.addEventListener("close", () => resolve(dialog.returnValue || buttons[buttons.length - 1].id));
-    openDialog(dialog, dialog.querySelector("button.primary"));
+    // With no primary action (a destructive question), Enter must land on the cancelling button.
+    openDialog(dialog, dialog.querySelector("button.primary") ?? dialog.querySelector("menu button:last-child"));
   });
 }
 
@@ -406,6 +407,8 @@ function menuButton(label: string,
       items[(at + (event.key === "ArrowDown" ? 1 : items.length - 1)) % items.length]?.focus();
     } else if (event.key === "Escape" || event.key === "Tab") {
       event.preventDefault();
+      // The popover is gone by the time the document hears it: that Esc must not also reach the editor.
+      event.stopPropagation();
       menu.hidePopover();
       button.focus();
     }
@@ -520,8 +523,10 @@ async function reconcileDraft(kind: Kind): Promise<void> {
     if (state.collections[kind].draft !== draft || check.status === "unchanged") return;
     const name = draft.original;
     if (!isDirty(kind)) {
-      if (check.status === "gone") state.collections[kind].draft = null;
-      else state.collections[kind].draft = draftFrom(await sources[kind].get(name), draft.type);
+      const fresh = check.status === "gone" ? null : draftFrom(await sources[kind].get(name), draft.type);
+      // Typing during that read made it a draft: keep it, and let the next refresh ask.
+      if (state.collections[kind].draft !== draft || isDirty(kind)) return;
+      state.collections[kind].draft = fresh;
       if (state.page === kind) { renderList(); renderDetail(); }
       return;
     }
@@ -601,8 +606,21 @@ async function newItem(kind: Kind): Promise<void> {
   document.getElementById(prefill ? "text" : "name")?.focus();
 }
 
+const saving = new Set<Kind>();
+
 /** Salvar and Ctrl+S. True when nothing is left unsaved. */
-async function save(kind: Kind, confirmed: SaveCheck[] = []): Promise<boolean> {
+async function save(kind: Kind): Promise<boolean> {
+  // A second Salvar while one is in flight would carry the same base and read as someone else's change.
+  if (saving.has(kind)) return false;
+  saving.add(kind);
+  try {
+    return await saveDraft(kind);
+  } finally {
+    saving.delete(kind);
+  }
+}
+
+async function saveDraft(kind: Kind, confirmed: SaveCheck[] = []): Promise<boolean> {
   const draft = state.collections[kind].draft;
   if (!draft || !isDirty(kind)) return true;
   let answer: Saved | Confirmation;
@@ -618,7 +636,7 @@ async function save(kind: Kind, confirmed: SaveCheck[] = []): Promise<boolean> {
       { id: "ok", label: answer.action, tone: answer.check === "replace" || answer.check === "stale" ? "danger" : "primary" },
       { id: "cancel", label: t("Cancelar") },
     ]);
-    return choice === "ok" ? save(kind, [...confirmed, answer.check]) : false;
+    return choice === "ok" ? saveDraft(kind, [...confirmed, answer.check]) : false;
   }
   Object.assign(draft, {
     original: answer.name, name: answer.name, savedName: answer.name, savedText: draft.text,
@@ -1075,7 +1093,8 @@ function renderStatus(): void {
   const toggleLabel = expansion === "paused" ? t("Retomar expansão") : t("Pausar expansão");
   // The narrow rail hides every .label: the buttons keep their names in title and aria-label.
   const toggle = expansion === "down"
-    ? h("button", { type: "button", class: "el-button", disabled: true }, t("Reinicie o SnipType"))
+    ? h("button", { type: "button", class: "el-button", disabled: true, title: t("Reinicie o SnipType"),
+      "aria-label": t("Reinicie o SnipType") }, icon("pause"), h("span", { class: "label" }, t("Reinicie o SnipType")))
     : h("button", { type: "button", class: "el-button", title: toggleLabel, "aria-label": toggleLabel,
       onclick: () => void toggleExpansion() },
       icon(expansion === "paused" ? "play" : "pause"), h("span", { class: "label" }, toggleLabel));
@@ -1180,6 +1199,8 @@ async function runHealth(action: string): Promise<void> {
     await alertError(t("Avisos"), error);
   }
   await refreshInfo().catch((error) => console.error("refresh failed", error));
+  // Tentar agora on the Dados card: its transfer lines come from app.info, not from the bar.
+  if (state.page === "settings") renderAll();
 }
 
 async function dismissIssue(id: string): Promise<void> {
@@ -2756,7 +2777,9 @@ async function escapeEditor(kind: Kind): Promise<void> {
   if (!isDirty(kind)) return;
   const draft = collection.draft!;
   const choice = await ask(t("Descartar alterações?"),
-    t("{name} tem alterações que ainda não foram salvas.", { name: draft.name.trim() || draft.savedName || t("novo snippet") }),
+    t("{name} tem alterações que ainda não foram salvas.", {
+      name: draft.name.trim() || draft.savedName || (kind === "textos" ? t("novo snippet") : t("novo item")),
+    }),
     [{ id: "discard", label: t("Descartar"), tone: "danger" }, { id: "cancel", label: t("Cancelar") }]);
   if (choice !== "discard" || collection.draft !== draft) return;
   if (draft.original === null) collection.draft = null;
@@ -2776,6 +2799,8 @@ async function onAppEvent({ event: name, text }: AppEvent): Promise<void> {
   } else if (name === "state") {
     await refreshInfo().catch((error) => console.error("refresh failed", error));
   } else if (name === "library") {
+    // The app pushes this after a reload or a restore: a Desfazer receipt described the library that was there.
+    for (const kind of ["textos", "mapeamentos"] as Kind[]) state.collections[kind].receipt = null;
     await refreshVisible().catch((error) => console.error("refresh failed", error));
   } else if (name === "receipt" && text) {
     // A tray or hotkey command while the person is in this window: its receipt, not a toast.
@@ -2808,8 +2833,9 @@ async function restoreWindow(saved: WindowState | undefined): Promise<boolean> {
     || saved.y === undefined) return false;
   const rect = { x: saved.x, y: saved.y, width: saved.width, height: saved.height };
   if (!(await onSomeMonitor(rect))) return false;
-  await appWindow.setSize(new PhysicalSize(rect.width, rect.height));
+  // Position first: moving to a monitor of another scale rescales the window, so the size comes after.
   await appWindow.setPosition(new PhysicalPosition(rect.x, rect.y));
+  await appWindow.setSize(new PhysicalSize(rect.width, rect.height));
   normalRect = rect;
   return !!saved.maximized;
 }
