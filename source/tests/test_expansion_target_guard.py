@@ -297,6 +297,46 @@ class ExpansionTargetGuardTests(_GuardFixture):
         self.assertEqual(["SECOND"], self.pasted)
         self.app.keyboard_controller.type.assert_not_called()
 
+    def _cursor_snippet(self, text):
+        self.app.snippets["xcur"] = text
+        self.app.refresh_runtime_indexes()
+        self.app.text_inserter.move_caret_left = mock.Mock(return_value=True)
+
+    def test_cursor_token_is_pasted_away_and_the_caret_moves_back(self):
+        self._cursor_snippet("Olá %%_cursor%%, tudo bem?")
+        self._type("xcur")
+        self._run_worker(0)
+
+        self.assertEqual(["Olá , tudo bem?"], self.pasted)
+        self.app.text_inserter.move_caret_left.assert_called_once_with(len(", tudo bem?"))
+
+    def test_terminator_lands_at_the_end_before_the_caret_moves(self):
+        self.app.terminator_mode = True
+        self._cursor_snippet("<%%_cursor%%>")
+        self._type("xcur ")
+        order = []
+        self.app.keyboard_controller.type.side_effect = lambda text: order.append(("type", text))
+        self.app.text_inserter.move_caret_left.side_effect = lambda count: order.append(("left", count))
+        self._run_worker(0)
+
+        self.assertEqual(["<>"], self.pasted)
+        self.assertEqual([("type", " "), ("left", 2)], order)
+
+    def test_caret_stays_put_when_the_target_moved_on(self):
+        self._cursor_snippet("a%%_cursor%%b")
+        self._type("xcur")
+
+        def paste_then_click():
+            self.pasted.append(self.clipboard.value)
+            self.app.mouse_monitor.generation += 1
+            return True
+
+        self.app.text_inserter._send_paste_shortcut = paste_then_click
+        self._run_worker(0)
+
+        self.assertEqual(["ab"], self.pasted)
+        self.app.text_inserter.move_caret_left.assert_not_called()
+
     def test_self_injected_events_do_not_mark_the_expansion_stale(self):
         # macOS and the paced Windows erase deliver our own synthesized
         # backspaces (and the re-emitted terminator) to the listener after

@@ -1,7 +1,9 @@
 """Side-effect-free preview resolution for Sniptype snippet values."""
 
 from dataclasses import dataclass
+from datetime import datetime
 
+from builtin_tokens import render_date
 from form_support import compile_form, render_form_values
 from rich_text_support import extract_plain_text, is_rich_text_payload, rebuild_rich_text
 from snippet_utils import check_dynamic_pattern, get_dynamic_prefixes
@@ -9,6 +11,7 @@ from variable_support import VARIABLE_RE, classify_variable
 
 
 CLIPBOARD_PLACEHOLDER = "‹clipboard›"
+CURSOR_PLACEHOLDER = "‹cursor›"
 DYNAMIC_PLACEHOLDER_TEMPLATE = "‹dynamic:{name}›"
 
 
@@ -23,9 +26,11 @@ class PreviewResult:
 def resolve_preview(value, snippets, form_fields=None, form_values=None):
     """Resolve a preview without clipboard reads, providers, insertion, or I/O.
 
-    Static and mapping references use the local in-memory library. Clipboard
-    and callable dynamic references become explicit placeholders. Form values
-    are rendered from supplied values or their configured defaults. Every
+    Static and mapping references use the local in-memory library and
+    ``%%_date…%%`` renders the current date. Clipboard and callable dynamic
+    references become explicit placeholders, and ``%%_cursor%%`` shows where
+    the caret will end. Form values are rendered from supplied values or their
+    configured defaults. Every
     replacement is selected from the original template in one regex pass, so
     replacement text containing ``%%tokens%%`` remains literal.
     """
@@ -34,6 +39,7 @@ def resolve_preview(value, snippets, form_fields=None, form_values=None):
     rendered_fields = render_form_values(compiled, form_values or {})
     prefixes = get_dynamic_prefixes(snippets)
     unavailable = []
+    now = datetime.now()
 
     def replace(match):
         name = match.group(1)
@@ -43,6 +49,10 @@ def resolve_preview(value, snippets, form_fields=None, form_values=None):
         if kind == "clipboard":
             unavailable.append(name)
             return CLIPBOARD_PLACEHOLDER
+        if kind == "date":
+            return render_date(name, now)
+        if kind == "cursor":
+            return CURSOR_PLACEHOLDER
         if kind == "dynamic_ref":
             unavailable.append(name)
             return DYNAMIC_PLACEHOLDER_TEMPLATE.format(name=name)
@@ -58,6 +68,7 @@ def resolve_preview(value, snippets, form_fields=None, form_values=None):
 
 __all__ = [
     "CLIPBOARD_PLACEHOLDER",
+    "CURSOR_PLACEHOLDER",
     "DYNAMIC_PLACEHOLDER_TEMPLATE",
     "PreviewResult",
     "resolve_preview",

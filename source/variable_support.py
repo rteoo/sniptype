@@ -4,6 +4,8 @@ Syntax: %%variable_name%%
 
 Kinds, resolved in this priority order:
   - %%clipboard-paste%%  → current clipboard plain text
+  - %%_date…%%, %%_cursor%% → built-in tokens (``builtin_tokens``): the date,
+                           and where the caret ends after the paste
   - %%trigger%%          → plain text of an existing static snippet (1 level deep)
   - %%trigger%%          → a runtime dynamic snippet (xhj, xdolar, xcot, ...): the
                            callable is invoked and its result substituted
@@ -18,6 +20,7 @@ worker thread — never from the keyboard listener.
 
 import re
 
+from builtin_tokens import builtin_kind, builtin_value
 from rich_text_support import extract_plain_text
 from snippet_utils import check_dynamic_pattern, get_dynamic_prefixes
 from whatsapp_runtime_support import ACTION_COMPLETED
@@ -43,13 +46,16 @@ def find_variable_names(text):
 
 
 def classify_variable(name, snippets, prefixes=None):
-    """Return 'clipboard', 'snippet_ref', 'dynamic_ref', 'mapping_ref' or 'form_field'.
+    """Return 'clipboard', 'date', 'cursor', 'snippet_ref', 'dynamic_ref', 'mapping_ref' or 'form_field'.
 
     ``prefixes`` is the precomputed dynamic-mapping prefix map; pass it when
     classifying many names so the map is not rebuilt per token.
     """
     if name == "clipboard-paste":
         return "clipboard"
+    builtin = builtin_kind(name)
+    if builtin is not None:
+        return builtin
     if name in snippets:
         return "dynamic_ref" if callable(snippets[name]) else "snippet_ref"
     if check_dynamic_pattern(snippets, name, prefixes)[0] is not None:
@@ -129,6 +135,8 @@ def expand_inline(text, snippets, get_clipboard, _seen=None, prefixes=None, noti
                     _("A área de transferência não retornou texto válido.")
                 )
             inline_values[name] = value
+        elif kind in ("date", "cursor"):
+            inline_values[name] = builtin_value(name)
         elif name in _seen:
             continue  # circular reference: leave unchanged
         elif kind == "snippet_ref":

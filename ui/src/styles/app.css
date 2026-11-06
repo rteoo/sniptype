@@ -133,6 +133,15 @@ code, .mono { font-family: var(--app-font-trigger); }
 .format-bar { display: flex; flex-wrap: wrap; gap: 4px; }
 .format-bar .el-button { min-height: 28px; min-width: 32px; padding: 2px 8px; }
 .format-bar .rt-code { font-size: 12px; }
+.editor-tools { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.editor-tools .menu-anchor .el-button { min-height: 28px; padding: 2px 8px; }
+/* The %% list follows the caret; options read like the field list: name over a muted line. */
+.completion { max-width: min(480px, calc(100vw - 8px)); }
+.completion-option { display: grid; gap: 0; padding: 4px 10px; border-radius: 4px; cursor: default; }
+.completion-option .muted { font-size: var(--native-type-caption); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.completion-option[aria-selected=true] { background: var(--native-selection); }
+.reference-list { max-height: 50vh; overflow-y: auto; margin-top: 8px; }
+.reference-list button .muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 .editor #trigger { font-family: var(--app-font-trigger); max-width: 360px; }
 .editor .hint { color: var(--native-muted); }
 .editor .el-message { margin: 0; }

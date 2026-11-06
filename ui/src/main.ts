@@ -13,8 +13,9 @@ import {
   type FormSaveAnswer, type Group, type Preview,
   type GroupForm, type Groups, type GroupSaveAnswer, type Library, type ListFilter, type MappingEntry,
   type MappingItem, type MappingSaveAnswer, type MappingType, type RenameAnswer, type SaveAnswer, type SaveCheck,
-  type Snippet, request, startBridge,
+  type Snippet, type Variable, type Variables, request, startBridge,
 } from "./bridge";
+import { attachCompletion, type Candidate } from "./completion";
 import { h, icon } from "./dom";
 import { setLanguage, t } from "./i18n";
 import { createRichEditor, type RichEditor, type Span, type Style } from "./richtext";
@@ -351,9 +352,10 @@ function formDialog(options: {
       ),
     );
     update();
-    dialog.addEventListener("close", () => resolve(done));
     const first = controls.values().next().value ?? null;
     openDialog(dialog, first);
+    // After openDialog's own close listener, so focus is back where it was when a caller acts on the answer.
+    dialog.addEventListener("close", () => resolve(done));
     if (first instanceof HTMLInputElement && first.type !== "checkbox") first.select();
   });
 }
@@ -1233,6 +1235,202 @@ function formatBar(editor: RichEditor, hint: HTMLElement): HTMLElement {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Inserir: the variables the app resolves, offered instead of left to be guessed.
+
+// "{d}" becomes the date token with its offset. A date token cannot hold a
+// space, so a written-out date is several tokens around plain text.
+const DATE_PRESETS = [
+  "%%{d}%%",
+  "%%{d}:dd/MM/yy%%",
+  "%%{d}:yyyy-MM-dd%%",
+  "%%{d}:HH:mm%%",
+  "%%{d}:dd/MM/yyyy%% %%{d}:HH:mm%%",
+  "%%{d}:dd%% de %%{d}:MMMM%% de %%{d}:yyyy%%",
+  "%%{d}:dddd%%, %%{d}:dd%% de %%{d}:MMMM%% de %%{d}:yyyy%%",
+];
+// Same grammar as source/builtin_tokens.py.
+const DATE_OFFSET = /^[+-]\d{1,3}[dwmy]$/;
+
+async function loadVariables(exclude: string | null): Promise<Variables> {
+  const variables = await request<Variables>("variables.list");
+  // A snippet that names itself is left as typed, so it is not offered to itself.
+  variables.snippets = variables.snippets.filter((variable) => variable.name !== exclude);
+  return variables;
+}
+
+async function completionCandidates(exclude: string | null): Promise<Candidate[]> {
+  const variables = await loadVariables(exclude);
+  return [
+    { name: "clipboard-paste", detail: t("Texto da área de transferência") },
+    { name: "_cursor", detail: t("Onde o cursor fica depois da expansão") },
+    { name: "_date", detail: t("Data de hoje (dd/MM/yyyy)") },
+    { name: "_date:HH:mm", detail: t("Hora atual (HH:mm)") },
+    { name: "_date+1d", detail: t("Data de amanhã") },
+    ...variables.snippets, ...variables.dynamics, ...variables.mappings,
+  ];
+}
+
+async function insertReference(editor: RichEditor, exclude: string | null): Promise<void> {
+  let variables: Variables;
+  try {
+    variables = await loadVariables(exclude);
+  } catch (error) {
+    await alertError(t("Snippet existente"), error);
+    return;
+  }
+  const sections: [string, Variable[]][] = [
+    [t("Textos"), variables.snippets], [t("Dinâmicos"), variables.dynamics], [t("Mapeamentos"), variables.mappings],
+  ];
+  let chosen: string | null = null;
+  const search = h("input", {
+    class: "field", type: "search", autocomplete: "off", spellcheck: "false", "aria-label": t("Buscar"),
+    placeholder: t("Buscar"),
+  });
+  const list = h("div", { class: "field-list reference-list" });
+  const empty = h("p", { class: "muted", hidden: true }, t("Nada encontrado."));
+  const dialog = h("dialog", { class: "wide", "aria-labelledby": "dialog-title" },
+    h("h2", { id: "dialog-title" }, t("Inserir snippet existente")),
+    h("p", {}, t("Ao expandir, o texto do snippet escolhido entra no lugar da variável.")),
+    search, list, empty,
+    h("menu", {}, h("button", { type: "button", onclick: () => dialog.close() }, t("Cancelar"))),
+  );
+  const draw = () => {
+    const needle = fold(search.value.trim());
+    const rows: HTMLElement[] = [];
+    for (const [label, items] of sections) {
+      const matches = items.filter((item) => fold(item.name).includes(needle) || fold(item.detail).includes(needle));
+      if (!matches.length) continue;
+      rows.push(h("span", { class: "list-caption" }, label));
+      rows.push(...matches.map((item) => h("button", {
+        type: "button",
+        onclick: () => {
+          chosen = item.name;
+          dialog.close();
+        },
+      }, h("span", { class: "mono" }, item.name), h("span", { class: "muted" }, item.detail))));
+    }
+    list.replaceChildren(...rows);
+    empty.hidden = rows.length > 0;
+  };
+  search.addEventListener("input", draw);
+  search.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    list.querySelector<HTMLButtonElement>("button")?.click();
+  });
+  draw();
+  openDialog(dialog, search);
+  // Listening after openDialog lets it hand focus back first; the insert then moves it to the editor.
+  await new Promise<void>((resolve) => dialog.addEventListener("close", () => resolve()));
+  if (chosen) editor.insert(`%%${chosen}%%`);
+}
+
+async function insertDate(editor: RichEditor): Promise<void> {
+  let examples: string[];
+  try {
+    const preview = await request<Preview>("preview.get", {
+      text: DATE_PRESETS.map((preset) => preset.replaceAll("{d}", "_date")).join("\n"),
+    });
+    examples = preview.text.split("\n");
+  } catch (error) {
+    await alertError(t("Data e hora"), error);
+    return;
+  }
+  let inserted = "";
+  const done = await formDialog({
+    title: t("Inserir data e hora"),
+    message: t("A data é calculada na hora em que o snippet expande."),
+    fields: [
+      {
+        id: "format", label: t("Formato"), kind: "select", value: "0",
+        options: [
+          ...DATE_PRESETS.map((preset, index) => ({ value: String(index), label: examples[index] ?? preset })),
+          { value: "custom", label: t("Personalizado…") },
+        ],
+      },
+      {
+        id: "pattern", label: t("Padrão"), mono: true, value: "dd/MM/yyyy",
+        hint: t("dd dia · MM mês · MMMM mês por extenso · yyyy ano · dddd dia da semana · HH:mm:ss hora. Sem espaços."),
+        shownWhen: (values) => values.format === "custom",
+      },
+      {
+        id: "offset", label: t("Quando"), kind: "select", value: "",
+        options: [
+          { value: "", label: t("No momento da expansão") }, { value: "+1d", label: t("Amanhã") },
+          { value: "-1d", label: t("Ontem") }, { value: "+7d", label: t("Daqui a 7 dias") },
+          { value: "+1m", label: t("Daqui a 1 mês") }, { value: "custom", label: t("Outro…") },
+        ],
+      },
+      {
+        id: "amount", label: t("Deslocamento"), mono: true, value: "+15d",
+        hint: t("Sinal, até três dígitos e a unidade: d (dias), w (semanas), m (meses) ou y (anos)."),
+        shownWhen: (values) => values.offset === "custom",
+      },
+    ],
+    action: t("Inserir"),
+    submit: async (values) => {
+      const offset = values.offset === "custom" ? String(values.amount).trim() : String(values.offset);
+      if (offset && !DATE_OFFSET.test(offset)) {
+        return { field: "amount", message: t("Use o formato +15d: sinal, até três dígitos e d, w, m ou y.") };
+      }
+      const date = `_date${offset}`;
+      if (values.format === "custom") {
+        const pattern = String(values.pattern).trim();
+        if (!pattern || /[%\s]/.test(pattern)) {
+          return { field: "pattern", message: t("O padrão não pode ter espaços nem %.") };
+        }
+        inserted = `%%${date}:${pattern}%%`;
+      } else {
+        inserted = DATE_PRESETS[Number(values.format)].replaceAll("{d}", date);
+      }
+      return null;
+    },
+  });
+  if (done) editor.insert(inserted);
+}
+
+async function insertField(editor: RichEditor): Promise<void> {
+  let name = "";
+  const done = await formDialog({
+    title: t("Inserir campo de formulário"),
+    message: t("Ao expandir, o SnipType pede o valor deste campo. Depois de salvar, use Formulário para definir o tipo."),
+    fields: [{ id: "name", label: t("Nome do campo"), mono: true, value: "" }],
+    action: t("Inserir"),
+    submit: async (values) => {
+      const typed = String(values.name).trim();
+      if (!/^[^%\s]+$/.test(typed)) return { field: "name", message: t("Use um nome sem espaços nem %.") };
+      if (typed.startsWith("_") || typed === "clipboard-paste") {
+        return { field: "name", message: t("Esse nome é reservado pelo SnipType.") };
+      }
+      let variables: Variables;
+      try {
+        variables = await loadVariables(null);
+      } catch (error) {
+        return { field: "name", message: errorText(error) };
+      }
+      if ([variables.snippets, variables.dynamics, variables.mappings].some((items) =>
+        items.some((item) => item.name === typed))) {
+        return { field: "name", message: t("Já existe um snippet com esse nome: a variável usaria o texto dele.") };
+      }
+      name = typed;
+      return null;
+    },
+  });
+  if (done) editor.insert(`%%${name}%%`);
+}
+
+/** Inserir: every kind of variable, so nobody has to know the syntax. */
+function insertMenu(editor: RichEditor, exclude: string | null): HTMLElement {
+  return menuButton(t("Inserir"), () => [
+    { label: t("Área de transferência"), run: () => editor.insert("%%clipboard-paste%%") },
+    { label: t("Snippet existente…"), run: () => void insertReference(editor, exclude) },
+    { label: t("Data e hora…"), run: () => void insertDate(editor) },
+    { label: t("Posição do cursor"), run: () => editor.insert("%%_cursor%%") },
+    { label: t("Campo de formulário…"), run: () => void insertField(editor) },
+  ], { title: t("Inserir variável (ou digite %%)") });
+}
+
 function renderDetail(): void {
   const host = refs.detail;
   const kind = activeKind();
@@ -1272,6 +1470,8 @@ function renderDetail(): void {
 
   refs.meta = draft.original ? h("div", { class: "meta-row" }) : null;
   const formatHint = h("span", { class: "hint", "aria-live": "polite" });
+  // Only a saved snippet can be named by a variable; its own name is not offered to it.
+  const exclude = textos ? draft.original : null;
   const editor = createRichEditor({
     id: "text", label: textos ? t("Texto") : t("Valor"), describedBy: "text-hint",
     value: { text: draft.text, spans: draft.spans },
@@ -1308,9 +1508,10 @@ function renderDetail(): void {
       ),
       h("div", { class: "grow text-field" },
         h("span", { class: "field-label", id: "text-label" }, textos ? t("Texto") : t("Valor")),
-        formatBar(editor, formatHint),
+        h("div", { class: "editor-tools" }, formatBar(editor, formatHint), insertMenu(editor, exclude)),
         editor.element,
-        h("span", { class: "hint", id: "text-hint" }, textos ? t("Variáveis como %%clipboard-paste%% são resolvidas na expansão.")
+        attachCompletion(editor, () => completionCandidates(exclude)),
+        h("span", { class: "hint", id: "text-hint" }, textos ? t("Digite %% para inserir uma variável, ou use Inserir.")
           : t("O texto que entra no lugar do trigger."), " ", formatHint),
       ),
     ),
