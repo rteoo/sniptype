@@ -13,8 +13,9 @@ import {
   type FormSaveAnswer, type Group, type HealthAnswer, type Preview,
   type GroupForm, type Groups, type GroupSaveAnswer, type Library, type ListFilter, type MappingEntry,
   type MappingItem, type MappingSaveAnswer, type MappingType, type RenameAnswer, type SaveAnswer, type SaveCheck,
-  type Snippet, request, startBridge,
+  type Snippet, type Variable, type Variables, request, startBridge,
 } from "./bridge";
+import { attachCompletion, type Candidate } from "./completion";
 import { h, icon } from "./dom";
 import { setLanguage, t } from "./i18n";
 import { createRichEditor, type RichEditor, type Span, type Style } from "./richtext";
@@ -28,6 +29,7 @@ interface Item {
   effectiveTrigger: string;
   preview: string;
   rich: boolean;
+  keys: boolean;
   favorite: boolean;
   group?: string | null;
   enabled?: boolean;
@@ -352,9 +354,10 @@ function formDialog(options: {
       ),
     );
     update();
-    dialog.addEventListener("close", () => resolve(done));
     const first = controls.values().next().value ?? null;
     openDialog(dialog, first);
+    // After openDialog's own close listener, so focus is back where it was when a caller acts on the answer.
+    dialog.addEventListener("close", () => resolve(done));
     if (first instanceof HTMLInputElement && first.type !== "checkbox") first.select();
   });
 }
@@ -363,8 +366,9 @@ function formDialog(options: {
  * A drop-down menu behind a labeled button with a chevron (DESIGN.md: never
  * icon-only). `entries` is read each time it opens, so it reflects the view.
  */
-function menuButton(label: string, entries: () => { label: string; disabled?: boolean; run: () => void }[],
-  attrs: Record<string, unknown> = {}): HTMLElement {
+function menuButton(label: string,
+  entries: () => { label: string; icon?: string; disabled?: boolean; run: () => void }[],
+  attrs: Record<string, unknown> = {}, leading?: string): HTMLElement {
   const menu = h("div", { class: "menu", popover: "auto", role: "menu", "aria-label": label });
   const button = h("button", {
     type: "button", class: "el-button", "aria-haspopup": "menu", "aria-expanded": "false", ...attrs,
@@ -377,14 +381,14 @@ function menuButton(label: string, entries: () => { label: string; disabled?: bo
           button.focus();
           entry.run();
         },
-      }, entry.label)));
+      }, entry.icon ? icon(entry.icon) : null, entry.label)));
       const box = button.getBoundingClientRect();
       menu.style.top = `${box.bottom + 4}px`;
       menu.style.left = `${box.left}px`;
       menu.showPopover();
       menu.querySelector<HTMLElement>("button:not([disabled])")?.focus();
     },
-  }, label, icon("chevron-down"));
+  }, leading ? icon(leading) : null, label, icon("chevron-down"));
   menu.addEventListener("toggle", (event) =>
     button.setAttribute("aria-expanded", String((event as Event & { newState: string }).newState === "open")));
   menu.addEventListener("keydown", (event) => {
@@ -1218,6 +1222,8 @@ function renderList(): void {
   h("span", { class: "badges" },
     item.favorite ? icon("favorite") : null,
     item.rich ? h("span", { class: "el-badge" }, t("formatado")) : null,
+    item.keys ? h("span", { class: "el-badge", title: t("Pressiona Enter ou Tab ao expandir.") },
+      icon("bi-keyboard"), t("teclas")) : null,
     item.shadowed ? h("span", { class: "el-badge", title: t("Um snippet dinâmico usa este trigger e tem prioridade.") },
       t("sombreado")) : null,
     item.group ? h("span", { class: "el-badge" }, item.group) : null,
@@ -1234,6 +1240,7 @@ function itemLabel(item: Item): string {
     trigger,
     item.favorite ? t("favorito") : "",
     item.rich ? t("formatado") : "",
+    item.keys ? t("teclas") : "",
     item.shadowed ? t("sombreado") : "",
     item.group ?? "",
     item.enabled === false ? t("desativado") : "",
@@ -1283,29 +1290,229 @@ function updateSaveState(): void {
 /** Negrito, Itálico, Sublinhado, Código, Tachado and Limpar formatação, over the editor's selection. */
 function formatBar(editor: RichEditor, hint: HTMLElement): HTMLElement {
   const styles: [Style, string, string, string][] = [
-    ["bold", "B", t("Negrito"), "Ctrl+B"], ["italic", "I", t("Itálico"), "Ctrl+I"],
-    ["underline", "U", t("Sublinhado"), "Ctrl+U"], ["code", "</>", t("Código"), ""],
-    ["strike", "S", t("Tachado"), ""],
+    ["bold", "bi-type-bold", t("Negrito"), "Ctrl+B"], ["italic", "bi-type-italic", t("Itálico"), "Ctrl+I"],
+    ["underline", "bi-type-underline", t("Sublinhado"), "Ctrl+U"], ["code", "bi-code-slash", t("Código"), ""],
+    ["strike", "bi-type-strikethrough", t("Tachado"), ""],
   ];
   // The buttons never take focus from a mouse click, so the selection they act on stays put.
   const keep = (event: Event) => event.preventDefault();
   return h("div", { class: "format-bar", role: "toolbar", "aria-label": t("Formatação"), "aria-controls": "text" },
-    ...styles.map(([style, glyph, label, keys]) => h("button", {
-      type: "button", class: `el-button rt-${style}`, title: keys ? `${label} (${keys})` : label, "aria-label": label,
+    ...styles.map(([style, symbol, label, keys]) => h("button", {
+      type: "button", class: "el-button", title: keys ? `${label} (${keys})` : label, "aria-label": label,
       onmousedown: keep,
       onclick: () => {
         if (!editor.toggle(style)) hint.textContent = t("Selecione o texto para formatar.");
         editor.focus();
       },
-    }, glyph)),
+    }, icon(symbol))),
     h("button", {
       type: "button", class: "el-button", onmousedown: keep,
       onclick: () => {
         editor.clear();
         editor.focus();
       },
-    }, t("Limpar formatação")),
+    }, icon("bi-eraser"), t("Limpar formatação")),
   );
+}
+
+// ---------------------------------------------------------------------------
+// Inserir: the variables the app resolves, offered instead of left to be guessed.
+
+// "{d}" becomes the date token with its offset. A date token cannot hold a
+// space, so a written-out date is several tokens around plain text.
+const DATE_PRESETS = [
+  "%%{d}%%",
+  "%%{d}:dd/MM/yy%%",
+  "%%{d}:yyyy-MM-dd%%",
+  "%%{d}:HH:mm%%",
+  "%%{d}:dd/MM/yyyy%% %%{d}:HH:mm%%",
+  "%%{d}:dd%% de %%{d}:MMMM%% de %%{d}:yyyy%%",
+  "%%{d}:dddd%%, %%{d}:dd%% de %%{d}:MMMM%% de %%{d}:yyyy%%",
+];
+// Same grammar as source/builtin_tokens.py.
+const DATE_OFFSET = /^[+-]\d{1,3}[dwmy]$/;
+
+async function loadVariables(exclude: string | null): Promise<Variables> {
+  const variables = await request<Variables>("variables.list");
+  // A snippet that names itself is left as typed, so it is not offered to itself.
+  variables.snippets = variables.snippets.filter((variable) => variable.name !== exclude);
+  return variables;
+}
+
+async function completionCandidates(exclude: string | null): Promise<Candidate[]> {
+  const variables = await loadVariables(exclude);
+  return [
+    { name: "clipboard-paste", detail: t("Texto da área de transferência") },
+    { name: "_cursor", detail: t("Onde o cursor fica depois da expansão") },
+    { name: "_date", detail: t("Data de hoje (dd/MM/yyyy)") },
+    { name: "_date:HH:mm", detail: t("Hora atual (HH:mm)") },
+    { name: "_date+1d", detail: t("Data de amanhã") },
+    { name: "_enter", detail: t("Pressiona Enter (envia mensagens e formulários)") },
+    { name: "_tab", detail: t("Pressiona Tab (vai para o próximo campo)") },
+    ...variables.snippets, ...variables.dynamics, ...variables.mappings,
+  ];
+}
+
+async function insertReference(editor: RichEditor, exclude: string | null): Promise<void> {
+  let variables: Variables;
+  try {
+    variables = await loadVariables(exclude);
+  } catch (error) {
+    await alertError(t("Snippet existente"), error);
+    return;
+  }
+  const sections: [string, Variable[]][] = [
+    [t("Textos"), variables.snippets], [t("Dinâmicos"), variables.dynamics], [t("Mapeamentos"), variables.mappings],
+  ];
+  let chosen: string | null = null;
+  const search = h("input", {
+    class: "field", type: "search", autocomplete: "off", spellcheck: "false", "aria-label": t("Buscar"),
+    placeholder: t("Buscar"),
+  });
+  const list = h("div", { class: "field-list reference-list" });
+  const empty = h("p", { class: "muted", hidden: true }, t("Nada encontrado."));
+  const dialog = h("dialog", { class: "wide", "aria-labelledby": "dialog-title" },
+    h("h2", { id: "dialog-title" }, t("Inserir snippet existente")),
+    h("p", {}, t("Ao expandir, o texto do snippet escolhido entra no lugar da variável.")),
+    search, list, empty,
+    h("menu", {}, h("button", { type: "button", onclick: () => dialog.close() }, t("Cancelar"))),
+  );
+  const draw = () => {
+    const needle = fold(search.value.trim());
+    const rows: HTMLElement[] = [];
+    for (const [label, items] of sections) {
+      const matches = items.filter((item) => fold(item.name).includes(needle) || fold(item.detail).includes(needle));
+      if (!matches.length) continue;
+      rows.push(h("span", { class: "list-caption" }, label));
+      rows.push(...matches.map((item) => h("button", {
+        type: "button",
+        onclick: () => {
+          chosen = item.name;
+          dialog.close();
+        },
+      }, h("span", { class: "mono" }, item.name), h("span", { class: "muted" }, item.detail))));
+    }
+    list.replaceChildren(...rows);
+    empty.hidden = rows.length > 0;
+  };
+  search.addEventListener("input", draw);
+  search.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    list.querySelector<HTMLButtonElement>("button")?.click();
+  });
+  draw();
+  openDialog(dialog, search);
+  // Listening after openDialog lets it hand focus back first; the insert then moves it to the editor.
+  await new Promise<void>((resolve) => dialog.addEventListener("close", () => resolve()));
+  if (chosen) editor.insert(`%%${chosen}%%`);
+}
+
+async function insertDate(editor: RichEditor): Promise<void> {
+  let examples: string[];
+  try {
+    const preview = await request<Preview>("preview.get", {
+      text: DATE_PRESETS.map((preset) => preset.replaceAll("{d}", "_date")).join("\n"),
+    });
+    examples = preview.text.split("\n");
+  } catch (error) {
+    await alertError(t("Data e hora"), error);
+    return;
+  }
+  let inserted = "";
+  const done = await formDialog({
+    title: t("Inserir data e hora"),
+    message: t("A data é calculada na hora em que o snippet expande."),
+    fields: [
+      {
+        id: "format", label: t("Formato"), kind: "select", value: "0",
+        options: [
+          ...DATE_PRESETS.map((preset, index) => ({ value: String(index), label: examples[index] ?? preset })),
+          { value: "custom", label: t("Personalizado…") },
+        ],
+      },
+      {
+        id: "pattern", label: t("Padrão"), mono: true, value: "dd/MM/yyyy",
+        hint: t("dd dia · MM mês · MMMM mês por extenso · yyyy ano · dddd dia da semana · HH:mm:ss hora. Sem espaços."),
+        shownWhen: (values) => values.format === "custom",
+      },
+      {
+        id: "offset", label: t("Quando"), kind: "select", value: "",
+        options: [
+          { value: "", label: t("No momento da expansão") }, { value: "+1d", label: t("Amanhã") },
+          { value: "-1d", label: t("Ontem") }, { value: "+7d", label: t("Daqui a 7 dias") },
+          { value: "+1m", label: t("Daqui a 1 mês") }, { value: "custom", label: t("Outro…") },
+        ],
+      },
+      {
+        id: "amount", label: t("Deslocamento"), mono: true, value: "+15d",
+        hint: t("Sinal, até três dígitos e a unidade: d (dias), w (semanas), m (meses) ou y (anos)."),
+        shownWhen: (values) => values.offset === "custom",
+      },
+    ],
+    action: t("Inserir"),
+    submit: async (values) => {
+      const offset = values.offset === "custom" ? String(values.amount).trim() : String(values.offset);
+      if (offset && !DATE_OFFSET.test(offset)) {
+        return { field: "amount", message: t("Use o formato +15d: sinal, até três dígitos e d, w, m ou y.") };
+      }
+      const date = `_date${offset}`;
+      if (values.format === "custom") {
+        const pattern = String(values.pattern).trim();
+        if (!pattern || /[%\s]/.test(pattern)) {
+          return { field: "pattern", message: t("O padrão não pode ter espaços nem %.") };
+        }
+        inserted = `%%${date}:${pattern}%%`;
+      } else {
+        inserted = DATE_PRESETS[Number(values.format)].replaceAll("{d}", date);
+      }
+      return null;
+    },
+  });
+  if (done) editor.insert(inserted);
+}
+
+async function insertField(editor: RichEditor): Promise<void> {
+  let name = "";
+  const done = await formDialog({
+    title: t("Inserir campo de formulário"),
+    message: t("Ao expandir, o SnipType pede o valor deste campo. Depois de salvar, use Formulário para definir o tipo."),
+    fields: [{ id: "name", label: t("Nome do campo"), mono: true, value: "" }],
+    action: t("Inserir"),
+    submit: async (values) => {
+      const typed = String(values.name).trim();
+      if (!/^[^%\s]+$/.test(typed)) return { field: "name", message: t("Use um nome sem espaços nem %.") };
+      if (typed.startsWith("_") || typed === "clipboard-paste") {
+        return { field: "name", message: t("Esse nome é reservado pelo SnipType.") };
+      }
+      let variables: Variables;
+      try {
+        variables = await loadVariables(null);
+      } catch (error) {
+        return { field: "name", message: errorText(error) };
+      }
+      if ([variables.snippets, variables.dynamics, variables.mappings].some((items) =>
+        items.some((item) => item.name === typed))) {
+        return { field: "name", message: t("Já existe um snippet com esse nome: a variável usaria o texto dele.") };
+      }
+      name = typed;
+      return null;
+    },
+  });
+  if (done) editor.insert(`%%${name}%%`);
+}
+
+/** Inserir: every kind of variable, so nobody has to know the syntax. */
+function insertMenu(editor: RichEditor, exclude: string | null): HTMLElement {
+  return menuButton(t("Inserir"), () => [
+    { label: t("Área de transferência"), icon: "bi-clipboard", run: () => editor.insert("%%clipboard-paste%%") },
+    { label: t("Snippet existente…"), icon: "bi-journal-text", run: () => void insertReference(editor, exclude) },
+    { label: t("Data e hora…"), icon: "bi-calendar-event", run: () => void insertDate(editor) },
+    { label: t("Posição do cursor"), icon: "bi-cursor-text", run: () => editor.insert("%%_cursor%%") },
+    { label: t("Campo de formulário…"), icon: "bi-input-cursor-text", run: () => void insertField(editor) },
+    { label: t("Tecla Enter"), icon: "bi-arrow-return-left", run: () => editor.insert("%%_enter%%") },
+    { label: t("Tecla Tab"), icon: "bi-arrow-bar-right", run: () => editor.insert("%%_tab%%") },
+  ], { title: t("Inserir variável (ou digite %%)") }, "bi-braces");
 }
 
 function renderDetail(): void {
@@ -1347,6 +1554,8 @@ function renderDetail(): void {
 
   refs.meta = draft.original ? h("div", { class: "meta-row" }) : null;
   const formatHint = h("span", { class: "hint", "aria-live": "polite" });
+  // Only a saved snippet can be named by a variable; its own name is not offered to it.
+  const exclude = textos ? draft.original : null;
   const editor = createRichEditor({
     id: "text", label: textos ? t("Texto") : t("Valor"), describedBy: "text-hint",
     value: { text: draft.text, spans: draft.spans },
@@ -1383,9 +1592,10 @@ function renderDetail(): void {
       ),
       h("div", { class: "grow text-field" },
         h("span", { class: "field-label", id: "text-label" }, textos ? t("Texto") : t("Valor")),
-        formatBar(editor, formatHint),
+        h("div", { class: "editor-tools" }, formatBar(editor, formatHint), insertMenu(editor, exclude)),
         editor.element,
-        h("span", { class: "hint", id: "text-hint" }, textos ? t("Variáveis como %%clipboard-paste%% são resolvidas na expansão.")
+        attachCompletion(editor, () => completionCandidates(exclude)),
+        h("span", { class: "hint", id: "text-hint" }, textos ? t("Digite %% para inserir uma variável, ou use Inserir.")
           : t("O texto que entra no lugar do trigger."), " ", formatHint),
       ),
     ),

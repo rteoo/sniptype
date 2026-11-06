@@ -297,6 +297,114 @@ class ExpansionTargetGuardTests(_GuardFixture):
         self.assertEqual(["SECOND"], self.pasted)
         self.app.keyboard_controller.type.assert_not_called()
 
+    def _cursor_snippet(self, text):
+        self.app.snippets["xcur"] = text
+        self.app.refresh_runtime_indexes()
+        self.app.text_inserter.move_caret_left = mock.Mock(return_value=True)
+
+    def test_cursor_token_is_pasted_away_and_the_caret_moves_back(self):
+        self._cursor_snippet("Olá %%_cursor%%, tudo bem?")
+        self._type("xcur")
+        self._run_worker(0)
+
+        self.assertEqual(["Olá , tudo bem?"], self.pasted)
+        self.app.text_inserter.move_caret_left.assert_called_once_with(len(", tudo bem?"))
+
+    def test_terminator_lands_at_the_end_before_the_caret_moves(self):
+        self.app.terminator_mode = True
+        self._cursor_snippet("<%%_cursor%%>")
+        self._type("xcur ")
+        order = []
+        self.app.keyboard_controller.type.side_effect = lambda text: order.append(("type", text))
+        self.app.text_inserter.move_caret_left.side_effect = lambda count: order.append(("left", count))
+        self._run_worker(0)
+
+        self.assertEqual(["<>"], self.pasted)
+        self.assertEqual([("type", " "), ("left", 2)], order)
+
+    def test_caret_stays_put_when_the_target_moved_on(self):
+        self._cursor_snippet("a%%_cursor%%b")
+        self._type("xcur")
+
+        def paste_then_click():
+            self.pasted.append(self.clipboard.value)
+            self.app.mouse_monitor.generation += 1
+            return True
+
+        self.app.text_inserter._send_paste_shortcut = paste_then_click
+        self._run_worker(0)
+
+        self.assertEqual(["ab"], self.pasted)
+        self.app.text_inserter.move_caret_left.assert_not_called()
+
+    def _key_snippet(self, text):
+        """Record pastes and key presses in one list, in the order they are sent."""
+        self.app.snippets["xkeys"] = text
+        self.app.refresh_runtime_indexes()
+        events = []
+        inserter = self.app.text_inserter
+        inserter._send_paste_shortcut = lambda: events.append(("paste", self.clipboard.value)) or True
+        self.app.keyboard_controller.press.side_effect = lambda key: events.append(("key", key))
+        return events
+
+    def test_keys_are_pressed_between_pastes_and_the_clipboard_comes_back(self):
+        events = self._key_snippet("Nome%%_tab%%Fulano%%_enter%%")
+        self._type("xkeys")
+        events.clear()  # the trigger's erase
+        self._run_worker(0)
+
+        self.assertEqual(
+            [("paste", "Nome"), ("key", Key.tab), ("paste", "Fulano"), ("key", Key.enter)], events
+        )
+        self.assertEqual("ORIGINAL", self.clipboard.value)
+
+    def test_a_fast_callable_cannot_press_keys_with_its_output(self):
+        events = self._key_snippet("unused")
+        # A provider's text is data; a key mark in it (U+FDD1, Enter) must not press anything.
+        self.app.snippets["xdyn"] = lambda: f"a{chr(0xFDD1)}b"
+        self.app.refresh_runtime_indexes()
+        self._type("xdyn")
+        events.clear()  # the trigger's erase
+        self._run_worker(0)
+
+        self.assertEqual([("paste", "ab")], events)
+
+    def test_a_click_mid_sequence_stops_it_and_leaves_the_rest_to_paste(self):
+        events = self._key_snippet("Nome%%_tab%%Fulano%%_enter%%")
+        self._type("xkeys")
+        events.clear()  # the trigger's erase
+
+        def paste_then_click():
+            events.append(("paste", self.clipboard.value))
+            self.app.mouse_monitor.generation += 1
+            return True
+
+        self.app.text_inserter._send_paste_shortcut = paste_then_click
+        self._run_worker(0)
+
+        self.assertEqual([("paste", "Nome")], events)
+        # The fake stores CF_UNICODETEXT line breaks, as Windows does.
+        self.assertEqual("\tFulano\r\n", self.clipboard.value)
+        notify = self.app.text_inserter.notify
+        notify.assert_called_once()
+        self.assertEqual("paste-steps", notify.call_args.kwargs["key"])
+
+    def test_typing_mid_sequence_stops_it(self):
+        events = self._key_snippet("a%%_enter%%b")
+        self._type("xkeys")
+        events.clear()  # the trigger's erase
+
+        def paste_then_type():
+            events.append(("paste", self.clipboard.value))
+            self._type("q")
+            return True
+
+        self.app.text_inserter._send_paste_shortcut = paste_then_type
+        self._run_worker(0)
+
+        self.assertEqual([("paste", "a")], events)
+        self.assertEqual("\r\nb", self.clipboard.value)
+
     def test_self_injected_events_do_not_mark_the_expansion_stale(self):
         # macOS and the paced Windows erase deliver our own synthesized
         # backspaces (and the re-emitted terminator) to the listener after

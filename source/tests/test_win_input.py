@@ -89,6 +89,34 @@ class SendInputStructureTests(unittest.TestCase):
             captured["events"],
         )
 
+    def test_left_arrows_carry_the_extended_key_flag(self):
+        captured = []
+
+        def fake_send(count, inputs, size):
+            captured.extend((inputs[i].value.ki.wVk, inputs[i].value.ki.dwFlags) for i in range(count))
+            return count
+
+        with mock.patch.object(win_input._USER32, "SendInput", side_effect=fake_send):
+            self.assertTrue(win_input.BatchKeyboard().caret_left(2))
+
+        self.assertEqual([(win_input.VK_LEFT, 1), (win_input.VK_LEFT, 3)] * 2, captured)
+
+    def test_snippet_keys_are_one_press_and_release(self):
+        captured = []
+
+        def fake_send(count, inputs, size):
+            captured.extend((inputs[i].value.ki.wVk, inputs[i].value.ki.dwFlags) for i in range(count))
+            return count
+
+        with mock.patch.object(win_input._USER32, "SendInput", side_effect=fake_send):
+            self.assertTrue(win_input.BatchKeyboard().press("tab"))
+            self.assertTrue(win_input.BatchKeyboard().press("enter"))
+
+        self.assertEqual(
+            [(win_input.VK_TAB, 0), (win_input.VK_TAB, 2), (win_input.VK_RETURN, 0), (win_input.VK_RETURN, 2)],
+            captured,
+        )
+
     def test_partial_insert_reports_failure(self):
         with mock.patch.object(win_input._USER32, "SendInput", return_value=0):
             self.assertFalse(win_input.send_key_events(win_input.backspace_events(1)))
@@ -115,6 +143,71 @@ class PasteChordTests(unittest.TestCase):
         inserter._send_paste_shortcut()
 
         logger.warning.assert_called_once()
+
+
+class KeyStepTests(unittest.TestCase):
+    def test_a_rejected_key_stops_the_sequence_and_leaves_the_rest(self):
+        batch = mock.Mock()
+        batch.paste.return_value = True
+        batch.press.return_value = False
+        clipboard = mock.Mock()
+        clipboard.read_text.return_value = (True, "ORIGINAL")
+        clipboard.set_content.return_value = True
+        notify = mock.Mock()
+        inserter = TextInserter(mock.Mock(), batch_keyboard=batch, notify=notify, settle_delay=0, restore_delay=0)
+
+        with mock.patch("runtime_support.Clipboard", clipboard):
+            ok = inserter.insert_steps([("text", "a"), ("key", "enter"), ("text", "b")])
+
+        self.assertFalse(ok)
+        batch.press.assert_called_once_with("enter")
+        self.assertEqual(mock.call("\nb"), clipboard.set_content.call_args)
+        self.assertEqual("paste-steps", notify.call_args.kwargs["key"])
+
+    def test_keys_never_fall_back_to_typing(self):
+        keyboard, batch = mock.Mock(), mock.Mock()
+        batch.paste.return_value = False
+        clipboard = mock.Mock()
+        clipboard.read_text.return_value = (True, "ORIGINAL")
+        clipboard.set_content.return_value = True
+        inserter = TextInserter(keyboard, batch_keyboard=batch, settle_delay=0, restore_delay=0)
+
+        with mock.patch("runtime_support.Clipboard", clipboard):
+            self.assertFalse(inserter.insert_steps([("text", "a"), ("key", "tab")]))
+
+        keyboard.type.assert_not_called()
+        batch.press.assert_not_called()
+
+
+class CaretMoveTests(unittest.TestCase):
+    def test_batch_moves_the_caret_in_one_injection(self):
+        keyboard, batch = mock.Mock(), mock.Mock()
+        batch.caret_left.return_value = True
+
+        self.assertTrue(TextInserter(keyboard, batch_keyboard=batch).move_caret_left(3))
+
+        batch.caret_left.assert_called_once_with(3)
+        self.assertEqual([], keyboard.mock_calls)
+
+    def test_blocked_move_is_reported(self):
+        batch, logger = mock.Mock(), mock.Mock()
+        batch.caret_left.return_value = False
+
+        self.assertFalse(TextInserter(mock.Mock(), logger=logger, batch_keyboard=batch).move_caret_left(1))
+        logger.warning.assert_called_once()
+
+    def test_without_a_batch_pynput_presses_left(self):
+        from pynput.keyboard import Key
+
+        keyboard = mock.Mock()
+        TextInserter(keyboard).move_caret_left(2)
+
+        self.assertEqual([mock.call.press(Key.left), mock.call.release(Key.left)] * 2, keyboard.mock_calls)
+
+    def test_nothing_to_move_sends_nothing(self):
+        keyboard, batch = mock.Mock(), mock.Mock()
+        self.assertTrue(TextInserter(keyboard, batch_keyboard=batch).move_caret_left(0))
+        self.assertEqual([], batch.mock_calls + keyboard.mock_calls)
 
 
 class BusyClipboardRestoreTests(unittest.TestCase):
