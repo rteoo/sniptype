@@ -211,7 +211,11 @@ class FormDialog:
         self.theme = theme or ui_theme.bind(parent)
         self.window = tk.Toplevel(parent)
         self.window.title(_(title))
-        self.window.transient(parent)
+        # Expansion opens the form over the hidden shared root, and on Windows
+        # a transient of a withdrawn master is never mapped: the reveal would
+        # wait forever, holding the one-dialog lock.
+        if parent.winfo_viewable():
+            self.window.transient(parent)
         self.window.configure(bg=self.theme.surface)
         ui_theme.prepare_window(self.window, self.theme)
         self.window.minsize(350, 300)

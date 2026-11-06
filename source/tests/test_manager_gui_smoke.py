@@ -2445,6 +2445,44 @@ class ModalDialogSerializationTests(unittest.TestCase):
         later.join(10)
         self.assertEqual(self.results["later"], {"later": "two"})
 
+    def test_structured_form_shows_over_the_hidden_root_and_releases_the_lock(self):
+        # A snippet with a form definition (a Choice field, here) opens the
+        # structured dialog. It once stayed withdrawn forever, holding the lock.
+        compiled = tx.compile_form(
+            "%%empresa%%",
+            [{"name": "empresa", "label": "Empresa", "type": "choice",
+              "options": ["Alfa", "Beta"], "default": "Alfa"}],
+            {},
+        )
+
+        def worker():
+            self.results["empresa"] = self.app._show_form_dialog(["empresa"], compiled)
+
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+
+        def shown(root):
+            window = _find_form(root, "Empresa")
+            return window is not None and bool(window.winfo_viewable())
+
+        deadline = time.time() + 15
+        while not self.app.gui.call(shown, timeout=10):
+            if time.time() > deadline:
+                self.fail("the structured form never became visible")
+            time.sleep(0.05)
+
+        def choose(root):
+            window = _find_form(root, "Empresa")
+            combo = [w for w in _descendants(window) if isinstance(w, ttk.Combobox)][0]
+            combo.set("Beta")
+            window.event_generate("<Return>")
+
+        self.app.gui.call(choose, timeout=10)
+        thread.join(10)
+        self.assertEqual(self.results["empresa"], {"empresa": "Beta"})
+        self.assertTrue(self.app._dialog_lock.acquire(blocking=False))
+        self.app._dialog_lock.release()
+
 
 def _close_log_handlers(home):
     """Release the app's log file in a temporary home so it can be removed."""
