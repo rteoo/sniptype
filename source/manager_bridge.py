@@ -6,7 +6,9 @@ JSON message per line on its stdin: a response (``{"id", "result"}`` or
 ``{"id", "error"}``) or an event (``{"event"}``). Events name what changed and
 carry no data: ``focus`` and ``target`` (raise the window, open the queued
 item), ``state`` (expansion, health or the last expansion; ask ``app.info``)
-and ``library`` (the library was replaced or read again; list again). The manager never touches
+and ``library`` (the library was replaced or read again; list again). Only
+``receipt`` carries data: its ``text`` goes on the status line, sent instead of
+a tray toast while the window has the focus. The manager never touches
 ``snippets.json`` itself: every change goes through the app's own save path,
 so backups, quarantine, shadowed statics and rollback hold exactly as they do
 for the classic Tk manager.

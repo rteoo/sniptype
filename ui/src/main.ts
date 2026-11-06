@@ -7,7 +7,7 @@ import "./styles/app.css";
 import { availableMonitors, getCurrentWindow, PhysicalPosition, PhysicalSize } from "@tauri-apps/api/window";
 
 import {
-  type AppInfo, type Backup, type BackupPreview, BridgeError, type ChangeCounts, type Choice, type Confirmation,
+  type AppEvent, type AppInfo, type Backup, type BackupPreview, BridgeError, type ChangeCounts, type Choice, type Confirmation,
   type CopyAnswer, type CreateTypeAnswer, type DraftCheck, type ImportCounts,
   type DynamicRenameAnswer, type DynamicSection, type DynamicToggleAnswer, type FormFieldDef, type FormInfo,
   type FormSaveAnswer, type Group, type HealthAnswer, type HotkeySaveAnswer, type Preview,
@@ -109,6 +109,7 @@ const state = {
   view: { filter: "all" as ListFilter, group: "" },
   cardStatus: {} as Record<string, { text: string; error: boolean }>,
   dynamics: { sections: [] as DynamicSection[], query: "", receipt: "" },
+  settingsReceipt: "",
   backups: { items: [] as Backup[], receipt: "" },
 };
 
@@ -2136,11 +2137,19 @@ function backupsReceipt(text: string): void {
   if (state.page === "backups") renderBackups();
 }
 
-/** The receipt of something done from the page showing now. */
+/** The receipt of something done from the page showing now, on that page's status line. */
 function pageReceipt(text: string): void {
   const kind = activeKind();
   if (kind) showReceipt(kind, { text });
+  else if (state.page === "dinamicos") dynamicsReceipt(text);
+  else if (state.page === "settings") settingsReceipt(text);
   else backupsReceipt(text);
+}
+
+function settingsReceipt(text: string): void {
+  state.settingsReceipt = text;
+  const line = document.getElementById("settings-receipt");
+  if (line) line.textContent = text;
 }
 
 function countsText(counts: ChangeCounts): string {
@@ -2369,6 +2378,7 @@ function settingsPage(): HTMLElement {
   return h("div", { class: "settings-page" },
     h("header", {},
       h("h1", {}, t("Configurações")),
+      h("p", { id: "settings-receipt", class: "receipt", role: "status", "aria-live": "polite" }, state.settingsReceipt),
       h("p", { class: "muted" }, t("Ajuste a aparência, a expansão e os dados do SnipType.")),
     ),
     h("div", { class: "cards" },
@@ -2719,7 +2729,7 @@ async function escapeEditor(kind: Kind): Promise<void> {
 
 const PAGES: Page[] = ["textos", "mapeamentos", "dinamicos", "backups", "settings"];
 
-async function onAppEvent(name: string): Promise<void> {
+async function onAppEvent({ event: name, text }: AppEvent): Promise<void> {
   if (name === "focus") {
     await appWindow.unminimize();
     await appWindow.setFocus();
@@ -2729,6 +2739,9 @@ async function onAppEvent(name: string): Promise<void> {
     await refreshInfo().catch((error) => console.error("refresh failed", error));
   } else if (name === "library") {
     await refreshVisible().catch((error) => console.error("refresh failed", error));
+  } else if (name === "receipt" && text) {
+    // A tray or hotkey command while the person is in this window: its receipt, not a toast.
+    pageReceipt(text);
   }
 }
 
@@ -2787,7 +2800,7 @@ async function main(): Promise<void> {
   // The window starts hidden so it does not jump to its saved place; it shows whatever happens next.
   const showAnyway = window.setTimeout(() => void appWindow.show(), 3000);
   applyAppearance();
-  await startBridge((name) => void onAppEvent(name));
+  await startBridge((event) => void onAppEvent(event));
   try {
     await refreshInfo();
     await refreshList("textos");

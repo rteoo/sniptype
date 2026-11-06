@@ -167,9 +167,12 @@ interface Pending { resolve: (value: unknown) => void; reject: (error: Error) =>
 const pending = new Map<number, Pending>();
 let nextId = 1;
 
-export async function startBridge(onEvent: (name: string) => void): Promise<void> {
+/** An app event: its name, and for `receipt` the text for the status line. */
+export interface AppEvent { event: string; text?: string }
+
+export async function startBridge(onEvent: (event: AppEvent) => void): Promise<void> {
   await listen<string>("bridge", (event) => {
-    let message: { id?: number; result?: unknown; error?: { code: string; message: string }; event?: string };
+    let message: { id?: number; result?: unknown; error?: { code: string; message: string }; event?: string; text?: string };
     try {
       message = JSON.parse(event.payload);
     } catch {
@@ -177,7 +180,7 @@ export async function startBridge(onEvent: (name: string) => void): Promise<void
       return;
     }
     if (typeof message.event === "string") {
-      onEvent(message.event);
+      onEvent({ event: message.event, text: typeof message.text === "string" ? message.text : undefined });
       return;
     }
     const waiter = message.id === undefined ? undefined : pending.get(message.id);

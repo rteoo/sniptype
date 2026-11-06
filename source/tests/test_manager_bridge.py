@@ -1071,6 +1071,54 @@ class HotkeyRecordingTests(unittest.TestCase):
         self.assertFalse(self.app._hotkeys_suspended())
 
 
+class WindowReceiptTests(unittest.TestCase):
+    """Routine status reaches the focused window's status line instead of a tray toast."""
+
+    def setUp(self):
+        self.app = make_real_app(self, {"hello": "Hello there"})
+        self.app.icon = mock.Mock(visible=True)
+        self.process = mock.Mock(alive=True)
+        self.app._manager_process = self.process
+        self.app.notification_history = []
+
+    def events(self):
+        return [call.args[0] for call in self.process.send.call_args_list]
+
+    def test_a_focused_window_gets_the_receipt_and_no_toast(self):
+        self.app._manager_window_focused = True
+        self.assertTrue(self.app.notify_status("Biblioteca atualizada.", key="reload"))
+        self.assertEqual([{"event": "receipt", "text": "Biblioteca atualizada."}], self.events())
+        self.app.icon.notify.assert_not_called()
+        self.assertEqual("Biblioteca atualizada.", self.app.notification_history[-1]["message"])
+
+    def test_an_unfocused_window_leaves_it_to_the_tray(self):
+        self.app._manager_window_focused = False
+        self.app.notify_status("Biblioteca atualizada.", key="reload")
+        self.assertEqual([], self.events())
+        self.app.icon.notify.assert_called_once()
+
+    def test_errors_are_always_toasts(self):
+        self.app._manager_window_focused = True
+        self.app.notify_error("Falhou.", key="boom")
+        self.assertEqual([], self.events())
+        self.app.icon.notify.assert_called_once()
+
+    def test_a_closed_window_with_a_stale_focus_flag_falls_back_to_the_tray(self):
+        self.app._manager_window_focused = True
+        self.process.alive = False
+        self.app.notify_status("Biblioteca atualizada.", key="reload")
+        self.process.send.assert_not_called()
+        self.app.icon.notify.assert_called_once()
+
+    def test_a_hotkey_pause_while_in_the_window_is_written_there(self):
+        self.app._manager_window_focused = True
+        self.app.toggle_enabled(self.app.icon, None)
+        receipts = [event["text"] for event in self.events() if event.get("event") == "receipt"]
+        self.assertEqual(1, len(receipts))
+        self.assertTrue(receipts[0].startswith("Expansão pausada às"))
+        self.app.icon.notify.assert_not_called()
+
+
 class ManagerEventPushTests(unittest.TestCase):
     """The app tells a running window when its state or its library changed."""
 
