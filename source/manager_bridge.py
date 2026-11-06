@@ -3,7 +3,10 @@
 The Tauri manager (``ui/``) is a child process of the app. It writes one JSON
 request per line on its stdout (``{"id", "method", "params"}``) and reads one
 JSON message per line on its stdin: a response (``{"id", "result"}`` or
-``{"id", "error"}``) or an event (``{"event"}``). The manager never touches
+``{"id", "error"}``) or an event (``{"event"}``). Events name what changed and
+carry no data: ``focus`` and ``target`` (raise the window, open the queued
+item), ``state`` (expansion, health or the last expansion; ask ``app.info``)
+and ``library`` (the library was replaced or read again; list again). The manager never touches
 ``snippets.json`` itself: every change goes through the app's own save path,
 so backups, quarantine, shadowed statics and rollback hold exactly as they do
 for the classic Tk manager.
@@ -22,6 +25,7 @@ import threading
 import uuid
 from datetime import datetime
 
+import health_support
 import i18n
 import manager_actions
 import time_format
@@ -135,6 +139,10 @@ class ManagerBridge:
             "app.info": self.app_info,
             "app.openDataFolder": self.open_data_folder,
             "app.takeTarget": self.take_target,
+            "app.toggleEnabled": self.toggle_enabled,
+            "app.editLast": self.edit_last,
+            "health.run": self.health_run,
+            "health.dismiss": self.health_dismiss,
             "library.list": self.library_list,
             "snippet.get": self.snippet_get,
             "snippet.save": self.snippet_save,
@@ -198,6 +206,7 @@ class ManagerBridge:
 
     def app_info(self):
         app = self.app
+        state = app._expansion_state()
         return {
             "version": self.version,
             "channel": self.channel,
@@ -208,14 +217,66 @@ class ManagerBridge:
             else "compact",
             "terminatorMode": bool(app.terminator_mode),
             "dataDir": str(app.data_dir),
+            "expansion": {"state": state, "label": health_support.expansion_label(state)},
+            "lastExpansion": app._last_expansion_text(),
+            "canEditLast": app._manager_target(app.workflow_state.last_successful_item) is not None
+            if app.workflow_state.last_successful_item is not None else False,
             "issues": [
-                {"id": issue.id, "severity": issue.severity, "title": issue.title, "body": issue.body}
+                {"id": issue.id, "severity": issue.severity, "title": issue.title, "body": issue.body,
+                 "action": issue.action_id, "actionLabel": issue.action_label,
+                 "dismissible": issue.dismissible}
                 for issue in app._manager_issues()
             ],
         }
 
     def open_data_folder(self):
         self.app.open_data_folder()
+        return None
+
+    def toggle_enabled(self):
+        """Pausar or Retomar from the window: the receipt comes back for its status line.
+
+        A failed capture cannot be resumed; the app says so in the tray and
+        ``receipt`` is None.
+        """
+        receipt = self.app.toggle_enabled(self.app.icon, None, in_manager=True, announce=False)
+        return {"receipt": receipt}
+
+    def edit_last(self):
+        """Editar o último item: the app sends ``target`` back once it has it queued."""
+        if self.app.workflow_state.last_successful_item is None:
+            raise BridgeError("not_found", "nothing has been expanded yet")
+        self.app.edit_last_snippet()
+        return None
+
+    # Recovery actions that open a page of this window instead of doing something.
+    _HEALTH_PAGES = {health_support.OPEN_BACKUPS: "backups", health_support.OPEN_DYNAMIC: "dinamicos"}
+
+    def health_run(self, action):
+        """Run an issue's one recovery action. ``page`` names a page to show; ``receipt``, what changed."""
+        app = self.app
+        if action in self._HEALTH_PAGES:
+            return {"page": self._HEALTH_PAGES[action], "receipt": None}
+        if action == health_support.RESUME:
+            return {"page": None, "receipt": self.toggle_enabled()["receipt"]}
+        if action == health_support.OPEN_FOLDER:
+            app.open_data_folder()
+        elif action == health_support.OPEN_LOG:
+            app.open_log()
+        elif action == health_support.RETRY_SYNC:
+            app.retry_sync()
+        else:
+            raise BridgeError("bad_params", f"unknown health action: {action!r}")
+        return {"page": None, "receipt": None}
+
+    def health_dismiss(self, id):
+        """Hide an info issue for the rest of the session; warnings and errors stay."""
+        issue = next((issue for issue in self.app._manager_issues() if issue.id == id), None)
+        if issue is None:
+            raise BridgeError("not_found", f"no open issue {id!r}")
+        if not issue.dismissible:
+            raise BridgeError("bad_params", f"issue {id!r} cannot be dismissed")
+        self.app._dismiss_health(id)
         return None
 
     def take_target(self):

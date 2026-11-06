@@ -43,7 +43,17 @@ code, .mono { font-family: var(--app-font-trigger); }
 .navigation button[aria-current=page]::before {
   content: ''; position: absolute; left: 0; width: 3px; height: 16px; border-radius: 2px; background: var(--color-link);
 }
-.navigation .settings { margin-top: auto; }
+/* Expansion: the state in words, Pausar/Retomar and the last expansion, above Configurações. */
+.navigation .expansion { margin-top: auto; display: grid; gap: 4px; padding: 8px 0; border-top: 1px solid var(--native-line); }
+.expansion p { margin: 0; padding: 0 12px; }
+.expansion .state { display: flex; align-items: center; gap: 8px; color: var(--native-muted); }
+.expansion .state .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--color-success-fg); flex: none; }
+.expansion .state.paused, .expansion .state.down { color: var(--color-text-primary); font-weight: 600; }
+.expansion .state.paused .dot { background: var(--color-link); }
+.expansion .state.down .dot { background: var(--color-danger-fg); }
+.expansion .last { font-size: var(--native-type-caption); color: var(--native-muted); overflow-wrap: anywhere; }
+.expansion button { display: flex; align-items: center; gap: 8px; justify-content: flex-start; }
+.infobar .actions { display: flex; gap: 8px; margin-top: 6px; }
 .navigation .version { padding: 8px 12px 0; font-size: var(--native-type-caption); color: var(--native-muted); }
 
 .page {
@@ -237,7 +247,7 @@ dialog form { max-height: calc(100vh - 96px); overflow-y: auto; }
 
 @media (max-width: 860px) {
   .app { grid-template-columns: 56px minmax(0, 1fr); }
-  .navigation .label, .brand span, .navigation .version { display: none; }
+  .navigation .label, .brand span, .navigation .version, .expansion .last { display: none; }
   .navigation button { justify-content: center; padding: 4px; }
   .textos { grid-template-columns: minmax(220px, 300px) minmax(0, 1fr); }
   .editor { padding: 20px; }
