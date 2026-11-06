@@ -25,6 +25,8 @@ export interface AppInfo {
   lastExpansion: string;
   canEditLast: boolean;
   hotkeys: Hotkey[];
+  /** Where the window was last (physical pixels), and its page; {} the first time. */
+  window: WindowState;
   issues: Issue[];
 }
 
@@ -35,6 +37,10 @@ export interface SwitcherRow {
 }
 
 export interface HealthAnswer { page: string | null; receipt: string | null }
+
+export interface WindowState {
+  x?: number; y?: number; width?: number; height?: number; maximized?: boolean; page?: string;
+}
 
 /** One workflow hotkey: `binding` is the stored pynput syntax (null when off), `display` how it reads. */
 export interface Hotkey { action: string; label: string; binding: string | null; display: string }

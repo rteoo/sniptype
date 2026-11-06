@@ -69,6 +69,7 @@ from manager_view_support import (
     UNGROUPED_FILTER,
     filter_manager_rows,
     manager_row_preview,
+    normalize_manager_window,
     search_manager_rows,
 )
 from rich_text_support import (
@@ -221,6 +222,7 @@ class ManagerBridge:
             "mapping.createType": self.mapping_create_type,
             "mapping.deleteType": self.mapping_delete_type,
             "settings.set": self.settings_set,
+            "window.save": self.window_save,
         }
 
     def handle(self, message):
@@ -261,6 +263,7 @@ class ManagerBridge:
             "expansion": {"state": state, "label": health_support.expansion_label(state)},
             "lastExpansion": app._last_expansion_text(),
             "hotkeys": self._hotkeys(),
+            "window": normalize_manager_window(app.settings.get("manager_window")),
             "canEditLast": app._manager_target(app.workflow_state.last_successful_item) is not None
             if app.workflow_state.last_successful_item is not None else False,
             "issues": [
@@ -1186,6 +1189,17 @@ class ManagerBridge:
             app.terminator_mode = value
             app.refresh_runtime_indexes()
         return self.app_info()
+
+
+    def window_save(self, value):
+        """Remember where the window is and which page it shows, for the next time it opens."""
+        window = normalize_manager_window(value)
+        if window != value:
+            raise BridgeError("bad_params", f"unusable window state {value!r}")
+        if window != self.app.settings.get("manager_window") and not self.app._persist_settings(
+                {"manager_window": window}):
+            raise BridgeError("save_failed", _("Não foi possível salvar."))
+        return None
 
 
 def find_manager_executable(env=None, frozen=None, executable=None, source_dir=None):
