@@ -859,6 +859,71 @@ class ExpansionStateAndHealthTests(unittest.TestCase):
         edit_last.assert_called_once_with()
 
 
+class HotkeySettingsTests(unittest.TestCase):
+    """Configurações records and saves the workflow hotkeys through the app's own save."""
+
+    def setUp(self):
+        self.app = make_real_app(self, {"hello": "Hello there"})
+        self.app.icon = None
+        self.bridge = ManagerBridge(self.app, version="9.9.9", channel="stable")
+
+    def result(self, method, **params):
+        response = self.bridge.handle({"id": 1, "method": method, "params": params})
+        self.assertNotIn("error", response, response)
+        return response["result"]
+
+    def test_info_lists_the_three_hotkeys_off_by_default(self):
+        hotkeys = self.result("app.info")["hotkeys"]
+        self.assertEqual(["open_manager", "edit_last", "toggle_enabled"], [h["action"] for h in hotkeys])
+        self.assertEqual("Abrir gerenciador", hotkeys[0]["label"])
+        self.assertTrue(all(h["binding"] is None and h["display"] == "" for h in hotkeys))
+
+    def test_capture_translates_a_key_press(self):
+        self.assertEqual({"binding": "<ctrl>+<shift>+m", "display": "Ctrl+Shift+M"},
+                         self.result("hotkeys.capture", key="M", code="KeyM", ctrl=True, shift=True))
+        self.assertIsNone(self.result("hotkeys.capture", key="Shift", code="ShiftLeft", shift=True)["binding"])
+
+    def test_save_persists_and_replaces_the_live_router(self):
+        before = self.app.hotkey_router
+        answer = self.result("hotkeys.save", bindings={"open_manager": "<ctrl>+<shift>+m",
+                                                       "edit_last": None, "toggle_enabled": None})
+        self.assertEqual("saved", answer["status"])
+        self.assertEqual("Ctrl+Shift+M", answer["hotkeys"][0]["display"])
+        with open(self.app.settings_file, encoding="utf-8") as handle:
+            self.assertEqual("<ctrl>+<shift>+m", json.load(handle)["hotkeys"]["open_manager"])
+        # The live router was replaced and knows the new chord, with no restart.
+        self.assertIsNot(before, self.app.hotkey_router)
+        self.assertEqual({"open_manager"}, set(self.app.hotkey_router._chords))
+
+    def test_invalid_and_duplicate_bindings_are_refused_in_words(self):
+        answer = self.result("hotkeys.save", bindings={"open_manager": "m", "edit_last": None,
+                                                       "toggle_enabled": None})
+        self.assertEqual(("invalid", "open_manager"), (answer["status"], answer["field"]))
+        self.assertEqual("Uma letra ou um número precisa de Ctrl, Alt ou Win.", answer["message"])
+        answer = self.result("hotkeys.save", bindings={"open_manager": "<ctrl>+<shift>+m",
+                                                       "edit_last": "<ctrl>+<shift>+m", "toggle_enabled": None})
+        self.assertEqual("edit_last", answer["field"])
+        self.assertEqual("Já é o atalho de Abrir gerenciador.", answer["message"])
+        self.assertNotIn("hotkeys", self.app.settings)
+
+    def test_tray_configurar_atalhos_opens_the_window_at_settings(self):
+        process = mock.Mock(alive=True)
+        self.app._manager_process = process
+        with mock.patch.object(self.app.gui, "submit") as submit:
+            self.app.configure_hotkeys()
+        process.send.assert_called_once_with({"event": "target"})
+        submit.assert_not_called()
+        self.assertEqual({"kind": "page", "key": "settings", "container": None}, self.result("app.takeTarget"))
+        self.assertIsNone(self.result("app.takeTarget"))
+
+    def test_without_the_window_the_tray_opens_the_classic_dialog(self):
+        with mock.patch.object(tx, "find_manager_executable", return_value=None), \
+                mock.patch.object(self.app.gui, "submit") as submit:
+            self.app.configure_hotkeys()
+        submit.assert_called_once_with(self.app._show_hotkey_settings)
+        self.assertIsNone(self.app._pending_manager_page)
+
+
 class ManagerEventPushTests(unittest.TestCase):
     """The app tells a running window when its state or its library changed."""
 

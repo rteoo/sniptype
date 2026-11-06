@@ -442,6 +442,8 @@ class Sniptype:
         self._manager_process = None
         self._manager_process_lock = threading.Lock()
         self._pending_manager_target = None
+        # A page of the Tauri window to show next ("settings"), taken once like the target.
+        self._pending_manager_page = None
         self.macos_permission_window = None
         self._manager_notebook = None
         self._manager_status_var = None
@@ -2834,10 +2836,15 @@ class Sniptype:
         return True
 
     def configure_hotkeys(self, icon=None, item=None):
-        """Open the optional workflow-hotkey editor on the GUI thread."""
+        """Tray Configurar atalhos: Configurações in the manager window, or the classic dialog."""
         try:
+            self._pending_manager_page = "settings"
+            if self._open_tauri_manager():
+                return
+            self._pending_manager_page = None
             self.gui.submit(self._show_hotkey_settings)
         except Exception as e:
+            self._pending_manager_page = None
             self.logger.error(f"Erro ao abrir configurações de atalhos: {e}")
 
     def _show_hotkey_settings(self, tk_root):
@@ -2894,7 +2901,7 @@ class Sniptype:
             process = self._manager_process
             if process is not None and process.alive:
                 process.focus()
-                if self._pending_manager_target is not None:
+                if self._pending_manager_target is not None or getattr(self, "_pending_manager_page", None) is not None:
                     process.send({"event": "target"})
                 return True
             executable = find_manager_executable()

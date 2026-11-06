@@ -54,6 +54,13 @@ code, .mono { font-family: var(--app-font-trigger); }
 .expansion .last { font-size: var(--native-type-caption); color: var(--native-muted); overflow-wrap: anywhere; }
 .expansion button { display: flex; align-items: center; gap: 8px; justify-content: flex-start; }
 .infobar .actions { display: flex; gap: 8px; margin-top: 6px; }
+
+/* Atalhos de teclado: label | recorded chord | Desativar. */
+/* One column: the rows need the card's width, and a status line must not move them. */
+.card.hotkeys { grid-template-columns: minmax(0, 1fr); }
+.hotkey-rows { display: grid; gap: 8px; }
+.hotkey-row { display: grid; grid-template-columns: minmax(140px, 1fr) minmax(160px, 220px) auto; gap: 8px; align-items: center; }
+.field.hotkey { cursor: pointer; caret-color: transparent; font-family: var(--app-font-trigger, monospace); }
 .navigation .version { padding: 8px 12px 0; font-size: var(--native-type-caption); color: var(--native-muted); }
 
 .page {

@@ -7,8 +7,15 @@ keypress was consumed and dispatches no action-specific logic itself.
 from pynput import keyboard
 from pynput.keyboard import Key, KeyCode
 
+from i18n import N_
+
 
 ACTIONS = ("open_manager", "edit_last", "toggle_enabled")
+ACTION_LABELS = {
+    "open_manager": N_("Abrir gerenciador"),
+    "edit_last": N_("Editar último expandido"),
+    "toggle_enabled": N_("Alternar expansão"),
+}
 
 
 def display_hotkey(binding):
@@ -55,6 +62,46 @@ def capture_hotkey(keysym, state, windowing_system="win32", pressed_keys=()):
                    "next": "page_down", "space": "space"}
         parts.append(f"<{aliases.get(key, key)}>")
     return "+".join(parts)
+
+# KeyboardEvent.key names (the WebView's) that are modifiers on their own.
+_DOM_MODIFIER_KEYS = frozenset({"Control", "Shift", "Alt", "Meta", "OS", "AltGraph", "CapsLock", "NumLock"})
+# KeyboardEvent.key names for pynput's named keys.
+_DOM_NAMED_KEYS = {
+    "Enter": "enter", "Escape": "esc", "Backspace": "backspace", "Delete": "delete", "Insert": "insert",
+    "Home": "home", "End": "end", "PageUp": "page_up", "PageDown": "page_down", " ": "space",
+    "ArrowUp": "up", "ArrowDown": "down", "ArrowLeft": "left", "ArrowRight": "right",
+    "Pause": "pause", "PrintScreen": "print_screen", "ContextMenu": "menu",
+}
+
+
+def dom_hotkey(key, code, *, ctrl=False, alt=False, shift=False, meta=False):
+    """Translate a WebView ``keydown`` to pynput syntax, like :func:`capture_hotkey` does for Tk.
+
+    Letters and digits come from ``code`` (``KeyM``, ``Digit1``), so Shift
+    and the keyboard layout do not change what is stored. Returns None for a
+    key that cannot finish a chord (a modifier alone, Tab), and ``""`` for
+    Backspace or Delete with no modifier, which clears the binding.
+    """
+    if not isinstance(key, str) or key in _DOM_MODIFIER_KEYS or key == "Tab":
+        return None
+    held = [name for name, on in (("ctrl", ctrl), ("alt", alt), ("shift", shift), ("cmd", meta)) if on]
+    if key in {"Backspace", "Delete"} and not held:
+        return ""
+    code = code if isinstance(code, str) else ""
+    if code.startswith("Key") and len(code) == 4:
+        name = code[3].casefold()
+    elif code.startswith("Digit") and len(code) == 6:
+        name = code[5]
+    elif key in _DOM_NAMED_KEYS:
+        name = f"<{_DOM_NAMED_KEYS[key]}>"
+    elif len(key) > 1 and key[0] == "F" and key[1:].isdigit():
+        name = f"<{key.casefold()}>"
+    elif len(key) == 1:
+        name = key.casefold()
+    else:
+        return None
+    return "+".join([f"<{part}>" for part in held] + [name])
+
 
 _MODIFIER_ALIASES = {
     Key.alt_l: Key.alt,

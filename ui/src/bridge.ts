@@ -24,10 +24,16 @@ export interface AppInfo {
   expansion: { state: ExpansionState; label: string };
   lastExpansion: string;
   canEditLast: boolean;
+  hotkeys: Hotkey[];
   issues: Issue[];
 }
 
 export interface HealthAnswer { page: string | null; receipt: string | null }
+
+/** One workflow hotkey: `binding` is the stored pynput syntax (null when off), `display` how it reads. */
+export interface Hotkey { action: string; label: string; binding: string | null; display: string }
+export type HotkeySaveAnswer =
+  | { status: "saved"; hotkeys: Hotkey[] } | { status: "invalid"; field: string; message: string };
 
 export interface LibraryItem {
   trigger: string;

@@ -6,7 +6,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from pynput.keyboard import Key, KeyCode
 
-from hotkey_support import ACTIONS, HotkeyRouter, normalize_hotkeys
+from hotkey_support import ACTIONS, HotkeyRouter, dom_hotkey, normalize_hotkeys
 
 
 class NormalizeHotkeysTests(unittest.TestCase):
@@ -63,6 +63,33 @@ class NormalizeHotkeysTests(unittest.TestCase):
         self.assertIsNone(bindings["open_manager"])
         self.assertIn("open_manager", invalid)
         self.assertEqual("<ctrl>+<shift>+m", bindings["edit_last"])
+
+
+class DomHotkeyTests(unittest.TestCase):
+    """The manager window's key events become the same stored syntax as the Tk dialog's."""
+
+    def test_letters_and_digits_come_from_the_physical_key(self):
+        self.assertEqual("<ctrl>+<shift>+m", dom_hotkey("M", "KeyM", ctrl=True, shift=True))
+        self.assertEqual("<alt>+1", dom_hotkey("!", "Digit1", alt=True))
+        self.assertEqual("<cmd>+e", dom_hotkey("e", "KeyE", meta=True))
+
+    def test_named_and_function_keys(self):
+        self.assertEqual("<ctrl>+<page_up>", dom_hotkey("PageUp", "PageUp", ctrl=True))
+        self.assertEqual("<f8>", dom_hotkey("F8", "F8"))
+        self.assertEqual("<ctrl>+<space>", dom_hotkey(" ", "Space", ctrl=True))
+
+    def test_modifiers_alone_and_tab_are_ignored_and_backspace_clears(self):
+        for key in ("Control", "Shift", "Alt", "Meta", "Tab"):
+            self.assertIsNone(dom_hotkey(key, key + "Left", ctrl=key == "Control"))
+        self.assertEqual("", dom_hotkey("Backspace", "Backspace"))
+        self.assertEqual("", dom_hotkey("Delete", "Delete"))
+        self.assertEqual("<ctrl>+<delete>", dom_hotkey("Delete", "Delete", ctrl=True))
+
+    def test_what_it_stores_passes_normalization(self):
+        binding = dom_hotkey("M", "KeyM", ctrl=True, shift=True)
+        bindings, invalid = normalize_hotkeys({"open_manager": binding})
+        self.assertEqual({}, invalid)
+        self.assertEqual(binding, bindings["open_manager"])
 
 
 class HotkeyRouterTests(unittest.TestCase):

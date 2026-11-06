@@ -24,6 +24,7 @@ const EN_US: Record<string, string> = {
   "Área de transferência": "Clipboard",
   "Arquivo: {file}\n\nMesclar mantém a biblioteca atual e dá prioridade ao arquivo.\n{merge}\n\nSubstituir tudo troca a biblioteca pelo arquivo.\n{replace}\n\nAntes, a biblioteca atual é salva em um backup.":
     "File: {file}\n\nMerge keeps the current library and gives the file priority.\n{merge}\n\nReplace all swaps the library for the file.\n{replace}\n\nThe current library is saved to a backup first.",
+  "Atalhos de teclado": "Keyboard hotkeys",
   "Ativado às {time} · {name}": "Turned on at {time} · {name}",
   "Ativar": "Activate",
   "Avisos": "Notices",
@@ -51,6 +52,7 @@ const EN_US: Record<string, string> = {
   "Campos que o texto pede: {names}": "Fields the text asks for: {names}",
   "Cancelar": "Cancel",
   "Claro": "Light",
+  "Clique em um campo e pressione a combinação, como Ctrl+Shift+M. Backspace desativa o atalho.": "Click a field and press the combination, such as Ctrl+Shift+M. Backspace turns the hotkey off.",
   "Com o prefixo do grupo, digite {trigger} para expandir.": "With the group's prefix, type {trigger} to expand.",
   "Com problema": "With problems",
   "Como a data entra no texto, por exemplo %d/%m/%Y.": "How the date goes into the text, for example %d/%m/%Y.",
@@ -71,6 +73,7 @@ const EN_US: Record<string, string> = {
   "dd dia · MM mês · MMMM mês por extenso · yyyy ano · dddd dia da semana · HH:mm:ss hora. Sem espaços.":
     "dd day · MM month · MMMM month name · yyyy year · dddd weekday · HH:mm:ss time. No spaces. Month and weekday names come out in Portuguese.",
   "Densidade": "Density",
+  "Desativado": "Off",
   "Desativado às {time} · {name}": "Turned off at {time} · {name}",
   "Desativados": "Disabled",
   "Desativar": "Deactivate",
