@@ -16,6 +16,7 @@ manager and every other handler that mutates the library.
 """
 
 import copy
+import hashlib
 import itertools
 import json
 import os
@@ -36,6 +37,9 @@ from form_support import DEFAULT_DATE_FORMAT, FIELD_TYPES, FormValidationError, 
 from preview_dialog import build_preview_model
 from preview_support import resolve_preview
 from editor_session import (
+    CHANGED,
+    GONE,
+    UNCHANGED,
     mapping_draft_problem,
     mapping_type_key,
     mapping_type_problem,
@@ -98,6 +102,37 @@ def _spans(value):
     if not is_rich_text_payload(value):
         return []
     return normalize_style_spans(value.get("spans"), len(value["text"]))
+
+
+def revision(value):
+    """A short fingerprint of a stored value, or None when nothing is stored.
+
+    The editor keeps the revision it opened; a save or a check compares it
+    with the library now, so a value changed behind the window is never
+    overwritten without the person knowing.
+    """
+    if value is None:
+        return None
+    encoded = json.dumps(value, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    return hashlib.sha1(encoded).hexdigest()[:16]
+
+
+def _stale_check(current, base, name, confirmed, *, gone_message, changed_message):
+    """The confirmation a save over a changed or deleted item needs first, or None.
+
+    ``current`` is the revision stored under the draft's item now, ``base``
+    the one the editor opened; without a ``base`` (a new draft, an old
+    client) there is nothing to compare.
+    """
+    if base is None or "stale" in confirmed or current == base:
+        return None
+    return {
+        "status": "confirm",
+        "check": "stale",
+        "title": _("A biblioteca mudou"),
+        "message": (gone_message if current is None else changed_message).format(name=name),
+        "action": _("Salvar mesmo assim"),
+    }
 
 
 def _edited_value(text, spans, existing):
@@ -170,6 +205,7 @@ class ManagerBridge:
             "form.get": self.form_get,
             "form.save": self.form_save,
             "preview.get": self.preview_get,
+            "draft.check": self.draft_check,
             "mapping.types": self.mapping_types,
             "mapping.list": self.mapping_list,
             "mapping.get": self.mapping_get,
@@ -338,15 +374,33 @@ class ManagerBridge:
             raise BridgeError("missing", _("O snippet {name} não existe mais.").format(name=trigger))
         return {"trigger": trigger, "text": extract_plain_text(value), "rich": is_rich_text_payload(value),
                 "spans": _spans(value), "effectiveTrigger": row.effective_trigger, "favorite": row.favorite,
-                "groupId": row.group_id}
+                "groupId": row.group_id, "revision": revision(value)}
 
-    def snippet_save(self, trigger, text, original=None, confirmed=(), spans=None):
+    def draft_check(self, kind, key, base, container=None):
+        """What the library now holds under an open draft's item: ``unchanged``, ``changed`` or ``gone``.
+
+        The rule is :meth:`editor_session.EditorSession.reconcile`'s, on
+        revisions: the window decides only how to ask.
+        """
+        if kind == "static":
+            current = revision(self._stored(key))
+        elif kind == "mapping":
+            self._type(container)
+            current = revision(self._mapping_value(container, key))
+        else:
+            raise BridgeError("bad_params", f"unknown draft kind: {kind!r}")
+        status = GONE if current is None else UNCHANGED if current == base else CHANGED
+        return {"status": status, "revision": current}
+
+    def snippet_save(self, trigger, text, original=None, confirmed=(), spans=None, base=None):
         """Save a static snippet: its text and, from the formatting editor, its style spans.
 
         Answers ``{"status": "saved"}``, or ``{"status": "confirm", "check", ...}``
         when the person has to accept a replacement or trigger warnings first;
         the UI repeats the request with that check in ``confirmed``. Text whose
         spans are all gone is stored plain again, as the classic editor does.
+        ``base`` is the revision the editor opened ``original`` at: a save over
+        a version changed or deleted since asks first (``stale``).
         """
         app = self.app
         trigger = trigger.strip() if isinstance(trigger, str) else ""
@@ -358,6 +412,15 @@ class ManagerBridge:
 
         existing = self._stored(trigger)
         value = _edited_value(text, spans, existing)
+        if original is not None:
+            stale = _stale_check(
+                revision(self._stored(original)), base, original, confirmed,
+                gone_message=_("O snippet {name} foi excluído depois que você o abriu. Salvar cria de novo "
+                               "com o rascunho."),
+                changed_message=_("O snippet {name} foi alterado depois que você o abriu. Salvar troca a "
+                                  "versão nova pelo rascunho."))
+            if stale:
+                return stale
         if existing is not None and trigger != original and "replace" not in confirmed:
             return {
                 "status": "confirm",
@@ -379,12 +442,12 @@ class ManagerBridge:
                     "action": _("Salvar mesmo assim"),
                 }
         if existing == value:
-            return {"status": "saved", "trigger": trigger}
+            return {"status": "saved", "trigger": trigger, "revision": revision(existing)}
         if not app.save_static_snippet(trigger, value):
             raise BridgeError("save_failed", _(
                 "Não foi possível gravar snippets.json, então nada foi salvo. O rascunho continua no "
                 "editor; verifique os logs e tente de novo."))
-        return {"status": "saved", "trigger": trigger}
+        return {"status": "saved", "trigger": trigger, "revision": revision(self._stored(trigger))}
 
     def snippet_delete(self, trigger):
         """Delete a static snippet; the answer carries the token Desfazer sends back."""
@@ -677,9 +740,10 @@ class ManagerBridge:
         row = self._row("mapping", name, type)
         return {"type": type, "name": name, "text": extract_plain_text(value),
                 "rich": is_rich_text_payload(value), "spans": _spans(value),
-                "effectiveTrigger": info["prefix"] + name, "favorite": bool(row and row.favorite)}
+                "effectiveTrigger": info["prefix"] + name, "favorite": bool(row and row.favorite),
+                "revision": revision(value)}
 
-    def mapping_save(self, type, name, text, original=None, confirmed=(), formFrom=None, spans=None):
+    def mapping_save(self, type, name, text, original=None, confirmed=(), formFrom=None, spans=None, base=None):
         """Save a mapping item; answers like :meth:`snippet_save`.
 
         ``formFrom`` names the item of the same type a Duplicar copy was made
@@ -694,6 +758,15 @@ class ManagerBridge:
             raise BridgeError("invalid", _(problem))
         existing = self._mapping_value(type, name)
         value = _edited_value(text, spans, existing)
+        if original is not None:
+            stale = _stale_check(
+                revision(self._mapping_value(type, original)), base, original, confirmed,
+                gone_message=_("O item {name} foi excluído depois que você o abriu. Salvar cria de novo "
+                               "com o rascunho."),
+                changed_message=_("O item {name} foi alterado depois que você o abriu. Salvar troca a "
+                                  "versão nova pelo rascunho."))
+            if stale:
+                return stale
         if existing is not None and name != original and "replace" not in confirmed:
             return {
                 "status": "confirm",
@@ -709,7 +782,8 @@ class ManagerBridge:
             raise BridgeError("save_failed", _(
                 "Não foi possível gravar snippets.json, então nada foi salvo. O rascunho continua no "
                 "editor; verifique os logs e tente de novo."))
-        return {"status": "saved", "type": type, "name": name}
+        return {"status": "saved", "type": type, "name": name,
+                "revision": revision(self._mapping_value(type, name))}
 
     def _copied_mapping_form(self, type, name, value, source):
         """The metadata that gives ``name`` the form of ``source``, or None when it has none."""

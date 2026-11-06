@@ -51,11 +51,16 @@ export interface StyleSpan { tag: "bold" | "italic" | "underline" | "code" | "st
 export interface Snippet {
   trigger: string; text: string; rich: boolean; spans: StyleSpan[]; effectiveTrigger: string; favorite: boolean;
   groupId: string | null;
+  /** Fingerprint of the stored value: a save sends it back as `base`, so a newer version is never overwritten unasked. */
+  revision: string;
 }
 
-export type SaveCheck = "replace" | "warnings" | "shadow";
+export type SaveCheck = "replace" | "warnings" | "shadow" | "stale";
 export type Confirmation = { status: "confirm"; check: SaveCheck; title: string; message: string; action: string };
-export type SaveAnswer = { status: "saved"; trigger: string } | Confirmation;
+export type SaveAnswer = { status: "saved"; trigger: string; revision: string } | Confirmation;
+
+/** What the library holds now under an open draft's item (editor_session.reconcile). */
+export interface DraftCheck { status: "unchanged" | "changed" | "gone"; revision: string | null }
 
 export type CopyAnswer = { status: "duplicated"; trigger: string } | { status: "invalid"; message: string };
 export type RenameAnswer =
@@ -106,10 +111,10 @@ export interface MappingItem { name: string; effectiveTrigger: string; favorite:
 
 export interface MappingEntry {
   type: string; name: string; text: string; rich: boolean; spans: StyleSpan[]; effectiveTrigger: string;
-  favorite: boolean;
+  favorite: boolean; revision: string;
 }
 
-export type MappingSaveAnswer = { status: "saved"; type: string; name: string } | Confirmation;
+export type MappingSaveAnswer = { status: "saved"; type: string; name: string; revision: string } | Confirmation;
 
 export type CreateTypeAnswer =
   | { status: "created"; key: string }

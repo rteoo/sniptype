@@ -512,6 +512,15 @@ EN_US = {
     "Não foi possível restaurar {trigger}: {error}": "Could not restore {trigger}: {error}",
     "Não foi possível restaurar {name}: {error}": "Could not restore {name}: {error}",
     "Salvar snippet": "Save snippet",
+    "A biblioteca mudou": "The library changed",
+    "O snippet {name} foi excluído depois que você o abriu. Salvar cria de novo com o rascunho.":
+    "The snippet {name} was deleted after you opened it. Saving creates it again from the draft.",
+    "O snippet {name} foi alterado depois que você o abriu. Salvar troca a versão nova pelo rascunho.":
+    "The snippet {name} was changed after you opened it. Saving replaces the newer version with the draft.",
+    "O item {name} foi excluído depois que você o abriu. Salvar cria de novo com o rascunho.":
+    "The item {name} was deleted after you opened it. Saving creates it again from the draft.",
+    "O item {name} foi alterado depois que você o abriu. Salvar troca a versão nova pelo rascunho.":
+    "The item {name} was changed after you opened it. Saving replaces the newer version with the draft.",
     "Salvar mesmo assim": "Save anyway",
     "Excluir snippet": "Delete snippet",
     "Duplicar snippet": "Duplicate snippet",
