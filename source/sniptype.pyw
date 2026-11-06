@@ -1,7 +1,7 @@
 """
 SnipType - Windows system tray snippet expander.
-Version: 1.4.0
-Channel: stable
+Version: 1.5.0
+Channel: beta
 
 IMPORTANT: This program captures keyboard input only to expand text
 snippets (shortcuts). It does not store, transmit, or log keystrokes.
@@ -315,8 +315,6 @@ BUFFER_RESET_KEYS = frozenset(
 
 # Pixels kept for an editor's formatting toolbar plus its content box.
 EDITOR_CONTENT_MIN_HEIGHT = 140
-
-# Display labels for the persisted notification ``kind`` values.
 
 # An open manager checks the Windows app theme this often while the
 # appearance is System (see _check_system_appearance). A registry read costs
@@ -2379,7 +2377,7 @@ class Sniptype:
         try:
             if not injected:
                 self._input_generation += 1
-            if not self._hotkeys_suspended() and self.hotkey_router.press(key):
+            if not self._hotkeys_suspended() and self.hotkey_router.press(self._hotkey_key(key)):
                 self.typed_text = ""
                 return
             if not self.enabled:
@@ -2430,10 +2428,21 @@ class Sniptype:
         return getattr(self, "_hotkey_dialog_open", False) or (
             getattr(self, "_hotkey_field_active", False) and getattr(self, "_manager_window_focused", False))
 
+    def _hotkey_key(self, key):
+        """The key as the hotkey router compares it: the listener's canonical form.
+
+        pynput's Windows listener reports a letter with the held modifiers
+        applied (Ctrl+M arrives as "\\r", Ctrl+1 with no character), which no
+        stored binding equals; its ``canonical`` maps the scan code back to the
+        unmodified key of the current layout.
+        """
+        canonical = getattr(self.listener, "canonical", None)
+        return canonical(key) if canonical is not None else key
+
     def on_release(self, key):
         """Release hotkey state without touching GUI, disk, or snippet data."""
         try:
-            self.hotkey_router.release(key)
+            self.hotkey_router.release(self._hotkey_key(key))
         except Exception as e:
             self.logger.error(f"Erro ao liberar atalho de teclado: {e}")
 
@@ -2760,7 +2769,9 @@ class Sniptype:
             # cancelled form dialog or a failed paste does not leave a stray char.
             if append_text and inserted and self._expansion_target_is_current():
                 self.keyboard_controller.type(append_text)
-                caret_back += len(append_text)
+                if caret_back:
+                    # A %%_cursor%% mark: the terminator went after it too.
+                    caret_back += len(append_text)
             if caret_back and self._expansion_target_is_current():
                 self.text_inserter.move_caret_left(caret_back)
         except Exception as e:

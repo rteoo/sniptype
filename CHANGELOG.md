@@ -19,6 +19,53 @@ their original numbers.
 | 3.2.0, 3.2.1 | 0.9.0, 0.9.1 | 5.2.0-beta.1 | 1.0.0-beta.1 |
 | 3.3.0-beta, 3.3.0 | 0.10.0-beta.1, 0.10.0 | 5.2.0 | 1.0.0 |
 
+## [1.5.0-beta.1] — 2026-11-06
+
+The manager window does everything the classic manager did on Windows, and
+snippets can carry dates, the caret position and keys.
+
+### Added
+
+- Inserir in the editor lists every variable kind, and typing `%%` offers the
+  names SnipType resolves.
+- Built-in tokens: `%%_date%%` with an offset and a format
+  (`%%_date+1w:dd/MM/yyyy%%`), `%%_cursor%%` to leave the caret at that spot,
+  and `%%_enter%%` and `%%_tab%%` to press those keys. A snippet that presses
+  keys stops if you type or click while it runs, and never types its rest
+  as a fallback.
+- The window shows whether expansion is on, paused or down, with
+  Pausar/Retomar, and each problem in the bar above the pages has its recovery
+  action and Dispensar.
+- Workflow hotkeys are edited in Configurações > Atalhos; the tray's
+  Configurar atalhos opens them there.
+- Keyboard workflow: Ctrl+K to find or create an item, Ctrl+E for the last
+  expanded item, Ctrl+1–5 for the pages, Ctrl+/ for the shortcut list, and Esc
+  to clear the search.
+- The window reopens where it was closed, on the page it was showing, and
+  comes back on screen when that monitor is gone.
+- Configurações > Dados shows the mirror and sync state with Copiar and Tentar
+  agora, and Notificações lists the recent notifications.
+- While the window has the focus, routine tray messages appear on its status
+  line instead of a notification.
+- "Oculto pelo filtro atual." with Mostrar na lista when the search or a filter
+  hides the item being edited.
+
+### Fixed
+
+- The window no longer overwrites a value that changed since it was opened:
+  it asks first, and reloads an editor with no unsaved changes when the library
+  changes.
+- Hotkeys with Ctrl and a letter or a digit (Ctrl+Shift+M, Ctrl+1), and those
+  that end in a named key (F1–F12, PageUp, Home, Space and similar), now fire.
+- Recording a hotkey no longer runs the existing hotkey it duplicates.
+
+### Known issues
+
+- Form validation messages are in English.
+- The macOS build keeps the classic manager.
+- The classic editor's "Salvar substitui …" note while a trigger is retyped is
+  a question at Salvar in the window.
+
 ## [1.4.0] — 2026-11-05
 
 The rebuilt manager window becomes the stable manager, with a new app icon.

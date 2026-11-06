@@ -313,7 +313,9 @@ class ManagerBridge:
         if action in self._HEALTH_PAGES:
             return {"page": self._HEALTH_PAGES[action], "receipt": None}
         if action == health_support.RESUME:
-            return {"page": None, "receipt": self.toggle_enabled()["receipt"]}
+            # Retomar only resumes: a hotkey may have resumed already, and toggling would pause again.
+            receipt = None if app.enabled else self.toggle_enabled()["receipt"]
+            return {"page": None, "receipt": receipt}
         if action == health_support.OPEN_FOLDER:
             app.open_data_folder()
         elif action == health_support.OPEN_LOG:

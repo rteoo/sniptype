@@ -128,6 +128,14 @@ class HotkeyRouterTests(unittest.TestCase):
         self.assertTrue(router.press(Key.page_up))
         self.assertEqual(["toggle_enabled", "edit_last"], actions)
 
+    def test_space_fires_as_the_listener_reports_it(self):
+        # Key.space is the one named key whose value also carries a character.
+        actions = []
+        router = HotkeyRouter({"open_manager": "<ctrl>+<space>"}, actions.append)
+        router.press(Key.ctrl_l)
+        self.assertTrue(router.press(Key.space))
+        self.assertEqual(["open_manager"], actions)
+
     def test_unrelated_key_is_not_consumed(self):
         self.router.press(Key.ctrl)
         self.router.press(Key.shift)
