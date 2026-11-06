@@ -508,6 +508,17 @@ class TrayStateTests(unittest.TestCase):
         for image in (paused, failed):
             self.assertEqual(shipped.size, image.size)
 
+    def test_without_the_shipped_icon_the_tray_draws_the_family_mark(self):
+        app = self._app()
+        app.resolve_resource_path = lambda name: None
+
+        colors = {rgba for _, rgba in app.load_tray_icon().getcolors(64 * 64)}
+
+        # Navy tile, cream cursor, copper trigger: the colors of sniptype-icon-small.svg.
+        self.assertTrue(
+            {(38, 60, 86, 255), (242, 239, 233, 255), (230, 160, 90, 255)} <= colors
+        )
+
     def test_a_failed_capture_is_down_even_if_the_flag_says_enabled(self):
         app = self._app(enabled=True, capture_error=OSError("hook"))
 
