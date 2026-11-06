@@ -117,6 +117,17 @@ class HotkeyRouterTests(unittest.TestCase):
         self.assertTrue(self.router.press(KeyCode.from_char("M")))
         self.assertEqual(["open_manager"], self.actions)
 
+    def test_named_keys_fire_as_the_listener_reports_them(self):
+        actions = []
+        router = HotkeyRouter({"toggle_enabled": "<ctrl>+<f8>", "edit_last": "<alt>+<page_up>"}, actions.append)
+        router.press(Key.ctrl_l)
+        self.assertTrue(router.press(Key.f8))
+        router.release(Key.f8)
+        router.release(Key.ctrl_l)
+        router.press(Key.alt_l)
+        self.assertTrue(router.press(Key.page_up))
+        self.assertEqual(["toggle_enabled", "edit_last"], actions)
+
     def test_unrelated_key_is_not_consumed(self):
         self.router.press(Key.ctrl)
         self.router.press(Key.shift)
