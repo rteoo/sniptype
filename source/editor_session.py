@@ -13,6 +13,7 @@ text, so the caller takes the baseline from the editor right after a load.
 The stored value (``source``) is kept separately, for :meth:`reconcile`.
 """
 
+from builtin_tokens import condition_problem
 from i18n import N_, _
 
 
@@ -130,7 +131,7 @@ def static_draft_problem(trigger, plain_text):
         return N_("Triggers com '_' são reservados.")
     if not plain_text.strip():
         return N_("Informe um valor para o snippet.")
-    return None
+    return condition_problem(plain_text)
 
 
 def static_trigger_problem(snippets, trigger, current=None):
@@ -156,7 +157,7 @@ def mapping_draft_problem(name, plain_text):
         return N_("'__prefix__' é reservado para o prefixo do tipo de mapeamento.")
     if not plain_text.strip():
         return N_("Informe um valor.")
-    return None
+    return condition_problem(plain_text)
 
 
 def mapping_type_problem(types, snippets, type_name, prefix):

@@ -21,12 +21,21 @@ caret has to move back over.
 ``%%_enter%%`` and ``%%_tab%%`` press that key between pieces of text. They
 become marks the same way, and ``plan_insertion`` turns the resolved payload
 into paste and key steps.
+
+``%%_if:COND%%`` … ``%%_elif:COND%%`` … ``%%_else%%`` … ``%%_endif%%`` keep
+only the branch whose condition holds when the snippet expands (blocks nest).
+``resolve_conditions`` runs before anything else reads the text, so a branch
+that is dropped never asks for its form fields nor runs its dynamic snippets.
+A line break touching a marker is layout: one right after ``_if``, ``_elif``
+or ``_else`` and one right before ``_elif``, ``_else`` or ``_endif`` are
+dropped, so each branch can sit on its own line.
 """
 
 import calendar
 from datetime import datetime, timedelta
 import re
 
+from i18n import N_, _
 from rich_text_support import (
     build_rich_text_payload,
     extract_plain_text,
@@ -54,6 +63,35 @@ _MARK_BLOCK = {code: None for code in range(0xFDD0, 0xFDF0)}
 KEY_TEXT = {"enter": "\n", "tab": "\t"}
 
 _DATE_RE = re.compile(r"_date(?:(?P<sign>[+-])(?P<amount>\d{1,3})(?P<unit>[dwmy]))?(?::(?P<format>.+))?")
+# Any _if/_elif is a condition marker, whatever follows it: an unknown
+# condition is reported, never asked for as a form field.
+_CONDITION_RE = re.compile(r"_(?P<word>if|elif)(?::(?P<condition>.*))?|_(?P<bare>else|endif)")
+_TOKEN_RE = re.compile(r"%%([^%\s]+)%%")
+_DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+# Morning 05:00-11:59, afternoon 12:00-17:59, night 18:00-04:59.
+CONDITIONS = {
+    "morning": lambda now: 5 <= now.hour < 12,
+    "afternoon": lambda now: 12 <= now.hour < 18,
+    "night": lambda now: now.hour >= 18 or now.hour < 5,
+    "weekday": lambda now: now.weekday() < 5,
+    "weekend": lambda now: now.weekday() >= 5,
+    **{day: (lambda now, index=index: now.weekday() == index) for index, day in enumerate(_DAYS)},
+}
+UNKNOWN_CONDITION = N_(
+    "Condição desconhecida. Use morning, afternoon, night, weekday, weekend "
+    "ou mon, tue, wed, thu, fri, sat, sun."
+)
+STRAY_MARKER = N_("%%_elif%%, %%_else%% ou %%_endif%% sem um %%_if%% antes.")
+AFTER_ELSE = N_("%%_elif%% ou %%_else%% depois do %%_else%% da mesma condição.")
+UNCLOSED = N_("Falta um %%_endif%% para fechar a condição.")
+
+
+class ConditionError(ValueError):
+    """A malformed condition block. ``message_id`` is the untranslated message."""
+
+    def __init__(self, message_id):
+        super().__init__(_(message_id))
+        self.message_id = message_id
 
 _MONTHS = ("janeiro", "fevereiro", "março", "abril", "maio", "junho",  # i18n: not ui
            "julho", "agosto", "setembro", "outubro", "novembro", "dezembro")  # i18n: not ui
@@ -87,13 +125,97 @@ def strip_marks(text):
 
 
 def builtin_kind(name):
-    """``"cursor"``, ``"key"``, ``"date"`` or None for a variable name."""
+    """``"cursor"``, ``"key"``, ``"date"``, ``"condition"`` or None for a variable name."""
     if name == CURSOR_NAME:
         return "cursor"
     if name in KEYS:
         return "key"
     if _DATE_RE.fullmatch(name):
         return "date"
+    if _CONDITION_RE.fullmatch(name):
+        return "condition"
+    return None
+
+
+def _holds(condition, now):
+    test = CONDITIONS.get(condition)
+    if test is None:
+        raise ConditionError(UNKNOWN_CONDITION)
+    return test(now)
+
+
+def _without_trailing_break(chunk):
+    if chunk.endswith("\r\n"):
+        return chunk[:-2]
+    return chunk[:-1] if chunk.endswith("\n") else chunk
+
+
+def _after_leading_break(text, index):
+    if text.startswith("\r\n", index):
+        return index + 2
+    return index + 1 if text.startswith("\n", index) else index
+
+
+def resolve_conditions(text, now=None):
+    """``text`` with each condition block replaced by the branch that holds at ``now``.
+
+    Raises :class:`ConditionError` for a malformed block, checking every
+    marker, including those in branches that are dropped.
+    """
+    if "%%_" not in text:
+        return text
+    now = now or datetime.now()
+    out = []
+    # One frame per open block: [parent emits, a branch was taken, _else seen].
+    stack = []
+    active = True
+    position = 0
+    for match in _TOKEN_RE.finditer(text):
+        marker = _CONDITION_RE.fullmatch(match.group(1))
+        if marker is None:
+            continue
+        word = marker["word"] or marker["bare"]
+        chunk = text[position:match.start()]
+        if word != "if":
+            chunk = _without_trailing_break(chunk)
+        if active:
+            out.append(chunk)
+        position = match.end()
+        if word != "endif":
+            position = _after_leading_break(text, position)
+        if word == "if":
+            frame = [active, False, False]
+            stack.append(frame)
+            chosen = _holds(marker["condition"], now) and active
+        else:
+            if not stack:
+                raise ConditionError(STRAY_MARKER)
+            frame = stack[-1]
+            if word == "endif":
+                stack.pop()
+                active = frame[0]
+                continue
+            if frame[2]:
+                raise ConditionError(AFTER_ELSE)
+            if word == "else":
+                frame[2] = True
+                chosen = frame[0] and not frame[1]
+            else:
+                chosen = _holds(marker["condition"], now) and frame[0] and not frame[1]
+        frame[1] = frame[1] or chosen
+        active = chosen
+    if stack:
+        raise ConditionError(UNCLOSED)
+    out.append(text[position:])
+    return "".join(out)
+
+
+def condition_problem(text):
+    """Why ``text``'s condition blocks are malformed, as a message id, or None."""
+    try:
+        resolve_conditions(text, datetime(2000, 1, 1))
+    except ConditionError as error:
+        return error.message_id
     return None
 
 

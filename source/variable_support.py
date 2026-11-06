@@ -7,6 +7,7 @@ Kinds, resolved in this priority order:
   - %%_date…%%, %%_cursor%%, %%_enter%%, %%_tab%% → built-in tokens
                            (``builtin_tokens``): the date, where the caret ends
                            after the paste, and keys pressed between the text
+  - %%_if:…%% … %%_endif%% → condition blocks, resolved before everything else
   - %%trigger%%          → plain text of an existing static snippet (1 level deep)
   - %%trigger%%          → a runtime dynamic snippet (xhj, xdolar, xcot, ...): the
                            callable is invoked and its result substituted
@@ -19,9 +20,10 @@ WhatsApp prompt), so ``resolve_inline`` must only be called from the expansion
 worker thread — never from the keyboard listener.
 """
 
+from datetime import datetime
 import re
 
-from builtin_tokens import builtin_kind, builtin_value, strip_marks
+from builtin_tokens import builtin_kind, builtin_value, resolve_conditions, strip_marks
 from rich_text_support import extract_plain_text
 from snippet_utils import check_dynamic_pattern, get_dynamic_prefixes
 from whatsapp_runtime_support import ACTION_COMPLETED
@@ -115,7 +117,9 @@ def expand_inline(text, snippets, get_clipboard, _seen=None, prefixes=None, noti
     that is not a built-in token loses its mark characters
     (``builtin_tokens.strip_marks``), so only a token can press a key.
     """
-    text = strip_marks(text)
+    now = datetime.now()
+    # Conditions first: a dropped branch must not ask, fetch or open anything.
+    text = resolve_conditions(strip_marks(text), now)
     names = find_variable_names(text)
     inline_values = {}
     if not names:
@@ -150,10 +154,12 @@ def expand_inline(text, snippets, get_clipboard, _seen=None, prefixes=None, noti
             continue  # circular reference: leave unchanged
         elif kind == "snippet_ref":
             # One level deep only: do not recursively resolve variables inside the ref.
-            text = text.replace(f"%%{name}%%", strip_marks(extract_plain_text(snippets[name])))
+            body = resolve_conditions(strip_marks(extract_plain_text(snippets[name])), now)
+            text = text.replace(f"%%{name}%%", body)
         elif kind == "mapping_ref":
             value, _prefix = check_dynamic_pattern(snippets, name, prefixes)
-            text = text.replace(f"%%{name}%%", strip_marks(extract_plain_text(value)))
+            body = resolve_conditions(strip_marks(extract_plain_text(value)), now)
+            text = text.replace(f"%%{name}%%", body)
         elif kind == "dynamic_ref":
             inline_values[name] = _resolve_dynamic(name, snippets, notify_failure)
         # form_field: leave unchanged
