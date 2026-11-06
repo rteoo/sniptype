@@ -1656,7 +1656,7 @@ class Sniptype:
 
             try:
                 time.sleep(0.05)
-                inserted = self._insert_template_result(snippet)
+                inserted = self._insert_template_result(snippet, keys=False)
                 if inserted is False:
                     return False
 
@@ -1742,7 +1742,7 @@ class Sniptype:
                 if is_rich_text_payload(raw):
                     result = rebuild_rich_text(raw, result)
                 time.sleep(0.05)
-                inserted = self._insert_template_result(result)
+                inserted = self._insert_template_result(result, keys=True)
                 return inserted is not False
 
             result = func()
@@ -1767,15 +1767,17 @@ class Sniptype:
             )
             return False
 
-    def _insert_template_result(self, payload):
+    def _insert_template_result(self, payload, keys):
         """Insert a resolved snippet and record where %%_cursor%% leaves the caret.
 
         A snippet that presses keys goes in as a sequence of pastes and keys;
-        anything else is one paste. ``_run_expansion`` moves the caret only
+        anything else is one paste. Only the slow route passes ``keys=True``:
+        it is the route whose context check counts keystrokes, so key snippets
+        are routed there (``key_triggers``) and the fast route never presses one. ``_run_expansion`` moves the caret only
         after it re-emits the terminator, which belongs after the expansion's
         last character.
         """
-        steps, caret_back = plan_insertion(payload)
+        steps, caret_back = plan_insertion(payload, keys=keys)
         if any(kind == "key" for kind, _value in steps):
             inserted = self.text_inserter.insert_steps(steps)
         else:

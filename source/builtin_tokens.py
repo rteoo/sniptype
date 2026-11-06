@@ -44,6 +44,11 @@ DEFAULT_DATE_FORMAT = "dd/MM/yyyy"
 KEYS = {"_enter": "enter", "_tab": "tab"}
 _KEY_MARKS = {"enter": chr(0xFDD1), "tab": chr(0xFDD2)}
 _MARK_KEYS = {mark: key for key, mark in _KEY_MARKS.items()}
+# Every mark above lies in U+FDD0..U+FDEF, a block of noncharacters. A mark
+# must come only from a built-in token: text from anywhere else (the snippet
+# itself, the clipboard, a provider, a form) goes through ``strip_marks``, or
+# a U+FDD1 copied from a web page would press Enter.
+_MARK_BLOCK = {code: None for code in range(0xFDD0, 0xFDF0)}
 # How a key that was not pressed is written when the rest of a stopped
 # sequence is left on the clipboard as text.
 KEY_TEXT = {"enter": "\n", "tab": "\t"}
@@ -74,6 +79,11 @@ _PATTERNS = (
 )
 _PATTERN_RE = re.compile("|".join(re.escape(pattern) for pattern, _render in _PATTERNS))
 _RENDERERS = dict(_PATTERNS)
+
+
+def strip_marks(text):
+    """``text`` without any mark character, so data can never act as a token."""
+    return text.translate(_MARK_BLOCK)
 
 
 def builtin_kind(name):
@@ -155,16 +165,21 @@ def _slice(payload, start, end):
     return build_rich_text_payload(text, spans)
 
 
-def plan_insertion(payload):
+def plan_insertion(payload, keys=True):
     """Return ``(steps, caret_back)`` for a resolved payload.
 
     ``steps`` are ``("text", payload)`` and ``("key", name)`` in order; without
     a key it is the one text step, empty or not. The caret moves back only
     from a ``%%_cursor%%`` after the last key: one before a key would have to
     travel back across what the key did (another field, a sent message), so
-    it is dropped.
+    it is dropped. ``keys=False`` (the fast route, which does not watch the
+    keyboard while it inserts) drops every key mark instead of pressing it.
     """
     text = extract_plain_text(payload)
+    if not keys and any(mark in text for mark in _MARK_KEYS):
+        kept = "".join(char for char in text if char not in _MARK_KEYS)
+        payload = rebuild_rich_text(payload, kept) if is_rich_text_payload(payload) else kept
+        text = kept
     caret = text.find(CARET_MARK)
     last_key = max((text.rfind(mark) for mark in _MARK_KEYS), default=-1)
     clean_payload, caret_back = split_cursor(payload)

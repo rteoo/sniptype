@@ -358,6 +358,17 @@ class ExpansionTargetGuardTests(_GuardFixture):
         )
         self.assertEqual("ORIGINAL", self.clipboard.value)
 
+    def test_a_fast_callable_cannot_press_keys_with_its_output(self):
+        events = self._key_snippet("unused")
+        # A provider's text is data; a key mark in it (U+FDD1, Enter) must not press anything.
+        self.app.snippets["xdyn"] = lambda: f"a{chr(0xFDD1)}b"
+        self.app.refresh_runtime_indexes()
+        self._type("xdyn")
+        events.clear()  # the trigger's erase
+        self._run_worker(0)
+
+        self.assertEqual([("paste", "ab")], events)
+
     def test_a_click_mid_sequence_stops_it_and_leaves_the_rest_to_paste(self):
         events = self._key_snippet("Nome%%_tab%%Fulano%%_enter%%")
         self._type("xkeys")

@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 import re
 
-from builtin_tokens import builtin_kind
+from builtin_tokens import builtin_kind, strip_marks
 from i18n import _
 from snippet_utils import get_dynamic_prefixes
 
@@ -307,7 +307,9 @@ def render_form(compiled, values, inline_values=None):
     dynamic output) to their text; they join the same pass so that data is
     never re-read as template syntax either.
     """
-    rendered = {**(inline_values or {}), **render_form_values(compiled, values)}
+    # Typed values are data: a mark character in them must not act as a token.
+    typed = {name: strip_marks(text) for name, text in render_form_values(compiled, values).items()}
+    rendered = {**(inline_values or {}), **typed}
     return VARIABLE_RE.sub(
         lambda match: rendered.get(match.group(1), match.group(0)),
         compiled.template,

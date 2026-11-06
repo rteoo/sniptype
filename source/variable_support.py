@@ -21,7 +21,7 @@ worker thread — never from the keyboard listener.
 
 import re
 
-from builtin_tokens import builtin_kind, builtin_value
+from builtin_tokens import builtin_kind, builtin_value, strip_marks
 from rich_text_support import extract_plain_text
 from snippet_utils import check_dynamic_pattern, get_dynamic_prefixes
 from whatsapp_runtime_support import ACTION_COMPLETED
@@ -111,8 +111,11 @@ def expand_inline(text, snippets, get_clipboard, _seen=None, prefixes=None, noti
     same single pass as the form values, where they can never be re-read as
     template syntax.
 
-    Same threading and argument contract as ``resolve_inline``.
+    Same threading and argument contract as ``resolve_inline``. Every text
+    that is not a built-in token loses its mark characters
+    (``builtin_tokens.strip_marks``), so only a token can press a key.
     """
+    text = strip_marks(text)
     names = find_variable_names(text)
     inline_values = {}
     if not names:
@@ -140,17 +143,17 @@ def expand_inline(text, snippets, get_clipboard, _seen=None, prefixes=None, noti
                 raise VariableResolutionError(
                     _("A área de transferência não retornou texto válido.")
                 )
-            inline_values[name] = value
+            inline_values[name] = strip_marks(value)
         elif kind in ("date", "cursor", "key"):
             inline_values[name] = builtin_value(name)
         elif name in _seen:
             continue  # circular reference: leave unchanged
         elif kind == "snippet_ref":
             # One level deep only: do not recursively resolve variables inside the ref.
-            text = text.replace(f"%%{name}%%", extract_plain_text(snippets[name]))
+            text = text.replace(f"%%{name}%%", strip_marks(extract_plain_text(snippets[name])))
         elif kind == "mapping_ref":
             value, _prefix = check_dynamic_pattern(snippets, name, prefixes)
-            text = text.replace(f"%%{name}%%", extract_plain_text(value))
+            text = text.replace(f"%%{name}%%", strip_marks(extract_plain_text(value)))
         elif kind == "dynamic_ref":
             inline_values[name] = _resolve_dynamic(name, snippets, notify_failure)
         # form_field: leave unchanged
@@ -175,7 +178,7 @@ def _resolve_dynamic(name, snippets, notify_failure):
         return ""
     if notify_failure:
         notify_failure(name, result)
-    return extract_plain_text(result)
+    return strip_marks(extract_plain_text(result))
 
 
 def substitute_variables(text, values):
@@ -195,4 +198,5 @@ def resolve_form_variables(text, form_data, inline_values=None):
     ``inline_values`` (from ``expand_inline``) are substituted in the same pass,
     so neither they nor the typed values are ever re-read as template syntax.
     """
-    return substitute_variables(text, {**(inline_values or {}), **form_data})
+    typed = {name: strip_marks(value) for name, value in form_data.items()}
+    return substitute_variables(text, {**(inline_values or {}), **typed})

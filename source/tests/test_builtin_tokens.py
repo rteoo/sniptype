@@ -15,12 +15,18 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 import builtin_tokens
 import sync_export
 from builtin_tokens import CARET_MARK, builtin_kind, plan_insertion, render_date, split_cursor, steps_text
-from form_support import compile_form
+from form_support import compile_form, render_form
 from preview_support import CURSOR_PLACEHOLDER, resolve_preview
 from rich_text_support import build_rich_text_payload, extract_plain_text
 from snippet_utils import get_dynamic_prefixes
 from trigger_index import compile_trigger_index
-from variable_support import classify_variable, has_form_variables, has_key_tokens, resolve_inline
+from variable_support import (
+    classify_variable,
+    has_form_variables,
+    has_key_tokens,
+    resolve_form_variables,
+    resolve_inline,
+)
 
 # A Saturday, the last day of a 31-day month.
 NOW = datetime(2026, 1, 31, 9, 5, 7)
@@ -179,6 +185,35 @@ class KeyTokenTests(unittest.TestCase):
             {"xform": "a%%_tab%%b", "xplain": "ab", "_cpf_numbers": {"fulano": "1%%_enter%%"}}, set()
         )
         self.assertEqual({"xform", "cpffulano"}, set(index["key_triggers"]))
+
+
+class InjectedMarkTests(unittest.TestCase):
+    """Only a token can press a key: a mark character arriving as data is dropped."""
+
+    def assert_one_paste(self, text, expected):
+        self.assertEqual([("text", expected)], plan_insertion(text)[0])
+
+    def test_clipboard_text_cannot_press_a_key(self):
+        self.assert_one_paste(resolve_inline("%%clipboard-paste%%", {}, lambda: f"a{ENTER}b{TAB}c"), "abc")
+
+    def test_provider_output_cannot_press_a_key(self):
+        self.assert_one_paste(resolve_inline("%%xdyn%%", {"xdyn": lambda: f"1{ENTER}2"}, lambda: ""), "12")
+
+    def test_a_raw_mark_in_library_text_is_not_a_key(self):
+        self.assert_one_paste(resolve_inline(f"a{ENTER}b %%clipboard-paste%%", {}, lambda: "c"), "ab c")
+        self.assert_one_paste(resolve_inline("%%ref%%", {"ref": f"x{TAB}y"}, lambda: ""), "xy")
+
+    def test_typed_form_values_cannot_press_a_key(self):
+        self.assertEqual("x!", resolve_form_variables("%%nome%%!", {"nome": f"x{ENTER}"}))
+        compiled = compile_form("%%nome%%!", [{"name": "nome", "type": "text"}], {})
+        self.assertEqual("x!", render_form(compiled, {"nome": f"x{TAB}"}))
+
+    def test_the_tokens_themselves_still_press_keys(self):
+        steps = plan_insertion(resolve_inline("%%clipboard-paste%%%%_enter%%", {}, lambda: f"a{ENTER}"))[0]
+        self.assertEqual([("text", "a"), ("key", "enter")], steps)
+
+    def test_without_keys_allowed_every_key_is_dropped(self):
+        self.assertEqual(([("text", "ab")], 0), plan_insertion(f"a{TAB}b{ENTER}", keys=False))
 
 
 if __name__ == "__main__":
