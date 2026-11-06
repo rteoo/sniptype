@@ -521,6 +521,11 @@ EN_US = {
     "The item {name} was deleted after you opened it. Saving creates it again from the draft.",
     "O item {name} foi alterado depois que você o abriu. Salvar troca a versão nova pelo rascunho.":
     "The item {name} was changed after you opened it. Saving replaces the newer version with the draft.",
+    "Já é o atalho de {action}.": "Already the hotkey for {action}.",
+    "Inclua uma tecla além de Ctrl, Alt, Shift ou Win.": "Include a key besides Ctrl, Alt, Shift or Win.",
+    "Uma letra ou um número precisa de Ctrl, Alt ou Win.": "A letter or a number needs Ctrl, Alt or Win.",
+    "Ctrl+Alt com uma letra ou um número é o AltGr no Windows; use outra combinação.":
+    "Ctrl+Alt with a letter or a number is AltGr on Windows; use another combination.",
     "Salvar mesmo assim": "Save anyway",
     "Excluir snippet": "Delete snippet",
     "Duplicar snippet": "Duplicate snippet",

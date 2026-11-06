@@ -12,14 +12,9 @@ import tkinter as tk
 import ui_theme
 import ui_widgets
 from i18n import N_, _
-from hotkey_support import ACTIONS, capture_hotkey, display_hotkey, normalize_hotkeys
+from hotkey_support import ACTION_LABELS, ACTIONS, capture_hotkey, display_hotkey, normalize_hotkeys
 
 
-ACTION_LABELS = {
-    "open_manager": N_("Abrir gerenciador"),
-    "edit_last": N_("Editar último expandido"),
-    "toggle_enabled": N_("Alternar expansão"),
-}
 HINT_TEXT = N_("Pressione uma combinação, como Ctrl+Shift+M. Backspace limpa o atalho.")
 
 

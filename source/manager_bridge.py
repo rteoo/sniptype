@@ -27,6 +27,7 @@ import uuid
 from datetime import datetime
 
 import health_support
+import hotkey_support
 import i18n
 import manager_actions
 import time_format
@@ -176,6 +177,8 @@ class ManagerBridge:
             "app.takeTarget": self.take_target,
             "app.toggleEnabled": self.toggle_enabled,
             "app.editLast": self.edit_last,
+            "hotkeys.capture": self.hotkeys_capture,
+            "hotkeys.save": self.hotkeys_save,
             "health.run": self.health_run,
             "health.dismiss": self.health_dismiss,
             "library.list": self.library_list,
@@ -255,6 +258,7 @@ class ManagerBridge:
             "dataDir": str(app.data_dir),
             "expansion": {"state": state, "label": health_support.expansion_label(state)},
             "lastExpansion": app._last_expansion_text(),
+            "hotkeys": self._hotkeys(),
             "canEditLast": app._manager_target(app.workflow_state.last_successful_item) is not None
             if app.workflow_state.last_successful_item is not None else False,
             "issues": [
@@ -315,8 +319,53 @@ class ManagerBridge:
         self.app._dismiss_health(id)
         return None
 
+    # Why normalize_hotkeys refused a binding, in words the window can show.
+    _HOTKEY_PROBLEMS = (
+        ("duplicates ", N_("Já é o atalho de {action}.")),
+        ("modifier-only", N_("Inclua uma tecla além de Ctrl, Alt, Shift ou Win.")),
+        ("printable keys require a modifier", N_("Uma letra ou um número precisa de Ctrl, Alt ou Win.")),
+        ("Ctrl+Alt printable", N_("Ctrl+Alt com uma letra ou um número é o AltGr no Windows; use outra combinação.")),
+    )
+
+    def _hotkeys(self):
+        """The three workflow hotkeys as Configurações shows them."""
+        stored = self.app.settings.get("hotkeys")
+        bindings, _invalid = hotkey_support.normalize_hotkeys(stored if isinstance(stored, dict) else {})
+        return [{"action": action, "label": _(hotkey_support.ACTION_LABELS[action]), "binding": bindings[action],
+                 "display": hotkey_support.display_hotkey(bindings[action])}
+                for action in hotkey_support.ACTIONS]
+
+    def hotkeys_capture(self, key, code="", ctrl=False, alt=False, shift=False, meta=False):
+        """A key pressed in a hotkey field, as stored syntax: ``binding`` None to ignore it, ``""`` to clear."""
+        binding = hotkey_support.dom_hotkey(key, code, ctrl=ctrl, alt=alt, shift=shift, meta=meta)
+        return {"binding": binding, "display": hotkey_support.display_hotkey(binding) if binding else ""}
+
+    def hotkeys_save(self, bindings):
+        """Validate and save all three hotkeys at once, as the classic dialog does."""
+        if not isinstance(bindings, dict):
+            raise BridgeError("bad_params", "bindings must be an object")
+        _normalized, invalid = hotkey_support.normalize_hotkeys(bindings)
+        for action in hotkey_support.ACTIONS:
+            reason = invalid.get(action)
+            if reason is None:
+                continue
+            message = _("Atalho inválido.")
+            for prefix, text in self._HOTKEY_PROBLEMS:
+                if reason.startswith(prefix):
+                    other = reason[len("duplicates "):] if prefix == "duplicates " else None
+                    message = _(text).format(action=_(hotkey_support.ACTION_LABELS.get(other, other or "")))
+                    break
+            return {"status": "invalid", "field": action, "message": message}
+        if not self.app._save_hotkey_bindings(bindings):
+            raise BridgeError("save_failed", _("Não foi possível salvar os atalhos."))
+        return {"status": "saved", "hotkeys": self._hotkeys()}
+
     def take_target(self):
         """The item Editar o último item asked for (once), as ``{kind, key, container}``, or None."""
+        page = getattr(self.app, "_pending_manager_page", None)
+        self.app._pending_manager_page = None
+        if page is not None:
+            return {"kind": "page", "key": page, "container": None}
         target = self.app._pending_manager_target
         self.app._pending_manager_target = None
         if target is None:

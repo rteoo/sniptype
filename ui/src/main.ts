@@ -10,7 +10,7 @@ import {
   type AppInfo, type Backup, type BackupPreview, BridgeError, type ChangeCounts, type Choice, type Confirmation,
   type CopyAnswer, type CreateTypeAnswer, type DraftCheck, type ImportCounts,
   type DynamicRenameAnswer, type DynamicSection, type DynamicToggleAnswer, type FormFieldDef, type FormInfo,
-  type FormSaveAnswer, type Group, type HealthAnswer, type Preview,
+  type FormSaveAnswer, type Group, type HealthAnswer, type HotkeySaveAnswer, type Preview,
   type GroupForm, type Groups, type GroupSaveAnswer, type Library, type ListFilter, type MappingEntry,
   type MappingItem, type MappingSaveAnswer, type MappingType, type RenameAnswer, type SaveAnswer, type SaveCheck,
   type Snippet, request, startBridge,
@@ -2116,12 +2116,74 @@ function settingsPage(): HTMLElement {
             onchange: (event: Event) => void setSetting("expansion", "terminatorMode",
               (event.target as HTMLInputElement).checked),
           }))),
+      h("section", { class: "card hotkeys", "aria-labelledby": "card-hotkeys" },
+        h("h2", { id: "card-hotkeys" }, t("Atalhos de teclado")),
+        h("p", { id: "hotkeys-hint" },
+          t("Clique em um campo e pressione a combinação, como Ctrl+Shift+M. Backspace desativa o atalho.")),
+        status("hotkeys"),
+        h("div", { class: "hotkey-rows" }, ...info.hotkeys.map((hotkey) => h("div", { class: "hotkey-row" },
+          h("span", {}, hotkey.label),
+          hotkeyField(hotkey.action, hotkey.label, hotkey.display),
+          h("button", {
+            type: "button", class: "el-button", disabled: !hotkey.binding,
+            onclick: () => void saveHotkey(hotkey.action, null),
+          }, t("Desativar")))))),
       card("data", t("Dados"),
         h("span", { class: "stack" }, t("Biblioteca, backups e logs ficam nesta pasta."), h("code", {}, info.dataDir)),
         h("button", { type: "button", class: "el-button", onclick: () => void request("app.openDataFolder") },
           t("Abrir pasta"))),
     ),
   );
+}
+
+// ---------------------------------------------------------------------------
+// Atalhos de teclado: the three workflow hotkeys, recorded by pressing them.
+
+/** Save all three hotkeys with `action` set to `binding` (null turns it off). */
+async function saveHotkey(action: string, binding: string | null): Promise<void> {
+  const info = state.info!;
+  const bindings = Object.fromEntries(info.hotkeys.map((hotkey) =>
+    [hotkey.action, hotkey.action === action ? binding : hotkey.binding]));
+  let answer: HotkeySaveAnswer;
+  try {
+    answer = await request<HotkeySaveAnswer>("hotkeys.save", { bindings });
+  } catch (error) {
+    state.cardStatus.hotkeys = { text: errorText(error), error: true };
+    renderAll();
+    return;
+  }
+  if (answer.status === "invalid") {
+    const label = info.hotkeys.find((hotkey) => hotkey.action === answer.field)?.label ?? answer.field;
+    state.cardStatus.hotkeys = { text: `${label}: ${answer.message}`, error: true };
+  } else {
+    info.hotkeys = answer.hotkeys;
+    state.cardStatus.hotkeys = { text: t("Salvo."), error: false };
+  }
+  renderAll();
+  document.getElementById(`hotkey-${action}`)?.focus();
+}
+
+/** A field that records the next key combination pressed in it. Esc and Tab leave it as it was. */
+function hotkeyField(action: string, label: string, display: string): HTMLElement {
+  return h("input", {
+    id: `hotkey-${action}`, class: "field hotkey", readonly: true, value: display || t("Desativado"),
+    "aria-label": label, "aria-describedby": "hotkeys-hint",
+    onkeydown: (event: KeyboardEvent) => {
+      if (event.key === "Tab" || (event.key === "Escape" && !event.ctrlKey && !event.altKey && !event.metaKey)) {
+        if (event.key === "Escape") (event.target as HTMLElement).blur();
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      void request<{ binding: string | null }>("hotkeys.capture", {
+        key: event.key, code: event.code, ctrl: event.ctrlKey, alt: event.altKey, shift: event.shiftKey,
+        meta: event.metaKey,
+      }).then((captured) => {
+        if (captured.binding === null) return;
+        return saveHotkey(action, captured.binding || null);
+      }).catch((error) => console.error("hotkey capture failed", error));
+    },
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -2182,6 +2244,13 @@ void appWindow.onCloseRequested(async (event) => {
 async function takeTarget(): Promise<void> {
   const target = await request<{ kind: string; key: string; container: string | null } | null>("app.takeTarget");
   if (!target) return;
+  if (target.kind === "page") {
+    // Configurar atalhos from the tray: the hotkeys card in Configurações.
+    await showPage(target.key as Page);
+    document.getElementById("card-hotkeys")?.scrollIntoView({ block: "center" });
+    (document.querySelector(".hotkey") as HTMLElement | null)?.focus();
+    return;
+  }
   if (target.kind === "dynamic") {
     state.dynamics.query = target.key;
     await showPage("dinamicos");
