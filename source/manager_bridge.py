@@ -70,7 +70,6 @@ from rich_text_support import (
 from snippet_utils import build_saveable_snippets, mapping_types
 
 MANAGER_EXE_NAME = "sniptype-manager.exe" if sys.platform == "win32" else "sniptype-manager"
-MANAGER_UI_SETTING = "manager_ui"
 DENSITY_CHOICES = ("compact", "comfortable", "touch")
 PREVIEW_LIMIT = 160
 LIST_FILTERS = (FILTER_ALL, FILTER_FAVORITES, FILTER_RECENT, FILTER_DISABLED, FILTER_PROBLEMS)
@@ -135,7 +134,6 @@ class ManagerBridge:
         self.methods = {
             "app.info": self.app_info,
             "app.openDataFolder": self.open_data_folder,
-            "app.openClassicManager": self.open_classic_manager,
             "app.takeTarget": self.take_target,
             "library.list": self.library_list,
             "snippet.get": self.snippet_get,
@@ -227,11 +225,6 @@ class ManagerBridge:
         if target is None:
             return None
         return {"kind": target.kind, "key": target.key, "container": target.container}
-
-    def open_classic_manager(self):
-        """The Tk manager, still reachable while this window is a preview."""
-        self.app.gui.submit(self.app._show_manager_window)
-        return None
 
     # -- library -----------------------------------------------------------
 

@@ -1,7 +1,7 @@
 """
 SnipType - Windows system tray snippet expander.
 Version: 1.4.0
-Channel: beta
+Channel: stable
 
 IMPORTANT: This program captures keyboard input only to expand text
 snippets (shortcuts). It does not store, transmit, or log keystrokes.
@@ -109,7 +109,7 @@ from workflow_support import SnippetRef, WorkflowState
 from validation_support import validate_trigger
 import health_support
 import i18n
-from manager_bridge import MANAGER_UI_SETTING, ManagerBridge, ManagerProcess, find_manager_executable
+from manager_bridge import ManagerBridge, ManagerProcess, find_manager_executable
 import macos_permissions
 import time_format
 import tray_support
@@ -436,7 +436,7 @@ class Sniptype:
         # of it, marshaled onto its thread. Started in run().
         self.gui = GuiThread(logger=self.logger)
         self.manager_window = None
-        # The Tauri manager window: the default, "manager_ui": "tk" keeps the classic one.
+        # The Tauri manager window; the classic Tk one only when it cannot run.
         self._manager_process = None
         self._manager_process_lock = threading.Lock()
         self._pending_manager_target = None
@@ -2844,18 +2844,17 @@ class Sniptype:
             )
 
     def open_manager(self):
-        """Show the manager: the Tauri window, or the classic Tk one when chosen ("manager_ui": "tk").
+        """Show the manager: the Tauri window, or the classic Tk one when it cannot run.
 
         A build without the Tauri window (a source checkout that has not built
-        ``ui/``, the macOS bundle) opens the classic manager; only a person who
-        asked for the new window by name is told it is missing.
+        ``ui/``, the macOS bundle) opens the classic manager quietly; a window
+        that is present but fails to start says so first.
         """
-        choice = self.settings.get(MANAGER_UI_SETTING)
-        if choice != "tk" and self._open_tauri_manager(chosen=choice == "tauri"):
+        if self._open_tauri_manager():
             return
         self.gui.submit(self._show_manager_window)
 
-    def _open_tauri_manager(self, *, chosen=False):
+    def _open_tauri_manager(self):
         """Start or raise the Tauri manager; False when it cannot run.
 
         A pending Editar o último item target is announced to a running window,
@@ -2870,12 +2869,7 @@ class Sniptype:
                 return True
             executable = find_manager_executable()
             if executable is None:
-                if chosen:
-                    self.logger.error("Tauri manager executable not found; opening the classic manager.")
-                    self.notify_error(_("O novo gerenciador não foi encontrado; abrindo o gerenciador clássico."),
-                                      key="manager-ui-missing", cooldown_seconds=5)
-                else:
-                    self.logger.info("Tauri manager not built here; opening the classic manager.")
+                self.logger.info("Tauri manager not built here; opening the classic manager.")
                 return False
             bridge = ManagerBridge(self, version=APP_VERSION, channel=RELEASE_CHANNEL)
             try:

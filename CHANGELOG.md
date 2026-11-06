@@ -19,6 +19,26 @@ their original numbers.
 | 3.2.0, 3.2.1 | 0.9.0, 0.9.1 | 5.2.0-beta.1 | 1.0.0-beta.1 |
 | 3.3.0-beta, 3.3.0 | 0.10.0-beta.1, 0.10.0 | 5.2.0 | 1.0.0 |
 
+## [1.4.0] — 2026-11-05
+
+The rebuilt manager window becomes the stable manager, with a new app icon.
+
+### Changed
+
+- The manager is the new window first shipped in 1.4.0-beta.1, with no
+  change in behavior since the beta.
+- The `"manager_ui": "tk"` setting and the Gerenciador clássico card in
+  Configurações are removed. The classic manager now opens only when the new
+  window cannot run.
+- The app icon follows the SnipVoice and SnipScreen style: a copper trigger dot
+  expanding into lines of text beside a text cursor, on a matte navy tile.
+  The tray, installer, Start menu and Store tiles use it.
+
+### Known issues
+
+- Form validation messages are in English.
+- The macOS build keeps the classic manager.
+
 ## [1.4.0-beta.1] — 2026-10-29
 
 Windows prerelease of the rebuilt manager window.

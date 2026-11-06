@@ -7,7 +7,6 @@ const EN_US: Record<string, string> = {
   "0 itens": "0 items",
   "A biblioteca inteira é trocada pelo conteúdo de {file}.\n{replace}\n\nAntes, a biblioteca atual é salva em um backup.":
     "The whole library is swapped for the contents of {file}.\n{replace}\n\nThe current library is saved to a backup first.",
-  "Abrir": "Open",
   "Abrir pasta": "Open folder",
   "Adicionar": "Add",
   "Ajuste a aparência, a expansão e os dados do SnipType.": "Adjust SnipType's appearance, expansion and data.",
@@ -99,7 +98,6 @@ const EN_US: Record<string, string> = {
   "Formulário salvo às {time} · {name}": "Form saved at {time} · {name}",
   "Formulário — {name}": "Form — {name}",
   "Formulário…": "Form…",
-  "Gerenciador clássico": "Classic manager",
   "Grupo": "Group",
   "Grupo ativo": "Group enabled",
   "Grupo atualizado às {time} · {name}": "Group updated at {time} · {name}",
@@ -216,8 +214,6 @@ const EN_US: Record<string, string> = {
   "Trigger da cópia de {trigger}": "Trigger for the copy of {trigger}",
   "Triggers que montam o texto na hora: datas, indicadores, cotações e links do WhatsApp.":
     "Triggers that build their text on the spot: dates, indicators, quotes and WhatsApp links.",
-  "Tudo o que ele faz também está nesta janela. Ele continua disponível enquanto esta janela é uma prévia.":
-    "Everything it does is also in this window. It stays available while this window is a preview.",
   "Um snippet dinâmico usa este trigger e tem prioridade.": "A dynamic snippet uses this trigger and takes priority.",
   "Valor": "Value",
   "Valor padrão": "Default value",

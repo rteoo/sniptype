@@ -24,7 +24,8 @@ An optional terminator mode waits for a following space or punctuation mark.
 - Static plain-text and rich-text snippets.
 - Variables for snippet references, clipboard content, and fill-in forms.
 - Built-in date/time, Brazilian Central Bank, market-data, and WhatsApp actions.
-- One manager for static snippets, dynamic mappings, built-in actions, and backups.
+- One manager window for static snippets, mappings, built-in actions, backups,
+  and settings, with favorites, groups, forms, preview, and text formatting.
 - Dynamic actions can be enabled, disabled, and renamed without editing the
   bundled registry.
 - Automatic rotating backups, corrupt-file quarantine, library import/export,
@@ -53,13 +54,15 @@ Use `pythonw sniptype.pyw` after setup when you do not need console output.
 ### Releases and installer
 
 The current stable release is
-[`v1.3.0`](https://github.com/rteoo/sniptype/releases/tag/v1.3.0) for Windows;
-SnipType is also available from the Microsoft Store. v1.3.0 leads with
-expansion health and actionable recovery, with clearer readiness and failure
-states, preserved view and editing context, improved keyboard operation, and
-better contrast and text sizing. The v1.2.0 release rebuilt the Windows manager
-on Windows 11 controls and fixed trigger detection around spaces, the numpad,
-pausing and window switches. It builds on v1.1.0's sidebar layout, v1.0.0's
+[`v1.4.0`](https://github.com/rteoo/sniptype/releases/tag/v1.4.0) for Windows;
+SnipType is also available from the Microsoft Store. v1.4.0 replaces the
+manager with a new window and gives the app a new icon. The window covers
+Textos, Mapeamentos, Dinâmicos, Backups and Configurações, with favorites,
+groups and filters, Duplicar and Renomear, forms and Prévia, formatting in the
+text editor, and backups, import and export, all saved through the same
+library, backups and recovery as before. v1.3.0 led with expansion health and
+actionable recovery, and v1.2.0 fixed trigger detection around spaces, the
+numpad, pausing and window switches. It builds on v1.1.0's sidebar layout, v1.0.0's
 SnipType display name, English interface option and Windows Design System
 manager refresh, and on v0.15.0's dark theme and Configurações tab and v0.14.x's
 more reliable typing and pasting; voice transcription now lives in the
@@ -68,11 +71,6 @@ the ARM64 build is available as the
 [`v0.14.4-beta.1` preview](https://github.com/rteoo/sniptype/releases/tag/v0.14.4-beta.1),
 at feature parity with v0.14.3. Versions before 1.0.0 were renumbered into
 `0.x`; the [changelog](CHANGELOG.md) maps the old numbers.
-
-The [`v1.4.0-beta.1` Windows prerelease](https://github.com/rteoo/sniptype/releases/tag/v1.4.0-beta.1)
-opens the rebuilt manager window. The beta installer upgrades the same per-user
-installation as stable and uses the same snippet library; close the running
-app before switching channels. Reinstall v1.3.0 to return to stable.
 
 The installer and the Store version use the same snippet library in
 `%USERPROFILE%\.sniptype` and only one of them runs at a time; uninstall the
@@ -109,18 +107,23 @@ The bundled sample library includes examples such as:
 | `xselic` | Current Selic target |
 | `xwapp` | A WhatsApp link generated from a phone number |
 
-The tray menu also exposes reload, autostart, enable/disable, backup, and
-data-folder actions when those features are available.
+The tray menu also exposes reload, autostart, enable/disable, backup,
+keyboard-shortcut, and data-folder actions when those features are available.
 
 The manager is organized around the work being done:
 
 | Tab (Portuguese / English) | Purpose |
 | --- | --- |
-| **Textos** / **Snippets** | Create and edit plain or rich-text expansions |
+| **Textos** / **Texts** | Create and edit plain or rich-text expansions, with favorites, groups, forms, and preview |
 | **Mapeamentos** / **Mappings** | Maintain prefixed collections such as CPF/CNPJ mappings |
-| **Ações dinâmicas** / **Dynamic actions** | Enable, disable, rename, and inspect built-in actions |
-| **Cópias de segurança** / **Backups** | Restore, import, or export the snippet library |
-| **Configurações** / **Settings** | Language, appearance, expansion mode, hotkeys, and data folder |
+| **Dinâmicos** / **Dynamic** | Enable, disable, rename, and search built-in actions |
+| **Backups** / **Backups** | Restore, create, import, or export the snippet library |
+| **Configurações** / **Settings** | Language, appearance, density, expansion mode, and data folder |
+
+On Windows the manager is a separate window that needs the WebView2 runtime,
+which Windows 11 ships. The popups shown while you type in another program
+(ticker, WhatsApp, form fill-in) open instantly inside the tray app. The macOS
+preview keeps the earlier built-in manager.
 
 ## Variables
 
