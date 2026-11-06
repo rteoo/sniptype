@@ -7,6 +7,9 @@ const EN_US: Record<string, string> = {
   "0 itens": "0 items",
   "A biblioteca inteira é trocada pelo conteúdo de {file}.\n{replace}\n\nAntes, a biblioteca atual é salva em um backup.":
     "The whole library is swapped for the contents of {file}.\n{replace}\n\nThe current library is saved to a backup first.",
+  "A biblioteca mudou": "The library changed",
+  "A biblioteca mudou: {name} não existe mais.": "The library changed: {name} no longer exists.",
+  "A biblioteca mudou: {name} tem uma versão salva mais nova.": "The library changed: {name} has a newer saved version.",
   "A data é calculada na hora em que o snippet expande.": "The date is worked out when the snippet expands.",
   "Abrir pasta": "Open folder",
   "Adicionar": "Add",
@@ -72,6 +75,7 @@ const EN_US: Record<string, string> = {
   "Desativados": "Disabled",
   "Desativar": "Deactivate",
   "Descartar": "Discard",
+  "Descartar rascunho": "Discard draft",
   "Desfazer": "Undo",
   "Desfazer exclusão": "Undo deletion",
   "Deslocamento": "Offset",
@@ -144,6 +148,7 @@ const EN_US: Record<string, string> = {
     "A snippet already has this name: the variable would use its text.",
   "Limpar formatação": "Clear formatting",
   "Listas": "Lists",
+  "Manter rascunho": "Keep draft",
   "Mapeamentos": "Mappings",
   "Mesclar": "Merge",
   "Modo de aplicativo": "App mode",
@@ -271,6 +276,7 @@ const EN_US: Record<string, string> = {
   "Triggers que montam o texto na hora: datas, indicadores, cotações e links do WhatsApp.":
     "Triggers that build their text on the spot: dates, indicators, quotes and WhatsApp links.",
   "Um snippet dinâmico usa este trigger e tem prioridade.": "A dynamic snippet uses this trigger and takes priority.",
+  "Usar a versão nova": "Use the new version",
   "Use o formato +15d: sinal, até três dígitos e d, w, m ou y.":
     "Use the +15d form: sign, up to three digits and d, w, m or y.",
   "Use um nome sem espaços nem %.": "Use a name without spaces or %.",

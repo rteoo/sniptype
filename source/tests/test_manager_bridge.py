@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from app_module import sniptype as tx
 import ui_theme
-from manager_bridge import ManagerBridge, ManagerProcess, find_manager_executable
+from manager_bridge import ManagerBridge, ManagerProcess, find_manager_executable, revision
 from rich_text_support import build_rich_text_payload
 from test_manager_runtime import make_real_app
 from workflow_support import SnippetRef
@@ -67,7 +67,7 @@ class BridgeTests(unittest.TestCase):
         self.assertIsInstance(info["issues"], list)
 
     def test_save_new_snippet_reaches_disk_and_expands(self):
-        self.assertEqual({"status": "saved", "trigger": "addr"},
+        self.assertEqual({"status": "saved", "trigger": "addr", "revision": revision("Rua A, 1")},
                          self.result("snippet.save", trigger=" addr ", text="Rua A, 1"))
         self.assertEqual("Rua A, 1", on_disk(self.app)["addr"])
         self.assertEqual("Rua A, 1", self.app.snippets["addr"])
@@ -135,7 +135,7 @@ class BridgeTests(unittest.TestCase):
     def test_get_returns_text_and_rich_flag(self):
         self.assertEqual({"trigger": "fancy", "text": "Bold text", "rich": True,
                           "spans": [{"tag": "bold", "start": 0, "end": 4}], "effectiveTrigger": "fancy",
-                          "favorite": False, "groupId": None},
+                          "favorite": False, "groupId": None, "revision": revision(on_disk(self.app)["fancy"])},
                          self.result("snippet.get", trigger="fancy"))
         self.assertEqual("missing", self.error("snippet.get", trigger="nope")["code"])
 
@@ -238,12 +238,14 @@ class MappingBridgeTests(unittest.TestCase):
 
     def test_get_returns_text_rich_flag_and_effective_trigger(self):
         self.assertEqual({"type": "_email_codes", "name": "work", "text": "work@example.com", "rich": False,
-                          "spans": [], "effectiveTrigger": "mailwork", "favorite": False},
+                          "spans": [], "effectiveTrigger": "mailwork", "favorite": False,
+                          "revision": revision("work@example.com")},
                          self.result("mapping.get", type="_email_codes", name="work"))
         self.assertEqual("missing", self.error("mapping.get", type="_email_codes", name="__prefix__")["code"])
 
     def test_save_new_item_reaches_disk_and_expands(self):
-        self.assertEqual({"status": "saved", "type": "_cpf_numbers", "name": "beltrano"},
+        self.assertEqual({"status": "saved", "type": "_cpf_numbers", "name": "beltrano",
+                          "revision": revision("987.654.321-00")},
                          self.result("mapping.save", type="_cpf_numbers", name=" beltrano ", text="987.654.321-00"))
         self.assertEqual("987.654.321-00", on_disk(self.app)["_cpf_numbers"]["beltrano"])
         self.assertEqual(("987.654.321-00", len("cpfbeltrano")),
@@ -692,6 +694,81 @@ class ProcessRoundTripTests(unittest.TestCase):
         with open(answer_file, encoding="utf-8") as handle:
             self.assertEqual({"id": 1, "result": ["ok"]}, json.loads(handle.read()))
         app.logger.warning.assert_called()  # the non-JSON line was reported, not answered
+
+
+class StaleDraftTests(unittest.TestCase):
+    """A draft opened before the library changed never overwrites the newer value unasked."""
+
+    def setUp(self):
+        self.app = make_real_app(self, {"hello": "Hello there", "_codes": {"__prefix__": "c", "city": "Goiânia"}})
+        self.bridge = ManagerBridge(self.app, version="9.9.9", channel="stable")
+
+    def result(self, method, **params):
+        response = self.bridge.handle({"id": 1, "method": method, "params": params})
+        self.assertNotIn("error", response, response)
+        return response["result"]
+
+    def change_behind_the_window(self, key, value, container=None):
+        """Another writer (a tray reload of an edited file, a restore) puts ``value`` in the library."""
+        if container is None:
+            self.assertTrue(self.app.save_static_snippet(key, value))
+        else:
+            self.assertTrue(self.app.save_mapping_item(container, key, value))
+
+    def test_get_and_save_carry_the_revision_of_the_stored_value(self):
+        opened = self.result("snippet.get", trigger="hello")["revision"]
+        self.assertIsInstance(opened, str)
+        saved = self.result("snippet.save", trigger="hello", text="Hi", original="hello", base=opened)
+        self.assertEqual("saved", saved["status"])
+        self.assertNotEqual(opened, saved["revision"])
+        self.assertEqual(saved["revision"], self.result("snippet.get", trigger="hello")["revision"])
+
+    def test_check_reports_unchanged_changed_and_gone(self):
+        base = self.result("snippet.get", trigger="hello")["revision"]
+        self.assertEqual({"status": "unchanged", "revision": base},
+                         self.result("draft.check", kind="static", key="hello", base=base))
+        self.change_behind_the_window("hello", "Changed elsewhere")
+        changed = self.result("draft.check", kind="static", key="hello", base=base)
+        self.assertEqual("changed", changed["status"])
+        self.assertNotEqual(base, changed["revision"])
+        self.app._delete_static_snippet("hello", include_shadowed=True)
+        self.assertEqual({"status": "gone", "revision": None},
+                         self.result("draft.check", kind="static", key="hello", base=base))
+
+    def test_saving_over_a_newer_version_asks_first(self):
+        base = self.result("snippet.get", trigger="hello")["revision"]
+        self.change_behind_the_window("hello", "Changed elsewhere")
+        answer = self.result("snippet.save", trigger="hello", text="Old draft", original="hello", base=base)
+        self.assertEqual(("confirm", "stale"), (answer["status"], answer["check"]))
+        self.assertIn("alterado depois que você o abriu", answer["message"])
+        self.assertEqual("Changed elsewhere", on_disk(self.app)["hello"])
+        self.result("snippet.save", trigger="hello", text="Old draft", original="hello", base=base,
+                    confirmed=["stale"])
+        self.assertEqual("Old draft", on_disk(self.app)["hello"])
+
+    def test_saving_a_deleted_item_asks_before_creating_it_again(self):
+        base = self.result("snippet.get", trigger="hello")["revision"]
+        self.app._delete_static_snippet("hello", include_shadowed=True)
+        answer = self.result("snippet.save", trigger="hello", text="Back", original="hello", base=base)
+        self.assertEqual("stale", answer["check"])
+        self.assertIn("excluído", answer["message"])
+        self.assertNotIn("hello", on_disk(self.app))
+
+    def test_without_a_base_the_save_behaves_as_before(self):
+        self.change_behind_the_window("hello", "Changed elsewhere")
+        self.assertEqual("saved", self.result("snippet.save", trigger="hello", text="Mine", original="hello")["status"])
+
+    def test_mapping_items_get_the_same_guard(self):
+        base = self.result("mapping.get", type="_codes", name="city")["revision"]
+        self.assertEqual("unchanged", self.result("draft.check", kind="mapping", key="city", base=base,
+                                                  container="_codes")["status"])
+        self.change_behind_the_window("city", "Anápolis", container="_codes")
+        answer = self.result("mapping.save", type="_codes", name="city", text="Old", original="city", base=base)
+        self.assertEqual("stale", answer["check"])
+        saved = self.result("mapping.save", type="_codes", name="city", text="Old", original="city", base=base,
+                            confirmed=["stale"])
+        self.assertEqual("Old", on_disk(self.app)["_codes"]["city"])
+        self.assertEqual(saved["revision"], self.result("mapping.get", type="_codes", name="city")["revision"])
 
 
 class ExpansionStateAndHealthTests(unittest.TestCase):

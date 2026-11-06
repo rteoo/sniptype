@@ -8,7 +8,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import {
   type AppInfo, type Backup, type BackupPreview, BridgeError, type ChangeCounts, type Choice, type Confirmation,
-  type CopyAnswer, type CreateTypeAnswer, type ImportCounts,
+  type CopyAnswer, type CreateTypeAnswer, type DraftCheck, type ImportCounts,
   type DynamicRenameAnswer, type DynamicSection, type DynamicToggleAnswer, type FormFieldDef, type FormInfo,
   type FormSaveAnswer, type Group, type HealthAnswer, type Preview,
   type GroupForm, type Groups, type GroupSaveAnswer, type Library, type ListFilter, type MappingEntry,
@@ -38,7 +38,7 @@ interface Item {
 
 /** A saved item as the editor opens it, metadata included (the list may be filtered). */
 interface Entry { name: string; text: string; rich: boolean; spans: Span[]; effectiveTrigger: string;
-  favorite: boolean; groupId: string | null }
+  favorite: boolean; groupId: string | null; revision: string }
 
 /**
  * What an editor holds. `original` is the saved name it was opened from (null
@@ -62,13 +62,15 @@ interface Draft {
   groupId: string | null;
   effectiveTrigger: string;
   formFrom?: string | null;
+  /** Revision of the saved item the draft was opened at (null for a new one); saves send it as `base`. */
+  revision: string | null;
 }
 
 interface Receipt { text: string; undo?: () => Promise<void> }
 
 interface Collection { items: Item[]; total: number; query: string; draft: Draft | null; receipt: Receipt | null }
 
-type Saved = { status: "saved"; name: string };
+type Saved = { status: "saved"; name: string; revision: string };
 
 /** How each collection reaches the app, so both pages share one list and editor. */
 interface Source {
@@ -138,8 +140,9 @@ const sources: Record<Kind, Source> = {
     save: async (draft, confirmed) => {
       const answer = await request<SaveAnswer>("snippet.save", {
         trigger: draft.name, text: draft.text, spans: draft.spans, original: draft.original, confirmed,
+        base: draft.revision,
       });
-      return answer.status === "saved" ? { status: "saved", name: answer.trigger } : answer;
+      return answer.status === "saved" ? { status: "saved", name: answer.trigger, revision: answer.revision } : answer;
     },
     remove: async (draft) =>
       (await request<{ undoToken: string }>("snippet.delete", { trigger: draft.original })).undoToken,
@@ -155,9 +158,9 @@ const sources: Record<Kind, Source> = {
     save: async (draft, confirmed) => {
       const answer = await request<MappingSaveAnswer>("mapping.save", {
         type: draft.type, name: draft.name, text: draft.text, spans: draft.spans, original: draft.original, confirmed,
-        formFrom: draft.formFrom ?? null,
+        formFrom: draft.formFrom ?? null, base: draft.revision,
       });
-      return answer.status === "saved" ? { status: "saved", name: answer.name } : answer;
+      return answer.status === "saved" ? { status: "saved", name: answer.name, revision: answer.revision } : answer;
     },
     remove: async (draft) =>
       (await request<{ undoToken: string }>("mapping.delete", { type: draft.type, name: draft.original }))
@@ -422,7 +425,10 @@ async function refreshVisible(): Promise<void> {
   const kind = activeKind();
   const page = state.page;
   await refreshInfo();
-  if (kind) await refreshList(kind);
+  if (kind) {
+    await refreshList(kind);
+    await reconcileDraft(kind);
+  }
   else if (page === "dinamicos") await refreshDynamics();
   else if (page === "backups") await refreshBackups();
 }
@@ -461,13 +467,14 @@ function draftFrom(entry: Entry, type: string | null): Draft {
     type, original: entry.name, name: entry.name, text: entry.text, spans: entry.spans, rich: entry.rich,
     savedName: entry.name, savedText: entry.text, savedSpans: JSON.stringify(entry.spans),
     favorite: entry.favorite, groupId: entry.groupId, effectiveTrigger: entry.effectiveTrigger,
+    revision: entry.revision,
   };
 }
 
 function newDraft(type: string | null, name: string, text = "", spans: Span[] = []): Draft {
   return {
     type, original: null, name, text, spans, rich: spans.length > 0, savedName: name, savedText: "", savedSpans: "[]",
-    favorite: false, groupId: null, effectiveTrigger: name,
+    favorite: false, groupId: null, effectiveTrigger: name, revision: null,
   };
 }
 
@@ -488,6 +495,54 @@ function isDirty(kind: Kind): boolean {
   if (!draft) return false;
   return draft.name.trim() !== draft.savedName || draft.text !== draft.savedText
     || JSON.stringify(draft.spans) !== draft.savedSpans;
+}
+
+let reconciling = false;
+
+/**
+ * The library changed behind the open editor (a tray reload, an outside edit, another window):
+ * a clean editor shows the new version or empties; a draft asks, as the classic manager did.
+ * Keeping the draft over a newer version moves its base there, so Salvar then overwrites knowingly.
+ */
+async function reconcileDraft(kind: Kind): Promise<void> {
+  const draft = state.collections[kind].draft;
+  if (reconciling || !draft?.original || draft.revision === null) return;
+  reconciling = true;
+  try {
+    const check = await request<DraftCheck>("draft.check", {
+      kind: kind === "textos" ? "static" : "mapping", key: draft.original, base: draft.revision, container: draft.type,
+    });
+    // The editor may have moved on while the app answered.
+    if (state.collections[kind].draft !== draft || check.status === "unchanged") return;
+    const name = draft.original;
+    if (!isDirty(kind)) {
+      if (check.status === "gone") state.collections[kind].draft = null;
+      else state.collections[kind].draft = draftFrom(await sources[kind].get(name), draft.type);
+      if (state.page === kind) { renderList(); renderDetail(); }
+      return;
+    }
+    const gone = check.status === "gone";
+    const choice = await ask(
+      t("A biblioteca mudou"),
+      gone ? t("A biblioteca mudou: {name} não existe mais.", { name })
+        : t("A biblioteca mudou: {name} tem uma versão salva mais nova.", { name }),
+      [
+        { id: "library", label: gone ? t("Descartar rascunho") : t("Usar a versão nova"), tone: "primary" },
+        { id: "keep", label: t("Manter rascunho") },
+      ],
+    );
+    if (state.collections[kind].draft !== draft) return;
+    if (choice === "keep") {
+      // Gone: the draft becomes a new item and Salvar creates it again.
+      if (gone) Object.assign(draft, { original: null, revision: null, savedName: "", savedText: "", savedSpans: "[]" });
+      else draft.revision = check.revision;
+    } else {
+      state.collections[kind].draft = gone ? null : draftFrom(await sources[kind].get(name), draft.type);
+    }
+    if (state.page === kind) { renderList(); renderDetail(); }
+  } finally {
+    reconciling = false;
+  }
 }
 
 /** Settle an unsaved draft before it would be dropped. True when it is safe to continue. */
@@ -556,14 +611,14 @@ async function save(kind: Kind, confirmed: SaveCheck[] = []): Promise<boolean> {
   }
   if (answer.status === "confirm") {
     const choice = await ask(answer.title, answer.message, [
-      { id: "ok", label: answer.action, tone: answer.check === "replace" ? "danger" : "primary" },
+      { id: "ok", label: answer.action, tone: answer.check === "replace" || answer.check === "stale" ? "danger" : "primary" },
       { id: "cancel", label: t("Cancelar") },
     ]);
     return choice === "ok" ? save(kind, [...confirmed, answer.check]) : false;
   }
   Object.assign(draft, {
     original: answer.name, name: answer.name, savedName: answer.name, savedText: draft.text,
-    savedSpans: JSON.stringify(draft.spans), formFrom: null,
+    savedSpans: JSON.stringify(draft.spans), formFrom: null, revision: answer.revision,
   });
   const shown = kind === "textos" ? answer.name : t("{name} em {type}", { name: answer.name, type: typeLabel(draft.type) });
   showReceipt(kind, { text: t("Salvo às {time} · {name}", { time: clock(), name: shown }) });
@@ -978,6 +1033,7 @@ async function showPage(page: Page): Promise<void> {
   if (isKind(page)) {
     refs.search?.focus();
     await refreshList(page).catch((error) => console.error("refresh failed", error));
+    await reconcileDraft(page).catch((error) => console.error("reconcile failed", error));
   } else if (page === "dinamicos") {
     refs.search?.focus();
     await refreshDynamics().catch((error) => console.error("refresh failed", error));
