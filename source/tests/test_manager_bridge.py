@@ -936,6 +936,38 @@ class HotkeySettingsTests(unittest.TestCase):
         self.assertIsNone(self.app._pending_manager_page)
 
 
+class WindowPlaceTests(unittest.TestCase):
+    """The window reopens where it was: the app keeps its place in settings.json."""
+
+    def setUp(self):
+        self.app = make_real_app(self, {"hello": "Hello there"})
+        self.bridge = ManagerBridge(self.app, version="9.9.9", channel="stable")
+
+    def call(self, method, **params):
+        return self.bridge.handle({"id": 1, "method": method, "params": params})
+
+    def test_first_time_there_is_no_saved_place(self):
+        self.assertEqual({}, self.call("app.info")["result"]["window"])
+
+    def test_save_persists_and_info_returns_it(self):
+        value = {"x": 40, "y": 30, "width": 1200, "height": 780, "maximized": False, "page": "mapeamentos"}
+        self.assertIsNone(self.call("window.save", value=value)["result"])
+        with open(self.app.settings_file, encoding="utf-8") as handle:
+            self.assertEqual(value, json.load(handle)["manager_window"])
+        self.assertEqual(value, self.call("app.info")["result"]["window"])
+
+    def test_an_unusable_state_is_refused_and_not_saved(self):
+        self.assertEqual("bad_params", self.call("window.save", value={"x": "left"})["error"]["code"])
+        self.assertNotIn("manager_window", self.app.settings)
+
+    def test_saving_the_same_place_again_does_not_write(self):
+        value = {"x": 40, "y": 30, "width": 1200, "height": 780, "maximized": False, "page": "textos"}
+        self.call("window.save", value=value)
+        with mock.patch.object(self.app, "_persist_settings") as persist:
+            self.call("window.save", value=dict(value))
+        persist.assert_not_called()
+
+
 class ManagerEventPushTests(unittest.TestCase):
     """The app tells a running window when its state or its library changed."""
 

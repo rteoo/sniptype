@@ -30,6 +30,39 @@ MANAGER_PAGES = ("static", "mapping", "dynamic", "backups", "settings")
 _GEOMETRY = re.compile(r"([1-9][0-9]{0,4})x([1-9][0-9]{0,4})([+-][0-9]{1,6})([+-][0-9]{1,6})\Z")
 
 
+# The Tauri window's pages (ui/src/main.ts), and the bounds a saved rectangle must keep.
+WINDOW_PAGES = ("textos", "mapeamentos", "dinamicos", "backups", "settings")  # i18n: not ui
+_WINDOW_COORDINATE_LIMIT = 100_000
+_WINDOW_MIN_SIZE = (200, 150)
+
+
+def normalize_manager_window(value):
+    """The Tauri window's last place, bounded and JSON-safe; ``{}`` when nothing usable.
+
+    ``x``, ``y`` (outer position) and ``width``, ``height`` (inner size) are
+    physical pixels and come as a set or not at all; ``maximized`` needs the
+    rectangle it returns to; ``page`` is one of :data:`WINDOW_PAGES`. Whether
+    the rectangle is still on a monitor is the window's question, at restore.
+    """
+    if not isinstance(value, dict):
+        return {}
+    result = {}
+    rect = {}
+    for key in ("x", "y", "width", "height"):
+        item = value.get(key)
+        if isinstance(item, bool) or not isinstance(item, int) or abs(item) > _WINDOW_COORDINATE_LIMIT:
+            rect = None
+            break
+        rect[key] = item
+    if rect and rect["width"] >= _WINDOW_MIN_SIZE[0] and rect["height"] >= _WINDOW_MIN_SIZE[1]:
+        result.update(rect)
+        if isinstance(value.get("maximized"), bool):
+            result["maximized"] = value["maximized"]
+    if value.get("page") in WINDOW_PAGES:
+        result["page"] = value["page"]
+    return result
+
+
 def normalize_manager_view(value):
     """Accept only bounded, JSON-safe view state; never restore widget paths."""
     if not isinstance(value, dict):

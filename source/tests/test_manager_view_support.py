@@ -1,6 +1,7 @@
 import unittest
 
 from manager_view_support import (
+    normalize_manager_window,
     FILTER_FAVORITES,
     FILTER_DISABLED,
     FILTER_PROBLEMS,
@@ -16,6 +17,31 @@ from manager_view_support import (
     search_manager_rows,
 )
 from workflow_support import SnippetRef, WorkflowState
+
+
+class ManagerWindowStateTests(unittest.TestCase):
+    """The Tauri window's saved place: bounded, all-or-nothing, never a widget path."""
+
+    def test_a_full_state_survives(self):
+        state = {"x": -8, "y": 120, "width": 1280, "height": 800, "maximized": True, "page": "backups"}
+        self.assertEqual(state, normalize_manager_window(state))
+
+    def test_the_rectangle_comes_whole_or_not_at_all(self):
+        self.assertEqual({"page": "settings"},
+                         normalize_manager_window({"x": 1, "y": 2, "width": 900, "page": "settings"}))
+        self.assertEqual({}, normalize_manager_window({"x": 1, "y": 2, "width": 900, "height": True}))
+        self.assertEqual({}, normalize_manager_window({"x": 1.5, "y": 2, "width": 900, "height": 700}))
+
+    def test_absurd_values_and_unknown_pages_are_dropped(self):
+        self.assertEqual({}, normalize_manager_window({"x": 10**7, "y": 0, "width": 900, "height": 700}))
+        self.assertEqual({}, normalize_manager_window({"x": 0, "y": 0, "width": 50, "height": 700}))
+        self.assertEqual({"x": 0, "y": 0, "width": 900, "height": 700},
+                         normalize_manager_window({"x": 0, "y": 0, "width": 900, "height": 700, "page": "static",
+                                                   "maximized": "yes", "extra": 1}))
+        self.assertEqual({}, normalize_manager_window("900x700+0+0"))
+
+    def test_maximized_needs_the_rectangle_it_returns_to(self):
+        self.assertEqual({"page": "textos"}, normalize_manager_window({"maximized": True, "page": "textos"}))
 
 
 class ManagerScrollAnchorNormalizationTests(unittest.TestCase):

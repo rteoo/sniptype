@@ -4,7 +4,7 @@ import "./styles/teo/windows-tokens.css";
 import "./styles/teo/windows-elements.css";
 import "./styles/app.css";
 
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { availableMonitors, getCurrentWindow, PhysicalPosition, PhysicalSize } from "@tauri-apps/api/window";
 
 import {
   type AppInfo, type Backup, type BackupPreview, BridgeError, type ChangeCounts, type Choice, type Confirmation,
@@ -13,7 +13,7 @@ import {
   type FormSaveAnswer, type Group, type HealthAnswer, type HotkeySaveAnswer, type Preview,
   type GroupForm, type Groups, type GroupSaveAnswer, type Library, type ListFilter, type MappingEntry,
   type MappingItem, type MappingSaveAnswer, type MappingType, type RenameAnswer, type SaveAnswer, type SaveCheck,
-  type Snippet, type SwitcherRow, type Variable, type Variables, request, startBridge,
+  type Snippet, type SwitcherRow, type Variable, type Variables, type WindowState, request, startBridge,
 } from "./bridge";
 import { attachCompletion, type Candidate } from "./completion";
 import { h, icon } from "./dom";
@@ -1029,6 +1029,7 @@ async function showPage(page: Page): Promise<void> {
   if (page === state.page) return;
   // Each editor keeps its draft while another page shows.
   state.page = page;
+  scheduleWindowSave();
   renderAll();
   if (isKind(page)) {
     refs.search?.focus();
@@ -2646,7 +2647,60 @@ async function onAppEvent(name: string): Promise<void> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Where the window reopens: the last size, position and page, while that place is still on a monitor.
+
+type Rect = { x: number; y: number; width: number; height: number };
+let normalRect: Rect | null = null;
+let windowSaveTimer = 0;
+
+/** At least a grip of the title bar must land on some monitor, or the window opens centered instead. */
+async function onSomeMonitor(rect: Rect): Promise<boolean> {
+  const grip = { left: rect.x, right: rect.x + rect.width, top: rect.y, bottom: rect.y + 40 };
+  return (await availableMonitors()).some((monitor) => {
+    const left = Math.max(grip.left, monitor.position.x);
+    const right = Math.min(grip.right, monitor.position.x + monitor.size.width);
+    const top = Math.max(grip.top, monitor.position.y);
+    const bottom = Math.min(grip.bottom, monitor.position.y + monitor.size.height);
+    return right - left >= 120 && bottom - top >= 20;
+  });
+}
+
+/** Put the hidden window back at its saved rectangle. True when it should then be maximized. */
+async function restoreWindow(saved: WindowState | undefined): Promise<boolean> {
+  if (!saved || saved.width === undefined || saved.height === undefined || saved.x === undefined
+    || saved.y === undefined) return false;
+  const rect = { x: saved.x, y: saved.y, width: saved.width, height: saved.height };
+  if (!(await onSomeMonitor(rect))) return false;
+  await appWindow.setSize(new PhysicalSize(rect.width, rect.height));
+  await appWindow.setPosition(new PhysicalPosition(rect.x, rect.y));
+  normalRect = rect;
+  return !!saved.maximized;
+}
+
+async function saveWindow(): Promise<void> {
+  if (await appWindow.isMinimized()) return;
+  const maximized = await appWindow.isMaximized();
+  if (!maximized) {
+    const position = await appWindow.outerPosition();
+    const size = await appWindow.innerSize();
+    normalRect = { x: position.x, y: position.y, width: size.width, height: size.height };
+  }
+  // A window maximized from the start keeps the default rectangle it would return to.
+  const value: WindowState = { ...(normalRect ?? {}), page: state.page };
+  if (normalRect) value.maximized = maximized;
+  await request("window.save", { value });
+}
+
+/** Moving, resizing and changing page all end here, once things settle. */
+function scheduleWindowSave(): void {
+  window.clearTimeout(windowSaveTimer);
+  windowSaveTimer = window.setTimeout(() => void saveWindow().catch((error) => console.error("window save failed", error)), 800);
+}
+
 async function main(): Promise<void> {
+  // The window starts hidden so it does not jump to its saved place; it shows whatever happens next.
+  const showAnyway = window.setTimeout(() => void appWindow.show(), 3000);
   applyAppearance();
   await startBridge((name) => void onAppEvent(name));
   try {
@@ -2658,8 +2712,22 @@ async function main(): Promise<void> {
       h("h1", {}, t("O SnipType não respondeu")),
       h("p", {}, errorText(error)),
       h("p", { class: "muted" }, t("Feche esta janela e abra o gerenciador de novo pelo ícone da bandeja."))));
+    window.clearTimeout(showAnyway);
+    await appWindow.show();
     return;
   }
+  const maximize = await restoreWindow(state.info?.window).catch((error) => {
+    console.error("restore failed", error);
+    return false;
+  });
+  window.clearTimeout(showAnyway);
+  await appWindow.show();
+  // Maximized only once shown: a hidden window maximized first restores to its default place.
+  if (maximize) await appWindow.maximize();
+  void appWindow.onMoved(scheduleWindowSave);
+  void appWindow.onResized(scheduleWindowSave);
+  const savedPage = state.info?.window.page as Page | undefined;
+  if (savedPage && savedPage !== state.page) await showPage(savedPage);
   renderAll();
   refs.search?.focus();
   await takeTarget().catch((error) => console.error("target failed", error));
