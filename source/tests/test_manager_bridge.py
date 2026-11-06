@@ -694,6 +694,130 @@ class ProcessRoundTripTests(unittest.TestCase):
         app.logger.warning.assert_called()  # the non-JSON line was reported, not answered
 
 
+class ExpansionStateAndHealthTests(unittest.TestCase):
+    """The window shows the expansion state, pauses it, and runs each issue's action."""
+
+    def setUp(self):
+        self.app = make_real_app(self, {"hello": "Hello there"})
+        self.app.icon = None
+        self.bridge = ManagerBridge(self.app, version="9.9.9", channel="stable")
+
+    def result(self, method, **params):
+        response = self.bridge.handle({"id": 1, "method": method, "params": params})
+        self.assertNotIn("error", response, response)
+        return response["result"]
+
+    def error(self, method, **params):
+        response = self.bridge.handle({"id": 1, "method": method, "params": params})
+        self.assertIn("error", response, response)
+        return response["error"]["code"]
+
+    def test_info_names_the_expansion_state_and_the_last_expansion(self):
+        info = self.result("app.info")
+        self.assertEqual({"state": "ok", "label": "Expansão ativa"}, info["expansion"])
+        self.assertEqual("Nada expandido ainda", info["lastExpansion"])
+        self.assertFalse(info["canEditLast"])
+
+    def test_pause_and_resume_from_the_window_return_the_receipt_instead_of_a_toast(self):
+        with mock.patch.object(self.app, "notify") as notify:
+            paused = self.result("app.toggleEnabled")
+            self.assertFalse(self.app.enabled)
+            self.assertTrue(paused["receipt"].startswith("Expansão pausada às"))
+            self.assertEqual("paused", self.result("app.info")["expansion"]["state"])
+            resumed = self.result("app.toggleEnabled")
+        self.assertTrue(self.app.enabled)
+        self.assertTrue(resumed["receipt"].startswith("Expansão retomada às"))
+        notify.assert_not_called()
+
+    def test_a_failed_capture_cannot_be_resumed_from_the_window(self):
+        self.app.enabled = False
+        self.app.capture_error = OSError("hook")
+        with mock.patch.object(self.app, "notify_error") as notify_error:
+            self.assertIsNone(self.result("app.toggleEnabled")["receipt"])
+        self.assertFalse(self.app.enabled)
+        notify_error.assert_called_once()
+        self.assertEqual("down", self.result("app.info")["expansion"]["state"])
+
+    def test_issues_carry_their_action_and_resume_runs_it(self):
+        self.app.enabled = False
+        issue = next(issue for issue in self.result("app.info")["issues"] if issue["id"] == "paused")
+        self.assertEqual(("resume", "Retomar", False),
+                         (issue["action"], issue["actionLabel"], issue["dismissible"]))
+        answer = self.result("health.run", action="resume")
+        self.assertIsNone(answer["page"])
+        self.assertTrue(answer["receipt"].startswith("Expansão retomada às"))
+        self.assertTrue(self.app.enabled)
+
+    def test_page_actions_name_the_page_and_others_reuse_the_app(self):
+        self.assertEqual({"page": "backups", "receipt": None}, self.result("health.run", action="open_backups"))
+        self.assertEqual("dinamicos", self.result("health.run", action="open_dynamic")["page"])
+        for action, method in (("open_folder", "open_data_folder"), ("open_log", "open_log"),
+                               ("retry_sync", "retry_sync")):
+            with self.subTest(action), mock.patch.object(self.app, method) as called:
+                self.assertEqual({"page": None, "receipt": None}, self.result("health.run", action=action))
+                called.assert_called_once_with()
+        self.assertEqual("bad_params", self.error("health.run", action="reboot"))
+
+    def test_only_info_issues_can_be_dismissed(self):
+        self.app.library_recovery = {"kind": "backup", "at": "2026-11-05T10:00:00"}
+        self.app.enabled = False
+        ids = {issue["id"]: issue["dismissible"] for issue in self.result("app.info")["issues"]}
+        restored = next(key for key in ids if key.startswith("restored:"))
+        self.assertTrue(ids[restored])
+        self.assertEqual("bad_params", self.error("health.dismiss", id="paused"))
+        self.assertIsNone(self.result("health.dismiss", id=restored))
+        remaining = [issue["id"] for issue in self.result("app.info")["issues"]]
+        self.assertEqual(["paused"], remaining)
+        self.assertEqual("not_found", self.error("health.dismiss", id=restored))
+
+    def test_edit_last_needs_an_expansion_and_then_queues_it(self):
+        self.assertEqual("not_found", self.error("app.editLast"))
+        self.app.workflow_state.record_success(SnippetRef("static", "hello"))
+        self.app._last_successful_expansion_at = tx.datetime(2026, 11, 5, 14, 32)
+        info = self.result("app.info")
+        self.assertTrue(info["canEditLast"])
+        self.assertIn("hello", info["lastExpansion"])
+        with mock.patch.object(self.app, "edit_last_snippet") as edit_last:
+            self.assertIsNone(self.result("app.editLast"))
+        edit_last.assert_called_once_with()
+
+
+class ManagerEventPushTests(unittest.TestCase):
+    """The app tells a running window when its state or its library changed."""
+
+    def setUp(self):
+        self.app = make_real_app(self, {"hello": "Hello there"})
+        self.app.icon = None
+        self.process = mock.Mock(alive=True)
+        self.app._manager_process = self.process
+
+    def events(self):
+        return [call.args[0]["event"] for call in self.process.send.call_args_list]
+
+    def test_nothing_is_sent_without_a_running_window(self):
+        self.process.alive = False
+        self.app._push_manager_event("state")
+        self.app._manager_process = None
+        self.app._push_manager_event("state")
+        self.process.send.assert_not_called()
+
+    def test_a_pause_from_anywhere_reaches_the_window(self):
+        self.app.toggle_enabled(None, None)
+        self.assertIn("state", self.events())
+
+    def test_health_facts_and_replaced_libraries_reach_the_window(self):
+        self.app._request_health_refresh()
+        self.assertEqual(["state"], self.events())
+        self.process.send.reset_mock()
+        self.app._library_replaced()
+        self.assertEqual(["state", "library"], self.events())
+
+    def test_reloading_the_library_tells_the_window(self):
+        with mock.patch.object(self.app, "notify_status"):
+            self.assertTrue(self.app._reload_snippets())
+        self.assertIn("library", self.events())
+
+
 class OpenManagerRoutingTests(unittest.TestCase):
     def _app(self, settings):
         app = object.__new__(tx.Sniptype)

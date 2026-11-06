@@ -2729,6 +2729,7 @@ class Sniptype:
                 if reference is not None:
                     self.workflow_state.record_success(reference)
                     self._last_successful_expansion_at = datetime.now()
+                    self._push_manager_event("state")
                     if self.manager_window is not None:
                         self.gui.submit(self._refresh_edit_last)
             caret_back = self._expansion_context.caret_back if inserted else 0
@@ -2911,6 +2912,17 @@ class Sniptype:
                 return False
             return True
 
+    def _push_manager_event(self, name):
+        """Tell a running Tauri window that ``name`` changed: ``state`` or ``library``. Any thread.
+
+        ``state`` covers expansion, health and the last expansion; ``library``
+        means the library on disk was replaced or read again. The window asks
+        for what it needs; without one this does nothing.
+        """
+        process = getattr(self, "_manager_process", None)
+        if process is not None and process.alive:
+            process.send({"event": name})
+
     def _manager_rows(self):
         """Return the immutable local projection used by manager navigation."""
         revision = getattr(self, "_manager_rows_revision", 0)
@@ -3037,11 +3049,19 @@ class Sniptype:
             _set_enabled(control, descriptor is not None)
         status = getattr(self, "_manager_last_expansion_var", None)
         if status is not None:
-            when = getattr(self, "_last_successful_expansion_at", None)
-            status.set(_("Última expansão: {name} · {when}").format(
-                name=descriptor.effective_trigger if descriptor else target.key,
-                when=time_format.absolute_stamp(when, datetime.now()))
-                if target is not None and when is not None else _("Nada expandido ainda"))
+            status.set(self._last_expansion_text(descriptor))
+
+    def _last_expansion_text(self, descriptor=None):
+        """"Última expansão: xola · 14:32", or "Nada expandido ainda"."""
+        target = self.workflow_state.last_successful_item
+        when = getattr(self, "_last_successful_expansion_at", None)
+        if target is None or when is None:
+            return _("Nada expandido ainda")
+        if descriptor is None:
+            descriptor = self._manager_target(target)
+        return _("Última expansão: {name} · {when}").format(
+            name=descriptor.effective_trigger if descriptor else target.key,
+            when=time_format.absolute_stamp(when, datetime.now()))
 
     def _manager_target(self, target):
         """Resolve a workflow reference without touching disk or GUI state."""
@@ -8164,6 +8184,7 @@ class Sniptype:
         macOS may only touch its status item on the main thread, so there the
         redraw goes through the GuiThread pump, as ``refresh_tray_menu`` does.
         """
+        self._push_manager_event("state")
         if not self.icon:
             return
         if platform_support.tray_menu_updates_on_gui_thread():
@@ -8185,7 +8206,7 @@ class Sniptype:
         # Nothing resumes a failed capture; the line only reports it.
         return self.capture_error is None
 
-    def toggle_enabled(self, icon, item, *, in_manager=False):
+    def toggle_enabled(self, icon, item, *, in_manager=False, announce=True):
         """Pause or resume snippet expansion.
 
         The tray menu and the hotkey call it with pystray's ``(icon, item)``.
@@ -8193,6 +8214,10 @@ class Sniptype:
         replaces the status line at once: a pause and the resume that follows
         within the toast cooldown must both be written, or the line keeps
         saying "pausada" over a sidebar that says "ativa".
+
+        Returns the receipt text, or None when the capture failed and nothing
+        changed. ``announce=False`` leaves the receipt to the caller (the Tauri
+        window writes it on its own status line).
         """
         if not self.enabled and self.capture_error is not None:
             # No listener runs after a capture failure, so "Expansão ativa"
@@ -8202,15 +8227,16 @@ class Sniptype:
                   "retomada. Reinicie o SnipType."),
                 key="toggle-enabled-capture-error",
             )
-            return
+            return None
         # A partial trigger typed before the toggle must not complete after it.
         self.typed_text = ""
         self.enabled = not self.enabled
         self.refresh_tray_state()
-        self.receipt(
-            N_("Expansão retomada às {time}") if self.enabled else N_("Expansão pausada às {time}"),
-            key="toggle-enabled", in_manager=in_manager)
+        outcome = N_("Expansão retomada às {time}") if self.enabled else N_("Expansão pausada às {time}")
+        if announce:
+            self.receipt(outcome, key="toggle-enabled", in_manager=in_manager)
         self.gui.submit(self._refresh_manager_status)
+        return _(outcome).format(time=time_format.clock(datetime.now()))
 
     def _refresh_manager_status(self, _root=None):
         """Refresh the visible manager state on the GUI thread.
@@ -8319,6 +8345,7 @@ class Sniptype:
 
     def _request_health_refresh(self):
         """Redraw an open manager's InfoBar; safe from any thread, a no-op when closed."""
+        self._push_manager_event("state")
         if self._manager_health is not None:
             self.gui.submit(self._refresh_manager_health)
 
@@ -8331,6 +8358,7 @@ class Sniptype:
         offer Desfazer on it.
         """
         self._request_health_refresh()
+        self._push_manager_event("library")
         if self._manager_receipts:
             self.gui.submit(self._reset_manager_receipts)
 
@@ -8428,6 +8456,7 @@ class Sniptype:
             return False
         if refresh_manager:
             self._refresh_manager_lists()
+        self._push_manager_event("library")
         self.notify_status(_("Biblioteca atualizada."), key="reload-snippets")
         return True
 

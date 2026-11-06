@@ -10,7 +10,7 @@ import {
   type AppInfo, type Backup, type BackupPreview, BridgeError, type ChangeCounts, type Choice, type Confirmation,
   type CopyAnswer, type CreateTypeAnswer, type ImportCounts,
   type DynamicRenameAnswer, type DynamicSection, type DynamicToggleAnswer, type FormFieldDef, type FormInfo,
-  type FormSaveAnswer, type Group, type Preview,
+  type FormSaveAnswer, type Group, type HealthAnswer, type Preview,
   type GroupForm, type Groups, type GroupSaveAnswer, type Library, type ListFilter, type MappingEntry,
   type MappingItem, type MappingSaveAnswer, type MappingType, type RenameAnswer, type SaveAnswer, type SaveCheck,
   type Snippet, type Variable, type Variables, request, startBridge,
@@ -110,6 +110,7 @@ const state = {
 
 const refs = {
   infobar: null as HTMLElement | null,
+  status: null as HTMLElement | null,
   items: null as HTMLElement | null,
   count: null as HTMLElement | null,
   detail: null as HTMLElement | null,
@@ -413,6 +414,17 @@ async function refreshInfo(): Promise<void> {
   setLanguage(state.info.language);
   applyAppearance();
   renderInfobar();
+  renderStatus();
+}
+
+/** Read the app again and the page on screen: the library or the app's state changed behind this window. */
+async function refreshVisible(): Promise<void> {
+  const kind = activeKind();
+  const page = state.page;
+  await refreshInfo();
+  if (kind) await refreshList(kind);
+  else if (page === "dinamicos") await refreshDynamics();
+  else if (page === "backups") await refreshBackups();
 }
 
 async function refreshTypes(): Promise<void> {
@@ -917,9 +929,8 @@ function renderReceipt(): void {
 
 function renderAll(): void {
   document.documentElement.lang = state.info?.language ?? "pt-BR";
-  const navButton = (page: Page, iconId: string, label: string, extra = "") => h("button", {
+  const navButton = (page: Page, iconId: string, label: string) => h("button", {
     type: "button",
-    class: extra || undefined,
     "aria-current": state.page === page ? "page" : "false",
     title: label,
     onclick: () => showPage(page),
@@ -938,12 +949,14 @@ function renderAll(): void {
       navButton("mapeamentos", "mapping", t("Mapeamentos")),
       navButton("dinamicos", "dynamic", t("Dinâmicos")),
       navButton("backups", "backup", t("Backups")),
-      navButton("settings", "settings", t("Configurações"), "settings"),
+      refs.status = h("div", { class: "expansion", role: "group", "aria-label": t("Expansão") }),
+      navButton("settings", "settings", t("Configurações")),
       h("p", { class: "version" }, state.info ? `${state.info.version} · ${state.info.channel}` : ""),
     ),
     page,
   ));
   renderInfobar();
+  renderStatus();
   if (kind) {
     renderTypeBar();
     renderViewBar();
@@ -977,10 +990,72 @@ function renderInfobar(): void {
   const host = refs.infobar;
   if (!host) return;
   const issues = state.info?.issues ?? [];
-  host.replaceChildren(...issues.map((issue) => h("div", {
-    class: `el-message ${issue.severity === "error" ? "error" : issue.severity === "warning" ? "warning" : "info"}`,
-    role: issue.severity === "error" ? "alert" : "status",
-  }, h("strong", {}, issue.title), h("span", {}, issue.body))));
+  host.replaceChildren(...issues.map((issue) => {
+    const actions = [
+      ...(issue.action ? [h("button", { type: "button", class: "el-button", onclick: () => void runHealth(issue.action!) },
+        issue.actionLabel ?? "")] : []),
+      ...(issue.dismissible ? [h("button", { type: "button", class: "el-button",
+        onclick: () => void dismissIssue(issue.id) }, t("Dispensar"))] : []),
+    ];
+    return h("div", {
+      class: `el-message ${issue.severity === "error" ? "error" : issue.severity === "warning" ? "warning" : "info"}`,
+      role: issue.severity === "error" ? "alert" : "status",
+    }, h("strong", {}, issue.title), h("span", {}, issue.body),
+    ...(actions.length ? [h("span", { class: "actions" }, ...actions)] : []));
+  }));
+}
+
+/** The sidebar's expansion block: the state in words, Pausar/Retomar, and the last expansion. */
+function renderStatus(): void {
+  const host = refs.status;
+  const info = state.info;
+  if (!host || !info) return;
+  const { state: expansion, label } = info.expansion;
+  const toggleLabel = expansion === "paused" ? t("Retomar expansão") : t("Pausar expansão");
+  // The narrow rail hides every .label: the buttons keep their names in title and aria-label.
+  const toggle = expansion === "down"
+    ? h("button", { type: "button", class: "el-button", disabled: true }, t("Reinicie o SnipType"))
+    : h("button", { type: "button", class: "el-button", title: toggleLabel, "aria-label": toggleLabel,
+      onclick: () => void toggleExpansion() },
+      icon(expansion === "paused" ? "play" : "pause"), h("span", { class: "label" }, toggleLabel));
+  host.replaceChildren(
+    h("p", { class: `state ${expansion}`, role: "status" }, h("span", { class: "dot", "aria-hidden": "true" }),
+      h("span", { class: "label" }, label)),
+    toggle,
+    h("p", { class: "last label" }, info.lastExpansion),
+    h("button", {
+      type: "button", class: "el-button", disabled: !info.canEditLast,
+      title: t("Editar último"), "aria-label": t("Editar último"),
+      onclick: () => void request("app.editLast").catch((error) => alertError(t("Editar último"), error)),
+    }, icon("document"), h("span", { class: "label" }, t("Editar último"))),
+  );
+}
+
+async function toggleExpansion(): Promise<void> {
+  try {
+    const answer = await request<{ receipt: string | null }>("app.toggleEnabled");
+    if (answer.receipt) pageReceipt(answer.receipt);
+  } catch (error) {
+    await alertError(t("Expansão"), error);
+  }
+  await refreshInfo().catch((error) => console.error("refresh failed", error));
+}
+
+/** An issue's one recovery action: some open a page here, the others run in the app. */
+async function runHealth(action: string): Promise<void> {
+  try {
+    const answer = await request<HealthAnswer>("health.run", { action });
+    if (answer.page) await showPage(answer.page as Page);
+    if (answer.receipt) pageReceipt(answer.receipt);
+  } catch (error) {
+    await alertError(t("Avisos"), error);
+  }
+  await refreshInfo().catch((error) => console.error("refresh failed", error));
+}
+
+async function dismissIssue(id: string): Promise<void> {
+  await request("health.dismiss", { id }).catch((error) => console.error("dismiss failed", error));
+  await refreshInfo().catch((error) => console.error("refresh failed", error));
 }
 
 const typeBar = { host: null as HTMLElement | null };
@@ -2243,12 +2318,7 @@ document.addEventListener("keydown", (event) => {
 // The library may change behind this window (a tray reload, a restore, an
 // import): look again whenever the person comes back to it.
 window.addEventListener("focus", () => {
-  const kind = activeKind();
-  const page = state.page;
-  void refreshInfo()
-    .then(() => kind ? refreshList(kind) : page === "dinamicos" ? refreshDynamics()
-      : page === "backups" ? refreshBackups() : undefined)
-    .catch((error) => console.error("refresh failed", error));
+  void refreshVisible().catch((error) => console.error("refresh failed", error));
 });
 
 void appWindow.onCloseRequested(async (event) => {
@@ -2288,6 +2358,10 @@ async function onAppEvent(name: string): Promise<void> {
     await appWindow.setFocus();
   } else if (name === "target") {
     await takeTarget();
+  } else if (name === "state") {
+    await refreshInfo().catch((error) => console.error("refresh failed", error));
+  } else if (name === "library") {
+    await refreshVisible().catch((error) => console.error("refresh failed", error));
   }
 }
 

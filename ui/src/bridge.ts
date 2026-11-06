@@ -4,7 +4,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
-export interface Issue { id: string; severity: string; title: string; body: string }
+export interface Issue {
+  id: string; severity: string; title: string; body: string;
+  /** The one recovery action (health_support), with its written label; null when there is none. */
+  action: string | null; actionLabel: string | null; dismissible: boolean;
+}
+
+export type ExpansionState = "ok" | "paused" | "down";
 
 export interface AppInfo {
   version: string;
@@ -15,8 +21,13 @@ export interface AppInfo {
   density: "compact" | "comfortable" | "touch";
   terminatorMode: boolean;
   dataDir: string;
+  expansion: { state: ExpansionState; label: string };
+  lastExpansion: string;
+  canEditLast: boolean;
   issues: Issue[];
 }
+
+export interface HealthAnswer { page: string | null; receipt: string | null }
 
 export interface LibraryItem {
   trigger: string;
