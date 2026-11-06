@@ -174,6 +174,7 @@ from variable_support import (
     resolve_inline,
 )
 from form_support import compile_form, render_form
+from builtin_tokens import plan_insertion
 from form_dialog import FormDialog
 from preview_support import resolve_preview
 from editor_session import (
@@ -420,7 +421,8 @@ class Sniptype:
         # Every newer trigger retires an unfinished older insertion, including
         # fast snippets. Workers never wait for one another on the keyboard hook.
         self._expansion_generation = 0
-        # (keystrokes, foreground HWND, clicks, trigger order) on this worker.
+        # (keystrokes, foreground HWND, clicks, trigger order) on this worker,
+        # plus ``caret_back``: how far %%_cursor%% moves the caret after it.
         self._expansion_context = threading.local()
         self.expansion_failed = False
         self.last_expansion_time = 0
@@ -1656,7 +1658,7 @@ class Sniptype:
 
             try:
                 time.sleep(0.05)
-                inserted = self.text_inserter.insert_text(snippet)
+                inserted = self._insert_template_result(snippet, keys=False)
                 if inserted is False:
                     return False
 
@@ -1742,7 +1744,7 @@ class Sniptype:
                 if is_rich_text_payload(raw):
                     result = rebuild_rich_text(raw, result)
                 time.sleep(0.05)
-                inserted = self.text_inserter.insert_text(result)
+                inserted = self._insert_template_result(result, keys=True)
                 return inserted is not False
 
             result = func()
@@ -1766,6 +1768,25 @@ class Sniptype:
                 cooldown_seconds=5,
             )
             return False
+
+    def _insert_template_result(self, payload, keys):
+        """Insert a resolved snippet and record where %%_cursor%% leaves the caret.
+
+        A snippet that presses keys goes in as a sequence of pastes and keys;
+        anything else is one paste. Only the slow route passes ``keys=True``:
+        it is the route whose context check counts keystrokes, so key snippets
+        are routed there (``key_triggers``) and the fast route never presses one. ``_run_expansion`` moves the caret only
+        after it re-emits the terminator, which belongs after the expansion's
+        last character.
+        """
+        steps, caret_back = plan_insertion(payload, keys=keys)
+        if any(kind == "key" for kind, _value in steps):
+            inserted = self.text_inserter.insert_steps(steps)
+        else:
+            inserted = self.text_inserter.insert_text(steps[0][1])
+        if inserted is not False:
+            self._expansion_context.caret_back = caret_back
+        return inserted
 
     def _is_whatsapp_insert_trigger(self, trigger):
         """Recognize the insert-link action after a registry trigger rename."""
@@ -2597,6 +2618,7 @@ class Sniptype:
         slow_route = (
             effective in trigger_index.get("slow_triggers", ())
             or effective in trigger_index.get("form_triggers", ())
+            or effective in trigger_index.get("key_triggers", ())
         )
         # The text target this trigger was typed into: an int read plus one
         # user32 call, cheap enough for the listener. The worker compares it
@@ -2684,6 +2706,7 @@ class Sniptype:
         if not self.enabled:
             return
         self._expansion_context.value = context
+        self._expansion_context.caret_back = 0
         try:
             effective = trigger.effective_trigger if isinstance(trigger, ExpansionTarget) else trigger
             lookup = (
@@ -2695,6 +2718,7 @@ class Sniptype:
                 slow_route = (
                     effective in self.trigger_index["slow_triggers"]
                     or effective in self.trigger_index["form_triggers"]
+                    or effective in self.trigger_index["key_triggers"]
                 )
             if slow_route:
                 outcome = self.run_slow_snippet(lookup)
@@ -2710,10 +2734,14 @@ class Sniptype:
                     self._push_manager_event("state")
                     if self.manager_window is not None:
                         self.gui.submit(self._refresh_edit_last)
+            caret_back = self._expansion_context.caret_back if inserted else 0
             # Only re-emit the terminator when text was actually inserted, so a
             # cancelled form dialog or a failed paste does not leave a stray char.
             if append_text and inserted and self._expansion_target_is_current():
                 self.keyboard_controller.type(append_text)
+                caret_back += len(append_text)
+            if caret_back and self._expansion_target_is_current():
+                self.text_inserter.move_caret_left(caret_back)
         except Exception as e:
             self.logger.error(f"Erro na expansão de {getattr(trigger, 'effective_trigger', trigger)}: {e}")
             self.notify_error(
@@ -2723,6 +2751,7 @@ class Sniptype:
             )
         finally:
             self._expansion_context.value = None
+            self._expansion_context.caret_back = 0
 
     def _expansion_target_is_current(self):
         """True when this worker's expansion may still be pasted.

@@ -62,6 +62,8 @@ export interface LibraryItem {
   enabled: boolean;
   shadowed: boolean;
   rich: boolean;
+  /** The text presses Enter or Tab when it expands. */
+  keys: boolean;
   preview: string;
 }
 
@@ -122,6 +124,10 @@ export type FormSaveAnswer =
   | { status: "saved"; count: number } | { status: "invalid"; message: string; index: number | null };
 export interface Preview { text: string; status: string }
 
+/** What `%%name%%` can reference, by the name the app resolves. */
+export interface Variable { name: string; detail: string }
+export interface Variables { snippets: Variable[]; dynamics: Variable[]; mappings: Variable[] }
+
 export interface ChangeCounts { new: number; overwritten: number; removed: number }
 export interface Backup {
   name: string; when: string; texts: number | null; lists: number | null; size: number; empty: boolean;
@@ -131,7 +137,9 @@ export interface ImportCounts { merge: ChangeCounts; replace: ChangeCounts }
 
 export interface MappingType { key: string; label: string; prefix: string; builtin: boolean; count: number }
 
-export interface MappingItem { name: string; effectiveTrigger: string; favorite: boolean; rich: boolean; preview: string }
+export interface MappingItem {
+  name: string; effectiveTrigger: string; favorite: boolean; rich: boolean; keys: boolean; preview: string;
+}
 
 export interface MappingEntry {
   type: string; name: string; text: string; rich: boolean; spans: StyleSpan[]; effectiveTrigger: string;
