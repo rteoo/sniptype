@@ -19,8 +19,8 @@ design system's `DESIGN.md`, `native/windows/tokens.css`, `patterns.md` and
   active and offers the pause command without a trip to the tray. No
   decorative dashboard precedes the collection.
 - **Stack:** Python with Tkinter/ttk (Tcl/Tk 8.6 on Windows), Pillow for the
-  drawn control faces, pystray for the tray. No WinUI. An opt-in Tauri
-  (WebView2) manager is in preview; see Tauri manager (preview).
+  drawn control faces, pystray for the tray. No WinUI. On Windows the
+  manager is the Tauri (WebView2) window; see Tauri manager.
 - **Platforms:** Windows 10 and 11 x64 are the supported desktop. macOS
   (Apple Silicon) is a beta that keeps native Aqua controls. Linux runs the
   same Windows-family theme in CI only.
@@ -171,10 +171,10 @@ shifted so the body role matches the platform's default size.
 - The supported Windows minimum is 1180 × 760 and the default is 1280 × 800.
   At the minimum, the text editor's actions fit on one row.
 
-## Tauri manager (preview)
+## Tauri manager
 
 `ui/` is a Tauri 2 + TypeScript rebuild of the manager, opened instead of the
-Tk window only when `settings.json` has `"manager_ui": "tauri"`. It covers
+Tk window whenever its binary is present (the Windows release). It covers
 Textos (list, search, editor, delete with Desfazer, Duplicar, Renomear,
 Favorito, Grupo, the Exibir and group filters, and the labeled **Grupos** menu
 with Novo, Editar and Excluir grupo with Desfazer), Mapeamentos (a type picker
@@ -191,8 +191,9 @@ fields at their defaults, references resolved, and the clipboard and dynamic
 snippets shown as unavailable), formatting in the text editor of Textos and
 Mapeamentos (Negrito, Itálico, Sublinhado, Código, Tachado and Limpar
 formatação over the selection, Ctrl+B / I / U) and Configurações (language,
-appearance, density, terminator mode, data folder). The Tk manager stays one
-click away from Configurações while this window is a preview. The popups
+appearance, density, terminator mode, data folder). The Tk manager is only the
+fallback when this window cannot run, and the macOS manager until the Mac
+build packages this one. The popups
 shown while typing in another program (ticker, WhatsApp, Preencher campos)
 stay Tk, in-process, so they open at once and return focus for the paste. Importar and Exportar use the
 WebView's own system pickers, owned by the window.

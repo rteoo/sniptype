@@ -24,8 +24,8 @@ by current Sniptype source or release builds.
 
 ## Release channels
 
-The current Windows stable release is `v1.3.0`; current Windows beta source is
-`v1.4.0-beta.1`. SnipType is also published
+The current Windows stable release is `v1.4.0`, and current source is `1.4.0`
+on the stable channel. SnipType is also published
 to the Microsoft Store, whose listing is updated separately. The macOS ARM64 package is the
 `v0.14.4-beta.1` preview pending its packaged desktop validation. Stable tags use
 `vMAJOR.MINOR.PATCH`; beta tags use `vMAJOR.MINOR.PATCH-beta.N` and their GitHub

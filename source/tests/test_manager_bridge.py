@@ -151,10 +151,8 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual("bad_params", self.error("settings.set", key="mirror_dir", value="C:/x")["code"])
         self.assertEqual("bad_params", self.error("settings.set", key="density", value="huge")["code"])
 
-    def test_classic_manager_opens_on_the_gui_thread(self):
-        with mock.patch.object(self.app, "gui") as gui:
-            self.assertIsNone(self.result("app.openClassicManager"))
-        gui.submit.assert_called_once_with(self.app._show_manager_window)
+    def test_the_window_has_no_way_back_to_the_classic_manager(self):
+        self.assertEqual("unknown_method", self.error("app.openClassicManager")["code"])
 
     def test_unknown_methods_and_bad_params_are_errors_not_crashes(self):
         self.assertEqual("unknown_method", self.error("library.drop")["code"])
@@ -683,12 +681,13 @@ class OpenManagerRoutingTests(unittest.TestCase):
         spawn.assert_called_once()
         app.gui.submit.assert_not_called()
 
-    def test_classic_manager_when_chosen(self):
+    def test_a_leftover_classic_choice_still_opens_the_tauri_window(self):
         app = self._app({"manager_ui": "tk"})
-        with mock.patch.object(tx, "find_manager_executable") as find:
+        process = mock.Mock(alive=True)
+        with mock.patch.object(tx, "find_manager_executable", return_value="m.exe"),                 mock.patch.object(tx, "ManagerProcess", return_value=process) as spawn:
             app.open_manager()
-        find.assert_not_called()
-        app.gui.submit.assert_called_once_with(app._show_manager_window)
+        spawn.assert_called_once()
+        app.gui.submit.assert_not_called()
 
     def test_default_without_the_binary_opens_the_classic_manager_quietly(self):
         app = self._app({})
@@ -708,8 +707,8 @@ class OpenManagerRoutingTests(unittest.TestCase):
         self.assertEqual({"kind": "static", "key": "sig", "container": None}, bridge.take_target())
         self.assertIsNone(bridge.take_target())
 
-    def test_flag_starts_the_tauri_window_once_then_focuses_it(self):
-        app = self._app({"manager_ui": "tauri"})
+    def test_starts_the_tauri_window_once_then_focuses_it(self):
+        app = self._app({})
         process = mock.Mock(alive=True)
         with mock.patch.object(tx, "find_manager_executable", return_value="m.exe"),                 mock.patch.object(tx, "ManagerProcess", return_value=process) as spawn:
             app.open_manager()
@@ -718,15 +717,8 @@ class OpenManagerRoutingTests(unittest.TestCase):
         process.focus.assert_called_once_with()
         app.gui.submit.assert_not_called()
 
-    def test_missing_binary_says_so_and_opens_the_classic_manager(self):
-        app = self._app({"manager_ui": "tauri"})
-        with mock.patch.object(tx, "find_manager_executable", return_value=None):
-            app.open_manager()
-        app.notify_error.assert_called_once()
-        app.gui.submit.assert_called_once_with(app._show_manager_window)
-
     def test_failed_start_says_so_and_opens_the_classic_manager(self):
-        app = self._app({"manager_ui": "tauri"})
+        app = self._app({})
         with mock.patch.object(tx, "find_manager_executable", return_value="m.exe"),                 mock.patch.object(tx, "ManagerProcess", side_effect=OSError("denied")):
             app.open_manager()
         app.notify_error.assert_called_once()

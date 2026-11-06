@@ -660,8 +660,6 @@ EN_US = {
     "Este texto tem formatação; salve-o pelo editor com formatação.": "This text has formatting; save it from the formatting editor.",
     "Não há exclusão para desfazer.": "There is no deletion to undo.",
     "Não foi possível gravar snippets.json. Verifique os logs.": "Could not write snippets.json. Check the logs.",
-    "O novo gerenciador não foi encontrado; abrindo o gerenciador clássico.":
-    "The new manager was not found; opening the classic manager.",
     "O novo gerenciador não abriu; abrindo o gerenciador clássico.":
     "The new manager did not open; opening the classic manager.",
 }

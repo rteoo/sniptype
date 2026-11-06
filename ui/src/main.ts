@@ -1989,10 +1989,6 @@ function settingsPage(): HTMLElement {
         h("span", { class: "stack" }, t("Biblioteca, backups e logs ficam nesta pasta."), h("code", {}, info.dataDir)),
         h("button", { type: "button", class: "el-button", onclick: () => void request("app.openDataFolder") },
           t("Abrir pasta"))),
-      card("classic", t("Gerenciador clássico"),
-        t("Tudo o que ele faz também está nesta janela. Ele continua disponível enquanto esta janela é uma prévia."),
-        h("button", { type: "button", class: "el-button", onclick: () => void request("app.openClassicManager") },
-          t("Abrir"))),
     ),
   );
 }
@@ -2034,7 +2030,7 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
-// The library may change behind this window (classic manager, a reload, an
+// The library may change behind this window (a tray reload, a restore, an
 // import): look again whenever the person comes back to it.
 window.addEventListener("focus", () => {
   const kind = activeKind();
