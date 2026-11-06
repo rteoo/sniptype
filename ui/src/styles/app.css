@@ -150,6 +150,9 @@ dl.shortcuts dd { margin: 0; }
 .commands { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--native-line); min-height: 49px; }
 .commands .state { margin-left: auto; font-size: var(--native-type-caption); color: var(--native-muted); }
 .commands .state.dirty { color: var(--color-link); }
+/* Oculto pelo filtro atual, with Mostrar na lista, between the commands and the editor. */
+.hidden-note { display: flex; align-items: center; gap: 12px; padding: 6px 16px;
+  font-size: var(--native-type-caption); color: var(--native-muted); border-bottom: 1px solid var(--native-line); }
 .primary { background: var(--color-action-primary-bg); color: var(--color-action-primary-text); border-color: var(--color-link); }
 .primary:hover { background: var(--color-action-primary-hover); }
 .danger { color: var(--color-danger-fg); }

@@ -115,6 +115,7 @@ const state = {
 
 const refs = {
   infobar: null as HTMLElement | null,
+  hiddenNote: null as HTMLElement | null,
   status: null as HTMLElement | null,
   items: null as HTMLElement | null,
   count: null as HTMLElement | null,
@@ -1304,10 +1305,40 @@ function visibleItems(kind: Kind): Item[] {
   return ranked.sort((a, b) => a[0] - b[0]).map(([, item]) => item);
 }
 
+/** Oculto pelo filtro atual: the open item is saved but the list's search or view hides it. */
+function renderHiddenNote(): void {
+  const host = refs.hiddenNote;
+  const kind = activeKind();
+  if (!host || !kind) return;
+  const draft = state.collections[kind].draft;
+  const shown = !!draft?.original && (kind === "textos" || draft.type === state.type)
+    && !visibleItems(kind).some((item) => item.name === draft.original);
+  host.hidden = !shown;
+  host.replaceChildren(...(shown ? [
+    h("span", {}, t("Oculto pelo filtro atual.")),
+    h("button", { type: "button", class: "el-button", onclick: () => void revealCurrent(kind) }, t("Mostrar na lista")),
+  ] : []));
+}
+
+/** Mostrar na lista: clear what hides the open item, then select it in the list. */
+async function revealCurrent(kind: Kind): Promise<void> {
+  const collection = state.collections[kind];
+  const name = collection.draft?.original;
+  if (!name) return;
+  collection.query = "";
+  if (refs.search) refs.search.value = "";
+  if (kind === "textos" && viewActive()) await setView({ filter: "all", group: "" });
+  else renderList();
+  const item = [...(refs.items?.querySelectorAll<HTMLElement>(".item") ?? [])].find((element) => element.dataset.name === name);
+  item?.scrollIntoView({ block: "nearest" });
+  item?.focus();
+}
+
 function renderList(): void {
   const host = refs.items;
   const kind = activeKind();
   if (!host || !kind) return;
+  renderHiddenNote();
   const collection = state.collections[kind];
   const textos = kind === "textos";
   const items = visibleItems(kind);
@@ -1655,6 +1686,7 @@ function renderDetail(): void {
   if (!draft) {
     refs.saveButton = null;
     refs.saveState = null;
+    refs.hiddenNote = null;
     host.replaceChildren(h("div", { class: "blank" },
       icon(textos ? "document" : "mapping"),
       h("p", {}, textos ? t("Selecione um texto na lista ou crie um novo.")
@@ -1706,6 +1738,7 @@ function renderDetail(): void {
         t("Excluir")) : null,
       refs.saveState,
     ),
+    refs.hiddenNote = h("div", { class: "hidden-note", role: "status", hidden: true }),
     h("div", { class: "editor" },
       h("h2", {}, heading),
       refs.meta,
@@ -1730,6 +1763,7 @@ function renderDetail(): void {
   );
   renderMeta();
   updateSaveState();
+  renderHiddenNote();
 }
 
 /** The saved item's Grupo and Favorito, redrawn in place so the draft's fields keep focus and caret. */
@@ -2167,7 +2201,11 @@ async function resolveAllDrafts(): Promise<boolean> {
 
 /** After a restore or an import the editors open from the new library. */
 async function libraryReplaced(): Promise<void> {
-  for (const kind of ["textos", "mapeamentos"] as Kind[]) state.collections[kind].draft = null;
+  // A receipt described the library that was there: its Desfazer must not act on the new one.
+  for (const kind of ["textos", "mapeamentos"] as Kind[]) {
+    state.collections[kind].draft = null;
+    state.collections[kind].receipt = null;
+  }
   const kind = activeKind();
   if (kind) {
     await refreshList(kind);

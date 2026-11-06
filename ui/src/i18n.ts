@@ -24,6 +24,8 @@ const EN_US: Record<string, string> = {
   "Ao expandir, o texto do snippet escolhido entra no lugar da variável.":
     "On expansion, the chosen snippet's text takes the variable's place.",
   "Aparência": "Appearance",
+  "Mostrar na lista": "Show in list",
+  "Oculto pelo filtro atual.": "Hidden by the current filter.",
   "Área de transferência": "Clipboard",
   "Arquivo: {file}\n\nMesclar mantém a biblioteca atual e dá prioridade ao arquivo.\n{merge}\n\nSubstituir tudo troca a biblioteca pelo arquivo.\n{replace}\n\nAntes, a biblioteca atual é salva em um backup.":
     "File: {file}\n\nMerge keeps the current library and gives the file priority.\n{merge}\n\nReplace all swaps the library for the file.\n{replace}\n\nThe current library is saved to a backup first.",
