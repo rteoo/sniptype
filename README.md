@@ -72,11 +72,14 @@ the ARM64 build is available as the
 at feature parity with v0.14.3. Versions before 1.0.0 were renumbered into
 `0.x`; the [changelog](CHANGELOG.md) maps the old numbers.
 
-The [`v1.5.0-beta.1` Windows prerelease](https://github.com/rteoo/sniptype/releases/tag/v1.5.0-beta.1)
+The [`v1.5.0-beta.2` Windows prerelease](https://github.com/rteoo/sniptype/releases/tag/v1.5.0-beta.2)
 gives the new window what only the classic manager could do: pausing
 and resuming expansion, recovery actions, workflow hotkeys, Inserir variável,
 the Ctrl+K switcher and keyboard shortcuts, a window that reopens where you
-left it, and the mirror, sync and notification history. The beta installer
+left it, and the mirror, sync and notification history. Beta 2 adds condition
+blocks (text by time of day or weekday), draws variables in the editor as
+chips with their own icons, and fixes forms with typed fields, which never
+appeared on Windows. The beta installer
 upgrades the same per-user installation as stable and uses the same snippet
 library; close the running app before switching channels. Reinstall v1.4.0 to
 return to stable.

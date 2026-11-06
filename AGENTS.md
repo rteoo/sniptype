@@ -86,7 +86,7 @@ python packaging\build_msix.py     # write dist\msix\Sniptype-<version>.0-x64.ms
 
 Release channels are explicit. The published Windows stable channel is the latest
 plain `vMAJOR.MINOR.PATCH` tag (`v1.4.0`); current source is `1.5.0` on the
-`beta` channel for the Windows `v1.5.0-beta.1` prerelease. The Microsoft Store listing is updated separately. The macOS ARM64
+`beta` channel for the Windows `v1.5.0-beta.2` prerelease. The Microsoft Store listing is updated separately. The macOS ARM64
 package is the `v0.14.4-beta.1` preview,
 built from `main` after v0.14.3; its bundle still reports its pre-renumbering
 version, 5.0.3 stable. Releases before 1.0.0 were renumbered into `0.x` on
