@@ -188,7 +188,7 @@ dl.shortcuts dd { margin: 0; }
 .format-bar .el-button { min-height: 28px; min-width: 32px; padding: 2px 8px; }
 .format-bar .el-button, .editor-tools .el-button { gap: 6px; }
 .format-bar .tp-i, .editor-tools .tp-i, .menu .tp-i { width: 16px; height: 16px; }
-.menu button { gap: 8px; }
+.menu button { gap: 8px; white-space: nowrap; }
 .item .badges .el-badge .tp-i { width: 12px; height: 12px; margin-right: 4px; vertical-align: -2px; color: inherit; }
 .editor-tools { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
 .editor-tools .menu-anchor .el-button { min-height: 28px; padding: 2px 8px; }
