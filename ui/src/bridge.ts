@@ -27,6 +27,8 @@ export interface LibraryItem {
   enabled: boolean;
   shadowed: boolean;
   rich: boolean;
+  /** The text presses Enter or Tab when it expands. */
+  keys: boolean;
   preview: string;
 }
 
@@ -95,7 +97,9 @@ export interface ImportCounts { merge: ChangeCounts; replace: ChangeCounts }
 
 export interface MappingType { key: string; label: string; prefix: string; builtin: boolean; count: number }
 
-export interface MappingItem { name: string; effectiveTrigger: string; favorite: boolean; rich: boolean; preview: string }
+export interface MappingItem {
+  name: string; effectiveTrigger: string; favorite: boolean; rich: boolean; keys: boolean; preview: string;
+}
 
 export interface MappingEntry {
   type: string; name: string; text: string; rich: boolean; spans: StyleSpan[]; effectiveTrigger: string;

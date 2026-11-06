@@ -4,8 +4,9 @@ Syntax: %%variable_name%%
 
 Kinds, resolved in this priority order:
   - %%clipboard-paste%%  → current clipboard plain text
-  - %%_date…%%, %%_cursor%% → built-in tokens (``builtin_tokens``): the date,
-                           and where the caret ends after the paste
+  - %%_date…%%, %%_cursor%%, %%_enter%%, %%_tab%% → built-in tokens
+                           (``builtin_tokens``): the date, where the caret ends
+                           after the paste, and keys pressed between the text
   - %%trigger%%          → plain text of an existing static snippet (1 level deep)
   - %%trigger%%          → a runtime dynamic snippet (xhj, xdolar, xcot, ...): the
                            callable is invoked and its result substituted
@@ -46,7 +47,7 @@ def find_variable_names(text):
 
 
 def classify_variable(name, snippets, prefixes=None):
-    """Return 'clipboard', 'date', 'cursor', 'snippet_ref', 'dynamic_ref', 'mapping_ref' or 'form_field'.
+    """Return 'clipboard', 'date', 'cursor', 'key', 'snippet_ref', 'dynamic_ref', 'mapping_ref' or 'form_field'.
 
     ``prefixes`` is the precomputed dynamic-mapping prefix map; pass it when
     classifying many names so the map is not rebuilt per token.
@@ -74,6 +75,11 @@ def has_form_variables(text, snippets, prefixes=None):
         classify_variable(name, snippets, prefixes) == "form_field"
         for name in names
     )
+
+
+def has_key_tokens(text):
+    """True if ``text`` presses a key (``%%_enter%%``, ``%%_tab%%``)."""
+    return any(builtin_kind(name) == "key" for name in find_variable_names(text))
 
 
 def resolve_inline(text, snippets, get_clipboard, _seen=None, prefixes=None, notify_failure=None):
@@ -135,7 +141,7 @@ def expand_inline(text, snippets, get_clipboard, _seen=None, prefixes=None, noti
                     _("A área de transferência não retornou texto válido.")
                 )
             inline_values[name] = value
-        elif kind in ("date", "cursor"):
+        elif kind in ("date", "cursor", "key"):
             inline_values[name] = builtin_value(name)
         elif name in _seen:
             continue  # circular reference: leave unchanged

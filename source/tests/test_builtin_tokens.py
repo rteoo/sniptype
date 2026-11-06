@@ -14,12 +14,13 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 import builtin_tokens
 import sync_export
-from builtin_tokens import CARET_MARK, builtin_kind, render_date, split_cursor
+from builtin_tokens import CARET_MARK, builtin_kind, plan_insertion, render_date, split_cursor, steps_text
 from form_support import compile_form
 from preview_support import CURSOR_PLACEHOLDER, resolve_preview
 from rich_text_support import build_rich_text_payload, extract_plain_text
 from snippet_utils import get_dynamic_prefixes
-from variable_support import classify_variable, has_form_variables, resolve_inline
+from trigger_index import compile_trigger_index
+from variable_support import classify_variable, has_form_variables, has_key_tokens, resolve_inline
 
 # A Saturday, the last day of a 31-day month.
 NOW = datetime(2026, 1, 31, 9, 5, 7)
@@ -118,6 +119,66 @@ class SyncExportTests(unittest.TestCase):
         text, block = sync_export._resolve_export_text("Em %%_date%%", {}, get_dynamic_prefixes({}))
         self.assertEqual("Em %%_date%%", text)
         self.assertIsNotNone(block)
+
+
+ENTER, TAB = builtin_tokens.builtin_value("_enter"), builtin_tokens.builtin_value("_tab")
+
+
+class KeyTokenTests(unittest.TestCase):
+    def test_keys_are_builtins_never_form_fields(self):
+        self.assertEqual("key", classify_variable("_enter", {}))
+        self.assertEqual("key", classify_variable("_tab", {}))
+        self.assertFalse(has_form_variables("%%_enter%% %%_tab%%", {}))
+        self.assertTrue(has_key_tokens("a%%_tab%%b"))
+        self.assertFalse(has_key_tokens("a%%clipboard-paste%%b %%_cursor%%"))
+
+    def test_plan_alternates_pastes_and_keys(self):
+        steps, back = plan_insertion(f"Nome{TAB}Fulano{ENTER}")
+        self.assertEqual([("text", "Nome"), ("key", "tab"), ("text", "Fulano"), ("key", "enter")], steps)
+        self.assertEqual(0, back)
+
+    def test_without_keys_the_plan_is_the_one_paste(self):
+        self.assertEqual(([("text", "abc")], 1), plan_insertion(f"ab{CARET_MARK}c"))
+        self.assertEqual(([("text", "")], 0), plan_insertion(""))
+
+    def test_consecutive_keys_have_no_empty_paste_between_them(self):
+        self.assertEqual([("key", "tab"), ("key", "tab"), ("text", "x")], plan_insertion(f"{TAB}{TAB}x")[0])
+
+    def test_cursor_after_the_last_key_moves_back_within_the_last_paste(self):
+        self.assertEqual(([("text", "x"), ("key", "tab"), ("text", "yz")], 1),
+                         plan_insertion(f"x{TAB}y{CARET_MARK}z"))
+
+    def test_cursor_before_a_key_is_dropped(self):
+        self.assertEqual(([("text", "ab"), ("key", "enter"), ("text", "c")], 0),
+                         plan_insertion(f"a{CARET_MARK}b{ENTER}c"))
+
+    def test_rich_text_styles_are_clipped_to_each_paste(self):
+        payload = build_rich_text_payload(f"Bold{TAB}more", [{"tag": "bold", "start": 0, "end": 7}])
+        steps, _back = plan_insertion(payload)
+        self.assertEqual([{"tag": "bold", "start": 0, "end": 4}], steps[0][1]["spans"])
+        self.assertEqual([{"tag": "bold", "start": 0, "end": 2}], steps[2][1]["spans"])
+        self.assertEqual("more", extract_plain_text(steps[2][1]))
+
+    def test_unsent_steps_read_as_text_with_keys_as_whitespace(self):
+        self.assertEqual("a\tb\n", steps_text([("text", "a"), ("key", "tab"), ("text", "b"), ("key", "enter")]))
+
+    def test_a_key_token_inside_clipboard_text_stays_literal(self):
+        text = resolve_inline("%%clipboard-paste%%%%_tab%%", {}, lambda: "x%%_enter%%")
+        self.assertEqual([("text", "x%%_enter%%"), ("key", "tab")], plan_insertion(text)[0])
+
+    def test_preview_names_the_keys(self):
+        self.assertEqual("a‹Tab›b‹Enter›", resolve_preview("a%%_tab%%b%%_enter%%", {}).payload)
+
+    def test_the_phone_refuses_an_entry_that_presses_keys(self):
+        text, block = sync_export._resolve_export_text("a%%_tab%%b", {}, {})
+        self.assertEqual("a%%_tab%%b", text)
+        self.assertIsNotNone(block)
+
+    def test_snippets_that_press_keys_take_the_slow_route(self):
+        index = compile_trigger_index(
+            {"xform": "a%%_tab%%b", "xplain": "ab", "_cpf_numbers": {"fulano": "1%%_enter%%"}}, set()
+        )
+        self.assertEqual({"xform", "cpffulano"}, set(index["key_triggers"]))
 
 
 if __name__ == "__main__":

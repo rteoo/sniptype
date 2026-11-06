@@ -23,8 +23,8 @@ from whatsapp_runtime_support import ACTION_COMPLETED
 def make_app(base_dir, snippets, stub_inserter=True):
     """Construct a Sniptype with keyboard/task side effects mocked out.
 
-    ``stub_inserter=False`` keeps the real ``TextInserter`` so its wiring (the
-    paste delays) can be inspected; it is never driven in that state.
+    ``stub_inserter=False`` keeps the real ``TextInserter`` so its wiring and
+    insertion flow can be exercised; its keys go to the same mock controller.
     """
     with open(os.path.join(base_dir, "snippets.json"), "w", encoding="utf-8") as handle:
         json.dump(snippets, handle)
@@ -47,6 +47,9 @@ def make_app(base_dir, snippets, stub_inserter=True):
         app.text_inserter = mock.Mock()
     else:
         app.text_inserter.batch_keyboard = None
+        # The inserter was built with the real pynput controller; a driven
+        # inserter (key steps, typed fallback) would press live keys with it.
+        app.text_inserter.keyboard_controller = app.keyboard_controller
     return app
 
 

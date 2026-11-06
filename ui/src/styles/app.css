@@ -132,7 +132,10 @@ code, .mono { font-family: var(--app-font-trigger); }
 .rt-code { font-family: var(--app-font-trigger); font-size: .95em; }
 .format-bar { display: flex; flex-wrap: wrap; gap: 4px; }
 .format-bar .el-button { min-height: 28px; min-width: 32px; padding: 2px 8px; }
-.format-bar .rt-code { font-size: 12px; }
+.format-bar .el-button, .editor-tools .el-button { gap: 6px; }
+.format-bar .tp-i, .editor-tools .tp-i, .menu .tp-i { width: 16px; height: 16px; }
+.menu button { gap: 8px; }
+.item .badges .el-badge .tp-i { width: 12px; height: 12px; margin-right: 4px; vertical-align: -2px; color: inherit; }
 .editor-tools { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
 .editor-tools .menu-anchor .el-button { min-height: 28px; padding: 2px 8px; }
 /* The %% list follows the caret; options read like the field list: name over a muted line. */
