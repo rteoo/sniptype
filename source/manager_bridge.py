@@ -78,7 +78,8 @@ from rich_text_support import (
     is_rich_text_payload,
     normalize_style_spans,
 )
-from snippet_utils import build_saveable_snippets, mapping_types
+from snippet_utils import build_saveable_snippets, get_dynamic_prefixes, mapping_types
+from variable_support import classify_variable, has_key_tokens
 
 MANAGER_EXE_NAME = "sniptype-manager.exe" if sys.platform == "win32" else "sniptype-manager"
 DENSITY_CHOICES = ("compact", "comfortable", "touch")
@@ -212,6 +213,7 @@ class ManagerBridge:
             "preview.get": self.preview_get,
             "switcher.search": self.switcher_search,
             "draft.check": self.draft_check,
+            "variables.list": self.variables_list,
             "mapping.types": self.mapping_types,
             "mapping.list": self.mapping_list,
             "mapping.get": self.mapping_get,
@@ -412,6 +414,7 @@ class ManagerBridge:
                 "enabled": row.enabled,
                 "shadowed": row.shadowed,
                 "rich": is_rich_text_payload(projection.get(row.stored_trigger)),
+                "keys": has_key_tokens(extract_plain_text(projection.get(row.stored_trigger))),
                 "preview": preview[:PREVIEW_LIMIT],
             })
         return {"items": items, "total": total}
@@ -797,6 +800,7 @@ class ManagerBridge:
                 "effectiveTrigger": row.effective_trigger,
                 "favorite": row.favorite,
                 "rich": is_rich_text_payload(self._mapping_value(type, row.stored_trigger)),
+                "keys": has_key_tokens(extract_plain_text(self._mapping_value(type, row.stored_trigger))),
                 "preview": preview[:PREVIEW_LIMIT],
             })
         return items
@@ -1020,6 +1024,37 @@ class ManagerBridge:
             notes.append(_("Os campos do rascunho não batem com o formulário salvo; eles aparecem vazios."))
         model = build_preview_model(result)
         return {"text": model.text, "status": "\n".join(note for note in (model.status_text, *notes) if note)}
+
+    def variables_list(self):
+        """What the editor can insert as ``%%name%%``, by the name the resolver looks up.
+
+        A name is listed only when ``classify_variable`` resolves it as its
+        kind, so an entry the token would not reach (a static shadowed by a
+        dynamic snippet, a disabled dynamic snippet) never shows up.
+        """
+        snippets = self.app.snippets
+        prefixes = get_dynamic_prefixes(snippets)
+        types = mapping_types(snippets)
+        projection = self.app._manager_static_projection()
+        statics, mappings = [], []
+        for row in self.app._manager_rows():
+            if row.kind == "static":
+                name, kind, bucket = row.stored_trigger, "snippet_ref", statics
+                detail = manager_row_preview(row, projection)
+            elif row.kind == "mapping":
+                name, kind, bucket = row.effective_trigger, "mapping_ref", mappings
+                label = types.get(row.container, {}).get("label", row.container)
+                detail = f"{label} · {manager_row_preview(row, snippets)}"
+            else:
+                continue
+            if classify_variable(name, snippets, prefixes) == kind:
+                bucket.append({"name": name, "detail": " ".join(detail.split())[:PREVIEW_LIMIT]})
+        dynamics = [
+            {"name": item["trigger"], "detail": item["description"]}
+            for section in self.dynamics_list() for item in section["items"]
+            if classify_variable(item["trigger"], snippets, prefixes) == "dynamic_ref"
+        ]
+        return {"snippets": statics, "dynamics": dynamics, "mappings": mappings}
 
     # -- dynamic snippets --------------------------------------------------
 
