@@ -26,8 +26,11 @@ import sys
 INJECTION_TAG = 0x534E4950
 
 VK_BACK = 0x08
+VK_TAB = 0x09
+VK_RETURN = 0x0D
 VK_CONTROL = 0x11
 VK_MENU = 0x12
+VK_LEFT = 0x25
 VK_NUMPAD0 = 0x60
 VK_DECIMAL = 0x6E
 VK_DIVIDE = 0x6F
@@ -49,6 +52,7 @@ if IS_WINDOWS:
 
     _USER32 = ctypes.WinDLL("user32", use_last_error=True)
 
+    _KEYEVENTF_EXTENDEDKEY = 0x0001
     _KEYEVENTF_KEYUP = 0x0002
     _INPUT_KEYBOARD = 1
     _MAPVK_VK_TO_VSC = 0
@@ -107,6 +111,25 @@ def backspace_events(count):
     return events
 
 
+# The keys a snippet can press (builtin_tokens.KEYS), by name.
+KEY_VKS = {"enter": VK_RETURN, "tab": VK_TAB}
+
+
+def key_events(name):
+    """One press and release of the snippet key ``name``."""
+    vk = KEY_VKS[name]
+    return [(vk, True), (vk, False)]
+
+
+def caret_left_events(count):
+    """``count`` Left-arrow press/release pairs, as ``(vk, is_press)``."""
+    events = []
+    for _ in range(count):
+        events.append((VK_LEFT, True))
+        events.append((VK_LEFT, False))
+    return events
+
+
 def paste_chord_events(v_vk):
     """Ctrl down, V down, V up, Ctrl up."""
     return [(VK_CONTROL, True), (v_vk, True), (v_vk, False), (VK_CONTROL, False)]
@@ -138,7 +161,10 @@ def send_key_events(events):
         slot.value.ki = _KEYBDINPUT(
             wVk=vk,
             wScan=_USER32.MapVirtualKeyW(vk, _MAPVK_VK_TO_VSC),
-            dwFlags=0 if is_press else _KEYEVENTF_KEYUP,
+            # Left is an extended key: without the flag it carries the numpad
+            # 4's scan code, and a target that reads scan codes sees that key.
+            dwFlags=(0 if is_press else _KEYEVENTF_KEYUP)
+            | (_KEYEVENTF_EXTENDEDKEY if vk == VK_LEFT else 0),
             time=0,
             dwExtraInfo=INJECTION_TAG,
         )
@@ -147,13 +173,19 @@ def send_key_events(events):
 
 
 class BatchKeyboard:
-    """The two injections the hot path needs, each as one atomic batch."""
+    """The injections the expansion path needs, each as one atomic batch."""
 
     def erase(self, count):
         return send_key_events(backspace_events(count))
 
     def paste(self):
         return send_key_events(paste_chord_events(paste_vk()))
+
+    def caret_left(self, count):
+        return send_key_events(caret_left_events(count))
+
+    def press(self, name):
+        return send_key_events(key_events(name))
 
 
 def ctrl_or_alt_held():

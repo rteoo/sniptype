@@ -10,7 +10,7 @@ from group_policy import (
     resolve_terminator_policy,
 )
 from snippet_utils import check_dynamic_pattern, get_dynamic_prefixes
-from variable_support import find_variable_names, has_form_variables
+from variable_support import find_variable_names, has_form_variables, has_key_tokens
 
 
 @dataclass(frozen=True)
@@ -46,22 +46,18 @@ def _is_indexable_trigger(trigger):
     return bool(trigger) and not trigger.startswith("_")
 
 
-def _compute_form_triggers(snippets, prefixes=None):
-    """Return triggers whose value needs a form-fill dialog.
+def _triggers_whose_text(snippets, prefixes, matches):
+    """Direct and composed mapping triggers whose plain text satisfies ``matches``.
 
-    Computed once at compile time so the keyboard hot path never runs the
-    form-variable regex per keystroke. Includes both direct triggers and
-    triggers composed from a dynamic-mapping prefix plus item name.
+    Computed once at compile time so the keyboard hot path never runs a
+    variable regex per keystroke.
     """
-    if prefixes is None:
-        prefixes = get_dynamic_prefixes(snippets)
-
-    form_triggers = set()
+    triggers = set()
     for trigger, value in snippets.items():
         if not _is_indexable_trigger(trigger) or callable(value):
             continue
-        if has_form_variables(extract_plain_text(value), snippets, prefixes):
-            form_triggers.add(trigger)
+        if matches(extract_plain_text(value)):
+            triggers.add(trigger)
 
     for prefix, mapping_key in prefixes.items():
         mapping = snippets.get(mapping_key)
@@ -70,10 +66,28 @@ def _compute_form_triggers(snippets, prefixes=None):
         for item_name, value in mapping.items():
             if item_name == "__prefix__" or callable(value):
                 continue
-            if has_form_variables(extract_plain_text(value), snippets, prefixes):
-                form_triggers.add(prefix + item_name)
+            if matches(extract_plain_text(value)):
+                triggers.add(prefix + item_name)
 
-    return form_triggers
+    return triggers
+
+
+def _compute_form_triggers(snippets, prefixes=None):
+    """Return triggers whose value needs a form-fill dialog."""
+    if prefixes is None:
+        prefixes = get_dynamic_prefixes(snippets)
+    return _triggers_whose_text(
+        snippets, prefixes, lambda text: has_form_variables(text, snippets, prefixes)
+    )
+
+
+def _compute_key_triggers(snippets, prefixes):
+    """Return triggers whose value presses a key between pieces of text.
+
+    They take the slow route, whose context check counts keystrokes: a key
+    sequence the person types into must stop, not interleave with them.
+    """
+    return _triggers_whose_text(snippets, prefixes, has_key_tokens)
 
 
 def _compute_slow_ref_triggers(snippets, slow_snippets):
@@ -192,8 +206,10 @@ def compile_trigger_index(
 
     slow_triggers = set(slow_snippets) | _compute_slow_ref_triggers(snippets, slow_snippets)
     form_triggers = _compute_form_triggers(snippets, dynamic_prefixes)
+    key_triggers = _compute_key_triggers(snippets, dynamic_prefixes)
     raw_slow_triggers = set(slow_triggers)
     raw_form_triggers = set(form_triggers)
+    raw_key_triggers = set(key_triggers)
     static_ids = {
         trigger
         for trigger, value in snippets.items()
@@ -201,6 +217,7 @@ def compile_trigger_index(
     }
     slow_triggers.difference_update(static_ids)
     form_triggers.difference_update(static_ids)
+    key_triggers.difference_update(static_ids)
     for target in direct_targets:
         if target.source_kind != "static":
             continue
@@ -208,6 +225,8 @@ def compile_trigger_index(
             slow_triggers.add(target.effective_trigger)
         if target.stable_identity in raw_form_triggers:
             form_triggers.add(target.effective_trigger)
+        if target.stable_identity in raw_key_triggers:
+            key_triggers.add(target.effective_trigger)
 
     return {
         "direct_triggers": tuple(direct_triggers),
@@ -229,6 +248,7 @@ def compile_trigger_index(
         },
         "slow_triggers": frozenset(slow_triggers),
         "form_triggers": frozenset(form_triggers),
+        "key_triggers": frozenset(key_triggers),
     }
 
 

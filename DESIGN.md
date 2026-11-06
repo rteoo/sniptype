@@ -207,7 +207,11 @@ WebView's own system pickers, owned by the window.
   drop-down chevron, so `ui/index.html` adds app-local `mapping` (a tag),
   `dynamic` (a bolt), `backup` (an archive box) and `chevron-down` symbols drawn on the same 24 px grid, stroke and
   square caps; replace them if the family gains its own. Element ids never
-  reuse a symbol id.
+  reuse a symbol id. The snippet editor's toolbar, its Inserir menu and the
+  `teclas` badge use Bootstrap Icons 1.13.2 (MIT, attributed in
+  `THIRD_PARTY_NOTICES.md`), inlined as `bi-*` symbols on their own 16 px
+  filled grid: only the icons in use, copied from that tag. Every icon there
+  sits beside its words or carries its name as `aria-label` and tooltip.
 - **Menus and metadata.** A drop-down is a labeled button with the chevron
   opening a popover menu (arrow keys, Escape returns focus). Favorito and
   Grupo sit under the editor's title and apply at once, like the classic
