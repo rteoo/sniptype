@@ -1983,7 +1983,7 @@ async function editForm(kind: Kind): Promise<void> {
       input(t("Nome"), field.name, (value) => {
         field.name = value;
         renderList();
-      }, { mono: true, hint: t("O %%nome%% que o texto usa.") }),
+      }, { mono: true, hint: t("Como o campo aparece no texto.") }),
       input(t("Rótulo"), field.label ?? "", (value) => { field.label = value; }, { hint: t("O que o formulário mostra; vazio usa o nome.") }),
       h("label", { class: "dialog-field" }, h("span", {}, t("Tipo")), h("select", {
         class: "field",
