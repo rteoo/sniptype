@@ -19,13 +19,20 @@ manager styling. The Python engine, Tk popups, and vanilla TypeScript stack stay
   the package contains no top-level user snippet library.
 - No secret scanner was available. Source/metadata received manual privacy
   review; generated packages are retained locally and excluded from commits.
+- The initial full run completed 1,749 tests with 2 failures, 110 errors and
+  3 skips. Serial reproduction found an X11-only keysym rejected by Windows
+  Tk and a label callback converting Tcl distances with Python `int`.
+  Both were fixed; the two failing GUI tests and 129 theme/popup/startup tests
+  then passed, along with Ruff. The full-suite rerun was stopped after 637
+  seconds, exceeding the repository's 10-minute CI job limit; it is incomplete,
+  not a pass. Repeated deleted-fixture log-handler errors remained in the output.
 
 ## Release gates
 
 - Run the full supported CI matrix: Windows Python 3.12/3.14, macOS Python 3.14,
   and Linux Python 3.14. PR #80 had no attached check results at merge.
-- Resolve or classify the local full-suite fixture logging errors. The earlier
-  full run was interrupted and is not a pass.
+- Resolve the local full-suite fixture logging errors and obtain a passing full
+  run. The initial run failed, and the post-fix rerun exceeded the CI time limit.
 - Verify the packaged Windows application: startup, immediate/terminator
   expansion, forms on multiple monitors, focus restoration, rich text and key
   steps, manager editing/save/conflict recovery, themes, backup/import/export,

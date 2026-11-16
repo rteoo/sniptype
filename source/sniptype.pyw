@@ -5391,7 +5391,9 @@ class Sniptype:
 
         text_widget.bind("<Tab>", lambda _event: traverse_text())
         text_widget.bind("<Shift-Tab>", lambda _event: traverse_text(True))
-        text_widget.bind("<ISO_Left_Tab>", lambda _event: traverse_text(True))
+        # ISO_Left_Tab is an X11 keysym; Windows Tk rejects the binding itself.
+        if text_widget.tk.call("tk", "windowingsystem") == "x11":
+            text_widget.bind("<ISO_Left_Tab>", lambda _event: traverse_text(True))
         text_widget.bind("<Control-Tab>", lambda _event: (text_widget.insert(tk.INSERT, "\t"), "break")[1])
 
         format_label = tk.Label(parent, textvariable=status_var, bg=toolbar_bg,

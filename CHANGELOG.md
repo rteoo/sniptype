@@ -36,6 +36,8 @@ Publication is pending the supported-platform matrix and packaged desktop checks
   building controls so dialog activation cannot change the target screen.
 - Shared Tk controls are prepared at startup to remove their initial theme
   construction from the first form invocation.
+- The fallback manager no longer binds the X11-only reverse-Tab keysym on
+  Windows, and label wrapping resolves Tcl distance values through Tk.
 
 ## [1.5.0-beta.2] — 2026-11-06
 

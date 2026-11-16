@@ -1192,9 +1192,10 @@ def fit_label(label, width):
     Eight-pixel steps prevent one-pixel requested/allocated width oscillation
     in nested Tk grid/canvas layouts. Reapplying an unchanged wrap is inert.
     """
-    inset = 2 * (int(label.cget("padx")) + int(label.cget("borderwidth")))
+    inset = 2 * (label.winfo_pixels(label.cget("padx"))
+                 + label.winfo_pixels(label.cget("borderwidth")))
     wrap = max(8, (max(8, int(width) - inset) // 8) * 8)
-    if int(label.cget("wraplength")) != wrap:
+    if label.winfo_pixels(label.cget("wraplength")) != wrap:
         label.configure(wraplength=wrap, justify=tk.LEFT)
 
 
