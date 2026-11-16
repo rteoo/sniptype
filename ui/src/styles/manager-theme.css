@@ -1,0 +1,114 @@
+/* Teo DS 3.0.1 web roles mapped onto the existing manager components.
+   Keep state and native window behavior in the existing Tauri implementation. */
+[data-platform=windows] {
+  --native-bg: var(--color-bg-canvas);
+  --native-panel: var(--color-bg-surface);
+  --native-content: var(--color-bg-canvas);
+  --native-selection: var(--color-bg-selected);
+  --native-line: var(--color-border-subtle);
+  --native-field-border: var(--color-border-control);
+  --native-muted: var(--color-text-muted);
+  --native-nav: var(--app-nav-bg);
+  --native-list: var(--color-bg-surface);
+  --native-control-radius: var(--radius-sm);
+  --native-control-height: 44px;
+  --windows-row-height: 44px;
+}
+/* Explicitly override the inherited native light and density selectors too. */
+[data-theme=light] [data-platform=windows] {
+  --native-bg: var(--color-bg-canvas);
+  --native-panel: var(--color-bg-surface);
+  --native-content: var(--color-bg-canvas);
+  --native-selection: var(--color-bg-selected);
+  --native-line: var(--color-border-subtle);
+  --native-field-border: var(--color-border-control);
+  --native-muted: var(--color-text-muted);
+  --native-nav: var(--app-nav-bg);
+  --native-list: var(--color-bg-surface);
+}
+[data-platform=windows][data-density=comfortable],
+[data-platform=windows][data-density=touch] {
+  --native-control-height: 44px;
+  --windows-row-height: 48px;
+}
+body { font-variant-numeric: tabular-nums; }
+.app { grid-template-columns: var(--app-sidebar-w) minmax(0, 1fr); }
+.navigation { border-right: 1px solid var(--app-nav-divider); }
+.navigation button { justify-content: flex-start; color: var(--app-nav-text); }
+.navigation button:hover { background: var(--app-nav-hover); }
+.navigation button[aria-current=page] {
+  background: var(--app-nav-active-bg); color: var(--app-nav-active-text);
+}
+.page { border: 0; border-radius: 0; }
+h1 { font: var(--type-page-title); }
+h2 { font: var(--type-section-title); }
+button:hover, .el-button:hover { background: var(--color-bg-hover); }
+.el-button { background: var(--color-action-secondary-bg); }
+.el-button:hover { background: var(--color-action-secondary-hover); }
+.el-button:active { background: var(--color-action-secondary-active); transform: none; }
+.primary, .el-button.primary, dialog menu button.primary {
+  background: var(--color-action-primary-bg);
+  border-color: var(--color-action-primary-border);
+  color: var(--color-action-primary-text);
+}
+.primary:hover, .el-button.primary:hover, dialog menu button.primary:hover {
+  background: var(--color-action-primary-hover);
+}
+.primary:active, .el-button.primary:active, dialog menu button.primary:active {
+  background: var(--color-action-primary-active);
+}
+.item:hover, .completion-option:hover, .field-list button:hover {
+  background: var(--color-bg-hover);
+}
+.item[aria-selected=true], .completion-option[aria-selected=true],
+.field-list button[aria-selected=true] {
+  background: var(--color-bg-selected);
+}
+.item[aria-selected=true] .trigger { color: var(--color-selection-text); }
+.field { border-color: var(--color-border-control); }
+:focus-visible { outline: var(--focus-width) solid var(--color-focus-ring); outline-offset: var(--focus-offset); }
+.field:focus-visible { outline: var(--focus-width) solid var(--color-focus-ring); outline-offset: var(--focus-offset); }
+.chip { background: var(--color-bg-raised); border-radius: var(--radius-sm); }
+.chip-condition { background: transparent; }
+.format-bar .el-button, .editor-tools .menu-anchor .el-button {
+  min-height: var(--native-control-height); min-width: 44px;
+}
+dialog { border-radius: var(--radius-xl); box-shadow: var(--shadow-overlay); }
+dialog::backdrop { background: var(--color-backdrop); }
+.menu { box-shadow: var(--shadow-overlay); }
+/* Apply banding to every manager table, including notifications and backups. */
+table { width: 100%; border-collapse: collapse; }
+thead, table.backups th, .notices th { background: var(--table-header); }
+th { font-weight: 700; }
+tbody tr:nth-child(even) { background: var(--table-band); }
+tbody th, tbody td:first-child { font-weight: 600; }
+table.backups th { color: var(--color-text-primary); }
+@media (max-width: 860px) {
+  .app { grid-template-columns: 56px minmax(0, 1fr); }
+  .navigation { padding-inline: 4px; }
+  .navigation button { justify-content: center; }
+  .brand { padding-inline: 8px; }
+}
+@media (max-width: 600px) {
+  .textos { display: flex; flex-direction: column; overflow: auto; }
+  .textos > * { flex-shrink: 0; }
+  .textos .items { max-height: 240px; }
+  .detail { border-left: 0; border-top: 1px solid var(--native-line); }
+  .form-editor, .data-row, .hotkey-row { grid-template-columns: minmax(0, 1fr); }
+  .data-row .transfer { grid-column: 1; }
+  .meta-row select { min-width: 0; max-width: 100%; }
+  dialog { max-height: calc(100dvh - 32px); overflow: auto; }
+  dialog menu { flex-wrap: wrap; }
+}
+@media (forced-colors: active) {
+  .navigation button[aria-current=page], .item[aria-selected=true],
+  .completion-option[aria-selected=true], .field-list button[aria-selected=true] {
+    outline: 2px solid Highlight; outline-offset: -2px;
+  }
+  .primary, .el-button.primary, dialog menu button.primary {
+    background: ButtonFace; color: ButtonText; border-color: ButtonText;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition: none !important; animation: none !important; }
+}

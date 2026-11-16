@@ -2,7 +2,9 @@ import "./styles/teo/foundations.css";
 import "./styles/teo/elements.css";
 import "./styles/teo/windows-tokens.css";
 import "./styles/teo/windows-elements.css";
+import "./styles/teo/theme.css";
 import "./styles/app.css";
+import "./styles/manager-theme.css";
 
 import { availableMonitors, getCurrentWindow, PhysicalPosition, PhysicalSize } from "@tauri-apps/api/window";
 

@@ -1,5 +1,27 @@
 # SnipType design contract
 
+## Current Tauri manager adoption
+
+The Tauri manager adopts **Teô Personal DS 3.0.1** (2026-11-14), from
+`rteoo/design-system-teo`. Its versioned `theme.css` snapshot is composed after
+the retained foundation/native component layers; `ui/src/styles/manager-theme.css`
+maps existing component roles to the current web palette. Dark and light use
+neutral planes, orange primary actions, blue wayfinding and focus, separate
+selection/hover, 4/6/8/12 px geometry, a 220 px rail, and banded tables.
+Default web controls have 44 px targets; Comfortable and Touch retain larger
+48 px list rows. Compact remains a persisted option with the same 44 px minimum.
+
+Scoped deviations: the existing vanilla TypeScript/Tauri implementation and
+Segoe UI/Cascadia system typography are retained. This change adds no React,
+Tailwind, component dependencies, remote fonts or redistributed font binaries.
+The SnipType product icon remains its own identity. Native title bars, Tk
+expansion popups and the fallback manager retain the Windows native family
+below, which is unchanged in DS 3.0.1; macOS retains Aqua.
+
+Build/static validation does not establish live theme switching, keyboard
+traversal, zoom/reflow, forced colors, or packaged desktop behavior. Those
+require runtime verification with the real bridge and supported desktop.
+
 Adoption record: **Teô Personal DS 2.7.1 — Windows native family** (Ink &
 Copper), adopted 2026-10-19. It replaces the Windows Design System 1.0.0
 adoption of 2026-09-25. `source/ui_theme.py` and `source/ui_widgets.py` are
@@ -202,7 +224,8 @@ WebView's own system pickers, owned by the window.
   system's `native/foundations.css`, `native/elements.css`,
   `native/windows/tokens.css` and `native/windows/elements.css`; update them
   by re-copying. `ui/index.html` inlines `native/windows/assets/icons.svg`.
-  `ui/src/styles/app.css` composes the window from those tokens only. The
+  `ui/src/styles/app.css` supplies the existing layout; the versioned web
+  `theme.css` and `manager-theme.css` adapter apply DS 3.0.1 as recorded above. The
   family sprite has no symbol for Mapeamentos, Dinâmicos, Backups or a
   drop-down chevron, so `ui/index.html` adds app-local `mapping` (a tag),
   `dynamic` (a bolt), `backup` (an archive box) and `chevron-down` symbols drawn on the same 24 px grid, stroke and

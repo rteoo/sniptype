@@ -1,7 +1,7 @@
 """
 SnipType - Windows system tray snippet expander.
-Version: 1.5.0
-Channel: beta
+Version: 1.5.1
+Channel: stable
 
 IMPORTANT: This program captures keyboard input only to expand text
 snippets (shortcuts). It does not store, transmit, or log keystrokes.
@@ -232,6 +232,7 @@ from gui_support import (
     restore_tree_scroll,
     center_dialog,
     center_on_screen,
+    input_monitor_work_area,
     ellipsize_text,
     focus_modal_input,
     iter_filtered_mapping_items,
@@ -1824,11 +1825,12 @@ class Sniptype:
         """
         if compiled_form is not None:
             def build_structured(root):
+                work_area = input_monitor_work_area()
                 form_dialog = FormDialog(root, compiled_form)
                 dialog = form_dialog.window
                 dialog.withdraw()
                 self._set_window_icon(dialog)
-                center_on_screen(dialog)
+                center_on_screen(dialog, work_area=work_area)
                 first_control = form_dialog._controls.get(field_names[0]) if field_names else None
                 cancel_activation = focus_modal_input(
                     dialog,
