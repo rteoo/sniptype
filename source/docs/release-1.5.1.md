@@ -26,13 +26,22 @@ manager styling. The Python engine, Tk popups, and vanilla TypeScript stack stay
   then passed, along with Ruff. The full-suite rerun was stopped after 637
   seconds, exceeding the repository's 10-minute CI job limit; it is incomplete,
   not a pass. Repeated deleted-fixture log-handler errors remained in the output.
+- Logging reconfiguration now closes only stale app-owned file handlers while
+  preserving caller-owned sinks. Its regression tests pass; the local suite's
+  output fell from hundreds of megabytes to hundreds of kilobytes.
+- CI was manually disabled and was re-enabled with owner approval. The first
+  restored matrix completed all 1,751 tests per lane but failed on a label test
+  double missing `winfo_pixels`. The double was corrected, Tcl-distance coverage
+  was added, and all 65 widget/runtime-support tests plus Ruff passed locally.
+  Current full-matrix results are attached to [PR #81](https://github.com/rteoo/sniptype/pull/81).
 
 ## Release gates
 
 - Run the full supported CI matrix: Windows Python 3.12/3.14, macOS Python 3.14,
   and Linux Python 3.14. PR #80 had no attached check results at merge.
-- Resolve the local full-suite fixture logging errors and obtain a passing full
-  run. The initial run failed, and the post-fix rerun exceeded the CI time limit.
+- Obtain passing full-matrix results at the final release revision. The initial
+  local run failed and its first post-fix rerun exceeded the CI time limit;
+  neither is passing evidence. Later fixes and results are recorded above.
 - Verify the packaged Windows application: startup, immediate/terminator
   expansion, forms on multiple monitors, focus restoration, rich text and key
   steps, manager editing/save/conflict recovery, themes, backup/import/export,
