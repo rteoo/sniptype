@@ -9,6 +9,27 @@ from gui_support import (
 import gui_support
 
 
+class DialogMonitorTests(unittest.TestCase):
+    def test_centers_on_negative_monitor_work_area(self):
+        dialog = mock.Mock()
+        dialog.winfo_reqwidth.return_value = 400
+        dialog.winfo_reqheight.return_value = 200
+        with mock.patch.object(gui_support, "input_monitor_work_area",
+                               return_value=(-1920, -200, 0, 840)):
+            gui_support.center_on_screen(dialog)
+        dialog.geometry.assert_called_once_with("400x200+-1160+220")
+
+    def test_unavailable_monitor_uses_tk_screen(self):
+        dialog = mock.Mock()
+        dialog.winfo_reqwidth.return_value = 400
+        dialog.winfo_reqheight.return_value = 200
+        dialog.winfo_screenwidth.return_value = 1920
+        dialog.winfo_screenheight.return_value = 1080
+        with mock.patch.object(gui_support, "input_monitor_work_area", return_value=None):
+            gui_support.center_on_screen(dialog, vertical_divisor=3)
+        dialog.geometry.assert_called_once_with("400x200+760+293")
+
+
 class TreeScrollAnchorTests(unittest.TestCase):
     class Tree:
         def __init__(self, rows=None, first=41, total=81):

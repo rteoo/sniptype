@@ -159,17 +159,55 @@ def layout_wrapping_row(container, leading, trailing, gap, wrap_gap):
     return relayout
 
 
+def input_monitor_work_area():
+    """Windows input window's work area, falling back to the pointer monitor."""
+    if not platform_support.IS_WINDOWS:
+        return None
+    import ctypes
+    from ctypes import wintypes
+
+    class MonitorInfo(ctypes.Structure):
+        _fields_ = [("size", wintypes.DWORD), ("monitor", wintypes.RECT),
+                    ("work", wintypes.RECT), ("flags", wintypes.DWORD)]
+
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.GetForegroundWindow.restype = wintypes.HWND
+    user32.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
+    user32.MonitorFromWindow.restype = wintypes.HANDLE
+    user32.MonitorFromPoint.argtypes = [wintypes.POINT, wintypes.DWORD]
+    user32.MonitorFromPoint.restype = wintypes.HANDLE
+    user32.GetCursorPos.argtypes = [ctypes.POINTER(wintypes.POINT)]
+    user32.GetMonitorInfoW.argtypes = [wintypes.HANDLE, ctypes.POINTER(MonitorInfo)]
+    window = user32.GetForegroundWindow()
+    monitor = user32.MonitorFromWindow(window, 0) if window else None
+    if not monitor:
+        point = wintypes.POINT()
+        if not user32.GetCursorPos(ctypes.byref(point)):
+            return None
+        monitor = user32.MonitorFromPoint(point, 2)
+    info = MonitorInfo()
+    info.size = ctypes.sizeof(info)
+    if not user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+        return None
+    return info.work.left, info.work.top, info.work.right, info.work.bottom
+
+
 def center_on_screen(dialog, vertical_divisor=2):
     """Center a dialog on the screen.
 
     Used by dialogs whose parent is the hidden shared root, which has no
     meaningful geometry to center against.
     """
+    # Resolve before processing Tk events can activate the new dialog.
+    area = input_monitor_work_area()
     dialog.update_idletasks()
     width = dialog.winfo_reqwidth()
     height = dialog.winfo_reqheight()
-    x = (dialog.winfo_screenwidth() - width) // 2
-    y = (dialog.winfo_screenheight() - height) // vertical_divisor
+    left, top, right, bottom = area or (
+        0, 0, dialog.winfo_screenwidth(), dialog.winfo_screenheight()
+    )
+    x = left + max(0, (right - left - width) // 2)
+    y = top + max(0, (bottom - top - height) // vertical_divisor)
     dialog.geometry(f"{width}x{height}+{x}+{y}")
 
 
