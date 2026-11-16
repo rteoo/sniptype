@@ -9010,6 +9010,9 @@ class Sniptype:
 
         if gui_started:
             self.gui.submit(self._install_callback_hook)
+            # Build the interpreter's cached control images before any trigger
+            # can open its first form. Creating the root alone does not do this.
+            self.gui.call(lambda root: ui_theme.prepare_window(root, ui_theme.bind(root)))
 
         if gui_started and IS_WINDOWS:
             # Default icon for every window, including a dialog opened before
