@@ -1,4 +1,5 @@
 import unittest
+import random
 
 from group_policy import (
     application_policy_allows,
@@ -8,6 +9,7 @@ from group_policy import (
 from trigger_index import (
     ExpansionTarget,
     compile_trigger_index,
+    find_direct_candidate,
     find_direct_target,
     find_direct_trigger,
     find_dynamic_trigger,
@@ -269,6 +271,51 @@ class EmptyKeyRegressionTests(unittest.TestCase):
         snippets = {"": "Dólar hoje: %%xdolar%%", "xdolar": lambda: "R$5"}
         index = compile_trigger_index(snippets, {"xdolar"})
         self.assertNotIn("", index["slow_triggers"])
+
+
+class DenseLookupTests(unittest.TestCase):
+    def test_dense_lookup_matches_longest_first_scan_in_both_modes(self):
+        snippets = {f"code{i:04d}x": "value" for i in range(160)}
+        snippets.update({"x": "short", "écode0099x": "unicode"})
+        rng = random.Random(127)
+        inputs = ["", "x", "no-matchx", "écode0099x", "CODE0099x"]
+        inputs += ["prefix " + rng.choice(tuple(snippets)) for _ in range(250)]
+        for terminated in (False, True):
+            index = compile_trigger_index(snippets, set(), terminator_mode=terminated)
+            mode = "terminated" if terminated else "immediate"
+            self.assertIn("x", index[f"direct_{mode}_suffix_lookup"])
+            for text in inputs:
+                bucket = index[f"direct_{mode}_by_last_char"].get(text[-1:] or "", ())
+                expected = next((t for t in bucket if text.endswith(t.effective_trigger)), None)
+                self.assertEqual(expected, find_direct_candidate(text, index, terminated))
+                self.assertIsNone(find_direct_candidate(text, index, not terminated))
+
+    def test_dense_lookup_does_not_fall_back_after_denied_longest(self):
+        snippets = {f"code{i:04d}x": "value" for i in range(64)}
+        snippets["x"] = "short"
+        metadata = {
+            "groups": {"restricted": {"applications": {
+                "mode": "allow", "executables": ["editor.exe"]}}},
+            "items": {"static": {"code0063x": {"group_id": "restricted"}}},
+        }
+        index = compile_trigger_index(snippets, set(), metadata=metadata)
+        self.assertIsNone(find_direct_target("code0063x", index, executable="other.exe"))
+        self.assertEqual("code0063x", find_direct_target(
+            "code0063x", index, executable="editor.exe").stable_identity)
+
+    def test_sparse_distinct_lengths_keep_the_compact_scan(self):
+        index = compile_trigger_index({"a" * n + "x": "value" for n in range(100)}, set())
+        self.assertEqual({}, index["direct_immediate_suffix_lookup"])
+        self.assertEqual("a" * 99 + "x", find_direct_candidate("a" * 99 + "x", index).effective_trigger)
+
+    def test_effective_trigger_ties_keep_first_source_identity(self):
+        snippets = {"item": "first", "pitem": "second"}
+        snippets.update({f"code{i:04d}m": "value" for i in range(64)})
+        metadata = {"groups": {"prefixed": {"prefix": "p"}},
+                    "items": {"static": {"item": {"group_id": "prefixed"}}}}
+        index = compile_trigger_index(snippets, set(), metadata=metadata)
+        self.assertEqual("item", find_direct_candidate("pitem", index).stable_identity)
+        self.assertEqual("item", index["direct_target_by_trigger"]["pitem"].stable_identity)
 
 
 class GroupPolicyIndexTests(unittest.TestCase):
