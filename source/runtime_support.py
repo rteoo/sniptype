@@ -86,6 +86,13 @@ def configure_logging(log_dir=None, level=logging.INFO):
 
     if log_dir:
         log_path = os.path.abspath(os.path.join(log_dir, LOG_FILE_NAME))
+        # The process has one active data home. Retaining its previous sink
+        # leaks handles and keeps logging into deleted test/relocated homes.
+        for handler in logger.handlers[:]:
+            if (getattr(handler, "_sniptype_owned_file", False)
+                    and os.path.abspath(handler.baseFilename) != log_path):
+                logger.removeHandler(handler)
+                handler.close()
         has_file_handler = any(
             isinstance(handler, RotatingFileHandler)
             and os.path.abspath(getattr(handler, "baseFilename", "")) == log_path
@@ -103,6 +110,7 @@ def configure_logging(log_dir=None, level=logging.INFO):
                     encoding="utf-8",
                 )
                 file_handler.setFormatter(formatter)
+                file_handler._sniptype_owned_file = True
                 logger.addHandler(file_handler)
             except OSError as error:
                 logger.warning(f"Não foi possível criar o log em {log_dir}: {error}")

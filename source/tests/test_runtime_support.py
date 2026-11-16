@@ -295,6 +295,28 @@ class ConfigureLoggingTests(unittest.TestCase):
         configure_logging(self.tmp)
         self.assertEqual(1, len(self._file_handlers()))
 
+    def test_changing_data_home_closes_the_previous_owned_file(self):
+        configure_logging(self.tmp)
+        previous = self._file_handlers()[0]
+        replacement = os.path.join(self.tmp, "new-home")
+        configure_logging(replacement)
+        self.assertIsNone(previous.stream)
+        self.assertNotIn(previous, self.logger.handlers)
+        self.assertEqual(1, len(self._file_handlers()))
+        AppLogger().info("new home diagnostic")
+        with open(os.path.join(replacement, runtime_support.LOG_FILE_NAME),
+                  encoding="utf-8") as log:
+            self.assertIn("new home diagnostic", log.read())
+
+    def test_changing_data_home_preserves_caller_owned_file_handlers(self):
+        caller = RotatingFileHandler(os.path.join(self.tmp, "caller.log"))
+        self.logger.addHandler(caller)
+        configure_logging(os.path.join(self.tmp, "first"))
+        configure_logging(os.path.join(self.tmp, "second"))
+        self.assertIn(caller, self.logger.handlers)
+        self.assertIsNotNone(caller.stream)
+        self.assertEqual(2, len(self._file_handlers()))
+
     def test_unwritable_log_dir_warns_and_does_not_crash(self):
         with mock.patch.object(
             runtime_support.os, "makedirs", side_effect=OSError("read-only")
