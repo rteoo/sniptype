@@ -69,6 +69,7 @@ from library_metadata import (
 from trigger_index import (
     ExpansionTarget,
     compile_trigger_index,
+    find_direct_candidate,
     find_dynamic_trigger,
     target_is_allowed,
 )
@@ -1662,7 +1663,6 @@ class Sniptype:
                     snippet = resolved_text
 
             try:
-                time.sleep(0.05)
                 inserted = self._insert_template_result(snippet, keys=False)
                 if inserted is False:
                     return False
@@ -1748,7 +1748,6 @@ class Sniptype:
                 )
                 if is_rich_text_payload(raw):
                     result = rebuild_rich_text(raw, result)
-                time.sleep(0.05)
                 inserted = self._insert_template_result(result, keys=True)
                 return inserted is not False
 
@@ -1758,7 +1757,6 @@ class Sniptype:
             if not result:
                 return False
             self.notify_snippet_failure(trigger, result)
-            time.sleep(0.05)
             inserted = self.text_inserter.insert_text(result)
             if inserted is False:
                 return False
@@ -2345,9 +2343,17 @@ class Sniptype:
         # A raw string can still name a direct target in compatibility calls.
         # Prefer the compiled route because a stored key may be disabled or may
         # have a group prefix while the same typed text belongs to a mapping.
-        for target in getattr(self, "trigger_index", {}).get("direct_targets", ()):
-            if target.effective_trigger == trigger:
+        index = getattr(self, "trigger_index", {})
+        targets = index.get("direct_target_by_trigger")
+        if targets is not None:
+            target = targets.get(trigger)
+            if target is not None:
                 return self._workflow_ref(target)
+        else:
+            # Compatibility for callers supplying an older partial index.
+            for target in index.get("direct_targets", ()):
+                if target.effective_trigger == trigger:
+                    return self._workflow_ref(target)
         value = self.snippets.get(trigger)
         if callable(value):
             for stable_key, entry in self.dynamic_registry.items():
@@ -2563,17 +2569,11 @@ class Sniptype:
         """
         if not typed_text:
             return None, False
-        bucket_name = (
-            "direct_terminated_by_last_char"
-            if terminated
-            else "direct_immediate_by_last_char"
-        )
-        candidates = self.trigger_index.get(bucket_name, {}).get(typed_text[-1], ())
-        for target in candidates:
-            if typed_text.endswith(target.effective_trigger):
-                if self._target_application_allowed(target):
-                    return target, True
-                return None, True
+        target = find_direct_candidate(typed_text, self.trigger_index, terminated)
+        if target is not None:
+            if self._target_application_allowed(target):
+                return target, True
+            return None, True
         return None, False
 
     def _target_application_allowed(self, target):

@@ -55,8 +55,39 @@ def make_app(base_dir, snippets, stub_inserter=True):
 
 class ImmediateModeTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.mkdtemp()
+        self.tmp = tempfile.mkdtemp(dir=os.path.join(os.path.dirname(__file__), "tmp"))
+        self.addCleanup(self._cleanup)
         self.app = make_app(self.tmp, {"xhi": "hello"})
+
+    def _cleanup(self):
+        logger = runtime_support.logging.getLogger(runtime_support.LOGGER_NAME)
+        for handler in logger.handlers[:]:
+            if (getattr(handler, "_sniptype_owned_file", False)
+                    and handler.baseFilename.startswith(self.tmp + os.sep)):
+                logger.removeHandler(handler)
+                handler.close()
+        shutil.rmtree(self.tmp)
+
+    def test_ready_payloads_reach_insertion_without_an_extra_wait(self):
+        with mock.patch.object(tx.time, "sleep") as sleep:
+            self.assertTrue(self.app.expand_snippet("xhi"))
+            self.app.snippets["xform"] = "Hello %%name%%"
+            self.app.snippets["xprovider"] = lambda: "provider result"
+            self.app.refresh_runtime_indexes()
+            with mock.patch.object(self.app, "_show_form_dialog", return_value={"name": "Ada"}):
+                self.assertTrue(self.app.run_slow_snippet("xform"))
+            self.assertTrue(self.app.run_slow_snippet("xprovider"))
+        sleep.assert_not_called()
+        self.assertEqual(["hello", "Hello Ada", "provider result"],
+                         [c.args[0] for c in self.app.text_inserter.insert_text.call_args_list])
+
+    def test_workflow_reference_uses_compiled_identity_without_scanning(self):
+        class NoScan:
+            def __iter__(self):
+                raise AssertionError("workflow reference scanned the trigger collection")
+
+        self.app.trigger_index["direct_targets"] = NoScan()
+        self.assertEqual(tx.SnippetRef("static", "xhi"), self.app._workflow_ref("xhi"))
 
     def _type(self, text):
         for char in text:

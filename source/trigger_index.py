@@ -111,6 +111,32 @@ def _sort_buckets(buckets):
     return {key: tuple(value) for key, value in buckets.items()}
 
 
+def _dense_suffix_lookups(buckets):
+    """Hash suffixes by length only where that avoids substantial bucket scans.
+
+    Sparse buckets keep their allocation-free endswith loop. Distinct-length
+    buckets keep it too: slicing and hashing every length would cost more.
+    """
+    result = {}
+    for last_char, targets in buckets.items():
+        if len(targets) < 32:
+            continue
+        lengths = {len(target.effective_trigger) for target in targets}
+        # ceiling: mostly distinct-length buckets retain linear suffix scans;
+        # revisit with a compact trie if those workloads become a measured cost.
+        if len(lengths) * 4 > len(targets):
+            continue
+        by_length = {}
+        for target in targets:
+            by_length.setdefault(len(target.effective_trigger), {}).setdefault(
+                target.effective_trigger, target
+            )
+        result[last_char] = tuple(
+            (length, by_length[length]) for length in sorted(lengths, reverse=True)
+        )
+    return result
+
+
 def compile_trigger_index(
     snippets,
     slow_snippets,
@@ -132,6 +158,7 @@ def compile_trigger_index(
     direct_triggers = []
     direct_by_last_char = {}
     direct_targets = []
+    direct_target_by_trigger = {}
     direct_targets_by_last_char = {}
     immediate_targets_by_last_char = {}
     terminated_targets_by_last_char = {}
@@ -172,6 +199,7 @@ def compile_trigger_index(
             application_policy = group.applications
 
         direct_targets.append(target)
+        direct_target_by_trigger.setdefault(target.effective_trigger, target)
         direct_triggers.append(target.effective_trigger)
         last_char = target.effective_trigger[-1]
         direct_by_last_char.setdefault(last_char, []).append(target.effective_trigger)
@@ -232,9 +260,12 @@ def compile_trigger_index(
         "direct_triggers": tuple(direct_triggers),
         "direct_by_last_char": direct_by_last_char,
         "direct_targets": tuple(direct_targets),
+        "direct_target_by_trigger": direct_target_by_trigger,
         "direct_targets_by_last_char": direct_targets_by_last_char,
         "direct_immediate_by_last_char": immediate_targets_by_last_char,
         "direct_terminated_by_last_char": terminated_targets_by_last_char,
+        "direct_immediate_suffix_lookup": _dense_suffix_lookups(immediate_targets_by_last_char),
+        "direct_terminated_suffix_lookup": _dense_suffix_lookups(terminated_targets_by_last_char),
         "direct_immediate_targets_by_last_char": immediate_targets_by_last_char,
         "direct_terminated_targets_by_last_char": terminated_targets_by_last_char,
         "immediate_by_last_char": immediate_targets_by_last_char,
@@ -269,6 +300,20 @@ def target_is_allowed(target, trigger_index, executable=None, *, windows=True):
 def find_direct_candidate(typed_text, trigger_index, terminated=False):
     """Return the longest suffix candidate before application-policy I/O."""
     if not typed_text:
+        return None
+
+    lookup_name = (
+        "direct_terminated_suffix_lookup" if terminated
+        else "direct_immediate_suffix_lookup"
+    )
+    lookup = trigger_index.get(lookup_name, {}).get(typed_text[-1])
+    if lookup is not None:
+        size = len(typed_text)
+        for length, targets in lookup:
+            if length <= size:
+                target = targets.get(typed_text[-length:])
+                if target is not None:
+                    return target
         return None
 
     bucket_name = (
