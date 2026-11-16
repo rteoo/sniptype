@@ -192,14 +192,14 @@ def input_monitor_work_area():
     return info.work.left, info.work.top, info.work.right, info.work.bottom
 
 
-def center_on_screen(dialog, vertical_divisor=2):
+def center_on_screen(dialog, vertical_divisor=2, work_area=None):
     """Center a dialog on the screen.
 
     Used by dialogs whose parent is the hidden shared root, which has no
     meaningful geometry to center against.
     """
     # Resolve before processing Tk events can activate the new dialog.
-    area = input_monitor_work_area()
+    area = work_area if work_area is not None else input_monitor_work_area()
     dialog.update_idletasks()
     width = dialog.winfo_reqwidth()
     height = dialog.winfo_reqheight()

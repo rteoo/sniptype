@@ -10,6 +10,15 @@ import gui_support
 
 
 class DialogMonitorTests(unittest.TestCase):
+    def test_captured_input_monitor_survives_dialog_activation(self):
+        dialog = mock.Mock()
+        dialog.winfo_reqwidth.return_value = 400
+        dialog.winfo_reqheight.return_value = 200
+        with mock.patch.object(gui_support, "input_monitor_work_area") as probe:
+            gui_support.center_on_screen(dialog, work_area=(-1920, 0, 0, 1080))
+        probe.assert_not_called()
+        dialog.geometry.assert_called_once_with("400x200+-1160+440")
+
     def test_centers_on_negative_monitor_work_area(self):
         dialog = mock.Mock()
         dialog.winfo_reqwidth.return_value = 400

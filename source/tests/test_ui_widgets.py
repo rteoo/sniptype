@@ -34,6 +34,7 @@ class ColorTests(unittest.TestCase):
         label = mock.Mock()
         options = {"padx": 1, "borderwidth": 0, "wraplength": 0}
         label.cget.side_effect = options.__getitem__
+        label.winfo_pixels.side_effect = lambda value: int(str(value))
         label.configure.side_effect = lambda **changed: options.update(changed)
         for width in (468, 469, 468, 469):
             ui_widgets.fit_label(label, width)
@@ -42,6 +43,17 @@ class ColorTests(unittest.TestCase):
         ui_widgets.fit_label(label, 247)
         self.assertLessEqual(options["wraplength"] + 2, 247)
         self.assertGreater(options["wraplength"], 230)
+
+    def test_wrapping_accepts_tcl_distance_objects(self):
+        class Distance:
+            def __str__(self):
+                return "2"
+
+        label = mock.Mock()
+        label.cget.return_value = Distance()
+        label.winfo_pixels.side_effect = lambda value: int(str(value))
+        ui_widgets.fit_label(label, 100)
+        label.configure.assert_called_once_with(wraplength=88, justify="left")
 
     def test_contrast_text_size_dpi_and_palette_have_distinct_image_sets(self):
         variants = [ui_theme.build_theme(kind, "windows", **options) for kind, options in (

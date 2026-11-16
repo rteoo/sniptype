@@ -19,6 +19,26 @@ their original numbers.
 | 3.2.0, 3.2.1 | 0.9.0, 0.9.1 | 5.2.0-beta.1 | 1.0.0-beta.1 |
 | 3.3.0-beta, 3.3.0 | 0.10.0-beta.1, 0.10.0 | 5.2.0 | 1.0.0 |
 
+## [1.5.1] — Unreleased
+
+Stable candidate incorporating the 1.5.0 beta features described below.
+Publication is pending the supported-platform matrix and packaged desktop checks.
+
+### Changed
+
+- The manager adopts Teô DS 3.0.1: neutral surfaces, orange actions, blue
+  selection and focus, larger controls, and alternating table rows.
+
+### Fixed
+
+- Expansion dialogs use the foreground window's monitor work area, falling
+  back to the pointer monitor. Structured forms capture the monitor before
+  building controls so dialog activation cannot change the target screen.
+- Shared Tk controls are prepared at startup to remove their initial theme
+  construction from the first form invocation.
+- The fallback manager no longer binds the X11-only reverse-Tab keysym on
+  Windows, and label wrapping resolves Tcl distance values through Tk.
+
 ## [1.5.0-beta.2] — 2026-11-06
 
 Snippets can change with the time of day, the editor shows variables as
