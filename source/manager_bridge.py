@@ -59,7 +59,7 @@ from group_dialog import (
     GroupDialogController,
     build_group_definition,
 )
-from group_policy import normalize_group
+from group_policy import get_static_item_metadata, normalize_group
 from i18n import N_, _
 from backup_support import backup_time
 from library_metadata import MetadataReadOnlyError, mapping_item_metadata, static_item_metadata
@@ -84,7 +84,8 @@ from rich_text_support import (
     normalize_style_spans,
 )
 from snippet_utils import build_saveable_snippets, get_dynamic_prefixes, mapping_types
-from variable_support import classify_variable, has_key_tokens
+from variable_support import classify_variable, has_form_variables, has_key_tokens
+from workflow_support import static_usage_id, valid_timestamp
 
 MANAGER_EXE_NAME = "sniptype-manager.exe" if sys.platform == "win32" else "sniptype-manager"
 DENSITY_CHOICES = ("compact", "comfortable", "touch")
@@ -217,6 +218,7 @@ class ManagerBridge:
             "dynamic.rename": self.dynamic_rename,
             "form.get": self.form_get,
             "form.save": self.form_save,
+            "form.validate": self.form_validate,
             "preview.get": self.preview_get,
             "switcher.search": self.switcher_search,
             "draft.check": self.draft_check,
@@ -427,9 +429,17 @@ class ManagerBridge:
         elif group:
             rows = filter_manager_rows(rows, "group", group_id=group)
         rows = filter_manager_rows(rows, filter, workflow_state=self.app.workflow_state)
+        runtime = self.app.snippets
+        prefixes = self.app.trigger_index["dynamic_prefixes"]
+        metadata = self.app.library_metadata
+        usage = self.app.workflow_state.static_usage()
         items = []
         for row in rows:
-            preview = " ".join(manager_row_preview(row, projection).split())
+            value = projection.get(row.stored_trigger)
+            text = extract_plain_text(value)
+            item = get_static_item_metadata(metadata, row.stored_trigger)
+            created = item.get("created_at")
+            form = item.get("form")
             items.append({
                 "trigger": row.stored_trigger,
                 "effectiveTrigger": row.effective_trigger,
@@ -438,9 +448,14 @@ class ManagerBridge:
                 "favorite": row.favorite,
                 "enabled": row.enabled,
                 "shadowed": row.shadowed,
-                "rich": is_rich_text_payload(projection.get(row.stored_trigger)),
-                "keys": has_key_tokens(extract_plain_text(projection.get(row.stored_trigger))),
-                "preview": preview[:PREVIEW_LIMIT],
+                "rich": is_rich_text_payload(value),
+                "keys": has_key_tokens(text),
+                "form": (isinstance(form, dict) and bool(form.get("fields")))
+                        or has_form_variables(text, runtime, prefixes),
+                "preview": " ".join(text.split())[:PREVIEW_LIMIT],
+                "sortText": text,
+                "createdAt": created if valid_timestamp(created) else None,
+                "lastUsed": usage.get(static_usage_id(row.stored_trigger, item)),
             })
         return {"items": items, "total": total}
 
@@ -489,7 +504,8 @@ class ManagerBridge:
         status = GONE if current is None else UNCHANGED if current == base else CHANGED
         return {"status": status, "revision": current}
 
-    def snippet_save(self, trigger, text, original=None, confirmed=(), spans=None, base=None):
+    def snippet_save(self, trigger, text, original=None, confirmed=(), spans=None, base=None, *,
+                     groupId=manager_actions.KEEP, favorite=manager_actions.KEEP, fields=manager_actions.KEEP):
         """Save a static snippet: its text and, from the formatting editor, its style spans.
 
         Answers ``{"status": "saved"}``, or ``{"status": "confirm", "check", ...}``
@@ -498,6 +514,7 @@ class ManagerBridge:
         spans are all gone is stored plain again, as the classic editor does.
         ``base`` is the revision the editor opened ``original`` at: a save over
         a version changed or deleted since asks first (``stale``).
+        Any supplied group, favorite or form changes commit with the text.
         """
         app = self.app
         trigger = trigger.strip() if isinstance(trigger, str) else ""
@@ -527,8 +544,28 @@ class ManagerBridge:
                              "editor.").format(name=trigger),
                 "action": _("Substituir"),
             }
-        if trigger not in app.snippets or callable(app.snippets[trigger]):
-            warnings = app._validate_trigger_warnings(trigger)
+        if groupId is not manager_actions.KEEP and groupId is not None:
+            if not isinstance(groupId, str):
+                raise BridgeError("bad_params", "groupId must be a string or null")
+            self._group(groupId)
+        if favorite is not manager_actions.KEEP and not isinstance(favorite, bool):
+            raise BridgeError("bad_params", "favorite must be a boolean")
+        form = self._validated_draft_form(fields, text) if fields is not manager_actions.KEEP else fields
+        before = app.library_metadata
+        try:
+            metadata = manager_actions.prepare_static_save(
+                app._manager_static_projection(), before, trigger, value, group=groupId,
+                favorite=favorite, form=form, dynamic_triggers=app._manager_dynamic_triggers(),
+            )
+        except TriggerCollisionError as error:
+            raise BridgeError("collision", _("O trigger efetivo {trigger} já é usado por outro snippet.").format(
+                trigger=error.trigger)) from error
+        except MetadataReadOnlyError as error:
+            raise BridgeError("read_only", _read_only_message()) from error
+        old_group = get_static_item_metadata(before, trigger).get("group_id")
+        if (trigger not in app.snippets or callable(app.snippets[trigger])
+                or get_static_item_metadata(metadata, trigger).get("group_id") != old_group):
+            warnings = app._validate_trigger_warnings(trigger, metadata=metadata)
             if warnings and "warnings" not in confirmed:
                 return {
                     "status": "confirm",
@@ -538,9 +575,9 @@ class ManagerBridge:
                         warnings="\n• ".join(warnings)),
                     "action": _("Salvar mesmo assim"),
                 }
-        if existing == value:
+        if existing == value and metadata == before:
             return {"status": "saved", "trigger": trigger, "revision": revision(existing)}
-        if not app.save_static_snippet(trigger, value):
+        if not app.save_static_snippet(trigger, value, metadata=metadata):
             raise BridgeError("save_failed", _(
                 "Não foi possível gravar snippets.json, então nada foi salvo. O rascunho continua no "
                 "editor; verifique os logs e tente de novo."))
@@ -982,15 +1019,20 @@ class ManagerBridge:
             raise BridgeError("missing", _("O snippet {name} não existe mais.").format(name=name))
         return value, app._static_form_metadata(name)
 
-    def form_get(self, name, type=None):
+    def form_get(self, name=None, type=None, text=None):
         """The fields the form dialog opens with.
 
         Without a saved form, the fields are the ones expansion already asks
         for (each ``%%variable%%`` that is not a snippet, a mapping or the
         clipboard), as plain text fields.
         """
-        value, form = self._form_target(name, type)
-        template = extract_plain_text(value)
+        if name is None:
+            if not isinstance(text, str):
+                raise BridgeError("bad_params", "draft text must be a string")
+            template, form = text, None
+        else:
+            value, form = self._form_target(name, type)
+            template = extract_plain_text(value)
         variables = [field.name for field in compile_form(template, None, self.app.snippets).fields]
         if form is not None:
             fields = copy.deepcopy(form.get("fields", []))
@@ -1005,15 +1047,31 @@ class ManagerBridge:
             "readOnly": bool(getattr(self.app.library_metadata, "read_only", False)),
         }
 
-    def form_save(self, name, fields, type=None):
-        """Validate a form against the saved text and store it: ``saved``, or ``invalid`` with the field index."""
-        app = self.app
-        value, _form = self._form_target(name, type)
-        controller = FormEditorController(fields, app.snippets, template=extract_plain_text(value))
+    def form_validate(self, fields, text):
+        """Validate draft fields and return their normalized values without saving the library."""
+        if not isinstance(fields, list) or not isinstance(text, str):
+            raise BridgeError("bad_params", "expected a field list and template text")
+        controller = FormEditorController(fields, self.app.snippets, template=text)
         try:
             form = controller.save()
         except FormValidationError:
             return {"status": "invalid", "message": controller.error, "index": controller.invalid_index}
+        return {"status": "valid", "fields": form["fields"]}
+
+    def _validated_draft_form(self, fields, text):
+        result = self.form_validate(fields, text)
+        if result["status"] == "invalid":
+            raise BridgeError("invalid", result["message"])
+        return {"fields": result["fields"]}
+
+    def form_save(self, name, fields, type=None):
+        """Validate a form against the saved text and store it."""
+        app = self.app
+        value, _form = self._form_target(name, type)
+        result = self.form_validate(fields, extract_plain_text(value))
+        if result["status"] == "invalid":
+            return result
+        form = {"fields": result["fields"]}
         if type:
             self._commit(lambda: manager_actions.set_mapping_form(
                 app.snippets, app.library_metadata, type, name, form,
@@ -1026,7 +1084,7 @@ class ManagerBridge:
             ))
         return {"status": "saved", "count": len(form["fields"])}
 
-    def preview_get(self, name=None, type=None, text=None):
+    def preview_get(self, name=None, type=None, text=None, fields=None):
         """What expanding would type, without the clipboard or a provider.
 
         ``text`` is the editor's plain draft; without it the saved value is
@@ -1039,6 +1097,8 @@ class ManagerBridge:
             if not isinstance(text, str):
                 raise BridgeError("bad_params", "text must be a string")
             value = text
+            if fields is not None:
+                form = self._validated_draft_form(fields, text)
         try:
             result = resolve_preview(value, self.app.snippets, form)
         except ConditionError as error:

@@ -1,6 +1,6 @@
 # SnipType Privacy Policy
 
-Effective date: 2026-09-25. [Versão em português abaixo](#política-de-privacidade-do-sniptype).
+Effective date: 2026-11-26. [Versão em português abaixo](#política-de-privacidade-do-sniptype).
 
 SnipType is a text expander for Windows published by Strateo. It runs on your
 device and has no accounts, no servers, no analytics and no telemetry. Strateo
@@ -28,6 +28,8 @@ clipboard content to insert it. The clipboard content stays on your device.
 Everything SnipType keeps is stored locally in `%USERPROFILE%\.sniptype`:
 
 - your snippet library (`snippets.json`) and settings (`settings.json`);
+- the last successful expansion time for each used text snippet, keyed by
+  an identifier in `snippet_usage.json`. This file stays on this device;
 - rotating backups of the library;
 - logs of app events and errors. Logs can include file paths and, when an
   expansion fails, the trigger name. They never contain typed text or snippet
@@ -77,7 +79,7 @@ Questions: open an issue at <https://github.com/rteoo/sniptype/issues>.
 
 ## Política de privacidade do SnipType
 
-Vigente desde 25/09/2026.
+Vigente desde 26/11/2026.
 
 O SnipType é um expansor de texto para Windows publicado pela Strateo. Ele roda
 no seu computador e não tem contas, servidores, análises de uso nem telemetria.
@@ -108,6 +110,9 @@ Tudo o que o SnipType guarda fica em `%USERPROFILE%\.sniptype`:
 
 - sua biblioteca de snippets (`snippets.json`) e as configurações
   (`settings.json`);
+- a data e a hora da última expansão bem-sucedida de cada snippet de texto
+  utilizado, associadas a um identificador em `snippet_usage.json`. Esse
+  arquivo fica no próprio dispositivo;
 - backups rotativos da biblioteca;
 - logs de eventos e erros do aplicativo. Os logs podem conter caminhos de
   arquivo e, quando uma expansão falha, o nome do gatilho. Nunca contêm texto

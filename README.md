@@ -126,7 +126,8 @@ The manager is organized around the work being done:
 
 | Tab (Portuguese / English) | Purpose |
 | --- | --- |
-| **Textos** / **Texts** | Create and edit plain or rich-text expansions, with favorites, groups, forms, and preview |
+| **Textos** / **Texts** | Sort snippets by trigger, text, creation, or last use. Group the list by group, favorite status, or snippet type. Assign a group, mark a favorite, or configure a form while creating a snippet. |
+| **Grupos** / **Groups** | Create and edit groups, set their prefixes and expansion rules, and open their snippets in Texts. |
 | **Dinâmicos** / **Dynamic** | Enable, disable, rename, and search built-in actions |
 | **Backups** / **Backups** | Restore, create, import, or export the snippet library |
 | **Configurações** / **Settings** | Language, appearance, density, expansion mode, and data folder |

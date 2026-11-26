@@ -10,7 +10,7 @@ import copy
 from dataclasses import dataclass
 
 from dynamic_registry import composed_mapping_triggers
-from group_policy import effective_trigger, static_item_enabled
+from group_policy import effective_trigger, get_static_item_metadata, static_item_enabled
 from rich_text_support import extract_plain_text
 from library_metadata import (
     LibraryMetadata,
@@ -19,6 +19,7 @@ from library_metadata import (
     create_group as metadata_create_group,
     delete_group as metadata_delete_group,
     duplicate_static_item_metadata,
+    new_static_tracking,
     rename_static_item_metadata,
     normalize_metadata,
     restore_mapping_item_metadata,
@@ -31,6 +32,10 @@ from library_metadata import (
     unassign_static_item as metadata_unassign_static_item,
     update_group as metadata_update_group,
 )
+from workflow_support import static_usage_id
+
+
+KEEP = object()
 
 
 class ManagerActionError(ValueError):
@@ -120,9 +125,9 @@ def _effective_static_triggers(snippets, metadata):
     return result
 
 
-def _check_collisions(snippets, metadata, changed_keys, dynamic_triggers):
+def _check_collisions(snippets, metadata, changed_keys, dynamic_triggers, *, check_dynamic=True):
     static_triggers = _effective_static_triggers(snippets, metadata)
-    dynamic = _dynamic_triggers(snippets, dynamic_triggers)
+    dynamic = _dynamic_triggers(snippets, dynamic_triggers) if check_dynamic else set()
     for stored_key in changed_keys:
         if stored_key not in snippets or not isinstance(stored_key, str):
             continue
@@ -164,6 +169,36 @@ def _finish(snippets, metadata, dynamic_triggers=()):
     )
 
 
+def prepare_static_save(snippets, metadata, key, value, *, group=KEEP, favorite=KEEP, form=KEEP,
+                        dynamic_triggers=()):
+    """Prepare the metadata for one content save, without publishing either change."""
+    previous = snippets.get(key)
+    new = previous is None or callable(previous)
+    changes_metadata = group is not KEEP or favorite is not KEEP or form is not KEEP
+    read_only = getattr(metadata, "read_only", False)
+    item = get_static_item_metadata(metadata, key) if not read_only else {}
+    old_group = item.get("group_id")
+    if read_only and changes_metadata:
+        raise MetadataReadOnlyError("library metadata is read-only for compatibility")
+    if not read_only and (new or changes_metadata):
+        if new:
+            item.update(new_static_tracking())
+        for attribute, selection in (("group_id", group), ("favorite", favorite), ("form", form)):
+            if selection is None:
+                item.pop(attribute, None)
+            elif selection is not KEEP:
+                item[attribute] = selection
+        metadata = restore_static_item_metadata(metadata, key, item)
+    if new or item.get("group_id") != old_group:
+        _check_collisions(
+            {**snippets, key: value}, metadata, (key,), dynamic_triggers,
+            # Bare triggers have always allowed a confirmed overlap with a
+            # dynamic snippet or mapping. Group assignments have stricter rules.
+            check_dynamic=item.get("group_id") is not None or old_group is not None,
+        )
+    return metadata
+
+
 def duplicate_static(
     snippets,
     metadata,
@@ -184,8 +219,8 @@ def duplicate_static(
         raise ValueError(f"cannot duplicate dynamic item: {source_key}")
     content[destination_key] = copy.deepcopy(content[source_key])
     state = duplicate_static_item_metadata(state, source_key, destination_key)
-    if destination_key not in state["items"]["static"]:
-        state["items"]["static"][destination_key] = {"favorite": False}
+    item = state["items"]["static"].setdefault(destination_key, {"favorite": False})
+    item.update(new_static_tracking())
     _check_collisions(content, state, (destination_key,), dynamic_triggers)
     return _finish(content, state, dynamic_triggers)
 
@@ -212,6 +247,8 @@ def rename_static(
         raise ValueError("destination_key must be a non-empty non-reserved string")
     content[destination_key] = content.pop(source_key)
     state = rename_static_item_metadata(state, source_key, destination_key)
+    item = state["items"]["static"].setdefault(destination_key, {})
+    item["usage_id"] = static_usage_id(source_key, item)
     _check_collisions(content, state, (destination_key,), dynamic_triggers)
     return _finish(content, state, dynamic_triggers)
 

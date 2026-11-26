@@ -1,0 +1,28 @@
+.groups-page > header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 0;
+  max-width: 760px;
+}
+
+.group-cards {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.group-card h2 { overflow-wrap: anywhere; }
+.group-summary { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+.group-card .group-actions { flex-wrap: wrap; gap: 6px; }
+#groups-readonly { margin-bottom: 8px; }
+
+@media (max-width: 780px) {
+  .group-card .group-actions {
+    grid-column: 1 / -1;
+    grid-row: auto;
+    margin-top: 6px;
+  }
+}

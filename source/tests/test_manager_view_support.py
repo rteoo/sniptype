@@ -43,6 +43,16 @@ class ManagerWindowStateTests(unittest.TestCase):
     def test_maximized_needs_the_rectangle_it_returns_to(self):
         self.assertEqual({"page": "textos"}, normalize_manager_window({"maximized": True, "page": "textos"}))
 
+    def test_groups_and_legacy_mapping_pages_round_trip(self):
+        for page in ("grupos", "mapeamentos"):
+            with self.subTest(page=page):
+                self.assertEqual({"page": page}, normalize_manager_window({"page": page}))
+
+    def test_list_preferences_accept_only_known_modes(self):
+        modes = {"listOrder": "created", "listGrouping": "type"}
+        self.assertEqual(modes, normalize_manager_window(modes))
+        self.assertEqual({}, normalize_manager_window({"listOrder": [], "listGrouping": "unknown"}))
+
 
 class ManagerScrollAnchorNormalizationTests(unittest.TestCase):
     def test_bounded_stable_anchor_and_legacy_fraction_round_trip(self):

@@ -5,6 +5,7 @@ import "./styles/teo/windows-elements.css";
 import "./styles/teo/theme.css";
 import "./styles/app.css";
 import "./styles/manager-theme.css";
+import "./styles/groups.css";
 
 import { availableMonitors, getCurrentWindow, PhysicalPosition, PhysicalSize } from "@tauri-apps/api/window";
 
@@ -22,24 +23,13 @@ import {
 import { attachCompletion, type Candidate } from "./completion";
 import { h, icon } from "./dom";
 import { setLanguage, t } from "./i18n";
+import { fold, listSections, type Item, type ListGrouping, type ListOrder } from "./list-view";
 import { createRichEditor, type RichEditor, type Span, type Style } from "./richtext";
 import { chip, describeToken, libraryFrom, type TokenLibrary, withChips } from "./tokens";
 
 type Kind = "textos" | "mapeamentos";
-type Page = Kind | "dinamicos" | "backups" | "settings";
-
-/** One row of a collection: a static snippet, or an item of the selected mapping type. */
-interface Item {
-  name: string;
-  effectiveTrigger: string;
-  preview: string;
-  rich: boolean;
-  keys: boolean;
-  favorite: boolean;
-  group?: string | null;
-  enabled?: boolean;
-  shadowed?: boolean;
-}
+type Page = Kind | "grupos" | "dinamicos" | "backups" | "settings";
+type ReceiptPage = Kind | "grupos";
 
 /** A saved item as the editor opens it, metadata included (the list may be filtered). */
 interface Entry { name: string; text: string; rich: boolean; spans: Span[]; effectiveTrigger: string;
@@ -49,8 +39,8 @@ interface Entry { name: string; text: string; rich: boolean; spans: Span[]; effe
  * What an editor holds. `original` is the saved name it was opened from (null
  * for a new one); `type` is the mapping type a Mapeamentos draft belongs to.
  * `spans` are the text's styles (`savedSpans` as JSON, to compare); `rich`
- * says it has any. `favorite`, `groupId` and `effectiveTrigger` describe the saved item and
- * change at once, never as part of the draft. `formFrom` names the mapping
+ * says it has any. New texts hold organization and form choices until their
+ * first save. For saved items metadata edits apply immediately. `formFrom` names the mapping
  * item a Duplicar copy came from, whose form the first save carries over.
  */
 interface Draft {
@@ -65,6 +55,8 @@ interface Draft {
   savedSpans: string;
   favorite: boolean;
   groupId: string | null;
+  initialGroupId?: string | null;
+  fields?: FormFieldDef[];
   effectiveTrigger: string;
   formFrom?: string | null;
   /** Revision of the saved item the draft was opened at (null for a new one); saves send it as `base`. */
@@ -88,7 +80,7 @@ interface Source {
 }
 
 const listFilters = (): [ListFilter, string][] => [
-  ["all", t("Todos")], ["favorites", t("Favoritos")], ["recent", t("Recentes")], ["disabled", t("Desativados")],
+  ["all", t("Todos")], ["favorites", t("Favoritos")], ["recent", t("Recentes nesta sessão")], ["disabled", t("Desativados")],
   ["problems", t("Com problema")],
 ];
 // The group selector's value for snippets in no group (source/manager_bridge.py).
@@ -108,8 +100,9 @@ const state = {
   type: "_cpf_numbers",
   groups: [] as Group[],
   groupsReadOnly: false,
-  // Textos' view: a list filter and a group ("" for every group, UNGROUPED for none).
-  view: { filter: "all" as ListFilter, group: "" },
+  groupsReceipt: null as Receipt | null,
+  // A group filter of "" includes every group; UNGROUPED shows texts in none.
+  view: { filter: "all" as ListFilter, group: "", order: "trigger" as ListOrder, grouping: "none" as ListGrouping },
   cardStatus: {} as Record<string, { text: string; error: boolean }>,
   dynamics: { sections: [] as DynamicSection[], query: "", receipt: "" },
   settingsReceipt: "",
@@ -164,6 +157,9 @@ const sources: Record<Kind, Source> = {
       const answer = await request<SaveAnswer>("snippet.save", {
         trigger: draft.name, text: draft.text, spans: draft.spans, original: draft.original, confirmed,
         base: draft.revision,
+        ...(!draft.original && draft.groupId ? { groupId: draft.groupId } : {}),
+        ...(!draft.original && draft.favorite ? { favorite: true } : {}),
+        ...(!draft.original && draft.fields !== undefined ? { fields: draft.fields } : {}),
       });
       return answer.status === "saved" ? { status: "saved", name: answer.trigger, revision: answer.revision } : answer;
     },
@@ -464,6 +460,7 @@ async function refreshVisible(): Promise<void> {
     await refreshList(kind);
     await reconcileDraft(kind);
   }
+  else if (page === "grupos") await refreshGroups();
   else if (page === "dinamicos") await refreshDynamics();
   else if (page === "backups") await refreshBackups();
 }
@@ -481,20 +478,29 @@ async function refreshGroups(): Promise<void> {
   if (state.view.group && state.view.group !== UNGROUPED && !state.groups.some((group) => group.id === state.view.group)) {
     state.view.group = "";
   }
+  if (state.page === "grupos") renderGroups();
 }
 
 async function refreshList(kind: Kind): Promise<void> {
   // Both pages need the groups' read-only flag; Textos also needs the groups.
   if (kind === "mapeamentos") await refreshTypes();
   await refreshGroups();
-  const { items, total } = await sources[kind].list();
-  Object.assign(state.collections[kind], { items, total });
+  await refreshCollectionRows(kind);
   if (state.page === kind) {
-    renderList();
     renderTypeBar();
     renderViewBar();
     renderMeta();
   }
+}
+
+const listRequest = { textos: 0, mapeamentos: 0 };
+
+async function refreshCollectionRows(kind: Kind): Promise<void> {
+  const requestId = ++listRequest[kind];
+  const { items, total } = await sources[kind].list();
+  if (requestId !== listRequest[kind]) return;
+  Object.assign(state.collections[kind], { items, total });
+  if (state.page === kind) renderList();
 }
 
 function draftFrom(entry: Entry, type: string | null): Draft {
@@ -529,6 +535,7 @@ function isDirty(kind: Kind): boolean {
   const draft = state.collections[kind].draft;
   if (!draft) return false;
   return draft.name.trim() !== draft.savedName || draft.text !== draft.savedText
+    || (!draft.original && (draft.favorite || draft.groupId !== (draft.initialGroupId ?? null) || draft.fields !== undefined))
     || JSON.stringify(draft.spans) !== draft.savedSpans;
 }
 
@@ -629,6 +636,9 @@ async function newItem(kind: Kind): Promise<void> {
   const collection = state.collections[kind];
   const prefill = collection.query.trim();
   collection.draft = newDraft(kind === "mapeamentos" ? state.type : null, prefill);
+  if (kind === "textos" && !state.groupsReadOnly && state.groups.some((g) => g.id === state.view.group)) {
+    collection.draft.initialGroupId = collection.draft.groupId = state.view.group;
+  }
   renderList();
   renderDetail();
   document.getElementById(prefill ? "text" : "name")?.focus();
@@ -668,7 +678,7 @@ async function saveDraft(kind: Kind, confirmed: SaveCheck[] = []): Promise<boole
   }
   Object.assign(draft, {
     original: answer.name, name: answer.name, savedName: answer.name, savedText: draft.text,
-    savedSpans: JSON.stringify(draft.spans), formFrom: null, revision: answer.revision,
+    savedSpans: JSON.stringify(draft.spans), formFrom: null, fields: undefined, revision: answer.revision,
   });
   const shown = kind === "textos" ? answer.name : t("{name} em {type}", { name: answer.name, type: typeLabel(draft.type) });
   showReceipt(kind, { text: t("Salvo às {time} · {name}", { time: clock(), name: shown }) });
@@ -716,10 +726,14 @@ async function deleteCurrent(kind: Kind): Promise<void> {
   renderDetail();
 }
 
-// Favorito and Grupo apply at once, like the classic manager; the draft stays as typed.
 async function setFavorite(kind: Kind, favorite: boolean): Promise<void> {
   const draft = state.collections[kind].draft;
-  if (!draft?.original) return;
+  if (!draft) return;
+  if (!draft.original) {
+    draft.favorite = favorite;
+    renderMeta();
+    return;
+  }
   try {
     await sources[kind].setFavorite(draft, favorite);
     draft.favorite = favorite;
@@ -731,7 +745,12 @@ async function setFavorite(kind: Kind, favorite: boolean): Promise<void> {
 
 async function setGroup(group: string): Promise<void> {
   const draft = state.collections.textos.draft;
-  if (!draft?.original) return;
+  if (!draft) return;
+  if (!draft.original) {
+    draft.groupId = group || null;
+    renderMeta();
+    return;
+  }
   try {
     await request("snippet.setGroup", { trigger: draft.original, group });
   } catch (error) {
@@ -829,7 +848,10 @@ async function renameCurrent(): Promise<void> {
 
 async function setView(change: Partial<typeof state.view>): Promise<void> {
   Object.assign(state.view, change);
-  await refreshList("textos");
+  if (change.order !== undefined || change.grouping !== undefined) scheduleWindowSave();
+  if (change.filter !== undefined || change.group !== undefined) await refreshList("textos");
+  else if (change.order === "used") await refreshCollectionRows("textos");
+  else if (state.page === "textos") renderList();
 }
 
 /** Novo grupo (no id) and Editar grupo. */
@@ -872,12 +894,11 @@ async function groupDialog(id: string | null): Promise<void> {
   });
   if (saved === null) return;
   const { label } = saved as { id: string; label: string };
-  await reloadEntry("textos");
-  await refreshList("textos");
-  showReceipt("textos", {
+  showReceipt("grupos", {
     text: id ? t("Grupo atualizado às {time} · {name}", { time: clock(), name: label })
       : t("Grupo criado às {time} · {name}", { time: clock(), name: label }),
   });
+  await refreshAfterGroupChange();
 }
 
 /** Excluir grupo asks nothing: its snippets stay, in no group, and Desfazer brings both back. */
@@ -890,9 +911,7 @@ async function deleteGroup(id: string): Promise<void> {
     return;
   }
   if (state.view.group === id) state.view.group = "";
-  await reloadEntry("textos");
-  await refreshList("textos");
-  showReceipt("textos", {
+  showReceipt("grupos", {
     text: t("Excluído às {time} · {name}", { time: clock(), name: answer.label }),
     undo: async () => {
       try {
@@ -901,11 +920,17 @@ async function deleteGroup(id: string): Promise<void> {
         await alertError(t("Desfazer exclusão"), error);
         return;
       }
-      await reloadEntry("textos");
-      await refreshList("textos");
-      showReceipt("textos", { text: t("Restaurado às {time} · {name}", { time: clock(), name: answer.label }) });
+      showReceipt("grupos", { text: t("Restaurado às {time} · {name}", { time: clock(), name: answer.label }) });
+      await refreshAfterGroupChange();
     },
   });
+  await refreshAfterGroupChange();
+}
+
+async function refreshAfterGroupChange(): Promise<void> {
+  // A group can change an open text's effective trigger without changing its draft.
+  await reloadEntry("textos");
+  await refreshList("textos").catch((error) => alertError(t("Grupos"), error));
 }
 
 async function switchType(key: string): Promise<void> {
@@ -1002,32 +1027,37 @@ async function setSetting(card: string, key: string, value: unknown): Promise<vo
 // ---------------------------------------------------------------------------
 // Receipts: the status line under each list, with Desfazer when it applies.
 
-const receiptTimers: Record<Kind, number> = { textos: 0, mapeamentos: 0 };
+const receiptTimers: Record<ReceiptPage, number> = { textos: 0, mapeamentos: 0, grupos: 0 };
 
-function showReceipt(kind: Kind, receipt: Receipt): void {
-  state.collections[kind].receipt = receipt;
-  window.clearTimeout(receiptTimers[kind]);
+function showReceipt(page: ReceiptPage, receipt: Receipt): void {
+  if (page === "grupos") state.groupsReceipt = receipt;
+  else state.collections[page].receipt = receipt;
+  window.clearTimeout(receiptTimers[page]);
   // An undo stays offered for a while; afterwards the line keeps only the fact.
-  if (receipt.undo) receiptTimers[kind] = window.setTimeout(() => showReceipt(kind, { text: receipt.text }), 15_000);
-  if (state.page === kind) renderReceipt();
+  if (receipt.undo) receiptTimers[page] = window.setTimeout(() => showReceipt(page, { text: receipt.text }), 15_000);
+  if (state.page === page) renderReceipt();
 }
 
 function renderReceipt(): void {
   const host = refs.receipt;
-  const kind = activeKind();
-  if (!host || !kind) return;
-  const receipt = state.collections[kind].receipt;
+  const page = state.page;
+  if (!host || (page !== "grupos" && !isKind(page))) return;
+  const receipt = page === "grupos" ? state.groupsReceipt : state.collections[page].receipt;
+  const undoHadFocus = host.contains(document.activeElement);
   host.replaceChildren(
     ...(receipt ? [h("span", {}, receipt.text)] : []),
     ...(receipt?.undo ? [h("button", {
       type: "button",
       onclick: () => {
         const undo = receipt.undo!;
-        showReceipt(kind, { text: receipt.text });
+        showReceipt(page, { text: receipt.text });
         void undo();
       },
     }, t("Desfazer"))] : []),
   );
+  if (page === "grupos" && undoHadFocus) {
+    (host.querySelector("button") ?? document.getElementById("groups-title"))?.focus();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1045,16 +1075,18 @@ function renderAll(): void {
   refs.infobar = h("div", { class: "infobar", role: "region", "aria-label": t("Avisos") });
   const kind = activeKind();
   const page = h("main", { class: "page" }, refs.infobar,
-    kind ? collectionPage(kind) : state.page === "dinamicos" ? dynamicsPage()
+    kind ? collectionPage(kind) : state.page === "grupos" ? groupsPage()
+      : state.page === "dinamicos" ? dynamicsPage()
       : state.page === "backups" ? backupsPage() : settingsPage());
 
   root.replaceChildren(h("div", { class: "app" },
     h("nav", { class: "navigation", "aria-label": t("Seções") },
       h("div", { class: "brand" }, icon("document"), h("span", {}, "SnipType")),
       navButton("textos", "library", t("Textos")),
-      state.info?.legacyMappings ? navButton("mapeamentos", "mapping", t("Mapeamentos antigos")) : null,
+      navButton("grupos", "groups", t("Grupos")),
       navButton("dinamicos", "dynamic", t("Dinâmicos")),
       navButton("backups", "backup", t("Backups")),
+      state.info?.legacyMappings ? navButton("mapeamentos", "mapping", t("Mapeamentos antigos")) : null,
       refs.status = h("div", { class: "expansion", role: "group", "aria-label": t("Expansão") }),
       navButton("settings", "settings", t("Configurações")),
       h("p", { class: "version" }, state.info ? `${state.info.version} · ${state.info.channel}` : ""),
@@ -1068,6 +1100,9 @@ function renderAll(): void {
     renderViewBar();
     renderList();
     renderDetail();
+    renderReceipt();
+  } else if (state.page === "grupos") {
+    renderGroups();
     renderReceipt();
   } else if (state.page === "dinamicos") {
     renderDynamics();
@@ -1087,11 +1122,73 @@ async function showPage(page: Page): Promise<void> {
     refs.search?.focus();
     await refreshList(page).catch((error) => console.error("refresh failed", error));
     await reconcileDraft(page).catch((error) => console.error("reconcile failed", error));
+  } else if (page === "grupos") {
+    document.getElementById("groups-title")?.focus();
+    await refreshGroups().catch((error) => alertError(t("Grupos"), error));
   } else if (page === "dinamicos") {
     refs.search?.focus();
     await refreshDynamics().catch((error) => console.error("refresh failed", error));
   } else if (page === "backups") {
     await refreshBackups().catch((error) => console.error("refresh failed", error));
+  }
+}
+
+function groupsPage(): HTMLElement {
+  refs.receipt = h("div", { class: "receipt", role: "status", "aria-live": "polite" });
+  return h("div", { class: "settings-page groups-page" },
+    h("header", {},
+      h("h1", { id: "groups-title", tabindex: -1 }, t("Grupos")),
+      h("button", { id: "groups-add", type: "button", class: "primary",
+        onclick: () => void groupDialog(null) }, icon("plus"), t("Novo grupo…")),
+    ),
+    refs.receipt,
+    h("p", { id: "groups-readonly", class: "muted", role: "status" }, readOnlyMessage()),
+    h("div", { id: "groups-list" }),
+  );
+}
+
+function renderGroups(): void {
+  const host = document.getElementById("groups-list");
+  if (!host) return;
+  const add = document.querySelector<HTMLButtonElement>("#groups-add")!;
+  const note = document.getElementById("groups-readonly")!;
+  add.disabled = state.groupsReadOnly;
+  note.hidden = !state.groupsReadOnly;
+  const active = document.activeElement;
+  const previous = active instanceof HTMLButtonElement && host.contains(active) ? active.dataset : null;
+  const rows = state.groups.map((group, index) => {
+    const headingId = `group-name-${index}`;
+    const button = (action: string, label: string, run: () => void, disabled = false) => {
+      const id = `group-${action}-${index}`;
+      return h("button", { id, type: "button", class: "el-button", disabled,
+        "aria-labelledby": `${id} ${headingId}`, "data-group": group.id, "data-action": action, onclick: run,
+      }, label);
+    };
+    return h("li", { class: "card group-card" },
+      h("h2", { id: headingId }, group.label),
+      h("p", { class: "group-summary" },
+        h("span", {}, group.enabled ? t("Grupo ativo") : t("Grupo desativado")),
+        h("span", {}, group.count === 1 ? t("1 texto") : t("{count} textos", { count: group.count })),
+        group.prefix ? h("span", {}, t("Prefixo do trigger"), " ", h("code", {}, group.prefix)) : null,
+      ),
+      h("div", { class: "control group-actions" },
+        button("view", t("Ver textos"), () => {
+          state.view.filter = "all";
+          state.view.group = group.id;
+          state.collections.textos.query = "";
+          void showPage("textos");
+        }),
+        button("edit", t("Editar grupo…"), () => void groupDialog(group.id), state.groupsReadOnly),
+        button("delete", t("Excluir grupo"), () => void deleteGroup(group.id), state.groupsReadOnly),
+      ),
+    );
+  });
+  host.replaceChildren(rows.length ? h("ul", { class: "cards group-cards" }, ...rows)
+    : h("p", { class: "empty-list" }, t("Nenhum grupo.")));
+  if (previous) {
+    const replacement = [...host.querySelectorAll("button")].find((control) =>
+      control.dataset.group === previous.group && control.dataset.action === previous.action && !control.disabled);
+    (replacement ?? document.getElementById("groups-title"))?.focus();
   }
 }
 
@@ -1263,22 +1360,22 @@ function collectionPage(kind: Kind): HTMLElement {
   });
   const title = textos ? t("Textos") : t("Mapeamentos antigos");
   refs.items = h("div", { class: "items", role: "listbox", "aria-label": title, onkeydown: onListKey });
-  refs.count = h("span");
+  refs.count = h("span", { "aria-live": "polite", "aria-atomic": "true" });
   refs.receipt = h("div", { class: "receipt", role: "status", "aria-live": "polite" });
   refs.detail = h("section", { class: "detail", "aria-label": t("Editor") });
   typeBar.host = textos ? null : h("div", { class: "type-bar" });
-  refs.viewBar = textos ? h("div", { class: "type-bar" }) : null;
+  refs.viewBar = textos ? h("div", { class: "list-controls" }) : null;
 
   return h("div", { class: "textos" },
-    h("section", { class: "collection", "aria-labelledby": "collection-title" },
+    h("section", { class: textos ? "collection text-collection" : "collection", "aria-labelledby": "collection-title" },
       h("div", { class: "heading" },
         h("h1", { id: "collection-title" }, title),
         h("button", { type: "button", class: "primary", title: "Ctrl+N", onclick: () => void newItem(kind) },
           icon("plus"), textos ? t("Novo") : t("Novo item")),
       ),
       typeBar.host,
-      refs.viewBar,
       h("div", { class: "search" }, icon("search"), refs.search),
+      refs.viewBar,
       h("p", { class: "list-caption" }, h("span", {}, textos ? t("Trigger") : t("Identificador")), refs.count),
       refs.items,
       refs.receipt,
@@ -1307,63 +1404,61 @@ function renderTypeBar(): void {
   );
 }
 
-/** Textos' Exibir and Grupo filters, and the Grupos menu beside them. */
 function renderViewBar(): void {
   const host = refs.viewBar;
   if (!host) return;
-  const selected = state.groups.find((group) => group.id === state.view.group);
+  const active = document.activeElement;
+  const focused = active instanceof HTMLSelectElement && host.contains(active) ? active.name : null;
+  const select = <K extends keyof typeof state.view>(key: K, label: string,
+    choices: [value: (typeof state.view)[K], label: string][]) =>
+    h("label", { class: "list-control" }, h("span", {}, label), h("select", {
+      name: key, class: "field",
+      onchange: (event: Event) => {
+        const value = (event.target as HTMLSelectElement).value;
+        void setView({ [key]: value }).catch((error) => alertError(label, error));
+      },
+    }, ...choices.map(([value, option]) => h("option", { value, selected: value === state.view[key] }, option))));
+
   host.replaceChildren(
-    h("select", {
-      class: "field", "aria-label": t("Exibir"),
-      onchange: (event: Event) => void setView({ filter: (event.target as HTMLSelectElement).value as ListFilter }),
-    }, ...listFilters().map(([value, label]) => h("option", { value, selected: value === state.view.filter }, label))),
-    h("select", {
-      class: "field", "aria-label": t("Filtrar por grupo"),
-      onchange: (event: Event) => void setView({ group: (event.target as HTMLSelectElement).value }),
-    },
-    h("option", { value: "", selected: state.view.group === "" }, t("Todos os grupos")),
-    h("option", { value: UNGROUPED, selected: state.view.group === UNGROUPED }, t("Sem grupo")),
-    ...state.groups.map((group) => h("option", { value: group.id, selected: group.id === state.view.group },
-      group.enabled ? group.label : t("{name} (desativado)", { name: group.label })))),
-    menuButton(t("Grupos"), () => [
-      { label: t("Novo grupo…"), run: () => void groupDialog(null) },
-      { label: t("Editar grupo…"), disabled: !selected, run: () => void groupDialog(selected!.id) },
-      { label: t("Excluir grupo"), disabled: !selected, run: () => void deleteGroup(selected!.id) },
-    ], {
-      disabled: state.groupsReadOnly,
-      title: state.groupsReadOnly ? readOnlyMessage()
-        : selected ? undefined : t("Escolha um grupo no filtro para editar ou excluir."),
-    }),
+    select("filter", t("Exibir"), listFilters()),
+    select("group", t("Filtrar por grupo"), [
+      ["", t("Todos os grupos")], [UNGROUPED, t("Sem grupo")],
+      ...state.groups.map((group): [string, string] => [
+        group.id, group.enabled ? group.label : t("{name} (desativado)", { name: group.label }),
+      ]),
+    ]),
+    select("order", t("Ordenar por"), [
+      ["trigger", t("Trigger (A–Z)")], ["text", t("Texto (A–Z)")],
+      ["created", t("Criação recente")], ["used", t("Uso recente")],
+    ]),
+    select("grouping", t("Agrupar por"), [
+      ["none", t("Sem agrupamento")], ["group", t("Grupo")],
+      ["favorite", t("Favorito")], ["type", t("Tipo")],
+    ]),
   );
+  if (focused) host.querySelector<HTMLElement>(`select[name="${focused}"]`)?.focus({ preventScroll: true });
 }
 
-function fold(text: string): string {
-  return text.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
-}
-
-/** Name prefix first, then name substring, then text matches. */
-function visibleItems(kind: Kind): Item[] {
+function collectionSections(kind: Kind): ReturnType<typeof listSections> {
   const { items, query } = state.collections[kind];
-  const needle = fold(query.trim());
-  if (!needle) return items;
-  const ranked: [number, Item][] = [];
-  for (const item of items) {
-    const name = fold(item.name);
-    const rank = name.startsWith(needle) ? 0 : name.includes(needle) ? 1
-      : fold(item.preview).includes(needle) ? 2 : -1;
-    if (rank >= 0) ranked.push([rank, item]);
-  }
-  return ranked.sort((a, b) => a[0] - b[0]).map(([, item]) => item);
+  return listSections(items, query, kind === "textos"
+    ? { order: state.view.order, grouping: state.view.grouping, language: state.info?.language ?? "pt-BR" }
+    : undefined);
+}
+
+function visibleItems(kind: Kind): Item[] {
+  return collectionSections(kind).flatMap((section) => section.items);
 }
 
 /** Oculto pelo filtro atual: the open item is saved but the list's search or view hides it. */
-function renderHiddenNote(): void {
+function renderHiddenNote(items?: Item[]): void {
   const host = refs.hiddenNote;
   const kind = activeKind();
   if (!host || !kind) return;
   const draft = state.collections[kind].draft;
   const shown = !!draft?.original && (kind === "textos" || draft.type === state.type)
-    && !visibleItems(kind).some((item) => item.name === draft.original);
+    && !(items ?? visibleItems(kind)).some((item) => item.name === draft.original);
+  if (host.hidden === !shown) return;
   host.hidden = !shown;
   host.replaceChildren(...(shown ? [
     h("span", {}, t("Oculto pelo filtro atual.")),
@@ -1389,18 +1484,24 @@ function renderList(): void {
   const host = refs.items;
   const kind = activeKind();
   if (!host || !kind) return;
-  renderHiddenNote();
+  const active = document.activeElement;
+  const focusedName = active instanceof HTMLElement && host.contains(active) ? active.dataset.name : undefined;
   const collection = state.collections[kind];
   const textos = kind === "textos";
-  const items = visibleItems(kind);
+  const sections = collectionSections(kind);
+  const items = sections.flatMap((section) => section.items);
+  renderHiddenNote(items);
   const draft = collection.draft;
   const current = draft && (textos || draft.type === state.type) ? draft.original : null;
   const narrowed = textos && viewActive();
-  refs.count!.textContent = collection.query.trim() || narrowed
+  const count = collection.query.trim() || narrowed
     ? t("{shown} de {total}", { shown: items.length, total: collection.total })
     : textos ? t("{total} textos", { total: collection.total })
     : t("{total} itens", { total: collection.total });
+  if (refs.count!.textContent !== count) refs.count!.textContent = count;
   if (!items.length) {
+    host.setAttribute("role", "group");
+    if (focusedName) refs.search?.focus({ preventScroll: true });
     if (narrowed && !collection.query.trim()) {
       host.replaceChildren(h("div", { class: "empty-list" },
         h("p", {}, t("Nenhum texto nesta visualização.")),
@@ -1418,10 +1519,16 @@ function renderList(): void {
       offerImport ? h("button", { type: "button", class: "el-button", onclick: () => importLibrary() }, t("Importar…")) : null));
     return;
   }
-  // One Tab stop for the whole list: the open item, else the first one.
-  const tabStop = items.some((item) => item.name === current) ? current : items[0].name;
+  host.setAttribute("role", "listbox");
+  const focusedItem = items.find((item) => item.name === focusedName);
+  // One Tab stop for the whole list: the focused row, then the editor's row, then the first.
+  const tabStop = focusedItem?.name ?? items.find((item) => item.name === current)?.name ?? items[0].name;
+  const sectionLabels = {
+    ungrouped: t("Sem grupo"), favorite: t("Favoritos"), other: t("Sem favorito"),
+    plain: t("Texto simples"), rich: t("Texto formatado"), form: t("Com formulário"), keys: t("Com teclas"),
+  };
   // ceiling: renders every row; virtualize if libraries beyond ~5k snippets feel slow.
-  host.replaceChildren(...items.map((item) => h("button", {
+  const row = (item: Item) => h("button", {
     type: "button", class: "item", role: "option", "data-name": item.name,
     "aria-selected": item.name === current ? "true" : "false", tabindex: item.name === tabStop ? "0" : "-1",
     "aria-label": itemLabel(item),
@@ -1432,15 +1539,27 @@ function renderList(): void {
   h("span", { class: "badges" },
     item.favorite ? icon("favorite") : null,
     item.rich ? h("span", { class: "el-badge" }, t("formatado")) : null,
+    item.form ? h("span", { class: "el-badge" }, t("Formulário")) : null,
     item.keys ? h("span", { class: "el-badge", title: t("Pressiona Enter ou Tab ao expandir.") },
       icon("bi-keyboard"), t("teclas")) : null,
     item.shadowed ? h("span", { class: "el-badge", title: t("Um snippet dinâmico usa este trigger e tem prioridade.") },
       t("sombreado")) : null,
-    item.group ? h("span", { class: "el-badge" }, item.group) : null,
+    item.group && state.view.grouping !== "group"
+      ? h("span", { class: "el-badge", title: item.group }, item.group) : null,
     item.enabled === false ? h("span", { class: "el-badge" }, t("desativado")) : null,
   ),
-  h("span", { class: "preview" }, ...(item.preview ? withChips(item.preview, tokenLibrary) : ["—"])))));
-  host.querySelector<HTMLElement>(".item[aria-selected=true]")?.scrollIntoView({ block: "nearest" });
+  h("span", { class: "preview" }, ...(item.preview ? withChips(item.preview, tokenLibrary) : ["—"])));
+
+  host.replaceChildren(...sections.flatMap<HTMLElement>(({ title, items }) => {
+    const rows = items.map(row);
+    if (!title) return rows;
+    const label = title.kind === "group" ? title.label ?? t("Grupo") : sectionLabels[title.kind];
+    return [h("div", { class: "item-group", role: "group", "aria-label": label },
+      h("div", { class: "item-group-heading", "aria-hidden": "true" }, h("span", {}, label), h("span", {}, String(items.length))),
+      ...rows)];
+  }));
+  if (focusedName) host.querySelector<HTMLElement>(".item[tabindex='0']")?.focus();
+  else host.querySelector<HTMLElement>(".item[aria-selected=true]")?.scrollIntoView({ block: "nearest" });
 }
 
 /** What a screen reader says for a row: its trigger, its badges in words, then its text. */
@@ -1450,6 +1569,7 @@ function itemLabel(item: Item): string {
     trigger,
     item.favorite ? t("favorito") : "",
     item.rich ? t("formatado") : "",
+    item.form ? t("Com formulário") : "",
     item.keys ? t("teclas") : "",
     item.shadowed ? t("sombreado") : "",
     item.group ?? "",
@@ -1462,11 +1582,17 @@ function onListKey(event: KeyboardEvent): void {
   const target = event.target as HTMLElement;
   const kind = activeKind();
   if (!kind || !target.classList.contains("item")) return;
-  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+  if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
     event.preventDefault();
-    const sibling = event.key === "ArrowDown" ? target.nextElementSibling : target.previousElementSibling;
-    if (sibling instanceof HTMLElement) sibling.focus();
-    else if (event.key === "ArrowUp") refs.search?.focus();
+    const rows = [...(refs.items?.querySelectorAll<HTMLElement>(".item") ?? [])];
+    const index = rows.indexOf(target);
+    const next = event.key === "Home" ? rows[0] : event.key === "End" ? rows[rows.length - 1]
+      : rows[index + (event.key === "ArrowDown" ? 1 : -1)];
+    if (next) {
+      refs.items?.querySelector<HTMLElement>(".item[tabindex='0']")?.setAttribute("tabindex", "-1");
+      next.tabIndex = 0;
+      next.focus();
+    } else if (event.key === "ArrowUp") refs.search?.focus();
   } else if (event.key === "Delete" && target.getAttribute("aria-selected") === "true") {
     event.preventDefault();
     void deleteCurrent(kind);
@@ -1484,8 +1610,9 @@ function updateSaveState(): void {
     refs.saveState.classList.toggle("dirty", dirty);
   }
   if (refs.effective && draft && kind === "textos") {
-    refs.effective.textContent = draft.original && draft.effectiveTrigger !== draft.original
-      ? t("Com o prefixo do grupo, digite {trigger} para expandir.", { trigger: draft.effectiveTrigger })
+    const prefix = state.groups.find((group) => group.id === draft.groupId)?.prefix;
+    refs.effective.textContent = prefix && draft.name.trim()
+      ? t("Com o prefixo do grupo, digite {trigger} para expandir.", { trigger: prefix + draft.name.trim() })
       : t("O que você digita para expandir. Triggers com '_' são reservados.");
   } else if (refs.effective && draft) {
     const prefix = state.types.find((type) => type.key === draft.type)?.prefix ?? "";
@@ -1816,7 +1943,7 @@ function renderDetail(): void {
     : draft.original ? t("{name} em {type}", { name: draft.original, type: typeLabel(draft.type) })
     : t("Novo item em {type}", { type: typeLabel(draft.type) });
 
-  refs.meta = draft.original ? h("div", { class: "meta-row" }) : null;
+  refs.meta = textos || draft.original ? h("div", { class: "meta-row" }) : null;
   const formatHint = h("span", { class: "hint", "aria-live": "polite" });
   // Only a saved snippet can be named by a variable; its own name is not offered to it.
   const exclude = textos ? draft.original : null;
@@ -1872,12 +1999,12 @@ function renderDetail(): void {
   renderHiddenNote();
 }
 
-/** The saved item's Grupo and Favorito, redrawn in place so the draft's fields keep focus and caret. */
+/** Redraw organization controls without disturbing the text editor's selection. */
 function renderMeta(): void {
   const host = refs.meta;
   const kind = activeKind();
   const draft = kind ? state.collections[kind].draft : null;
-  if (!host || !kind || !draft?.original) return;
+  if (!host || !kind || !draft) return;
   const locked = state.groupsReadOnly;
   const title = locked ? readOnlyMessage() : undefined;
   const group = kind === "textos" ? h("label", { class: "inline" },
@@ -1936,15 +2063,16 @@ function retype(field: FormFieldDef, type: string, dateFormat: string): void {
 
 async function editForm(kind: Kind): Promise<void> {
   const draft = state.collections[kind].draft;
-  if (!draft?.original) return;
+  if (!draft) return;
+  const creating = draft.original === null;
   let info: FormInfo;
   try {
-    info = await request<FormInfo>("form.get", formTarget(kind, draft));
+    info = await request<FormInfo>("form.get", creating ? { text: draft.text } : formTarget(kind, draft));
   } catch (error) {
     await alertError(t("Formulário"), error);
     return;
   }
-  const fields: FormFieldDef[] = info.fields.map((field) => ({ ...field, options: field.options ? [...field.options] : undefined }));
+  const fields: FormFieldDef[] = structuredClone(draft.fields ?? info.fields);
   let selected = fields.length ? 0 : -1;
   const list = h("div", { class: "field-list", role: "listbox", "aria-label": t("Campos do formulário") });
   const editor = h("div", { class: "field-editor" });
@@ -2034,9 +2162,13 @@ async function editForm(kind: Kind): Promise<void> {
       onsubmit: async (event: Event) => {
         event.preventDefault();
         submit.disabled = true;
-        let answer: FormSaveAnswer;
+        let answer: FormSaveAnswer | { status: "valid"; fields: FormFieldDef[] };
         try {
-          answer = await request<FormSaveAnswer>("form.save", { ...formTarget(kind, draft), fields: fields.map(storedField) });
+          const values = fields.map(storedField);
+          answer = creating
+            ? await request<{ status: "valid"; fields: FormFieldDef[] } | Extract<FormSaveAnswer, { status: "invalid" }>>(
+              "form.validate", { text: draft.text, fields: values })
+            : await request<FormSaveAnswer>("form.save", { ...formTarget(kind, draft), fields: values });
         } catch (failure) {
           error.textContent = errorText(failure);
           submit.disabled = false;
@@ -2052,11 +2184,12 @@ async function editForm(kind: Kind): Promise<void> {
           }
           return;
         }
+        if (answer.status === "valid") draft.fields = answer.fields;
         saved = true;
         dialog.close();
       },
     },
-    h("h2", { id: "dialog-title" }, t("Formulário — {name}", { name: draft.original })),
+    h("h2", { id: "dialog-title" }, t("Formulário — {name}", { name: draft.original ?? (draft.name.trim() || t("Novo texto")) })),
     info.variables.length
       ? h("p", { class: "muted chips" }, t("Campos que o texto pede:"), " ",
         ...info.variables.map((name) => chip(`%%${name}%%`, describeToken(name, tokenLibrary))))
@@ -2097,7 +2230,10 @@ async function editForm(kind: Kind): Promise<void> {
     dialog.addEventListener("close", () => resolve());
     openDialog(dialog, list.querySelector("button") ?? submit);
   });
-  if (saved) showReceipt(kind, { text: t("Formulário salvo às {time} · {name}", { time: clock(), name: draft.original }) });
+  if (saved && creating) updateSaveState();
+  else if (saved && draft.original) showReceipt(kind, {
+    text: t("Formulário salvo às {time} · {name}", { time: clock(), name: draft.original }),
+  });
 }
 
 /** Prévia: the editor's text as expansion would type it, fields at their defaults. */
@@ -2106,7 +2242,7 @@ async function showPreview(kind: Kind): Promise<void> {
   if (!draft) return;
   // The editor's text, unsaved edits included; formatting does not change what is typed.
   const params = { ...(draft.original ? formTarget(kind, draft) : kind === "mapeamentos" ? { type: draft.type } : {}),
-    text: draft.text };
+    text: draft.text, fields: draft.fields };
   let preview: Preview;
   try {
     preview = await request<Preview>("preview.get", params);
@@ -2282,6 +2418,7 @@ function backupsReceipt(text: string): void {
 function pageReceipt(text: string): void {
   const kind = activeKind();
   if (kind) showReceipt(kind, { text });
+  else if (state.page === "grupos") showReceipt("grupos", { text });
   else if (state.page === "dinamicos") dynamicsReceipt(text);
   else if (state.page === "settings") settingsReceipt(text);
   else backupsReceipt(text);
@@ -2645,7 +2782,7 @@ document.addEventListener("keydown", (event) => {
   // Keys every page answers: the switcher, Editar último, the sections, the shortcut sheet.
   if (ctrl && !event.altKey && !event.shiftKey) {
     const page = availablePages()[Number(event.key) - 1];
-    if (/^[1-5]$/.test(event.key) && page) {
+    if (/^[1-6]$/.test(event.key) && page) {
       event.preventDefault();
       void showPage(page);
       return;
@@ -2874,7 +3011,7 @@ async function escapeEditor(kind: Kind): Promise<void> {
   renderDetail();
 }
 
-const PAGES: Page[] = ["textos", "mapeamentos", "dinamicos", "backups", "settings"];
+const PAGES: Page[] = ["textos", "grupos", "dinamicos", "backups", "mapeamentos", "settings"];
 
 function availablePages(): Page[] {
   return state.info?.legacyMappings ? PAGES : PAGES.filter((page) => page !== "mapeamentos");
@@ -2887,10 +3024,20 @@ async function onAppEvent({ event: name, text }: AppEvent): Promise<void> {
   } else if (name === "target") {
     await takeTarget();
   } else if (name === "state") {
-    await refreshInfo().catch((error) => console.error("refresh failed", error));
+    try {
+      await refreshInfo();
+      if (state.page === "textos" && (state.view.order === "used" || state.view.filter === "recent")) {
+        await refreshCollectionRows("textos");
+      }
+    } catch (error) {
+      console.error("refresh failed", error);
+    }
   } else if (name === "library") {
     // The app pushes this after a reload or a restore: a Desfazer receipt described the library that was there.
     for (const kind of ["textos", "mapeamentos"] as Kind[]) state.collections[kind].receipt = null;
+    window.clearTimeout(receiptTimers.grupos);
+    state.groupsReceipt = null;
+    if (state.page === "grupos") renderReceipt();
     await refreshVisible().catch((error) => console.error("refresh failed", error));
     await loadTokenLibrary();
   } else if (name === "receipt" && text) {
@@ -2940,7 +3087,8 @@ async function saveWindow(): Promise<void> {
     normalRect = { x: position.x, y: position.y, width: size.width, height: size.height };
   }
   // A window maximized from the start keeps the default rectangle it would return to.
-  const value: WindowState = { ...(normalRect ?? {}), page: state.page };
+  const value: WindowState = { ...(normalRect ?? {}), page: state.page,
+    listOrder: state.view.order, listGrouping: state.view.grouping };
   if (normalRect) value.maximized = maximized;
   await request("window.save", { value });
 }
@@ -2958,6 +3106,8 @@ async function main(): Promise<void> {
   await startBridge((event) => void onAppEvent(event));
   try {
     await refreshInfo();
+    state.view.order = state.info?.window.listOrder ?? "trigger";
+    state.view.grouping = state.info?.window.listGrouping ?? "none";
     await refreshList("textos");
   } catch (error) {
     root.replaceChildren(h("div", { class: "fatal", role: "alert" },
@@ -2983,7 +3133,8 @@ async function main(): Promise<void> {
   const savedPage = state.info?.window.page as Page | undefined;
   if (savedPage && savedPage !== state.page) await showPage(savedPage);
   renderAll();
-  refs.search?.focus();
+  if (state.page === "grupos") document.getElementById("groups-title")?.focus();
+  else refs.search?.focus();
   void loadTokenLibrary();
   await takeTarget().catch((error) => console.error("target failed", error));
 }

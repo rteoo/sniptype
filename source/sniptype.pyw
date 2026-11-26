@@ -62,7 +62,9 @@ from library_metadata import (
     build_library_document,
     mapping_item_metadata,
     merge_metadata,
+    new_static_tracking,
     normalize_metadata,
+    restore_static_item_metadata,
     split_library_document,
     static_item_metadata,
 )
@@ -108,7 +110,7 @@ from app_paths import (
 )
 from settings_support import load_settings, normalize_runtime_settings, save_settings
 from hotkey_support import ACTIONS, HotkeyRouter, display_hotkey, normalize_hotkeys
-from workflow_support import SnippetRef, WorkflowState
+from workflow_support import SnippetRef, WorkflowState, static_usage_id
 from validation_support import validate_trigger
 import health_support
 import i18n
@@ -149,7 +151,8 @@ from dynamic_registry import (
     reference_entries_by_category,
     validate_rename,
 )
-from group_policy import validate_effective_triggers
+from group_policy import effective_trigger as static_effective_trigger
+from group_policy import get_static_item_metadata, validate_effective_triggers
 from sync_export import (
     EXPORT_FAILED,
     EXPORT_UNAVAILABLE,
@@ -518,7 +521,9 @@ class Sniptype:
         self.settings, invalid_runtime_settings = normalize_runtime_settings(
             load_settings(self.settings_file)
         )
-        self.workflow_state = WorkflowState()
+        self.workflow_state = WorkflowState(
+            usage_file=os.path.join(self.data_dir, "snippet_usage.json"), logger=self.logger,
+        )
         self.hotkey_router = HotkeyRouter(
             self.settings.get("hotkeys", {}),
             self._dispatch_hotkey_action,
@@ -1977,19 +1982,28 @@ class Sniptype:
             dynamic_identities=dynamic_identities,
         )
 
-    def _validate_trigger_warnings(self, trigger):
+    def _validate_trigger_warnings(self, trigger, *, metadata=None):
         """Return save-time warnings for a proposed static trigger."""
+        stored_key = trigger
+        snippets = self.snippets if metadata is None else self._manager_static_projection()
         static_triggers = {
-            key for key, value in self.snippets.items()
-            if not key.startswith("_") and not callable(value)
+            static_effective_trigger(key, metadata) if metadata is not None else key
+            for key, value in snippets.items()
+            if key != trigger and not key.startswith("_") and not callable(value)
         }
+        if metadata is not None:
+            trigger = static_effective_trigger(trigger, metadata)
         composed = composed_mapping_triggers(self.snippets)
         # Mapping entries remain in the ordinary trigger set for prefix/suffix
         # warnings. They are not runtime callables in ``self.snippets``: a
         # direct static entry wins an exact collision, so the generic dynamic
         # warning (which claims dynamic priority) would be false here.
         dynamic_names = {key for key, value in self.snippets.items() if callable(value)}
-        existing = (static_triggers - {trigger}) | composed
+        if stored_key in dynamic_names:
+            # A runtime provider shadows the stored key before group prefixes
+            # reach the trigger index. Keep the warning for a prefixed draft.
+            dynamic_names.add(trigger)
+        existing = static_triggers | composed
         warnings = validate_trigger(trigger, existing, dynamic_names)
         if trigger in composed:
             warnings.insert(
@@ -2033,7 +2047,7 @@ class Sniptype:
         else:
             self.snippets[trigger] = value
 
-    def save_static_snippet(self, trigger, value):
+    def save_static_snippet(self, trigger, value, *, metadata=None):
         """Store one static snippet and persist the library; False if nothing changed on disk.
 
         On a failed write memory goes back to what it was, so every manager
@@ -2041,8 +2055,11 @@ class Sniptype:
         """
         previous = self.snippets.get(trigger, EDITOR_MISSING)
         previous_shadow = self.shadowed_static_snippets.get(trigger, EDITOR_MISSING)
+        if (metadata is None and (previous is EDITOR_MISSING or callable(previous))
+                and previous_shadow is EDITOR_MISSING and not getattr(self.library_metadata, "read_only", False)):
+            metadata = restore_static_item_metadata(self.library_metadata, trigger, new_static_tracking())
         self._store_static_snippet(trigger, value)
-        if not self.save_snippets(self.snippets):
+        if not self.save_snippets(self.snippets, metadata=metadata):
             if previous is EDITOR_MISSING:
                 self.snippets.pop(trigger, None)
             else:
@@ -2752,6 +2769,8 @@ class Sniptype:
             return
         self._expansion_context.value = context
         self._expansion_context.caret_back = 0
+        static_used = False
+        usage_metadata = getattr(self, "library_metadata", None)
         try:
             effective = trigger.effective_trigger if isinstance(trigger, ExpansionTarget) else trigger
             lookup = (
@@ -2774,7 +2793,12 @@ class Sniptype:
             if completed:
                 reference = self._workflow_ref(trigger)
                 if reference is not None:
-                    self.workflow_state.record_success(reference)
+                    static_used = reference.kind == "static"
+                    if static_used:
+                        item = get_static_item_metadata(usage_metadata, reference.key)
+                        self.workflow_state.record_success(reference, usage_id=static_usage_id(reference.key, item))
+                    else:
+                        self.workflow_state.record_success(reference)
                     self._last_successful_expansion_at = datetime.now()
                     self._push_manager_event("state")
                     if self.manager_window is not None:
@@ -2799,6 +2823,8 @@ class Sniptype:
         finally:
             self._expansion_context.value = None
             self._expansion_context.caret_back = 0
+            if static_used:
+                self.workflow_state.flush_static_usage()
 
     def _expansion_target_is_current(self):
         """True when this worker's expansion may still be pasted.

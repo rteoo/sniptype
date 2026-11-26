@@ -12,6 +12,7 @@ import uuid
 
 from form_support import FormValidationError, validate_form_fields
 from group_policy import normalize_executable_name
+from workflow_support import unix_milliseconds
 
 
 METADATA_KEY = "__sniptype__"
@@ -615,6 +616,11 @@ def static_item_metadata(metadata, item_key):
     """A detached copy of one static item's metadata, or None when it has none."""
     item = dict(metadata or {}).get("items", {}).get("static", {}).get(item_key)
     return copy.deepcopy(item) if item else None
+
+
+def new_static_tracking():
+    """The creation date and a usage identity distinct from any prior namesake."""
+    return {"created_at": unix_milliseconds(), "usage_id": uuid.uuid4().hex}
 
 
 def mapping_item_metadata(metadata, container_key, item_key):
