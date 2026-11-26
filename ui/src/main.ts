@@ -1165,7 +1165,7 @@ function renderShell(page: HTMLElement): HTMLElement {
       } },
       icon("search"), h("span", { class: "label" }, t("Buscar")), h("kbd", {}, "Ctrl K")),
     h("div", { class: "nav-pages" },
-      navButton("textos", "library", t("Textos")),
+      navButton("textos", "library", t("Snippets")),
       navButton("grupos", "groups", t("Grupos")),
       navButton("dinamicos", "dynamic", t("Dinâmicos")),
       navButton("backups", "backup", t("Backups")),
@@ -1189,7 +1189,7 @@ function renderShell(page: HTMLElement): HTMLElement {
     },
   }, icon("more"), t("Mais"));
   const tabs = h("nav", { class: "mobile-tabs", "aria-label": t("Seções") },
-    navButton("textos", "library", t("Textos")), navButton("grupos", "groups", t("Grupos")),
+    navButton("textos", "library", t("Snippets")), navButton("grupos", "groups", t("Grupos")),
     navButton("dinamicos", "dynamic", t("Dinâmicos")), more);
   const shell = h("div", { class: "app" }, navigation, page, tabs, drawer);
   drawer.addEventListener("close", () => {
@@ -1601,7 +1601,7 @@ function collectionPage(kind: Kind): HTMLElement {
       }
     },
   });
-  const title = textos ? t("Textos") : t("Mapeamentos antigos");
+  const title = textos ? t("Snippets") : t("Mapeamentos antigos");
   refs.items = h("div", { class: "items", role: "listbox", "aria-label": title, onkeydown: onListKey });
   refs.count = h("span", { "aria-live": "polite", "aria-atomic": "true" });
   refs.receipt = h("div", { class: "receipt", role: "status", "aria-live": "polite" });

@@ -32,11 +32,12 @@
   background: var(--color-bg-surface);
 }
 
+.dynamics-page .secondary-header h1 { font: var(--type-page-title); }
+.dynamics-page .secondary-header p { font-size: inherit; }
 .dynamic-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1rem; }
 .dynamic-toolbar .search { flex: 1 1 19rem; min-width: 0; margin: 0; }
 .dynamic-sections { display: grid; gap: 1.25rem; margin-block-start: 1rem; }
 .dynamic-section { display: grid; gap: .5rem; min-width: 0; }
-.dynamic-section h2 { font: 600 1.125rem / 1.35 var(--font-display); }
 .dynamic-list {
   list-style: none;
   margin: 0;
@@ -55,8 +56,6 @@
 .dynamic-row + .dynamic-row { border-block-start: 1px solid var(--color-border-subtle); }
 .dynamic-toggle, .setting-toggle { justify-content: center; width: 48px; min-height: 44px; padding: 0; }
 .dynamic-identity { display: grid; gap: .2rem; overflow-wrap: anywhere; }
-.dynamic-identity .trigger { font-size: .9375rem; font-weight: 600; }
-.dynamic-identity p { font-size: .875rem; }
 
 .backup-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
 .backups-page > .backup-path {
