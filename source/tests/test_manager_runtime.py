@@ -6,6 +6,7 @@ import os
 import sys
 import tempfile
 import unittest
+from contextlib import nullcontext
 from unittest import mock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -31,12 +32,13 @@ class InlineGui:
         func(self.root)
 
 
-def make_real_app(test, snippets, *, raw=None, backups=()):
+def make_real_app(test, snippets, *, raw=None, backups=(), migrate_mappings=True):
     """A real Sniptype on a temporary data home with the bundled dynamic registry.
 
     ``raw`` is written as snippets.json instead of ``snippets`` (a corrupt
     file, say); ``backups`` are ``(file name, text)`` pairs placed in
-    ``backups/``, the last one the newest.
+    ``backups/``, the last one the newest. Legacy editor tests can bypass
+    conversion to keep their fixture in the compatibility path.
     """
     tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
     test.addCleanup(tmp.cleanup)
@@ -63,7 +65,10 @@ def make_real_app(test, snippets, *, raw=None, backups=()):
         with open(path, "w", encoding="utf-8") as handle:
             handle.write(text)
         os.utime(path, (1_700_000_000 + age, 1_700_000_000 + age))
-    with mock.patch.dict(os.environ, {"SNIPTYPE_HOME": home}), \
+    migration = nullcontext() if migrate_mappings else mock.patch.object(
+        tx, "group_legacy_mappings", side_effect=lambda content, metadata, _: (content, metadata),
+    )
+    with migration, mock.patch.dict(os.environ, {"SNIPTYPE_HOME": home}), \
             mock.patch.object(tx, "get_runtime_base_dir", return_value=home), \
             mock.patch.object(tx, "get_runtime_resource_dir", return_value=SOURCE_DIR):
         return tx.Sniptype()
@@ -721,7 +726,8 @@ class BundledRegistryManagerTests(unittest.TestCase):
              lambda: manager_actions.set_form(app.snippets, metadata, "xhi", {"fields": []})),
             ("toggle_mapping_favorite",
              lambda: manager_actions.toggle_mapping_favorite(
-                 app.snippets, metadata, "_codes", "city", True)),
+                 {**app.snippets, "_codes": {"__prefix__": "c", "city": "Cidade"}},
+                 metadata, "_codes", "city", True)),
         ):
             with self.subTest(name):
                 result = operation()

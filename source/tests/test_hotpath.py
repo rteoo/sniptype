@@ -190,7 +190,7 @@ class WorkflowHotkeyIntegrationTests(unittest.TestCase):
             manager, self.app.settings.get("hotkeys", {})
         )
 
-    def test_success_records_static_mapping_and_renamed_dynamic_stable_refs(self):
+    def test_success_records_static_migrated_mapping_and_renamed_dynamic_stable_refs(self):
         self.app.expand_snippet = mock.Mock(return_value=True)
         self.app._run_expansion("xhi")
         self.assertEqual(tx.SnippetRef("static", "xhi"), self.app.workflow_state.last_successful_item)
@@ -198,7 +198,7 @@ class WorkflowHotkeyIntegrationTests(unittest.TestCase):
         self.app.expand_snippet.reset_mock()
         self.app._run_expansion("codescity")
         self.assertEqual(
-            tx.SnippetRef("mapping", "city", "_codes"),
+            tx.SnippetRef("static", "codescity"),
             self.app.workflow_state.last_successful_item,
         )
 
@@ -211,6 +211,7 @@ class WorkflowHotkeyIntegrationTests(unittest.TestCase):
         self.assertEqual(tx.SnippetRef("dynamic", "stable"), self.app.workflow_state.last_successful_item)
 
     def test_mapping_ref_wins_when_same_stored_static_key_is_not_the_runtime_route(self):
+        self.app.snippets["_codes"] = {"city": "GYN"}
         self.app.snippets["codescity"] = "static"
         self.app.library_metadata = {
             "groups": {"work": {"prefix": "w", "enabled": True}},
@@ -944,7 +945,7 @@ class BufferMarginDispatchTests(unittest.TestCase):
         app.task_runner.start.assert_called_once()
         args = app.task_runner.start.call_args
         self.assertEqual(app._run_expansion, args.args[0])
-        self.assertEqual(composed, args.args[1])
+        self.assertEqual(tx.ExpansionTarget(composed, "static", composed), args.args[1])
         app._erase_chars.assert_called_once_with(len(composed))
 
     def test_direct_trigger_longer_than_default_buffer_still_matches(self):
@@ -1021,17 +1022,13 @@ class FormRoutingTests(unittest.TestCase):
         dialog.assert_called_once_with(["spec"])
         app.text_inserter.insert_text.assert_called_once_with("Write this: be concise")
 
-    def test_mapping_structured_form_uses_nested_metadata(self):
+    def test_migrated_mapping_keeps_its_structured_form(self):
         app = make_app(self.tmp, {
             "_template_codes": {
                 "__prefix__": "prompt",
                 "spec": "Write this: %%spec%%",
             },
-        })
-        app.library_metadata = {
-            "items": {
-                "static": {},
-                "mappings": {
+            "__sniptype__": {"kind": "sniptype_metadata", "schema_version": 1, "items": {"mappings": {
                     "_template_codes": {
                         "spec": {
                             "form": {
@@ -1040,11 +1037,9 @@ class FormRoutingTests(unittest.TestCase):
                                 ]
                             }
                         }
-                    }
-                },
-            }
-        }
-        app.refresh_runtime_indexes()
+                    },
+            }}},
+        })
 
         with mock.patch.object(app, "_show_form_dialog", return_value={}) as dialog, \
                 mock.patch.object(tx.time, "sleep"):

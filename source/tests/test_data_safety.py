@@ -381,13 +381,7 @@ class DynamicToggleCollisionTests(unittest.TestCase):
 
 
 class DynamicToggleMappingCollisionTests(unittest.TestCase):
-    """A mapping-composed trigger (``cpffulano``) is not a direct snippets key.
-
-    It resolves through the ``_cpf_numbers`` container, so the confirmation
-    helper's direct lookup misses it. Enabling a dynamic entry whose effective
-    trigger equals such a composed trigger must still prompt, because it silently
-    changes what the user's typing expands to.
-    """
+    """A dynamic action can shadow a converted mapping only after confirmation."""
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
@@ -418,19 +412,14 @@ class DynamicToggleMappingCollisionTests(unittest.TestCase):
             self.assertFalse(self.app._toggle_registry_entry("xcpf", True))
         ask.assert_called_once()
         self.assertEqual({}, self._override())
-        # The mapped value is untouched — the container was never a collision key.
-        self.assertEqual(
-            {"fulano": "123.456.789-00"}, self.app.snippets["_cpf_numbers"]
-        )
+        self.assertEqual("123.456.789-00", self.app.snippets["cpffulano"])
 
     def test_enabling_over_a_mapping_trigger_proceeds_when_confirmed(self):
         with mock.patch.object(tx.ui_widgets, "confirm", return_value=tx.ui_widgets.PRIMARY):
             self.assertTrue(self.app._toggle_registry_entry("xcpf", True))
         self.assertTrue(self._override()["xcpf"]["enabled"])
-        # The mapping container survives the toggle's reload/save cycle intact.
-        self.assertEqual(
-            {"fulano": "123.456.789-00"}, self.app.snippets["_cpf_numbers"]
-        )
+        self.assertTrue(callable(self.app.snippets["cpffulano"]))
+        self.assertEqual("123.456.789-00", self.app.shadowed_static_snippets["cpffulano"])
 
     def test_enabling_without_a_mapping_collision_does_not_prompt(self):
         self.app._toggle_registry_entry("xfree", False)

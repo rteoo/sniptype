@@ -56,8 +56,6 @@ code, .mono { font-family: var(--app-font-trigger); }
 .infobar .actions { display: flex; gap: 8px; margin-top: 6px; }
 
 /* Dados: each destination with Copiar, and the last copy or export under it. */
-.card.data { grid-template-columns: minmax(0, 1fr); }
-.card.data .control { grid-column: 1; grid-row: auto; }
 .data-rows { display: grid; gap: 10px; margin: 8px 0; }
 .data-row { display: grid; grid-template-columns: minmax(140px, auto) minmax(0, 1fr) auto; gap: 4px 12px; align-items: center; }
 .data-row code { overflow-wrap: anywhere; }
@@ -80,8 +78,6 @@ dl.shortcuts dt { font-family: var(--app-font-trigger, monospace); }
 dl.shortcuts dd { margin: 0; }
 
 /* Atalhos de teclado: label | recorded chord | Desativar. */
-/* One column: the rows need the card's width, and a status line must not move them. */
-.card.hotkeys { grid-template-columns: minmax(0, 1fr); }
 .hotkey-rows { display: grid; gap: 8px; }
 .hotkey-row { display: grid; grid-template-columns: minmax(140px, 1fr) minmax(160px, 220px) auto; gap: 8px; align-items: center; }
 .field.hotkey { cursor: pointer; caret-color: transparent; font-family: var(--app-font-trigger, monospace); }
@@ -119,6 +115,10 @@ dl.shortcuts dd { margin: 0; }
 .search { position: relative; margin-right: 8px; }
 .search .tp-i { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--native-muted); pointer-events: none; }
 .search input { padding-left: 38px; }
+.list-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 12px 8px 0 0; }
+.list-control { display: grid; grid-template-rows: auto 1fr; align-items: end; gap: 4px; min-width: 0; }
+.list-control > span { font-size: var(--native-type-caption); color: var(--native-muted); }
+.list-control select { padding-inline: 8px; }
 .field {
   width: 100%; min-width: 0; min-height: var(--native-control-height); padding: 6px 12px;
   border: 1px solid var(--native-line); border-bottom-color: var(--native-field-border);
@@ -130,6 +130,13 @@ dl.shortcuts dd { margin: 0; }
 .field[aria-invalid=true] { border-bottom-color: var(--color-danger-fg); }
 .list-caption { display: flex; justify-content: space-between; font-size: var(--native-type-caption); color: var(--native-muted); margin: 16px 16px 6px 4px; }
 .items { flex: 1; overflow-y: auto; display: grid; align-content: start; gap: 2px; padding: 0 8px 8px 0; }
+.item-group { display: grid; min-width: 0; gap: 2px; }
+.item-group + .item-group { margin-top: 8px; }
+.item-group-heading {
+  display: flex; justify-content: space-between; gap: 8px; padding: 6px 12px;
+  border-bottom: 1px solid var(--native-line); font-size: var(--native-type-caption);
+  color: var(--native-muted); font-weight: 600; overflow-wrap: anywhere;
+}
 .item {
   display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 2px 10px;
   width: 100%; text-align: left; padding: 7px 12px; min-height: var(--windows-row-height, 40px);
@@ -142,6 +149,9 @@ dl.shortcuts dd { margin: 0; }
 .item .trigger { font-family: var(--app-font-trigger); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .item .preview { grid-column: 1 / -1; font-size: var(--native-type-caption); color: var(--native-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .item .badges { display: flex; gap: 4px; align-items: center; }
+.text-collection .item { grid-template-columns: minmax(0, 1fr) fit-content(65%); }
+.text-collection .badges { flex-wrap: wrap; justify-content: flex-end; min-width: 0; }
+.text-collection .badges .el-badge { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .item .badges .tp-i { width: 14px; height: 14px; color: var(--color-link); }
 .el-badge { font-size: 11px; padding: 1px 6px; white-space: nowrap; }
 .empty-list { padding: 24px 8px; color: var(--native-muted); display: grid; gap: 12px; justify-items: start; }
@@ -218,48 +228,6 @@ dl.shortcuts dd { margin: 0; }
   font-size: var(--native-type-caption); color: var(--native-muted);
 }
 .receipt button { min-height: 28px; padding: 2px 10px; color: var(--color-link); }
-
-/* Configurações. */
-.settings-page { overflow-y: auto; padding: 24px 32px 40px; flex: 1; }
-.settings-page > header { margin-bottom: 20px; display: grid; gap: 4px; }
-.cards { display: grid; gap: 4px; max-width: 760px; }
-.card {
-  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px 24px;
-  padding: 14px 20px; background: var(--native-content); border: 1px solid var(--native-line); border-radius: 6px;
-}
-.card h2 { font-size: var(--native-type-body); font-weight: 600; }
-.card p { grid-column: 1; font-size: var(--native-type-caption); color: var(--native-muted); }
-.card .control { grid-column: 2; grid-row: 1 / span 2; display: flex; align-items: center; gap: 12px; }
-.card .status { font-size: var(--native-type-caption); color: var(--native-muted); }
-.card .status.error { color: var(--color-danger-fg); }
-.card select { min-width: 180px; }
-.card code { font-size: 12px; overflow-wrap: anywhere; color: var(--color-text-primary); }
-.card .stack { display: grid; gap: 4px; }
-.card .el-segment { flex-wrap: nowrap; }
-.card .el-segment label { min-width: 84px; }
-.card .el-choice { padding: 0; }
-
-/* Backups: actions, then the backups as a table with Restaurar per row. */
-.settings-page > header .path { font-size: 12px; color: var(--native-muted); overflow-wrap: anywhere; user-select: text; }
-.backup-actions { display: flex; flex-wrap: wrap; gap: 8px; max-width: 760px; margin-bottom: 4px; }
-.backup-list { display: grid; gap: 8px; max-width: 760px; }
-table.backups { width: 100%; border-collapse: collapse; background: var(--native-content); border: 1px solid var(--native-line); border-radius: 6px; }
-table.backups th, table.backups td { padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--native-line); }
-table.backups th { font-size: var(--native-type-caption); font-weight: 600; color: var(--native-muted); }
-table.backups tr:last-child td { border-bottom: 0; }
-table.backups .num { text-align: right; font-variant-numeric: tabular-nums; }
-table.backups .action { text-align: right; width: 1%; white-space: nowrap; }
-table.backups td .el-button { min-height: 28px; padding: 2px 12px; }
-
-/* Dinâmicos: one card per snippet, a section per category. */
-.dynamic-toolbar { display: flex; align-items: center; gap: 16px; max-width: 760px; margin-bottom: 4px; }
-.dynamic-toolbar .search { flex: 1; margin: 0; }
-.dynamic-sections { display: grid; gap: 20px; max-width: 760px; }
-.section-title { font-size: var(--native-type-body); font-weight: 600; margin: 4px 0; }
-.card.dynamic { grid-template-columns: auto minmax(0, 1fr) auto; gap: 4px 16px; padding: 10px 16px; }
-.card.dynamic .stack { grid-column: 2; }
-.card.dynamic .trigger { font-size: 13px; }
-.card.dynamic.off .trigger { color: var(--native-muted); }
 
 /* Dialog: ContentDialog. */
 dialog {

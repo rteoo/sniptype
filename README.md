@@ -24,7 +24,7 @@ An optional terminator mode waits for a following space or punctuation mark.
 - Static plain-text and rich-text snippets.
 - Variables for snippet references, clipboard content, and fill-in forms.
 - Built-in date/time, Brazilian Central Bank, market-data, and WhatsApp actions.
-- One manager window for static snippets, mappings, built-in actions, backups,
+- One manager window for static snippets, built-in actions, backups,
   and settings, with favorites, groups, forms, preview, and text formatting.
 - Dynamic actions can be enabled, disabled, and renamed without editing the
   bundled registry.
@@ -53,9 +53,8 @@ Use `pythonw sniptype.pyw` after setup when you do not need console output.
 
 ### Releases and installer
 
-The current stable release is
-[`v1.4.0`](https://github.com/rteoo/sniptype/releases/tag/v1.4.0) for Windows;
-SnipType is also available from the Microsoft Store. v1.4.0 replaces the
+Download the [latest stable Windows release](https://github.com/rteoo/sniptype/releases/latest).
+SnipType is also available from the Microsoft Store. v1.4.0 replaced the
 manager with a new window and gives the app a new icon. The window covers
 Textos, Mapeamentos, Dinâmicos, Backups and Configurações, with favorites,
 groups and filters, Duplicar and Renomear, forms and Prévia, formatting in the
@@ -126,11 +125,16 @@ The manager is organized around the work being done:
 
 | Tab (Portuguese / English) | Purpose |
 | --- | --- |
-| **Textos** / **Texts** | Create and edit plain or rich-text expansions, with favorites, groups, forms, and preview |
-| **Mapeamentos** / **Mappings** | Maintain prefixed collections such as CPF/CNPJ mappings |
+| **Textos** / **Texts** | Sort snippets by trigger, text, creation, or last use. Group the list by group, favorite status, or snippet type. Assign a group, mark a favorite, or configure a form while creating a snippet. |
+| **Grupos** / **Groups** | Create and edit groups, set their prefixes and expansion rules, and open their snippets in Texts. |
 | **Dinâmicos** / **Dynamic** | Enable, disable, rename, and search built-in actions |
 | **Backups** / **Backups** | Restore, create, import, or export the snippet library |
 | **Configurações** / **Settings** | Language, appearance, density, expansion mode, and data folder |
+
+Existing mapping types such as CPF and CNPJ become groups in Texts. SnipType
+backs up the original library before converting it and keeps each full trigger
+and snippet reference. A library with a conflicting trigger or unsupported
+metadata can still show the legacy mappings page for the affected types.
 
 On Windows the manager is a separate window that needs the WebView2 runtime,
 which Windows 11 ships. The popups shown while you type in another program

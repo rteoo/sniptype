@@ -209,7 +209,7 @@ EN_US = {
     "{PRODUCT_NAME} — Biblioteca": "{PRODUCT_NAME} — Library",
     "Editar último": "Edit last",
     "Notificações": "Notifications",
-    "Ctrl+1–5: seções · Ctrl+F: busca\nCtrl+K: alternar · Ctrl+/: teclado": "Ctrl+1–5: sections · Ctrl+F: search\nCtrl+K: switch · Ctrl+/: keyboard",
+    "Ctrl+1–{count}: seções · Ctrl+F: busca\nCtrl+K: alternar · Ctrl+/: teclado": "Ctrl+1–{count}: sections · Ctrl+F: search\nCtrl+K: switch · Ctrl+/: keyboard",
     "Textos": "Snippets",
     "Mapeamentos": "Mappings",
     "Ações dinâmicas": "Dynamic actions",
@@ -490,6 +490,9 @@ EN_US = {
     "Substituir item": "Replace item",
     "Substituir": "Replace",
     "O snippet {name} já existe. Salvar troca o texto dele pelo que está no editor.": "The snippet {name} already exists. Save replaces its text with what is in the editor.",
+    "A seleção de grupo do rascunho também será aplicada.": "The group selected in the draft will also be applied.",
+    "A marcação de favorito do rascunho também será aplicada.": "The draft's favorite setting will also be applied.",
+    "O formulário do rascunho também substituirá o formulário salvo.": "The draft's form will also replace the saved form.",
     "O item {name} de {type} já existe. Salvar troca o texto dele pelo que está no editor.": "The item {name} in {type} already exists. Save replaces its text with what is in the editor.",
     "Selecione um snippet na lista ou clique em Novo.": "Select a snippet in the list or click New.",
     "Selecione um item na lista ou clique em Novo.": "Select an item in the list or click New.",
@@ -641,7 +644,7 @@ EN_US = {
     "F2 — Renomear texto / focar identificador\nDelete — Excluir na lista (Desfazer disponível)\n"
     "Esc — Limpar busca / descartar rascunho com confirmação\n"
     "Ctrl+K — Alternar snippet\nCtrl+E — Editar último\nCtrl+F — Buscar\n"
-    "Ctrl+1–5 — Seções\n↓ / Enter na busca — Focar lista\n"
+    "Ctrl+1–{count} — Seções\n↓ / Enter na busca — Focar lista\n"
     "Tab / Shift+Tab — Próximo / anterior\nCtrl+Tab — Inserir tabulação\n"
     "Ctrl+Shift+R — Referência\nCtrl+Shift+V — Área de transferência\n"
     "Ctrl+Shift+F — Campo de formulário\nCtrl+Shift+X — Limpar formato\n"
@@ -651,7 +654,7 @@ EN_US = {
     "F2 — Rename text / focus identifier\nDelete — Delete from list (Undo available)\n"
     "Esc — Clear search / confirm discarding draft\n"
     "Ctrl+K — Switch snippet\nCtrl+E — Edit last\nCtrl+F — Search\n"
-    "Ctrl+1–5 — Sections\n↓ / Enter in search — Focus list\n"
+    "Ctrl+1–{count} — Sections\n↓ / Enter in search — Focus list\n"
     "Tab / Shift+Tab — Next / previous\nCtrl+Tab — Insert tab\n"
     "Ctrl+Shift+R — Reference\nCtrl+Shift+V — Clipboard\n"
     "Ctrl+Shift+F — Form field\nCtrl+Shift+X — Clear format\n"

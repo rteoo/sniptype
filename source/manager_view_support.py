@@ -31,7 +31,7 @@ _GEOMETRY = re.compile(r"([1-9][0-9]{0,4})x([1-9][0-9]{0,4})([+-][0-9]{1,6})([+-
 
 
 # The Tauri window's pages (ui/src/main.ts), and the bounds a saved rectangle must keep.
-WINDOW_PAGES = ("textos", "mapeamentos", "dinamicos", "backups", "settings")  # i18n: not ui
+WINDOW_PAGES = ("textos", "grupos", "dinamicos", "backups", "mapeamentos", "settings")  # i18n: not ui
 _WINDOW_COORDINATE_LIMIT = 100_000
 _WINDOW_MIN_SIZE = (200, 150)
 
@@ -60,6 +60,10 @@ def normalize_manager_window(value):
             result["maximized"] = value["maximized"]
     if value.get("page") in WINDOW_PAGES:
         result["page"] = value["page"]
+    if value.get("listOrder") in ("trigger", "text", "created", "used"):
+        result["listOrder"] = value["listOrder"]
+    if value.get("listGrouping") in ("none", "group", "favorite", "type"):
+        result["listGrouping"] = value["listGrouping"]
     return result
 
 

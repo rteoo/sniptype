@@ -5,6 +5,9 @@ import "./styles/teo/windows-elements.css";
 import "./styles/teo/theme.css";
 import "./styles/app.css";
 import "./styles/manager-theme.css";
+import "./styles/library-workspace.css";
+import "./styles/groups.css";
+import "./styles/secondary-pages.css";
 
 import { availableMonitors, getCurrentWindow, PhysicalPosition, PhysicalSize } from "@tauri-apps/api/window";
 
@@ -22,24 +25,13 @@ import {
 import { attachCompletion, type Candidate } from "./completion";
 import { h, icon } from "./dom";
 import { setLanguage, t } from "./i18n";
+import { fold, listSections, type Item, type ListGrouping, type ListOrder } from "./list-view";
 import { createRichEditor, type RichEditor, type Span, type Style } from "./richtext";
 import { chip, describeToken, libraryFrom, type TokenLibrary, withChips } from "./tokens";
 
 type Kind = "textos" | "mapeamentos";
-type Page = Kind | "dinamicos" | "backups" | "settings";
-
-/** One row of a collection: a static snippet, or an item of the selected mapping type. */
-interface Item {
-  name: string;
-  effectiveTrigger: string;
-  preview: string;
-  rich: boolean;
-  keys: boolean;
-  favorite: boolean;
-  group?: string | null;
-  enabled?: boolean;
-  shadowed?: boolean;
-}
+type Page = Kind | "grupos" | "dinamicos" | "backups" | "settings";
+type ReceiptPage = Kind | "grupos";
 
 /** A saved item as the editor opens it, metadata included (the list may be filtered). */
 interface Entry { name: string; text: string; rich: boolean; spans: Span[]; effectiveTrigger: string;
@@ -49,8 +41,8 @@ interface Entry { name: string; text: string; rich: boolean; spans: Span[]; effe
  * What an editor holds. `original` is the saved name it was opened from (null
  * for a new one); `type` is the mapping type a Mapeamentos draft belongs to.
  * `spans` are the text's styles (`savedSpans` as JSON, to compare); `rich`
- * says it has any. `favorite`, `groupId` and `effectiveTrigger` describe the saved item and
- * change at once, never as part of the draft. `formFrom` names the mapping
+ * says it has any. New texts hold organization and form choices until their
+ * first save. For saved items metadata edits apply immediately. `formFrom` names the mapping
  * item a Duplicar copy came from, whose form the first save carries over.
  */
 interface Draft {
@@ -65,6 +57,8 @@ interface Draft {
   savedSpans: string;
   favorite: boolean;
   groupId: string | null;
+  initialGroupId?: string | null;
+  fields?: FormFieldDef[];
   effectiveTrigger: string;
   formFrom?: string | null;
   /** Revision of the saved item the draft was opened at (null for a new one); saves send it as `base`. */
@@ -73,7 +67,9 @@ interface Draft {
 
 interface Receipt { text: string; undo?: () => Promise<void> }
 
-interface Collection { items: Item[]; total: number; query: string; draft: Draft | null; receipt: Receipt | null }
+interface Collection {
+  items: Item[]; total: number; query: string; draft: Draft | null; receipt: Receipt | null; detailOpen: boolean;
+}
 
 type Saved = { status: "saved"; name: string; revision: string };
 
@@ -88,7 +84,7 @@ interface Source {
 }
 
 const listFilters = (): [ListFilter, string][] => [
-  ["all", t("Todos")], ["favorites", t("Favoritos")], ["recent", t("Recentes")], ["disabled", t("Desativados")],
+  ["all", t("Todos")], ["favorites", t("Favoritos")], ["recent", t("Recentes nesta sessão")], ["disabled", t("Desativados")],
   ["problems", t("Com problema")],
 ];
 // The group selector's value for snippets in no group (source/manager_bridge.py).
@@ -98,7 +94,8 @@ const appWindow = getCurrentWindow();
 const lightScheme = matchMedia("(prefers-color-scheme: light)");
 const root = document.getElementById("app")!;
 
-const blank = (): Collection => ({ items: [], total: 0, query: "", draft: null, receipt: null });
+const compactLibrary = matchMedia("(max-width: 700px)");
+const blank = (): Collection => ({ items: [], total: 0, query: "", draft: null, receipt: null, detailOpen: false });
 
 const state = {
   info: null as AppInfo | null,
@@ -108,8 +105,9 @@ const state = {
   type: "_cpf_numbers",
   groups: [] as Group[],
   groupsReadOnly: false,
-  // Textos' view: a list filter and a group ("" for every group, UNGROUPED for none).
-  view: { filter: "all" as ListFilter, group: "" },
+  groupsReceipt: null as Receipt | null,
+  // A group filter of "" includes every group; UNGROUPED shows texts in none.
+  view: { filter: "all" as ListFilter, group: "", order: "trigger" as ListOrder, grouping: "none" as ListGrouping },
   cardStatus: {} as Record<string, { text: string; error: boolean }>,
   dynamics: { sections: [] as DynamicSection[], query: "", receipt: "" },
   settingsReceipt: "",
@@ -129,6 +127,8 @@ const refs = {
   receipt: null as HTMLElement | null,
   search: null as HTMLInputElement | null,
   viewBar: null as HTMLElement | null,
+  viewSummary: null as HTMLElement | null,
+  resumeDraft: null as HTMLButtonElement | null,
   meta: null as HTMLElement | null,
 };
 
@@ -164,6 +164,9 @@ const sources: Record<Kind, Source> = {
       const answer = await request<SaveAnswer>("snippet.save", {
         trigger: draft.name, text: draft.text, spans: draft.spans, original: draft.original, confirmed,
         base: draft.revision,
+        ...(!draft.original && draft.groupId ? { groupId: draft.groupId } : {}),
+        ...(!draft.original && draft.favorite ? { favorite: true } : {}),
+        ...(!draft.original && draft.fields !== undefined ? { fields: draft.fields } : {}),
       });
       return answer.status === "saved" ? { status: "saved", name: answer.trigger, revision: answer.revision } : answer;
     },
@@ -244,8 +247,29 @@ function errorText(error: unknown): string {
 
 interface DialogButton { id: string; label: string; tone?: "primary" | "danger" }
 
+function keepModalTabFocus(event: KeyboardEvent): void {
+  if (event.key !== "Tab" || event.defaultPrevented || !(event.currentTarget instanceof HTMLDialogElement)) return;
+  const dialog = event.currentTarget;
+  const stops = [...dialog.querySelectorAll<HTMLElement>(
+    "button, input, select, textarea, a[href], summary, [tabindex], [contenteditable=true]",
+  )].filter((element) => element.tabIndex >= 0 && !element.matches(":disabled")
+    && element.getClientRects().length > 0 && getComputedStyle(element).visibility === "visible");
+  if (!stops.length) {
+    event.preventDefault();
+    return;
+  }
+  const first = stops[0];
+  const last = stops[stops.length - 1];
+  // Chromium may move focus into browser chrome before returning to the modal.
+  if (document.activeElement === (event.shiftKey ? first : last)) {
+    event.preventDefault();
+    (event.shiftKey ? last : first).focus();
+  }
+}
+
 function openDialog(dialog: HTMLDialogElement, focus: HTMLElement | null): void {
   const returnFocus = document.activeElement as HTMLElement | null;
+  dialog.addEventListener("keydown", keepModalTabFocus);
   dialog.addEventListener("close", () => {
     dialog.remove();
     returnFocus?.focus();
@@ -394,14 +418,15 @@ function formDialog(options: {
  * icon-only). `entries` is read each time it opens, so it reflects the view.
  */
 function menuButton(label: string,
-  entries: () => { label: string; icon?: string; disabled?: boolean; run: () => void }[],
+  entries: () => { label: string; icon?: string; disabled?: boolean; danger?: boolean; shortcut?: string; run: () => void }[],
   attrs: Record<string, unknown> = {}, leading?: string): HTMLElement {
   const menu = h("div", { class: "menu", popover: "auto", role: "menu", "aria-label": label });
   const button = h("button", {
     type: "button", class: "el-button", "aria-haspopup": "menu", "aria-expanded": "false", ...attrs,
     onclick: () => {
       menu.replaceChildren(...entries().map((entry) => h("button", {
-        type: "button", role: "menuitem", disabled: entry.disabled,
+        type: "button", role: "menuitem", disabled: entry.disabled, class: entry.danger ? "danger" : undefined,
+        title: entry.shortcut,
         onclick: () => {
           menu.hidePopover();
           // What the entry opens returns focus here when it closes.
@@ -413,6 +438,11 @@ function menuButton(label: string,
       menu.style.top = `${box.bottom + 4}px`;
       menu.style.left = `${box.left}px`;
       menu.showPopover();
+      const { clientWidth, clientHeight } = document.documentElement;
+      menu.style.left = `${Math.max(8, Math.min(box.left, clientWidth - menu.offsetWidth - 8))}px`;
+      if (box.bottom + menu.offsetHeight + 12 > clientHeight) {
+        menu.style.top = `${Math.max(8, box.top - menu.offsetHeight - 4)}px`;
+      }
       menu.querySelector<HTMLElement>("button:not([disabled])")?.focus();
     },
   }, leading ? icon(leading) : null, label, icon("chevron-down"));
@@ -439,22 +469,32 @@ function menuButton(label: string,
 // Data
 
 async function refreshInfo(): Promise<void> {
+  const legacyMappings = state.info?.legacyMappings;
   state.info = await request<AppInfo>("app.info");
   setLanguage(state.info.language);
   applyAppearance();
+  if (refs.infobar && legacyMappings !== state.info.legacyMappings) {
+    if (state.page === "mapeamentos" && !state.info.legacyMappings) {
+      await showPage("textos");
+    } else {
+      renderAll();
+    }
+    return;
+  }
   renderInfobar();
   renderStatus();
 }
 
 /** Read the app again and the page on screen: the library or the app's state changed behind this window. */
 async function refreshVisible(): Promise<void> {
+  await refreshInfo();
   const kind = activeKind();
   const page = state.page;
-  await refreshInfo();
   if (kind) {
     await refreshList(kind);
     await reconcileDraft(kind);
   }
+  else if (page === "grupos") await refreshGroups();
   else if (page === "dinamicos") await refreshDynamics();
   else if (page === "backups") await refreshBackups();
 }
@@ -472,20 +512,29 @@ async function refreshGroups(): Promise<void> {
   if (state.view.group && state.view.group !== UNGROUPED && !state.groups.some((group) => group.id === state.view.group)) {
     state.view.group = "";
   }
+  if (state.page === "grupos") renderGroups();
 }
 
 async function refreshList(kind: Kind): Promise<void> {
   // Both pages need the groups' read-only flag; Textos also needs the groups.
   if (kind === "mapeamentos") await refreshTypes();
   await refreshGroups();
-  const { items, total } = await sources[kind].list();
-  Object.assign(state.collections[kind], { items, total });
+  await refreshCollectionRows(kind);
   if (state.page === kind) {
-    renderList();
     renderTypeBar();
     renderViewBar();
     renderMeta();
   }
+}
+
+const listRequest = { textos: 0, mapeamentos: 0 };
+
+async function refreshCollectionRows(kind: Kind): Promise<void> {
+  const requestId = ++listRequest[kind];
+  const { items, total } = await sources[kind].list();
+  if (requestId !== listRequest[kind]) return;
+  Object.assign(state.collections[kind], { items, total });
+  if (state.page === kind) renderList();
 }
 
 function draftFrom(entry: Entry, type: string | null): Draft {
@@ -520,6 +569,7 @@ function isDirty(kind: Kind): boolean {
   const draft = state.collections[kind].draft;
   if (!draft) return false;
   return draft.name.trim() !== draft.savedName || draft.text !== draft.savedText
+    || (!draft.original && (draft.favorite || draft.groupId !== (draft.initialGroupId ?? null) || draft.fields !== undefined))
     || JSON.stringify(draft.spans) !== draft.savedSpans;
 }
 
@@ -599,7 +649,10 @@ async function resolveDraft(kind: Kind): Promise<boolean> {
 async function openItem(kind: Kind, name: string): Promise<void> {
   const collection = state.collections[kind];
   const type = kind === "mapeamentos" ? state.type : null;
-  if (collection.draft?.original === name && collection.draft.type === type) return;
+  if (collection.draft?.original === name && collection.draft.type === type) {
+    if (compactLibrary.matches && !collection.detailOpen) openCollectionDetail(kind);
+    return;
+  }
   if (!(await resolveDraft(kind))) return;
   let entry: Entry;
   try {
@@ -612,7 +665,7 @@ async function openItem(kind: Kind, name: string): Promise<void> {
   }
   collection.draft = draftFrom(entry, type);
   renderList();
-  renderDetail();
+  openCollectionDetail(kind);
 }
 
 async function newItem(kind: Kind): Promise<void> {
@@ -620,7 +673,11 @@ async function newItem(kind: Kind): Promise<void> {
   const collection = state.collections[kind];
   const prefill = collection.query.trim();
   collection.draft = newDraft(kind === "mapeamentos" ? state.type : null, prefill);
+  if (kind === "textos" && !state.groupsReadOnly && state.groups.some((g) => g.id === state.view.group)) {
+    collection.draft.initialGroupId = collection.draft.groupId = state.view.group;
+  }
   renderList();
+  collection.detailOpen = true;
   renderDetail();
   document.getElementById(prefill ? "text" : "name")?.focus();
 }
@@ -659,7 +716,7 @@ async function saveDraft(kind: Kind, confirmed: SaveCheck[] = []): Promise<boole
   }
   Object.assign(draft, {
     original: answer.name, name: answer.name, savedName: answer.name, savedText: draft.text,
-    savedSpans: JSON.stringify(draft.spans), formFrom: null, revision: answer.revision,
+    savedSpans: JSON.stringify(draft.spans), formFrom: null, fields: undefined, revision: answer.revision,
   });
   const shown = kind === "textos" ? answer.name : t("{name} em {type}", { name: answer.name, type: typeLabel(draft.type) });
   showReceipt(kind, { text: t("Salvo às {time} · {name}", { time: clock(), name: shown }) });
@@ -707,10 +764,14 @@ async function deleteCurrent(kind: Kind): Promise<void> {
   renderDetail();
 }
 
-// Favorito and Grupo apply at once, like the classic manager; the draft stays as typed.
 async function setFavorite(kind: Kind, favorite: boolean): Promise<void> {
   const draft = state.collections[kind].draft;
-  if (!draft?.original) return;
+  if (!draft) return;
+  if (!draft.original) {
+    draft.favorite = favorite;
+    renderMeta();
+    return;
+  }
   try {
     await sources[kind].setFavorite(draft, favorite);
     draft.favorite = favorite;
@@ -722,7 +783,12 @@ async function setFavorite(kind: Kind, favorite: boolean): Promise<void> {
 
 async function setGroup(group: string): Promise<void> {
   const draft = state.collections.textos.draft;
-  if (!draft?.original) return;
+  if (!draft) return;
+  if (!draft.original) {
+    draft.groupId = group || null;
+    renderMeta();
+    return;
+  }
   try {
     await request("snippet.setGroup", { trigger: draft.original, group });
   } catch (error) {
@@ -743,6 +809,7 @@ async function duplicateCurrent(kind: Kind): Promise<void> {
     // A mapping copy is a new draft of the same type, saved under the identifier given to it, form included.
     collection.draft = { ...newDraft(source.type, "", source.savedText, JSON.parse(source.savedSpans)),
       formFrom: source.original };
+    collection.detailOpen = true;
     renderList();
     renderDetail();
     document.getElementById("name")?.focus();
@@ -820,7 +887,11 @@ async function renameCurrent(): Promise<void> {
 
 async function setView(change: Partial<typeof state.view>): Promise<void> {
   Object.assign(state.view, change);
-  await refreshList("textos");
+  renderViewSummary();
+  if (change.order !== undefined || change.grouping !== undefined) scheduleWindowSave();
+  if (change.filter !== undefined || change.group !== undefined) await refreshList("textos");
+  else if (change.order === "used") await refreshCollectionRows("textos");
+  else if (state.page === "textos") renderList();
 }
 
 /** Novo grupo (no id) and Editar grupo. */
@@ -863,12 +934,11 @@ async function groupDialog(id: string | null): Promise<void> {
   });
   if (saved === null) return;
   const { label } = saved as { id: string; label: string };
-  await reloadEntry("textos");
-  await refreshList("textos");
-  showReceipt("textos", {
+  showReceipt("grupos", {
     text: id ? t("Grupo atualizado às {time} · {name}", { time: clock(), name: label })
       : t("Grupo criado às {time} · {name}", { time: clock(), name: label }),
   });
+  await refreshAfterGroupChange();
 }
 
 /** Excluir grupo asks nothing: its snippets stay, in no group, and Desfazer brings both back. */
@@ -881,9 +951,7 @@ async function deleteGroup(id: string): Promise<void> {
     return;
   }
   if (state.view.group === id) state.view.group = "";
-  await reloadEntry("textos");
-  await refreshList("textos");
-  showReceipt("textos", {
+  showReceipt("grupos", {
     text: t("Excluído às {time} · {name}", { time: clock(), name: answer.label }),
     undo: async () => {
       try {
@@ -892,11 +960,17 @@ async function deleteGroup(id: string): Promise<void> {
         await alertError(t("Desfazer exclusão"), error);
         return;
       }
-      await reloadEntry("textos");
-      await refreshList("textos");
-      showReceipt("textos", { text: t("Restaurado às {time} · {name}", { time: clock(), name: answer.label }) });
+      showReceipt("grupos", { text: t("Restaurado às {time} · {name}", { time: clock(), name: answer.label }) });
+      await refreshAfterGroupChange();
     },
   });
+  await refreshAfterGroupChange();
+}
+
+async function refreshAfterGroupChange(): Promise<void> {
+  // A group can change an open text's effective trigger without changing its draft.
+  await reloadEntry("textos");
+  await refreshList("textos").catch((error) => alertError(t("Grupos"), error));
 }
 
 async function switchType(key: string): Promise<void> {
@@ -975,16 +1049,22 @@ async function deleteType(): Promise<void> {
   await refreshList("mapeamentos");
   renderDetail();
   showReceipt("mapeamentos", { text: t("Tipo excluído às {time} · {name}", { time: clock(), name: type.label }) });
+  await refreshInfo();
 }
 
 async function setSetting(card: string, key: string, value: unknown): Promise<void> {
+  const previousLanguage = state.info?.language;
   try {
     state.info = await request<AppInfo>("settings.set", { key, value });
+    setLanguage(state.info.language);
+    if (state.info.language !== previousLanguage) {
+      state.cardStatus = {};
+      state.settingsReceipt = "";
+    }
     state.cardStatus[card] = { text: t("Salvo."), error: false };
   } catch (error) {
     state.cardStatus[card] = { text: errorText(error), error: true };
   }
-  setLanguage(state.info!.language);
   applyAppearance();
   renderAll();
 }
@@ -992,65 +1072,113 @@ async function setSetting(card: string, key: string, value: unknown): Promise<vo
 // ---------------------------------------------------------------------------
 // Receipts: the status line under each list, with Desfazer when it applies.
 
-const receiptTimers: Record<Kind, number> = { textos: 0, mapeamentos: 0 };
+const receiptTimers: Record<ReceiptPage, number> = { textos: 0, mapeamentos: 0, grupos: 0 };
 
-function showReceipt(kind: Kind, receipt: Receipt): void {
-  state.collections[kind].receipt = receipt;
-  window.clearTimeout(receiptTimers[kind]);
+function showReceipt(page: ReceiptPage, receipt: Receipt): void {
+  if (page === "grupos") state.groupsReceipt = receipt;
+  else state.collections[page].receipt = receipt;
+  window.clearTimeout(receiptTimers[page]);
   // An undo stays offered for a while; afterwards the line keeps only the fact.
-  if (receipt.undo) receiptTimers[kind] = window.setTimeout(() => showReceipt(kind, { text: receipt.text }), 15_000);
-  if (state.page === kind) renderReceipt();
+  if (receipt.undo) receiptTimers[page] = window.setTimeout(() => showReceipt(page, { text: receipt.text }), 15_000);
+  if (state.page === page) renderReceipt();
 }
 
 function renderReceipt(): void {
   const host = refs.receipt;
-  const kind = activeKind();
-  if (!host || !kind) return;
-  const receipt = state.collections[kind].receipt;
+  const page = state.page;
+  if (!host || (page !== "grupos" && !isKind(page))) return;
+  const receipt = page === "grupos" ? state.groupsReceipt : state.collections[page].receipt;
+  const undoHadFocus = host.contains(document.activeElement);
   host.replaceChildren(
     ...(receipt ? [h("span", {}, receipt.text)] : []),
     ...(receipt?.undo ? [h("button", {
       type: "button",
       onclick: () => {
         const undo = receipt.undo!;
-        showReceipt(kind, { text: receipt.text });
+        showReceipt(page, { text: receipt.text });
         void undo();
       },
     }, t("Desfazer"))] : []),
   );
+  if (page === "grupos" && undoHadFocus) {
+    (host.querySelector("button") ?? document.getElementById("groups-title"))?.focus();
+  }
 }
 
 // ---------------------------------------------------------------------------
 // Rendering
 
+const compactShell = matchMedia("(max-width: 700px)");
+compactShell.addEventListener("change", () => document.querySelector<HTMLDialogElement>(".shell-drawer[open]")?.close());
+const productIcon = new URL("../../assets/icon.svg", import.meta.url).href;
+
+function renderShell(page: HTMLElement): HTMLElement {
+  const drawer = h("dialog", { class: "shell-drawer", "aria-label": t("Seções") });
+  drawer.addEventListener("keydown", keepModalTabFocus);
+  const navButton = (destination: Page, iconId: string, label: string) => h("button", {
+    type: "button",
+    "aria-current": state.page === destination ? "page" : undefined,
+    "aria-label": label, title: label,
+    onclick: () => {
+      if (drawer.open) drawer.close();
+      void showPage(destination);
+    },
+  }, icon(iconId), h("span", { class: "label" }, label));
+  const navigation = h("nav", { class: "navigation", "aria-label": t("Seções") },
+    h("div", { class: "brand" }, h("img", { src: productIcon, alt: "", width: 36, height: 36 }),
+      h("span", {}, "SnipType"),
+      h("button", { type: "button", class: "drawer-close", "aria-label": t("Fechar"), title: t("Fechar"),
+        onclick: () => drawer.close() }, icon("close"))),
+    h("button", { type: "button", class: "switcher-launch", title: t("Pesquisar snippets") + " (Ctrl+K)",
+      "aria-label": t("Pesquisar snippets"), onclick: () => {
+        if (drawer.open) drawer.close();
+        showSwitcher();
+      } },
+      icon("search"), h("span", { class: "label" }, t("Buscar")), h("kbd", {}, "Ctrl K")),
+    h("div", { class: "nav-pages" },
+      navButton("textos", "library", t("Textos")),
+      navButton("grupos", "groups", t("Grupos")),
+      navButton("dinamicos", "dynamic", t("Dinâmicos")),
+      navButton("backups", "backup", t("Backups")),
+      state.info?.legacyMappings ? navButton("mapeamentos", "mapping", t("Mapeamentos antigos")) : null,
+    ),
+    h("div", { class: "nav-footer" },
+      refs.status = h("div", { class: "expansion", role: "group", "aria-label": t("Expansão") }),
+      h("button", { type: "button", title: t("Notificações"), "aria-label": t("Notificações"),
+        onclick: () => void showNotifications() }, icon("bell"), h("span", { class: "label" }, t("Notificações"))),
+      navButton("settings", "settings", t("Configurações")),
+      h("p", { class: "version" }, state.info ? `${state.info.version} · ${state.info.channel}` : ""),
+    ));
+  const more = h("button", { type: "button", "aria-haspopup": "dialog", "aria-label": t("Mais seções"),
+    "aria-expanded": "false", class: ["textos", "grupos", "dinamicos"].includes(state.page) ? "" : "current-section",
+    onclick: () => {
+      drawer.append(navigation);
+      drawer.showModal();
+      more.setAttribute("aria-expanded", "true");
+      navigation.querySelector<HTMLElement>("[aria-current=page]")?.focus();
+    },
+  }, icon("more"), t("Mais"));
+  const tabs = h("nav", { class: "mobile-tabs", "aria-label": t("Seções") },
+    navButton("textos", "library", t("Textos")), navButton("grupos", "groups", t("Grupos")),
+    navButton("dinamicos", "dynamic", t("Dinâmicos")), more);
+  const shell = h("div", { class: "app" }, navigation, page, tabs, drawer);
+  drawer.addEventListener("close", () => {
+    shell.prepend(navigation);
+    more.setAttribute("aria-expanded", "false");
+  });
+  drawer.addEventListener("click", (event) => { if (event.target === drawer) drawer.close(); });
+  return shell;
+}
+
 function renderAll(): void {
   document.documentElement.lang = state.info?.language ?? "pt-BR";
-  const navButton = (page: Page, iconId: string, label: string) => h("button", {
-    type: "button",
-    "aria-current": state.page === page ? "page" : "false",
-    title: label,
-    onclick: () => showPage(page),
-  }, icon(iconId), h("span", { class: "label" }, label));
-
   refs.infobar = h("div", { class: "infobar", role: "region", "aria-label": t("Avisos") });
   const kind = activeKind();
   const page = h("main", { class: "page" }, refs.infobar,
-    kind ? collectionPage(kind) : state.page === "dinamicos" ? dynamicsPage()
+    kind ? collectionPage(kind) : state.page === "grupos" ? groupsPage()
+      : state.page === "dinamicos" ? dynamicsPage()
       : state.page === "backups" ? backupsPage() : settingsPage());
-
-  root.replaceChildren(h("div", { class: "app" },
-    h("nav", { class: "navigation", "aria-label": t("Seções") },
-      h("div", { class: "brand" }, icon("document"), h("span", {}, "SnipType")),
-      navButton("textos", "library", t("Textos")),
-      navButton("mapeamentos", "mapping", t("Mapeamentos")),
-      navButton("dinamicos", "dynamic", t("Dinâmicos")),
-      navButton("backups", "backup", t("Backups")),
-      refs.status = h("div", { class: "expansion", role: "group", "aria-label": t("Expansão") }),
-      navButton("settings", "settings", t("Configurações")),
-      h("p", { class: "version" }, state.info ? `${state.info.version} · ${state.info.channel}` : ""),
-    ),
-    page,
-  ));
+  root.replaceChildren(renderShell(page));
   renderInfobar();
   renderStatus();
   if (kind) {
@@ -1058,6 +1186,9 @@ function renderAll(): void {
     renderViewBar();
     renderList();
     renderDetail();
+    renderReceipt();
+  } else if (state.page === "grupos") {
+    renderGroups();
     renderReceipt();
   } else if (state.page === "dinamicos") {
     renderDynamics();
@@ -1067,20 +1198,91 @@ function renderAll(): void {
 }
 
 async function showPage(page: Page): Promise<void> {
+  if (page === "mapeamentos" && !state.info?.legacyMappings) return;
   if (page === state.page) return;
   // Each editor keeps its draft while another page shows.
   state.page = page;
   scheduleWindowSave();
   renderAll();
   if (isKind(page)) {
-    refs.search?.focus();
+    const detailVisible = compactLibrary.matches && refs.detail?.parentElement?.dataset.pane === "detail";
+    (detailVisible ? document.getElementById("library-editor-title") : refs.search)?.focus();
     await refreshList(page).catch((error) => console.error("refresh failed", error));
     await reconcileDraft(page).catch((error) => console.error("reconcile failed", error));
+  } else if (page === "grupos") {
+    document.getElementById("groups-title")?.focus();
+    await refreshGroups().catch((error) => alertError(t("Grupos"), error));
   } else if (page === "dinamicos") {
     refs.search?.focus();
     await refreshDynamics().catch((error) => console.error("refresh failed", error));
   } else if (page === "backups") {
     await refreshBackups().catch((error) => console.error("refresh failed", error));
+  }
+}
+
+function groupsPage(): HTMLElement {
+  refs.receipt = h("div", { class: "receipt", role: "status", "aria-live": "polite" });
+  return h("div", { class: "secondary-page groups-page" },
+    h("header", { class: "secondary-header" },
+      h("h1", { id: "groups-title", tabindex: -1 }, t("Grupos")),
+      h("button", { id: "groups-add", type: "button", class: "primary",
+        onclick: () => void groupDialog(null) }, icon("plus"), t("Novo grupo…")),
+    ),
+    refs.receipt,
+    h("p", { id: "groups-readonly", class: "muted", role: "status" }, readOnlyMessage()),
+    h("div", { id: "groups-list" }),
+  );
+}
+
+function renderGroups(): void {
+  const host = document.getElementById("groups-list");
+  if (!host) return;
+  const add = document.querySelector<HTMLButtonElement>("#groups-add")!;
+  const note = document.getElementById("groups-readonly")!;
+  add.disabled = state.groupsReadOnly;
+  note.hidden = !state.groupsReadOnly;
+  const active = document.activeElement;
+  const previous = active instanceof HTMLButtonElement && host.contains(active) ? active.dataset : null;
+  const rows = state.groups.map((group, index) => {
+    const headingId = `group-name-${index}`;
+    const viewId = `group-view-${index}`;
+    return h("li", { class: "group-card" },
+      h("div", { class: "group-identity" },
+        h("div", { class: "group-name" }, icon("groups"), h("h2", { id: headingId }, group.label)),
+        menuButton(t("Ações"), () => [
+          { label: t("Editar grupo…"), run: () => void groupDialog(group.id) },
+          { label: t("Excluir grupo"), danger: true, run: () => void deleteGroup(group.id) },
+        ], {
+          class: "group-menu-button", "aria-label": t("Ações do grupo {name}", { name: group.label }),
+          "data-group": group.id, "data-action": "menu", disabled: state.groupsReadOnly,
+        }),
+      ),
+      h("div", { class: "group-summary" },
+        h("span", { class: `group-state${group.enabled ? " on" : ""}` },
+          group.enabled ? t("Grupo ativo") : t("Grupo desativado")),
+        h("span", {}, group.count === 1 ? t("1 texto") : t("{count} textos", { count: group.count })),
+        group.prefix ? h("p", { class: "group-prefix" }, t("Prefixo do trigger"), " ", h("code", {}, group.prefix)) : null,
+      ),
+      h("div", { class: "group-actions" },
+        h("button", {
+          id: viewId, type: "button", class: "el-button", "aria-labelledby": `${viewId} ${headingId}`,
+          "data-group": group.id, "data-action": "view", onclick: () => {
+            state.view.filter = "all";
+            state.view.group = group.id;
+            state.collections.textos.query = "";
+            state.collections.textos.detailOpen = false;
+            void showPage("textos");
+          },
+        }, t("Ver textos")),
+      ),
+    );
+  });
+  host.replaceChildren(rows.length ? h("ul", { class: "group-cards" }, ...rows)
+    : h("p", { class: "empty-list" }, t("Nenhum grupo.")));
+  if (previous) {
+    const replacement = [...host.querySelectorAll("button")].find((control) =>
+      control.dataset.group === previous.group && control.dataset.action === previous.action && !control.disabled);
+    (replacement ?? document.getElementById("groups-title"))?.focus();
   }
 }
 
@@ -1109,29 +1311,34 @@ function renderStatus(): void {
   const info = state.info;
   if (!host || !info) return;
   const { state: expansion, label } = info.expansion;
+  const focused = host.contains(document.activeElement) ? document.activeElement : null;
   const toggleLabel = expansion === "paused" ? t("Retomar expansão") : t("Pausar expansão");
   // The narrow rail hides every .label: the buttons keep their names in title and aria-label.
   const toggle = expansion === "down"
     ? h("button", { type: "button", class: "el-button", disabled: true, title: t("Reinicie o SnipType"),
-      "aria-label": t("Reinicie o SnipType") }, icon("pause"), h("span", { class: "label" }, t("Reinicie o SnipType")))
+      "aria-label": t("Reinicie o SnipType") }, icon("pause"))
     : h("button", { type: "button", class: "el-button", title: toggleLabel, "aria-label": toggleLabel,
       onclick: () => void toggleExpansion() },
-      icon(expansion === "paused" ? "play" : "pause"), h("span", { class: "label" }, toggleLabel));
+      icon(expansion === "paused" ? "play" : "pause"));
   host.replaceChildren(
-    h("p", { class: `state ${expansion}`, role: "status" }, h("span", { class: "dot", "aria-hidden": "true" }),
+    h("p", { class: `state ${expansion}`, role: "status", title: label, "aria-label": label },
+      h("span", { class: "dot", "aria-hidden": "true" }),
       h("span", { class: "label" }, label)),
     toggle,
-    h("p", { class: "last label" }, info.lastExpansion),
     h("button", {
-      type: "button", class: "el-button", disabled: !info.canEditLast,
-      title: t("Editar último"), "aria-label": t("Editar último"),
-      onclick: () => void request("app.editLast").catch((error) => alertError(t("Editar último"), error)),
-    }, icon("document"), h("span", { class: "label" }, t("Editar último"))),
-    h("button", {
-      type: "button", class: "el-button", title: t("Notificações"), "aria-label": t("Notificações"),
-      onclick: () => void showNotifications(),
-    }, icon("bell"), h("span", { class: "label" }, t("Notificações"))),
+      type: "button", class: "last-used", disabled: !info.canEditLast,
+      title: info.canEditLast ? t("Editar último") + " · " + info.lastExpansion : info.lastExpansion,
+      "aria-label": t("Editar último") + " · " + info.lastExpansion,
+      onclick: () => {
+        host.closest<HTMLDialogElement>("dialog[open]")?.close();
+        void request("app.editLast").catch((error) => alertError(t("Editar último"), error));
+      },
+    }, icon("document"), h("span", { class: "label" }, info.lastExpansion)),
   );
+  if (focused) {
+    host.querySelector<HTMLElement>(focused.classList.contains("last-used") ? ".last-used" : ".el-button")
+      ?.focus({ preventScroll: true });
+  }
 }
 
 /** Notificações: what the app has said, newest first; errors are marked by word as well as color. */
@@ -1229,6 +1436,23 @@ async function dismissIssue(id: string): Promise<void> {
 
 const typeBar = { host: null as HTMLElement | null };
 
+function openCollectionDetail(kind: Kind): void {
+  state.collections[kind].detailOpen = true;
+  if (state.page !== kind) return;
+  renderDetail();
+  if (compactLibrary.matches) document.getElementById("library-editor-title")?.focus();
+}
+
+function showCollectionList(kind: Kind, focusSearch = false): void {
+  const collection = state.collections[kind];
+  collection.detailOpen = false;
+  const workspace = refs.detail?.parentElement;
+  if (workspace) workspace.dataset.pane = "list";
+  const selected = refs.items?.querySelector<HTMLElement>(".item[aria-selected=true]");
+  (focusSearch ? refs.search : selected ?? refs.search)?.focus();
+  if (focusSearch) refs.search?.select();
+}
+
 function collectionPage(kind: Kind): HTMLElement {
   const collection = state.collections[kind];
   const textos = kind === "textos";
@@ -1250,25 +1474,40 @@ function collectionPage(kind: Kind): HTMLElement {
       }
     },
   });
-  const title = textos ? t("Textos") : t("Mapeamentos");
+  const title = textos ? t("Textos") : t("Mapeamentos antigos");
   refs.items = h("div", { class: "items", role: "listbox", "aria-label": title, onkeydown: onListKey });
-  refs.count = h("span");
+  refs.count = h("span", { "aria-live": "polite", "aria-atomic": "true" });
   refs.receipt = h("div", { class: "receipt", role: "status", "aria-live": "polite" });
   refs.detail = h("section", { class: "detail", "aria-label": t("Editor") });
   typeBar.host = textos ? null : h("div", { class: "type-bar" });
-  refs.viewBar = textos ? h("div", { class: "type-bar" }) : null;
+  refs.viewBar = textos ? h("div", { class: "list-controls" }) : null;
+  refs.viewSummary = textos ? h("span", { class: "list-view-current" }) : null;
+  refs.resumeDraft = h("button", { type: "button", class: "el-button library-resume", hidden: true,
+    onclick: () => openCollectionDetail(kind) }, t("Retomar edição"));
+  const viewToggle = h("summary", { class: "list-view-toggle" },
+    icon("settings"), h("span", { class: "list-view-label" }, t("Visualização")), refs.viewSummary, icon("chevron-down"));
+  const view = refs.viewBar ? h("details", {
+    class: "list-view", onkeydown: (event: KeyboardEvent) => {
+      const details = event.currentTarget as HTMLDetailsElement;
+      if (event.key !== "Escape" || !details.open) return;
+      event.stopPropagation();
+      event.preventDefault();
+      details.open = false;
+      viewToggle.focus();
+    },
+  }, viewToggle, refs.viewBar) : null;
 
-  return h("div", { class: "textos" },
-    h("section", { class: "collection", "aria-labelledby": "collection-title" },
-      h("div", { class: "heading" },
+  return h("div", { class: "textos library-workspace", "data-pane": "list" },
+    h("section", { class: textos ? "collection text-collection" : "collection", "aria-labelledby": "collection-title" },
+      h("header", { class: "heading" },
         h("h1", { id: "collection-title" }, title),
-        h("button", { type: "button", class: "primary", title: "Ctrl+N", onclick: () => void newItem(kind) },
+        h("button", { type: "button", class: "el-button library-new", title: "Ctrl+N", onclick: () => void newItem(kind) },
           icon("plus"), textos ? t("Novo") : t("Novo item")),
       ),
       typeBar.host,
-      refs.viewBar,
       h("div", { class: "search" }, icon("search"), refs.search),
-      h("p", { class: "list-caption" }, h("span", {}, textos ? t("Trigger") : t("Identificador")), refs.count),
+      view,
+      h("div", { class: "list-caption" }, refs.count, refs.resumeDraft),
       refs.items,
       refs.receipt,
     ),
@@ -1296,63 +1535,75 @@ function renderTypeBar(): void {
   );
 }
 
-/** Textos' Exibir and Grupo filters, and the Grupos menu beside them. */
 function renderViewBar(): void {
   const host = refs.viewBar;
   if (!host) return;
-  const selected = state.groups.find((group) => group.id === state.view.group);
+  const active = document.activeElement;
+  const focused = active instanceof HTMLSelectElement && host.contains(active) ? active.name : null;
+  const select = <K extends keyof typeof state.view>(key: K, label: string,
+    choices: [value: (typeof state.view)[K], label: string][]) =>
+    h("label", { class: "list-control" }, h("span", {}, label), h("select", {
+      name: key, class: "field",
+      onchange: (event: Event) => {
+        const value = (event.target as HTMLSelectElement).value;
+        void setView({ [key]: value }).catch((error) => alertError(label, error));
+      },
+    }, ...choices.map(([value, option]) => h("option", { value, selected: value === state.view[key] }, option))));
+
   host.replaceChildren(
-    h("select", {
-      class: "field", "aria-label": t("Exibir"),
-      onchange: (event: Event) => void setView({ filter: (event.target as HTMLSelectElement).value as ListFilter }),
-    }, ...listFilters().map(([value, label]) => h("option", { value, selected: value === state.view.filter }, label))),
-    h("select", {
-      class: "field", "aria-label": t("Filtrar por grupo"),
-      onchange: (event: Event) => void setView({ group: (event.target as HTMLSelectElement).value }),
-    },
-    h("option", { value: "", selected: state.view.group === "" }, t("Todos os grupos")),
-    h("option", { value: UNGROUPED, selected: state.view.group === UNGROUPED }, t("Sem grupo")),
-    ...state.groups.map((group) => h("option", { value: group.id, selected: group.id === state.view.group },
-      group.enabled ? group.label : t("{name} (desativado)", { name: group.label })))),
-    menuButton(t("Grupos"), () => [
-      { label: t("Novo grupo…"), run: () => void groupDialog(null) },
-      { label: t("Editar grupo…"), disabled: !selected, run: () => void groupDialog(selected!.id) },
-      { label: t("Excluir grupo"), disabled: !selected, run: () => void deleteGroup(selected!.id) },
-    ], {
-      disabled: state.groupsReadOnly,
-      title: state.groupsReadOnly ? readOnlyMessage()
-        : selected ? undefined : t("Escolha um grupo no filtro para editar ou excluir."),
-    }),
+    select("filter", t("Exibir"), listFilters()),
+    select("group", t("Filtrar por grupo"), [
+      ["", t("Todos os grupos")], [UNGROUPED, t("Sem grupo")],
+      ...state.groups.map((group): [string, string] => [
+        group.id, group.enabled ? group.label : t("{name} (desativado)", { name: group.label }),
+      ]),
+    ]),
+    select("order", t("Ordenar por"), [
+      ["trigger", t("Trigger (A–Z)")], ["text", t("Texto (A–Z)")],
+      ["created", t("Criação recente")], ["used", t("Uso recente")],
+    ]),
+    select("grouping", t("Agrupar por"), [
+      ["none", t("Sem agrupamento")], ["group", t("Grupo")],
+      ["favorite", t("Favorito")], ["type", t("Tipo")],
+    ]),
   );
+  if (focused) host.querySelector<HTMLElement>(`select[name="${focused}"]`)?.focus({ preventScroll: true });
+  renderViewSummary();
 }
 
-function fold(text: string): string {
-  return text.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+function renderViewSummary(): void {
+  const summary = refs.viewSummary;
+  if (!summary) return;
+  const keys = ["order"];
+  if (state.view.grouping !== "none") keys.push("grouping");
+  if (state.view.filter !== "all") keys.push("filter");
+  if (state.view.group) keys.push("group");
+  const text = keys.map((key) => refs.viewBar?.querySelector<HTMLSelectElement>(`select[name="${key}"]`)
+    ?.selectedOptions[0]?.text).filter(Boolean).join(" · ");
+  summary.textContent = text;
+  summary.title = text;
 }
 
-/** Name prefix first, then name substring, then text matches. */
-function visibleItems(kind: Kind): Item[] {
+function collectionSections(kind: Kind): ReturnType<typeof listSections> {
   const { items, query } = state.collections[kind];
-  const needle = fold(query.trim());
-  if (!needle) return items;
-  const ranked: [number, Item][] = [];
-  for (const item of items) {
-    const name = fold(item.name);
-    const rank = name.startsWith(needle) ? 0 : name.includes(needle) ? 1
-      : fold(item.preview).includes(needle) ? 2 : -1;
-    if (rank >= 0) ranked.push([rank, item]);
-  }
-  return ranked.sort((a, b) => a[0] - b[0]).map(([, item]) => item);
+  return listSections(items, query, kind === "textos"
+    ? { order: state.view.order, grouping: state.view.grouping, language: state.info?.language ?? "pt-BR" }
+    : undefined);
+}
+
+function visibleItems(kind: Kind): Item[] {
+  return collectionSections(kind).flatMap((section) => section.items);
 }
 
 /** Oculto pelo filtro atual: the open item is saved but the list's search or view hides it. */
-function renderHiddenNote(): void {
+function renderHiddenNote(items?: Item[]): void {
   const host = refs.hiddenNote;
   const kind = activeKind();
   if (!host || !kind) return;
   const draft = state.collections[kind].draft;
   const shown = !!draft?.original && (kind === "textos" || draft.type === state.type)
-    && !visibleItems(kind).some((item) => item.name === draft.original);
+    && !(items ?? visibleItems(kind)).some((item) => item.name === draft.original);
+  if (host.hidden === !shown) return;
   host.hidden = !shown;
   host.replaceChildren(...(shown ? [
     h("span", {}, t("Oculto pelo filtro atual.")),
@@ -1369,6 +1620,7 @@ async function revealCurrent(kind: Kind): Promise<void> {
   if (refs.search) refs.search.value = "";
   if (kind === "textos" && viewActive()) await setView({ filter: "all", group: "" });
   else renderList();
+  if (compactLibrary.matches) showCollectionList(kind);
   const item = [...(refs.items?.querySelectorAll<HTMLElement>(".item") ?? [])].find((element) => element.dataset.name === name);
   item?.scrollIntoView({ block: "nearest" });
   item?.focus();
@@ -1378,18 +1630,24 @@ function renderList(): void {
   const host = refs.items;
   const kind = activeKind();
   if (!host || !kind) return;
-  renderHiddenNote();
+  const active = document.activeElement;
+  const focusedName = active instanceof HTMLElement && host.contains(active) ? active.dataset.name : undefined;
   const collection = state.collections[kind];
   const textos = kind === "textos";
-  const items = visibleItems(kind);
+  const sections = collectionSections(kind);
+  const items = sections.flatMap((section) => section.items);
+  renderHiddenNote(items);
   const draft = collection.draft;
   const current = draft && (textos || draft.type === state.type) ? draft.original : null;
   const narrowed = textos && viewActive();
-  refs.count!.textContent = collection.query.trim() || narrowed
+  const count = collection.query.trim() || narrowed
     ? t("{shown} de {total}", { shown: items.length, total: collection.total })
     : textos ? t("{total} textos", { total: collection.total })
     : t("{total} itens", { total: collection.total });
+  if (refs.count!.textContent !== count) refs.count!.textContent = count;
   if (!items.length) {
+    host.setAttribute("role", "group");
+    if (focusedName) refs.search?.focus({ preventScroll: true });
     if (narrowed && !collection.query.trim()) {
       host.replaceChildren(h("div", { class: "empty-list" },
         h("p", {}, t("Nenhum texto nesta visualização.")),
@@ -1407,10 +1665,16 @@ function renderList(): void {
       offerImport ? h("button", { type: "button", class: "el-button", onclick: () => importLibrary() }, t("Importar…")) : null));
     return;
   }
-  // One Tab stop for the whole list: the open item, else the first one.
-  const tabStop = items.some((item) => item.name === current) ? current : items[0].name;
+  host.setAttribute("role", "listbox");
+  const focusedItem = items.find((item) => item.name === focusedName);
+  // One Tab stop for the whole list: the focused row, then the editor's row, then the first.
+  const tabStop = focusedItem?.name ?? items.find((item) => item.name === current)?.name ?? items[0].name;
+  const sectionLabels = {
+    ungrouped: t("Sem grupo"), favorite: t("Favoritos"), other: t("Sem favorito"),
+    plain: t("Texto simples"), rich: t("Texto formatado"), form: t("Com formulário"), keys: t("Com teclas"),
+  };
   // ceiling: renders every row; virtualize if libraries beyond ~5k snippets feel slow.
-  host.replaceChildren(...items.map((item) => h("button", {
+  const row = (item: Item) => h("button", {
     type: "button", class: "item", role: "option", "data-name": item.name,
     "aria-selected": item.name === current ? "true" : "false", tabindex: item.name === tabStop ? "0" : "-1",
     "aria-label": itemLabel(item),
@@ -1421,15 +1685,27 @@ function renderList(): void {
   h("span", { class: "badges" },
     item.favorite ? icon("favorite") : null,
     item.rich ? h("span", { class: "el-badge" }, t("formatado")) : null,
+    item.form ? h("span", { class: "el-badge" }, t("Formulário")) : null,
     item.keys ? h("span", { class: "el-badge", title: t("Pressiona Enter ou Tab ao expandir.") },
       icon("bi-keyboard"), t("teclas")) : null,
     item.shadowed ? h("span", { class: "el-badge", title: t("Um snippet dinâmico usa este trigger e tem prioridade.") },
       t("sombreado")) : null,
-    item.group ? h("span", { class: "el-badge" }, item.group) : null,
+    item.group && state.view.grouping !== "group"
+      ? h("span", { class: "el-badge", title: item.group }, item.group) : null,
     item.enabled === false ? h("span", { class: "el-badge" }, t("desativado")) : null,
   ),
-  h("span", { class: "preview" }, ...(item.preview ? withChips(item.preview, tokenLibrary) : ["—"])))));
-  host.querySelector<HTMLElement>(".item[aria-selected=true]")?.scrollIntoView({ block: "nearest" });
+  h("span", { class: "preview" }, ...(item.preview ? withChips(item.preview, tokenLibrary) : ["—"])));
+
+  host.replaceChildren(...sections.flatMap<HTMLElement>(({ title, items }) => {
+    const rows = items.map(row);
+    if (!title) return rows;
+    const label = title.kind === "group" ? title.label ?? t("Grupo") : sectionLabels[title.kind];
+    return [h("div", { class: "item-group", role: "group", "aria-label": label },
+      h("div", { class: "item-group-heading", "aria-hidden": "true" }, h("span", {}, label), h("span", {}, String(items.length))),
+      ...rows)];
+  }));
+  if (focusedName) host.querySelector<HTMLElement>(".item[tabindex='0']")?.focus();
+  else host.querySelector<HTMLElement>(".item[aria-selected=true]")?.scrollIntoView({ block: "nearest" });
 }
 
 /** What a screen reader says for a row: its trigger, its badges in words, then its text. */
@@ -1439,6 +1715,7 @@ function itemLabel(item: Item): string {
     trigger,
     item.favorite ? t("favorito") : "",
     item.rich ? t("formatado") : "",
+    item.form ? t("Com formulário") : "",
     item.keys ? t("teclas") : "",
     item.shadowed ? t("sombreado") : "",
     item.group ?? "",
@@ -1451,11 +1728,17 @@ function onListKey(event: KeyboardEvent): void {
   const target = event.target as HTMLElement;
   const kind = activeKind();
   if (!kind || !target.classList.contains("item")) return;
-  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+  if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
     event.preventDefault();
-    const sibling = event.key === "ArrowDown" ? target.nextElementSibling : target.previousElementSibling;
-    if (sibling instanceof HTMLElement) sibling.focus();
-    else if (event.key === "ArrowUp") refs.search?.focus();
+    const rows = [...(refs.items?.querySelectorAll<HTMLElement>(".item") ?? [])];
+    const index = rows.indexOf(target);
+    const next = event.key === "Home" ? rows[0] : event.key === "End" ? rows[rows.length - 1]
+      : rows[index + (event.key === "ArrowDown" ? 1 : -1)];
+    if (next) {
+      refs.items?.querySelector<HTMLElement>(".item[tabindex='0']")?.setAttribute("tabindex", "-1");
+      next.tabIndex = 0;
+      next.focus();
+    } else if (event.key === "ArrowUp") refs.search?.focus();
   } else if (event.key === "Delete" && target.getAttribute("aria-selected") === "true") {
     event.preventDefault();
     void deleteCurrent(kind);
@@ -1468,13 +1751,15 @@ function updateSaveState(): void {
   const dirty = isDirty(kind);
   const draft = state.collections[kind].draft;
   if (refs.saveButton) refs.saveButton.disabled = !dirty;
+  if (refs.resumeDraft) refs.resumeDraft.hidden = !draft || (kind === "mapeamentos" && draft.type !== state.type);
   if (refs.saveState) {
     refs.saveState.textContent = dirty ? t("Alterações não salvas") : draft?.original ? t("Salvo") : "";
     refs.saveState.classList.toggle("dirty", dirty);
   }
   if (refs.effective && draft && kind === "textos") {
-    refs.effective.textContent = draft.original && draft.effectiveTrigger !== draft.original
-      ? t("Com o prefixo do grupo, digite {trigger} para expandir.", { trigger: draft.effectiveTrigger })
+    const prefix = state.groups.find((group) => group.id === draft.groupId)?.prefix;
+    refs.effective.textContent = prefix && draft.name.trim()
+      ? t("Com o prefixo do grupo, digite {trigger} para expandir.", { trigger: prefix + draft.name.trim() })
       : t("O que você digita para expandir. Triggers com '_' são reservados.");
   } else if (refs.effective && draft) {
     const prefix = state.types.find((type) => type.key === draft.type)?.prefix ?? "";
@@ -1505,12 +1790,13 @@ function formatBar(editor: RichEditor, hint: HTMLElement): HTMLElement {
       },
     }, icon(symbol))),
     h("button", {
-      type: "button", class: "el-button", onmousedown: keep,
+      type: "button", class: "el-button", title: t("Limpar formatação"), "aria-label": t("Limpar formatação"),
+      onmousedown: keep,
       onclick: () => {
         editor.clear();
         editor.focus();
       },
-    }, icon("bi-eraser"), t("Limpar formatação")),
+    }, icon("bi-eraser")),
   );
 }
 
@@ -1775,25 +2061,32 @@ function renderDetail(): void {
   const collection = state.collections[kind];
   // A Mapeamentos draft stays with its own type; another type shows no editor.
   const draft = collection.draft && (textos || collection.draft.type === state.type) ? collection.draft : null;
+  const workspace = host.parentElement!;
+  const hadDetail = workspace.dataset.pane === "detail";
+  const saveHadFocus = document.activeElement === refs.saveButton;
+  workspace.dataset.pane = collection.detailOpen && draft ? "detail" : "list";
+  workspace.classList.toggle("has-draft", !!draft);
   refs.effective = null;
   if (!draft) {
     refs.saveButton = null;
     refs.saveState = null;
     refs.hiddenNote = null;
-    host.replaceChildren(h("div", { class: "blank" },
-      icon(textos ? "document" : "mapping"),
+    refs.meta = null;
+    textEditor = null;
+    host.replaceChildren(h("div", { class: "blank library-empty" },
+      h("span", { class: "library-empty-icon" }, icon(textos ? "document" : "mapping")),
+      h("h2", {}, textos ? t("Nenhum texto selecionado") : t("Nenhum item selecionado")),
       h("p", {}, textos ? t("Selecione um texto na lista ou crie um novo.")
         : t("Selecione um item na lista ou crie um novo.")),
-      h("button", { type: "button", class: "primary", onclick: () => void newItem(kind) }, icon("plus"),
-        textos ? t("Novo") : t("Novo item")),
     ));
     updateSaveState();
+    if (hadDetail && compactLibrary.matches) showCollectionList(kind);
     return;
   }
 
   refs.saveButton = h("button", {
-    type: "button", class: "primary", title: "Ctrl+S", onclick: () => void save(kind),
-  }, icon("check"), t("Salvar"));
+    type: "button", class: "el-button primary library-save", title: "Ctrl+S", onclick: () => void save(kind),
+  }, t("Salvar"));
   refs.saveState = h("span", { class: "state", role: "status" });
   refs.effective = h("span", { class: "hint", id: "name-hint", "aria-live": "polite" });
   const onInput = (field: "name") => (event: Event) => {
@@ -1805,7 +2098,7 @@ function renderDetail(): void {
     : draft.original ? t("{name} em {type}", { name: draft.original, type: typeLabel(draft.type) })
     : t("Novo item em {type}", { type: typeLabel(draft.type) });
 
-  refs.meta = draft.original ? h("div", { class: "meta-row" }) : null;
+  refs.meta = textos || draft.original ? h("div", { class: "meta-row" }) : null;
   const formatHint = h("span", { class: "hint", "aria-live": "polite" });
   // Only a saved snippet can be named by a variable; its own name is not offered to it.
   const exclude = textos ? draft.original : null;
@@ -1821,23 +2114,24 @@ function renderDetail(): void {
     },
   });
   textEditor = editor;
+  const actions = draft.original ? menuButton(t("Mais ações"), () => [
+    { label: t("Duplicar"), shortcut: "Ctrl+D", run: () => void duplicateCurrent(kind) },
+    ...(textos ? [{ label: t("Renomear"), shortcut: "F2", run: () => void renameCurrent() }] : []),
+    { label: t("Excluir"), shortcut: "Delete", danger: true, run: () => void deleteCurrent(kind) },
+  ]) : null;
   host.replaceChildren(
-    h("div", { class: "commands" },
-      refs.saveButton,
-      draft.original ? h("button", { type: "button", title: "Ctrl+D", onclick: () => void duplicateCurrent(kind) },
-        t("Duplicar")) : null,
-      draft.original && textos ? h("button", { type: "button", title: "F2", onclick: () => void renameCurrent() },
-        t("Renomear")) : null,
-      h("button", { type: "button", onclick: () => void showPreview(kind) }, t("Prévia")),
-      draft.original ? h("button", { type: "button", class: "danger", title: "Delete", onclick: () => void deleteCurrent(kind) },
-        t("Excluir")) : null,
-      refs.saveState,
-    ),
-    refs.hiddenNote = h("div", { class: "hidden-note", role: "status", hidden: true }),
-    h("div", { class: "editor" },
-      h("h2", {}, heading),
-      refs.meta,
-      h("label", {},
+    h("div", { class: "editor library-editor" },
+      h("button", { type: "button", class: "el-button library-back", onclick: () => showCollectionList(kind) },
+        icon("back"), t("Voltar à lista")),
+      h("header", { class: "editor-header" },
+        h("div", { class: "editor-heading" },
+          h("h2", { id: "library-editor-title", tabindex: -1 }, heading), refs.saveState),
+        h("div", { class: "editor-actions" },
+          h("button", { type: "button", class: "el-button editor-preview", onclick: () => void showPreview(kind) }, t("Prévia")),
+          actions, refs.saveButton),
+      ),
+      refs.hiddenNote = h("div", { class: "hidden-note", role: "status", hidden: true }),
+      h("label", { class: "editor-trigger" },
         h("span", { id: "name-label" }, textos ? t("Trigger") : t("Identificador")),
         h("input", {
           id: "name", class: "field", value: draft.name, autocomplete: "off",
@@ -1846,10 +2140,12 @@ function renderDetail(): void {
         }),
         refs.effective,
       ),
-      h("div", { class: "grow text-field" },
+      refs.meta,
+      h("div", { class: "text-field" },
         h("span", { class: "field-label", id: "text-label" }, textos ? t("Texto") : t("Valor")),
-        h("div", { class: "editor-tools" }, formatBar(editor, formatHint), insertMenu(editor, exclude)),
-        editor.element,
+        h("div", { class: "editor-sheet" },
+          h("div", { class: "editor-tools" }, formatBar(editor, formatHint), insertMenu(editor, exclude)),
+          editor.element),
         attachCompletion(editor, () => completionCandidates(exclude), (name) => describeToken(name, tokenLibrary)),
         h("span", { class: "hint", id: "text-hint" }, textos ? t("Digite %% para inserir uma variável, ou use Inserir.")
           : t("O texto que entra no lugar do trigger."), " ", formatHint),
@@ -1859,20 +2155,23 @@ function renderDetail(): void {
   renderMeta();
   updateSaveState();
   renderHiddenNote();
+  if (saveHadFocus) (refs.saveButton.disabled ? document.getElementById("library-editor-title") : refs.saveButton)?.focus();
 }
 
-/** The saved item's Grupo and Favorito, redrawn in place so the draft's fields keep focus and caret. */
+/** Redraw organization controls without disturbing the text editor's selection. */
 function renderMeta(): void {
   const host = refs.meta;
   const kind = activeKind();
   const draft = kind ? state.collections[kind].draft : null;
-  if (!host || !kind || !draft?.original) return;
+  if (!host || !kind || !draft) return;
+  const active = document.activeElement;
+  const focused = active instanceof HTMLElement && host.contains(active) ? active.dataset.meta : undefined;
   const locked = state.groupsReadOnly;
   const title = locked ? readOnlyMessage() : undefined;
   const group = kind === "textos" ? h("label", { class: "inline" },
     h("span", {}, t("Grupo")),
     h("select", {
-      class: "field", disabled: locked, title,
+      class: "field", "data-meta": "group", disabled: locked, title,
       onchange: (event: Event) => void setGroup((event.target as HTMLSelectElement).value),
     },
     h("option", { value: "", selected: !draft.groupId }, t("Sem grupo")),
@@ -1880,11 +2179,12 @@ function renderMeta(): void {
       option.label))),
   ) : null;
   host.replaceChildren(...(group ? [group] : []), h("button", {
-    type: "button", class: "el-button", "aria-pressed": String(draft.favorite), disabled: locked, title,
+    type: "button", class: "el-button", "data-meta": "favorite", "aria-pressed": String(draft.favorite), disabled: locked, title,
     onclick: () => void setFavorite(kind, !draft.favorite),
   }, icon("favorite"), t("Favorito")), h("button", {
-    type: "button", class: "el-button", onclick: () => void editForm(kind),
+    type: "button", class: "el-button", "data-meta": "form", onclick: () => void editForm(kind),
   }, t("Formulário…")));
+  if (focused) host.querySelector<HTMLElement>(`[data-meta="${focused}"]`)?.focus({ preventScroll: true });
   updateSaveState();
 }
 
@@ -1925,15 +2225,16 @@ function retype(field: FormFieldDef, type: string, dateFormat: string): void {
 
 async function editForm(kind: Kind): Promise<void> {
   const draft = state.collections[kind].draft;
-  if (!draft?.original) return;
+  if (!draft) return;
+  const creating = draft.original === null;
   let info: FormInfo;
   try {
-    info = await request<FormInfo>("form.get", formTarget(kind, draft));
+    info = await request<FormInfo>("form.get", creating ? { text: draft.text } : formTarget(kind, draft));
   } catch (error) {
     await alertError(t("Formulário"), error);
     return;
   }
-  const fields: FormFieldDef[] = info.fields.map((field) => ({ ...field, options: field.options ? [...field.options] : undefined }));
+  const fields: FormFieldDef[] = structuredClone(draft.fields ?? info.fields);
   let selected = fields.length ? 0 : -1;
   const list = h("div", { class: "field-list", role: "listbox", "aria-label": t("Campos do formulário") });
   const editor = h("div", { class: "field-editor" });
@@ -2023,9 +2324,13 @@ async function editForm(kind: Kind): Promise<void> {
       onsubmit: async (event: Event) => {
         event.preventDefault();
         submit.disabled = true;
-        let answer: FormSaveAnswer;
+        let answer: FormSaveAnswer | { status: "valid"; fields: FormFieldDef[] };
         try {
-          answer = await request<FormSaveAnswer>("form.save", { ...formTarget(kind, draft), fields: fields.map(storedField) });
+          const values = fields.map(storedField);
+          answer = creating
+            ? await request<{ status: "valid"; fields: FormFieldDef[] } | Extract<FormSaveAnswer, { status: "invalid" }>>(
+              "form.validate", { text: draft.text, fields: values })
+            : await request<FormSaveAnswer>("form.save", { ...formTarget(kind, draft), fields: values });
         } catch (failure) {
           error.textContent = errorText(failure);
           submit.disabled = false;
@@ -2041,11 +2346,12 @@ async function editForm(kind: Kind): Promise<void> {
           }
           return;
         }
+        if (answer.status === "valid") draft.fields = answer.fields;
         saved = true;
         dialog.close();
       },
     },
-    h("h2", { id: "dialog-title" }, t("Formulário — {name}", { name: draft.original })),
+    h("h2", { id: "dialog-title" }, t("Formulário — {name}", { name: draft.original ?? (draft.name.trim() || t("Novo texto")) })),
     info.variables.length
       ? h("p", { class: "muted chips" }, t("Campos que o texto pede:"), " ",
         ...info.variables.map((name) => chip(`%%${name}%%`, describeToken(name, tokenLibrary))))
@@ -2086,7 +2392,10 @@ async function editForm(kind: Kind): Promise<void> {
     dialog.addEventListener("close", () => resolve());
     openDialog(dialog, list.querySelector("button") ?? submit);
   });
-  if (saved) showReceipt(kind, { text: t("Formulário salvo às {time} · {name}", { time: clock(), name: draft.original }) });
+  if (saved && creating) updateSaveState();
+  else if (saved && draft.original) showReceipt(kind, {
+    text: t("Formulário salvo às {time} · {name}", { time: clock(), name: draft.original }),
+  });
 }
 
 /** Prévia: the editor's text as expansion would type it, fields at their defaults. */
@@ -2095,7 +2404,7 @@ async function showPreview(kind: Kind): Promise<void> {
   if (!draft) return;
   // The editor's text, unsaved edits included; formatting does not change what is typed.
   const params = { ...(draft.original ? formTarget(kind, draft) : kind === "mapeamentos" ? { type: draft.type } : {}),
-    text: draft.text };
+    text: draft.text, fields: draft.fields };
   let preview: Preview;
   try {
     preview = await request<Preview>("preview.get", params);
@@ -2200,10 +2509,10 @@ function dynamicsPage(): HTMLElement {
     },
   });
   dynamicsRefs.list = h("div", { class: "dynamic-sections" });
-  dynamicsRefs.count = h("span", { class: "muted" });
+  dynamicsRefs.count = h("span", { class: "muted", role: "status" });
   dynamicsRefs.receipt = h("div", { class: "receipt", role: "status", "aria-live": "polite" });
-  return h("div", { class: "settings-page" },
-    h("header", {},
+  return h("div", { class: "secondary-page dynamics-page" },
+    h("header", { class: "secondary-header" },
       h("h1", {}, t("Snippets dinâmicos")),
       h("p", { class: "muted" }, t("Triggers que montam o texto na hora: datas, indicadores, cotações e links do WhatsApp.")),
     ),
@@ -2228,25 +2537,25 @@ function renderDynamics(): void {
     shown += items.length;
     if (!items.length) return null;
     const headingId = `dynamic-${section.id}`;
-    return h("section", { class: "cards", "aria-labelledby": headingId },
-      h("h2", { id: headingId, class: "section-title" }, section.label),
-      ...items.map((item) => h("div", { class: `card dynamic${item.enabled ? "" : " off"}` },
-        h("label", { class: "el-choice" },
+    return h("section", { class: "dynamic-section", "aria-labelledby": headingId },
+      h("h2", { id: headingId }, section.label),
+      h("ul", { class: "dynamic-list" }, ...items.map((item) => h("li", { class: "dynamic-row" },
+        h("label", { class: "el-choice dynamic-toggle" },
           h("input", {
             type: "checkbox", role: "switch", class: "el-switch", checked: item.enabled,
             "aria-label": t("{trigger} ativo", { trigger: item.trigger }),
             onchange: (event: Event) => void setDynamicEnabled(item.key, item.trigger,
               (event.target as HTMLInputElement).checked),
           })),
-        h("div", { class: "stack" },
+        h("div", { class: "dynamic-identity" },
           h("code", { class: "trigger" }, item.key === item.trigger ? item.trigger : `${item.key} → ${item.trigger}`),
-          h("span", { class: "muted" }, item.description)),
+          h("p", { class: "muted" }, item.description)),
         h("button", {
           type: "button", class: "el-button", "aria-label": t("Renomear {trigger}", { trigger: item.trigger }),
           onclick: () => void renameDynamic(item.key, item.trigger),
         },
           t("Renomear")),
-      )));
+      ))));
   });
   dynamicsRefs.count!.textContent = t("{shown} de {total}", { shown, total });
   dynamicsRefs.receipt!.textContent = state.dynamics.receipt;
@@ -2271,6 +2580,7 @@ function backupsReceipt(text: string): void {
 function pageReceipt(text: string): void {
   const kind = activeKind();
   if (kind) showReceipt(kind, { text });
+  else if (state.page === "grupos") showReceipt("grupos", { text });
   else if (state.page === "dinamicos") dynamicsReceipt(text);
   else if (state.page === "settings") settingsReceipt(text);
   else backupsReceipt(text);
@@ -2438,19 +2748,21 @@ function sizeText(bytes: number): string {
 function backupsPage(): HTMLElement {
   backupsRefs.list = h("div", { class: "backup-list" });
   backupsRefs.receipt = h("div", { class: "receipt", role: "status", "aria-live": "polite" });
-  return h("div", { class: "settings-page" },
-    h("header", {},
-      h("h1", {}, t("Backups da biblioteca")),
-      h("p", { class: "muted" }, t("Cada alteração guarda a versão anterior aqui; os 30 backups mais recentes ficam guardados.")),
-      h("code", { class: "path" }, state.info?.dataDir ?? ""),
+  return h("div", { class: "secondary-page backups-page" },
+    h("header", { class: "secondary-header" },
+      h("div", {},
+        h("h1", {}, t("Backups da biblioteca")),
+        h("p", { class: "muted" }, t("Cada alteração guarda a versão anterior aqui; os 30 backups mais recentes ficam guardados.")),
+      ),
+      h("button", { type: "button", class: "primary", onclick: () => void createBackup() }, icon("plus"), t("Criar backup")),
     ),
     h("div", { class: "backup-actions" },
-      h("button", { type: "button", class: "primary", onclick: () => void createBackup() }, icon("plus"), t("Criar backup")),
       h("button", { type: "button", class: "el-button", onclick: () => void exportLibrary() }, t("Exportar…")),
       h("button", { type: "button", class: "el-button", onclick: () => importLibrary() }, t("Importar…")),
       h("button", { type: "button", class: "el-button", onclick: () => void request("app.openDataFolder") },
         t("Abrir pasta")),
     ),
+    h("code", { class: "backup-path" }, state.info?.dataDir ?? ""),
     backupsRefs.receipt,
     backupsRefs.list,
   );
@@ -2466,37 +2778,38 @@ function renderBackups(): void {
     return;
   }
   const count = (value: number | null) => value === null ? t("inválido") : String(value);
+  const headings = [t("Textos"), t("Listas"), t("Tamanho")];
   host.replaceChildren(
     h("p", { class: "muted" }, t("{count} backups disponíveis", { count: items.length })),
-    h("table", { class: "backups", "aria-label": t("Backups da biblioteca") },
+    h("div", { class: "backup-table" }, h("table", { class: "backups", "aria-label": t("Backups da biblioteca") },
       h("thead", {}, h("tr", {},
-        h("th", { scope: "col" }, t("Quando")), h("th", { scope: "col", class: "num" }, t("Textos")),
-        h("th", { scope: "col", class: "num" }, t("Listas")), h("th", { scope: "col", class: "num" }, t("Tamanho")),
+        h("th", { scope: "col" }, t("Quando")),
+        ...headings.map((label) => h("th", { scope: "col", class: "num" }, label)),
         h("th", { scope: "col" }, h("span", { class: "sr-only" }, t("Ações"))))),
-      h("tbody", {}, ...items.map((backup, index) => h("tr", {},
-        h("td", {}, backup.when, backup.empty ? h("span", { class: "muted" }, ` · ${t("0 itens")}`) : null),
-        h("td", { class: "num" }, count(backup.texts)),
-        h("td", { class: "num" }, count(backup.lists)),
-        h("td", { class: "num" }, sizeText(backup.size)),
-        h("td", { class: "action" }, h("button", {
-          type: "button", class: "el-button", disabled: backup.texts === null,
-          // Two backups can share a minute, so the position keeps every button's name apart.
-          "aria-label": t("Restaurar o backup {index} de {count}: {when}", {
-            index: index + 1, count: items.length, when: backup.when,
-          }),
-          onclick: () => void restoreBackup(backup.name),
-        }, t("Restaurar"))),
-      ))),
-    ),
+      h("tbody", {}, ...items.map((backup, index) => {
+        const facts = [count(backup.texts), count(backup.lists), sizeText(backup.size)];
+        return h("tr", {},
+          h("td", {}, backup.when, backup.empty ? h("span", { class: "muted" }, ` · ${t("0 itens")}`) : null,
+            h("dl", { class: "backup-facts" }, ...facts.map((fact, column) =>
+              h("div", {}, h("dt", {}, headings[column]), h("dd", {}, fact)))),
+          ),
+          ...facts.map((fact) => h("td", { class: "num" }, fact)),
+          h("td", { class: "action" }, h("button", {
+            type: "button", class: "el-button", disabled: backup.texts === null,
+            // Two backups can share a minute, so the position keeps every button's name apart.
+            "aria-label": t("Restaurar o backup {index} de {count}: {when}", {
+              index: index + 1, count: items.length, when: backup.when,
+            }),
+            onclick: () => void restoreBackup(backup.name),
+          }, t("Restaurar"))),
+        );
+      })),
+    )),
   );
 }
 
 function settingsPage(): HTMLElement {
   const info = state.info!;
-  const status = (card: string) => {
-    const entry = state.cardStatus[card];
-    return entry ? h("span", { class: `status${entry.error ? " error" : ""}`, role: "status" }, entry.text) : null;
-  };
   const segment = (card: string, key: string, current: string, choices: [string, string][]) =>
     h("div", { class: "el-segment", role: "radiogroup", "aria-labelledby": `card-${card}` },
       ...choices.map(([value, label]) => h("label", {},
@@ -2505,47 +2818,50 @@ function settingsPage(): HTMLElement {
           onchange: () => void setSetting(card, key, value),
         }),
         h("span", {}, label))));
-  const card = (id: string, title: string, body: string | Node, ...control: (Node | null)[]) =>
-    h("section", { class: "card", "aria-labelledby": `card-${id}` },
-      h("h2", { id: `card-${id}` }, title), h("p", {}, body), h("div", { class: "control" }, ...control));
+  const setting = (id: string, title: string, description: string, ...controls: Node[]) => {
+    const entry = state.cardStatus[id];
+    return h("section", { class: "settings-entry", "aria-labelledby": `card-${id}` },
+      h("div", { class: "settings-copy" },
+        h("h2", { id: `card-${id}` }, title),
+        h("p", { id: id === "hotkeys" ? "hotkeys-hint" : undefined, class: "muted" }, description),
+      ),
+      h("div", { class: "settings-fields" }, ...controls,
+        entry ? h("p", { class: `settings-status${entry.error ? " error" : ""}`, role: "status" }, entry.text) : null),
+    );
+  };
 
-  return h("div", { class: "settings-page" },
-    h("header", {},
-      h("h1", {}, t("Configurações")),
-      h("p", { id: "settings-receipt", class: "receipt", role: "status", "aria-live": "polite" }, state.settingsReceipt),
-      h("p", { class: "muted" }, t("Ajuste a aparência, a expansão e os dados do SnipType.")),
+  return h("div", { class: "secondary-page preferences-page" },
+    h("header", { class: "secondary-header" },
+      h("div", {},
+        h("h1", {}, t("Configurações")),
+        h("p", { class: "muted" }, t("Ajuste a aparência, a expansão e os dados do SnipType.")),
+      ),
     ),
-    h("div", { class: "cards" },
-      card("language", t("Idioma"), t("Idioma da interface. O texto dos snippets não muda."),
-        status("language"),
+    h("p", { id: "settings-receipt", class: "receipt", role: "status", "aria-live": "polite" }, state.settingsReceipt),
+    h("div", { class: "settings-sections" },
+      setting("language", t("Idioma"), t("Idioma da interface. O texto dos snippets não muda."),
         h("select", {
           class: "field", "aria-labelledby": "card-language",
           onchange: (event: Event) => void setSetting("language", "language", (event.target as HTMLSelectElement).value),
         }, ...Object.entries(info.languages).map(([code, name]) =>
           h("option", { value: code, selected: code === info.language }, name)))),
-      card("appearance", t("Aparência"), t("Siga o tema do Windows ou escolha um fixo."),
-        status("appearance"),
+      setting("appearance", t("Aparência"), t("Siga o tema do Windows ou escolha um fixo."),
         segment("appearance", "appearance", info.appearance,
           [["system", t("Sistema")], ["light", t("Claro")], ["dark", t("Escuro")]])),
-      card("density", t("Densidade"), t("Espaço dos controles e das linhas."),
-        status("density"),
+      setting("density", t("Densidade"), t("Espaço dos controles e das linhas."),
         segment("density", "density", info.density,
           [["compact", t("Compacta")], ["comfortable", t("Confortável")], ["touch", t("Toque")]])),
-      card("expansion", t("Modo terminador"),
+      setting("expansion", t("Modo terminador"),
         t("Expande só depois de um espaço ou pontuação, que continua no texto. Enter não conta."),
-        status("expansion"),
-        h("label", { class: "el-choice" },
+        h("label", { class: "el-choice setting-toggle" },
           h("input", {
             type: "checkbox", role: "switch", class: "el-switch", checked: info.terminatorMode,
             "aria-labelledby": "card-expansion",
             onchange: (event: Event) => void setSetting("expansion", "terminatorMode",
               (event.target as HTMLInputElement).checked),
           }))),
-      h("section", { class: "card hotkeys", "aria-labelledby": "card-hotkeys" },
-        h("h2", { id: "card-hotkeys" }, t("Atalhos de teclado")),
-        h("p", { id: "hotkeys-hint" },
-          t("Clique em um campo e pressione a combinação, como Ctrl+Shift+M. Backspace desativa o atalho.")),
-        status("hotkeys"),
+      setting("hotkeys", t("Atalhos de teclado"),
+        t("Clique em um campo e pressione a combinação, como Ctrl+Shift+M. Backspace desativa o atalho."),
         h("div", { class: "hotkey-rows" }, ...info.hotkeys.map((hotkey) => h("div", { class: "hotkey-row" },
           h("span", {}, hotkey.label),
           hotkeyField(hotkey.action, hotkey.label, hotkey.display),
@@ -2553,10 +2869,7 @@ function settingsPage(): HTMLElement {
             type: "button", class: "el-button", disabled: !hotkey.binding,
             onclick: () => void saveHotkey(hotkey.action, null),
           }, t("Desativar")))))),
-      h("section", { class: "card data", "aria-labelledby": "card-data" },
-        h("h2", { id: "card-data" }, t("Dados")),
-        h("p", {}, t("Biblioteca, backups e logs ficam nesta pasta.")),
-        status("data"),
+      setting("data", t("Dados"), t("Biblioteca, backups e logs ficam nesta pasta."),
         h("div", { class: "data-rows" },
           h("div", { class: "data-row" },
             h("span", {}, t("Pasta de dados")), h("code", {}, info.dataDir),
@@ -2564,9 +2877,8 @@ function settingsPage(): HTMLElement {
               t("Copiar"))),
           ...info.transfers.map(transferRow)),
         h("p", { class: "muted" }, t("A cópia espelho e o pacote de sincronização são definidos em settings.json.")),
-        h("div", { class: "control" },
-          h("button", { type: "button", class: "el-button", onclick: () => void request("app.openDataFolder") },
-            t("Abrir pasta")))),
+        h("button", { type: "button", class: "el-button", onclick: () => void request("app.openDataFolder") },
+          t("Abrir pasta"))),
     ),
   );
 }
@@ -2633,8 +2945,8 @@ document.addEventListener("keydown", (event) => {
   const kind = activeKind();
   // Keys every page answers: the switcher, Editar último, the sections, the shortcut sheet.
   if (ctrl && !event.altKey && !event.shiftKey) {
-    const page = PAGES[Number(event.key) - 1];
-    if (/^[1-5]$/.test(event.key) && page) {
+    const page = availablePages()[Number(event.key) - 1];
+    if (/^[1-6]$/.test(event.key) && page) {
       event.preventDefault();
       void showPage(page);
       return;
@@ -2686,8 +2998,11 @@ document.addEventListener("keydown", (event) => {
     void newItem(kind);
   } else if (key === "f") {
     event.preventDefault();
-    refs.search?.focus();
-    refs.search?.select();
+    if (compactLibrary.matches) showCollectionList(kind, true);
+    else {
+      refs.search?.focus();
+      refs.search?.select();
+    }
   }
 });
 
@@ -2825,7 +3140,7 @@ const shortcuts = (): [string, string][] => [
   ["Ctrl+K", t("Alternar snippet")],
   ["Ctrl+E", t("Editar último")],
   ["Ctrl+F", t("Buscar")],
-  ["Ctrl+1–5", t("Seções")],
+  [`Ctrl+1–${availablePages().length}`, t("Seções")],
   ["↓ / Enter", t("Na busca: focar a lista")],
   ["Ctrl+B / I / U", t("Negrito / itálico / sublinhado")],
   ["Ctrl+/", t("Esta lista")],
@@ -2863,7 +3178,11 @@ async function escapeEditor(kind: Kind): Promise<void> {
   renderDetail();
 }
 
-const PAGES: Page[] = ["textos", "mapeamentos", "dinamicos", "backups", "settings"];
+const PAGES: Page[] = ["textos", "grupos", "dinamicos", "backups", "mapeamentos", "settings"];
+
+function availablePages(): Page[] {
+  return state.info?.legacyMappings ? PAGES : PAGES.filter((page) => page !== "mapeamentos");
+}
 
 async function onAppEvent({ event: name, text }: AppEvent): Promise<void> {
   if (name === "focus") {
@@ -2872,10 +3191,20 @@ async function onAppEvent({ event: name, text }: AppEvent): Promise<void> {
   } else if (name === "target") {
     await takeTarget();
   } else if (name === "state") {
-    await refreshInfo().catch((error) => console.error("refresh failed", error));
+    try {
+      await refreshInfo();
+      if (state.page === "textos" && (state.view.order === "used" || state.view.filter === "recent")) {
+        await refreshCollectionRows("textos");
+      }
+    } catch (error) {
+      console.error("refresh failed", error);
+    }
   } else if (name === "library") {
     // The app pushes this after a reload or a restore: a Desfazer receipt described the library that was there.
     for (const kind of ["textos", "mapeamentos"] as Kind[]) state.collections[kind].receipt = null;
+    window.clearTimeout(receiptTimers.grupos);
+    state.groupsReceipt = null;
+    if (state.page === "grupos") renderReceipt();
     await refreshVisible().catch((error) => console.error("refresh failed", error));
     await loadTokenLibrary();
   } else if (name === "receipt" && text) {
@@ -2925,7 +3254,8 @@ async function saveWindow(): Promise<void> {
     normalRect = { x: position.x, y: position.y, width: size.width, height: size.height };
   }
   // A window maximized from the start keeps the default rectangle it would return to.
-  const value: WindowState = { ...(normalRect ?? {}), page: state.page };
+  const value: WindowState = { ...(normalRect ?? {}), page: state.page,
+    listOrder: state.view.order, listGrouping: state.view.grouping };
   if (normalRect) value.maximized = maximized;
   await request("window.save", { value });
 }
@@ -2943,8 +3273,9 @@ async function main(): Promise<void> {
   await startBridge((event) => void onAppEvent(event));
   try {
     await refreshInfo();
+    state.view.order = state.info?.window.listOrder ?? "trigger";
+    state.view.grouping = state.info?.window.listGrouping ?? "none";
     await refreshList("textos");
-    await refreshTypes();
   } catch (error) {
     root.replaceChildren(h("div", { class: "fatal", role: "alert" },
       h("h1", {}, t("O SnipType não respondeu")),
@@ -2969,7 +3300,8 @@ async function main(): Promise<void> {
   const savedPage = state.info?.window.page as Page | undefined;
   if (savedPage && savedPage !== state.page) await showPage(savedPage);
   renderAll();
-  refs.search?.focus();
+  if (state.page === "grupos") document.getElementById("groups-title")?.focus();
+  else refs.search?.focus();
   void loadTokenLibrary();
   await takeTarget().catch((error) => console.error("target failed", error));
 }

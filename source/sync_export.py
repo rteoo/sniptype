@@ -362,7 +362,7 @@ def _build_entry(trigger, value, source, classification_map, prefixes, logger):
 # TRIGGER SET (§1.7)
 # =====================================================================
 
-def build_entries(static_snippets, accepted_triggers, logger=None):
+def build_entries(static_snippets, accepted_triggers, logger=None, *, metadata=None):
     """Compile ``entries[]``: static snippets first, then mapping expansions.
 
     Precedence is accepted dynamic > static > mapping-composed; the loser of any
@@ -381,6 +381,8 @@ def build_entries(static_snippets, accepted_triggers, logger=None):
 
     entries = []
     emitted = set(accepted_triggers)
+    groups = metadata.get("groups", {}) if metadata else {}
+    items = metadata.get("items", {}).get("static", {}) if metadata else {}
 
     for key, value in static_snippets.items():
         if key.startswith("_"):
@@ -390,9 +392,18 @@ def build_entries(static_snippets, accepted_triggers, logger=None):
         if key in emitted:
             _warn(logger, f"Bundle: snippet estático '{key}' colide com um trigger dinâmico; ignorado.")
             continue
-        entry = _build_entry(key, value, "static", classification_map, prefixes, logger)
+        # Keep the existing mobile grouping contract for converted types.
+        origin = groups.get(items.get(key, {}).get("group_id"), {}).get("legacy_mapping")
+        group = None
+        if isinstance(origin, dict):
+            container, prefix = origin.get("container"), origin.get("prefix")
+            if isinstance(container, str) and isinstance(prefix, str) and key.startswith(prefix) and len(key) > len(prefix):
+                group = {"container": container, "prefix": prefix, "item": key[len(prefix):]}
+        entry = _build_entry(key, value, "mapping" if group else "static", classification_map, prefixes, logger)
         if entry is None:
             continue
+        if group:
+            entry["group"] = group
         emitted.add(key)
         entries.append(entry)
 
@@ -430,7 +441,7 @@ def build_bundle(static_snippets, registry, app_version=None, now=None, logger=N
     # The desktop document carries metadata under a reserved root key.  Keep
     # this pure entry point safe for direct callers too: metadata is never a
     # mobile snippet or variable surface.
-    static_snippets, _metadata = split_library_document(static_snippets)
+    static_snippets, metadata = split_library_document(static_snippets)
     accept_set = build_accept_set(registry, logger)
     accepted_triggers = [trigger for _key, trigger, _entry in accept_set]
 
@@ -444,7 +455,8 @@ def build_bundle(static_snippets, registry, app_version=None, now=None, logger=N
             "version": app_version,
             "platform": sys.platform,
         },
-        "entries": build_entries(static_snippets, accepted_triggers, logger),
+        "entries": build_entries(static_snippets, accepted_triggers, logger,
+                                 metadata=None if metadata.read_only else metadata),
         "dynamic": build_dynamic_metadata(accept_set, logger),
     }
 

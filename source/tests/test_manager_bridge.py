@@ -17,7 +17,7 @@ import ui_theme
 from manager_bridge import ManagerBridge, ManagerProcess, find_manager_executable, revision
 from rich_text_support import build_rich_text_payload
 from test_manager_runtime import make_real_app
-from workflow_support import SnippetRef
+from workflow_support import SnippetRef, WorkflowState
 
 
 def on_disk(app):
@@ -32,7 +32,7 @@ class BridgeTests(unittest.TestCase):
             "sig": "Best,\nTeo",
             "fancy": build_rich_text_payload("Bold text", [{"tag": "bold", "start": 0, "end": 4}]),
             "_codes": {"__prefix__": "c", "city": "Goiânia"},
-        })
+        }, migrate_mappings=False)
         self.bridge = ManagerBridge(self.app, version="9.9.9", channel="beta")
 
     def call(self, method, **params):
@@ -57,6 +57,18 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual("Best, Teo", items["sig"]["preview"])
         self.assertTrue(items["fancy"]["rich"])
         self.assertFalse(items["hello"]["rich"])
+
+    def test_list_exposes_full_plain_text_and_real_form_fields(self):
+        text = "First line\n" + "a" * 180 + " %%recipient%%"
+        self.result("snippet.save", trigger="message", text=text)
+        self.result("snippet.save", trigger="clipboard", text="%%clipboard-paste%% %%hello%% %%_date%%")
+        items = {item["trigger"]: item for item in self.result("library.list")["items"]}
+        self.assertEqual(text, items["message"]["sortText"])
+        self.assertEqual(160, len(items["message"]["preview"]))
+        self.assertTrue(items["message"]["form"])
+        self.assertFalse(items["clipboard"]["form"])
+        self.assertIsNone(items["hello"]["createdAt"])
+        self.assertIsNone(items["message"]["lastUsed"])
 
     def test_switcher_ranks_every_kind_like_the_classic_one(self):
         rows = self.result("switcher.search", query="")
@@ -187,20 +199,17 @@ class VariablesBridgeTests(unittest.TestCase):
     def test_lists_every_resolvable_name_with_a_one_line_detail(self):
         variables = self.result("variables.list")
         snippets = {item["name"]: item["detail"] for item in variables["snippets"]}
-        self.assertEqual({"hello": "Hello there", "sig": "Best, Teo"}, snippets)
-        self.assertEqual(["cpffulano"], [item["name"] for item in variables["mappings"]])
-        self.assertIn("123.456.789-00", variables["mappings"][0]["detail"])
+        self.assertEqual({"hello": "Hello there", "sig": "Best, Teo", "cpffulano": "123.456.789-00"}, snippets)
+        self.assertEqual([], variables["mappings"])
         dynamics = {item["name"] for item in variables["dynamics"]}
         self.assertTrue(dynamics)
         self.assertTrue(all(callable(self.app.snippets[name]) for name in dynamics))
 
     def test_rows_say_which_snippets_press_keys(self):
         self.result("snippet.save", trigger="login", text="user%%_tab%%pass%%_enter%%")
-        self.result("mapping.save", type="_cpf_numbers", name="tabbed", text="1%%_tab%%2")
+        self.result("snippet.save", trigger="cpftabbed", text="1%%_tab%%2")
         library = {item["trigger"]: item["keys"] for item in self.result("library.list")["items"]}
-        self.assertEqual({"hello": False, "sig": False, "login": True}, library)
-        mappings = {item["name"]: item["keys"] for item in self.result("mapping.list", type="_cpf_numbers")}
-        self.assertEqual({"fulano": False, "tabbed": True}, mappings)
+        self.assertEqual({"hello": False, "sig": False, "login": True, "cpffulano": False, "cpftabbed": True}, library)
 
     def test_a_name_the_resolver_would_not_reach_is_left_out(self):
         dynamic = self.result("variables.list")["dynamics"][0]["name"]
@@ -217,7 +226,7 @@ class MappingBridgeTests(unittest.TestCase):
                 "styled": build_rich_text_payload("Bold id", [{"tag": "bold", "start": 0, "end": 4}]),
             },
             "_email_codes": {"__prefix__": "mail", "work": "work@example.com"},
-        })
+        }, migrate_mappings=False)
         self.bridge = ManagerBridge(self.app, version="9.9.9", channel="beta")
 
     call, result, error = BridgeTests.call, BridgeTests.result, BridgeTests.error
@@ -334,7 +343,7 @@ class OrganizeBridgeTests(unittest.TestCase):
             "sig": "Best,\nTeo",
             "fancy": build_rich_text_payload("Bold text", [{"tag": "bold", "start": 0, "end": 4}]),
             "_cpf_numbers": {"fulano": "123.456.789-00"},
-        })
+        }, migrate_mappings=False)
         self.bridge = ManagerBridge(self.app, version="9.9.9", channel="beta")
 
     call, result, error = BridgeTests.call, BridgeTests.result, BridgeTests.error
@@ -381,6 +390,104 @@ class OrganizeBridgeTests(unittest.TestCase):
             self.result("snippet.get", trigger="hello")[k] for k in ("effectiveTrigger", "groupId", "favorite")))
         self.result("snippet.setGroup", trigger="hello", group="")
         self.assertNotIn("group_id", self.metadata()["items"]["static"].get("hello", {}))
+
+    def test_create_with_group_favorite_and_form_is_one_transaction(self):
+        group = self.new_group(prefix="work-")
+        params = {"trigger": "reply", "text": "Hello %%recipient%%", "groupId": group, "favorite": True,
+                  "fields": [{"name": "recipient", "type": "text", "default": "team"}]}
+        before = on_disk(self.app)
+        with mock.patch.object(tx, "write_json_atomic", side_effect=OSError("synthetic denied")) as write:
+            self.assertEqual("save_failed", self.error("snippet.save", **params)["code"])
+        write.assert_called_once()
+        self.assertEqual(before, on_disk(self.app))
+        self.assertNotIn("reply", self.app.snippets)
+        self.assertEqual("saved", self.result("snippet.save", **params)["status"])
+        (row,) = self.result("library.list", group=group, filter="favorites")["items"]
+        self.assertEqual(("work-reply", group, True), (row["effectiveTrigger"], row["groupId"], row["form"]))
+        self.assertEqual("team", self.metadata()["items"]["static"]["reply"]["form"]["fields"][0]["default"])
+        self.assertIsInstance(row["createdAt"], int)
+
+    def test_group_prefix_collision_rejects_the_whole_new_snippet(self):
+        group = self.new_group(prefix="work-")
+        self.result("snippet.save", trigger="work-reply", text="Existing")
+        before = on_disk(self.app)
+        self.assertEqual("collision", self.error("snippet.save", trigger="reply", text="New", groupId=group,
+                                                 favorite=True)["code"])
+        self.assertEqual(before, on_disk(self.app))
+        self.assertNotIn("reply", self.app.snippets)
+
+    def test_prefixed_draft_warns_when_a_provider_owns_its_stored_key(self):
+        group = self.new_group(prefix="work-")
+        key = next(key for key, value in self.app.snippets.items() if callable(value))
+        answer = self.result("snippet.save", trigger=key, text="Draft", groupId=group)
+        self.assertEqual("warnings", answer["check"])
+        self.assertIn("dinâmico", answer["message"])
+        self.assertNotIn(key, on_disk(self.app))
+
+    def test_overwriting_a_snippet_preserves_unspecified_metadata_and_creation(self):
+        group = self.new_group(prefix="work-")
+        self.result("snippet.save", trigger="reply", text="Original", groupId=group, favorite=True)
+        original = self.metadata()["items"]["static"]["reply"]
+        answer = self.result("snippet.save", trigger="reply", text="First attempt")
+        self.assertEqual("replace", answer["check"])
+        self.assertNotIn("rascunho", answer["message"])
+        self.result("snippet.save", trigger="reply", text="Replacement", confirmed=["replace"])
+        self.assertEqual(original, self.metadata()["items"]["static"]["reply"])
+
+    def test_overwriting_a_snippet_discloses_supplied_metadata_before_writing(self):
+        old_group = self.new_group(label="Anterior")
+        new_group = self.new_group(label="Atual")
+        original = {"trigger": "reply", "text": "Hi %%recipient%%", "groupId": old_group, "favorite": False,
+                    "fields": [{"name": "recipient", "type": "text", "default": "team"}]}
+        self.result("snippet.save", **original)
+        before = on_disk(self.app)
+        fields = [{"name": "recipient", "type": "text", "default": "friend"}]
+        draft = {"trigger": "reply", "text": "Hello %%recipient%%", "groupId": new_group, "favorite": True,
+                 "fields": fields}
+        changes = {"groupId": "seleção de grupo", "favorite": "marcação de favorito",
+                   "fields": "substituirá o formulário salvo"}
+        for key, detail in changes.items():
+            with self.subTest(key=key):
+                answer = self.result("snippet.save", trigger=draft["trigger"], text=draft["text"], **{key: draft[key]})
+                self.assertEqual("replace", answer["check"])
+                self.assertIn(detail, answer["message"])
+                for other in set(changes.values()) - {detail}:
+                    self.assertNotIn(other, answer["message"])
+        answer = self.result("snippet.save", **draft)
+        self.assertEqual("replace", answer["check"])
+        for detail in changes.values():
+            self.assertIn(detail, answer["message"])
+        self.assertEqual(before, on_disk(self.app))
+
+        self.assertEqual("saved", self.result("snippet.save", confirmed=["replace"], **draft)["status"])
+        item = self.metadata()["items"]["static"]["reply"]
+        self.assertEqual((new_group, True, fields), (item["group_id"], item["favorite"], item["form"]["fields"]))
+        self.assertEqual(draft["text"], on_disk(self.app)["reply"])
+
+    def test_future_metadata_allows_text_only_saves(self):
+        metadata = {"kind": "sniptype_metadata", "schema_version": 99, "items": {"newMeaning": "unknown"}}
+        self.app = make_real_app(self, {"hello": "Hello", "__sniptype__": metadata}, migrate_mappings=False)
+        self.bridge = ManagerBridge(self.app, version="9.9.9", channel="beta")
+        self.assertEqual("read_only", self.error("snippet.save", trigger="draft", text="Hello", favorite=True)["code"])
+        self.assertNotIn("draft", on_disk(self.app))
+        self.assertEqual("saved", self.result("snippet.save", trigger="draft", text="Hello")["status"])
+        self.assertEqual(metadata, self.metadata())
+
+    def test_last_used_survives_reload_and_rename_but_not_copy_or_recreation(self):
+        self.result("snippet.save", trigger="launch", text="Expand me")
+        with mock.patch.object(self.app, "expand_snippet", return_value=True):
+            self.app._run_expansion("launch")
+        self.app.workflow_state = WorkflowState(usage_file=os.path.join(self.app.data_dir, "snippet_usage.json"))
+        self.result("snippet.rename", trigger="launch", destination="starter")
+        self.result("snippet.duplicate", trigger="starter", destination="duplicate")
+        items = {item["trigger"]: item for item in self.result("library.list")["items"]}
+        self.assertGreaterEqual(items["starter"]["lastUsed"], items["starter"]["createdAt"])
+        self.assertIsInstance(items["duplicate"]["createdAt"], int)
+        self.assertIsNone(items["duplicate"]["lastUsed"])
+        self.result("snippet.delete", trigger="starter")
+        self.result("snippet.save", trigger="starter", text="New identity")
+        self.assertIsNone(next(item["lastUsed"] for item in self.result("library.list")["items"]
+                               if item["trigger"] == "starter"))
 
     def test_group_dialog_values_and_validation(self):
         form = self.result("group.form")
@@ -534,7 +641,7 @@ class BackupBridgeTests(unittest.TestCase):
         listed = {backup["name"]: backup for backup in self.result("backups.list")}
         self.assertEqual(before + 1, len(listed))
         created = listed[name]
-        self.assertEqual((1, 1, False), (created["texts"], created["lists"], created["empty"]))
+        self.assertEqual((2, 0, False), (created["texts"], created["lists"], created["empty"]))
         self.assertTrue(created["when"])
 
     def test_preview_and_restore_bring_the_backup_back(self):
@@ -567,7 +674,7 @@ class BackupBridgeTests(unittest.TestCase):
         self.result("library.import", text=text, mode="merge")
         disk = on_disk(self.app)
         self.assertEqual(("Replaced", "New one"), (disk["hello"], disk["fresh"]))
-        self.assertIn("_cpf_numbers", disk)
+        self.assertEqual("123.456.789-00", disk["cpffulano"])
         self.result("library.import", text=json.dumps({"only": "This"}), mode="replace")
         self.assertEqual({"only"}, {key for key in on_disk(self.app) if key != "__sniptype__"})
 
@@ -588,13 +695,28 @@ class FormBridgeTests(unittest.TestCase):
             "letter": "Dear %%name%%, see you %%when%%.",
             "sig": "Best, %%hello%%",
             "_email_codes": {"__prefix__": "mail", "work": "Hi %%who%%"},
-        })
+        }, migrate_mappings=False)
         self.bridge = ManagerBridge(self.app, version="9.9.9", channel="beta")
 
     call, result, error = BridgeTests.call, BridgeTests.result, BridgeTests.error
 
     def metadata(self):
         return on_disk(self.app)["__sniptype__"]
+
+    def test_new_form_can_be_configured_and_previewed_before_first_save(self):
+        text = "Welcome %%guest%%"
+        initial = on_disk(self.app)
+        info = self.result("form.get", text=text)
+        self.assertEqual(["guest"], info["variables"])
+        fields = [{**info["fields"][0], "default": "friend"}]
+        self.assertEqual("invalid", self.result("form.validate", text=text, fields=[])["status"])
+        validated = self.result("form.validate", text=text, fields=fields)
+        self.assertEqual("valid", validated["status"])
+        self.assertEqual("Welcome friend", self.result("preview.get", text=text, fields=validated["fields"])["text"])
+        self.assertEqual(initial, on_disk(self.app))
+        self.result("snippet.save", trigger="welcome", text=text, fields=validated["fields"], favorite=True)
+        self.assertTrue(self.result("snippet.get", trigger="welcome")["favorite"])
+        self.assertEqual("friend", self.result("form.get", name="welcome")["fields"][0]["default"])
 
     def test_get_without_a_form_offers_the_template_fields(self):
         form = self.result("form.get", name="letter")
@@ -712,7 +834,8 @@ class StaleDraftTests(unittest.TestCase):
     """A draft opened before the library changed never overwrites the newer value unasked."""
 
     def setUp(self):
-        self.app = make_real_app(self, {"hello": "Hello there", "_codes": {"__prefix__": "c", "city": "Goiânia"}})
+        self.app = make_real_app(self, {"hello": "Hello there", "_codes": {"__prefix__": "c", "city": "Goiânia"}},
+                                 migrate_mappings=False)
         self.bridge = ManagerBridge(self.app, version="9.9.9", channel="stable")
 
     def result(self, method, **params):

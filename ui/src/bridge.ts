@@ -3,6 +3,7 @@
 // arrive as the `bridge` event (one JSON line read from stdin).
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import type { ListGrouping, ListOrder } from "./list-view";
 
 export interface Issue {
   id: string; severity: string; title: string; body: string;
@@ -20,6 +21,7 @@ export interface AppInfo {
   appearance: "system" | "light" | "dark";
   density: "compact" | "comfortable" | "touch";
   terminatorMode: boolean;
+  legacyMappings: boolean;
   dataDir: string;
   expansion: { state: ExpansionState; label: string };
   lastExpansion: string;
@@ -46,6 +48,7 @@ export interface Notice { when: string; kind: string; kindLabel: string; message
 
 export interface WindowState {
   x?: number; y?: number; width?: number; height?: number; maximized?: boolean; page?: string;
+  listOrder?: ListOrder; listGrouping?: ListGrouping;
 }
 
 /** One workflow hotkey: `binding` is the stored pynput syntax (null when off), `display` how it reads. */
@@ -64,7 +67,11 @@ export interface LibraryItem {
   rich: boolean;
   /** The text presses Enter or Tab when it expands. */
   keys: boolean;
+  form: boolean;
   preview: string;
+  sortText: string;
+  createdAt: number | null;
+  lastUsed: number | null;
 }
 
 /** A filtered view of the static library; `total` counts every static snippet. */

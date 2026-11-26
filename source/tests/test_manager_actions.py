@@ -61,11 +61,14 @@ class ManagerActionTests(unittest.TestCase):
         with self.assertRaises(KeyError):
             duplicate_static({}, {"items": {"static": {}, "mappings": {}}}, "missing", "new")
 
-    def test_duplicate_legacy_item_gets_only_fresh_nonfavorite_metadata(self):
+    def test_duplicate_legacy_item_gets_fresh_nonfavorite_metadata(self):
         result = duplicate_static({"x": "legacy"}, {}, "x", "copy")
 
         self.assertEqual("legacy", result.snippets["copy"])
-        self.assertEqual({"favorite": False}, result.metadata["items"]["static"]["copy"])
+        copied = result.metadata["items"]["static"]["copy"]
+        self.assertFalse(copied["favorite"])
+        self.assertIsInstance(copied["created_at"], int)
+        self.assertTrue(copied["usage_id"])
 
     def test_rename_preserves_group_form_and_favorite_metadata(self):
         snippets = {"old": "Hello %%name%%"}
@@ -82,10 +85,9 @@ class ManagerActionTests(unittest.TestCase):
 
         self.assertNotIn("old", result.snippets)
         self.assertEqual("Hello %%name%%", result.snippets["new"])
-        self.assertEqual(
-            metadata["items"]["static"]["old"],
-            result.metadata["items"]["static"]["new"],
-        )
+        renamed = dict(result.metadata["items"]["static"]["new"])
+        self.assertTrue(renamed.pop("usage_id"))
+        self.assertEqual(metadata["items"]["static"]["old"], renamed)
 
     def test_set_form_rejects_invalid_field_definition_without_mutating_inputs(self):
         for old_test, template, form in (
