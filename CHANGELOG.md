@@ -19,10 +19,22 @@ their original numbers.
 | 3.2.0, 3.2.1 | 0.9.0, 0.9.1 | 5.2.0-beta.1 | 1.0.0-beta.1 |
 | 3.3.0-beta, 3.3.0 | 0.10.0-beta.1, 0.10.0 | 5.2.0 | 1.0.0 |
 
-## [1.5.1] — Unreleased
+## [1.6.0] — Unreleased
 
-Stable candidate incorporating the 1.5.0 beta features described below.
-Publication is pending the supported-platform matrix and packaged desktop checks.
+- Existing mappings become grouped snippets on upgrade. SnipType backs up the
+  prior library and keeps the legacy editor available for mappings that would
+  change which trigger expands.
+- Sort snippets by trigger, text, creation date, or last use. Group the results
+  by snippet group, favorite status, or content type. Dates appear as SnipType
+  records them.
+- Create and edit groups from the new Groups page, and assign a group, favorite
+  status, and form fields while creating a snippet.
+- The redesigned manager has searchable navigation and a compact layout that
+  keeps the current draft when switching between the list and editor.
+
+## [1.5.1] — 2026-11-17
+
+This release includes the 1.5.0 beta features described below.
 
 ### Changed
 

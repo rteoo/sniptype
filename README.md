@@ -53,9 +53,8 @@ Use `pythonw sniptype.pyw` after setup when you do not need console output.
 
 ### Releases and installer
 
-The current stable release is
-[`v1.4.0`](https://github.com/rteoo/sniptype/releases/tag/v1.4.0) for Windows;
-SnipType is also available from the Microsoft Store. v1.4.0 replaces the
+Download the [latest stable Windows release](https://github.com/rteoo/sniptype/releases/latest).
+SnipType is also available from the Microsoft Store. v1.4.0 replaced the
 manager with a new window and gives the app a new icon. The window covers
 Textos, Mapeamentos, Dinâmicos, Backups and Configurações, with favorites,
 groups and filters, Duplicar and Renomear, forms and Prévia, formatting in the
