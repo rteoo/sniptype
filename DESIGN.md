@@ -20,8 +20,12 @@ Default web controls have 44 px targets; Comfortable and Touch retain larger
 Scoped deviations: the existing vanilla TypeScript/Tauri implementation and
 Segoe UI/Cascadia system typography are retained. This change adds no React,
 Tailwind, component dependencies, remote fonts or redistributed font binaries.
-The SnipType product icon remains its own identity. Native title bars, Tk
-expansion popups and the fallback manager retain the Windows native family
+The SnipType product icon uses the Teô 3.2.0 reference's matte ink tile,
+off-white mark, and amber dot. SnipType's text lines and caret identify the
+product. A neutral rim defines the tile on dark surfaces, and the 16–32 px
+Windows frames simplify the mark to the caret and dot. The macOS icon keeps
+its centered 824 px tile on the 1024 px system grid. Native title bars, Tk
+expansion popups, and the fallback manager retain the Windows native family
 below. macOS retains Aqua.
 
 Build/static validation does not establish live theme switching, keyboard

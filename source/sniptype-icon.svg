@@ -1,24 +1,13 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-labelledby="title desc">
   <title id="title">SnipType</title>
-  <desc id="desc">A copper trigger dot expanding into lines of text beside a text cursor, on a rounded matte navy tile.</desc>
-  <defs>
-    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#263C56"/>
-      <stop offset="1" stop-color="#152235"/>
-    </linearGradient>
-  </defs>
+  <desc id="desc">An amber trigger dot, lines of text, and a text cursor on a rounded ink tile.</desc>
 
-  <!-- Tile: matte navy-500 to the slate-navy rail, with a navy-400 rim that
-       keeps its edge on dark taskbars. No sheen or glow: the system is matte. -->
-  <rect x="64" y="64" width="896" height="896" rx="200" fill="url(#tile)"/>
-  <rect x="72" y="72" width="880" height="880" rx="192" fill="none" stroke="#8CA8CF" stroke-opacity="0.45" stroke-width="16"/>
+  <!-- Teô 3.2.0 ink tile, with a neutral edge for contrast on dark taskbars. -->
+  <rect x="64" y="64" width="896" height="896" rx="208" fill="#0A0A0A"/>
+  <rect x="76" y="76" width="872" height="872" rx="196" fill="none" stroke="#8A8A8A" stroke-width="24"/>
 
-  <!-- Expansion: the snippet's lines, in navy-300. -->
-  <path d="M372 384 H600 M212 512 H600 M212 640 H504" fill="none" stroke="#ADC1DC" stroke-width="56" stroke-linecap="round"/>
-  <!-- Text cursor: the insertion point, flat text ink. -->
-  <path d="M708 288 H812 M708 736 H812 M760 288 V736" fill="none" stroke="#F2EFE9" stroke-width="56" stroke-linecap="round"/>
-  <!-- Trigger: the one copper accent, the short word the lines expand from,
-       separated from the tile by a navy ring. Top left, clear of the tray's
-       state badge in the bottom-right corner. -->
-  <circle cx="244" cy="384" r="64" fill="#E6A05A" stroke="#152235" stroke-width="24"/>
+  <!-- Text strokes and caret. Keep the trigger dot clear of the tray badge. -->
+  <path d="M384 384 H576 M228 512 H576 M228 640 H480" fill="none" stroke="#D4D4D4" stroke-width="56" stroke-linecap="round"/>
+  <path d="M690 288 H814 M690 736 H814 M752 288 V736" fill="none" stroke="#F5F5F5" stroke-width="64" stroke-linecap="round"/>
+  <circle cx="244" cy="384" r="60" fill="#FE9A00"/>
 </svg>

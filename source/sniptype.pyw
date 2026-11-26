@@ -8249,22 +8249,21 @@ class Sniptype:
 
     def create_icon_image(self):
         """The tray icon drawn from scratch, for a build without ``sniptype.ico``."""
-        # The small mark of sniptype-icon-small.svg: navy tile and rim, cream
-        # text cursor, copper trigger dot.
+        # Match the ink tile, neutral rim, caret and amber dot in the small SVG.
         size = 64
-        tile_color = (38, 60, 86, 255)
-        rim_color = (95, 122, 156, 255)
-        ink_color = (242, 239, 233, 255)
-        dot_color = (230, 160, 90, 255)
+        tile_color = (10, 10, 10, 255)
+        rim_color = (138, 138, 138, 255)
+        ink_color = (245, 245, 245, 255)
+        dot_color = (254, 154, 0, 255)
 
         image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
         dc = ImageDraw.Draw(image)
 
-        dc.rounded_rectangle((0, 0, 63, 63), radius=14, fill=tile_color, outline=rim_color, width=2)
-        dc.rounded_rectangle((35, 12, 41, 51), radius=3, fill=ink_color)
-        dc.rounded_rectangle((28, 11, 48, 17), radius=3, fill=ink_color)
-        dc.rounded_rectangle((28, 46, 48, 52), radius=3, fill=ink_color)
-        dc.ellipse((10, 13, 26, 29), fill=dot_color, outline=tile_color, width=2)
+        dc.rounded_rectangle((0, 0, 63, 63), radius=15, fill=tile_color, outline=rim_color, width=3)
+        dc.rounded_rectangle((35, 10, 42, 54), radius=3, fill=ink_color)
+        dc.rounded_rectangle((27, 9, 50, 15), radius=3, fill=ink_color)
+        dc.rounded_rectangle((27, 48, 50, 54), radius=3, fill=ink_color)
+        dc.ellipse((10, 12, 24, 26), fill=dot_color)
 
         return image
 
@@ -8280,7 +8279,13 @@ class Sniptype:
         if icon_path:
             try:
                 with Image.open(icon_path) as image:
-                    base = image.copy()
+                    # pystray serializes one bitmap. Start with the small mark so
+                    # its 16px icon stays readable after native scaling.
+                    tray_size = (32, 32)
+                    if image.format == "ICO" and tray_size in image.ico.sizes():
+                        base = image.ico.getimage(tray_size).copy()
+                    else:
+                        base = image.copy()
             except Exception as e:
                 self.logger.warning(f"Falha ao carregar icone do tray: {e}")
         if base is None:

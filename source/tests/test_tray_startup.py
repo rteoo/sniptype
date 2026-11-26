@@ -497,12 +497,12 @@ class TrayStateTests(unittest.TestCase):
 
     def test_each_state_draws_a_different_icon(self):
         with tx.Image.open(os.path.join(SOURCE_DIR, "sniptype.ico")) as icon_file:
-            shipped = icon_file.convert("RGBA")
+            shipped = icon_file.ico.getimage((32, 32)).convert("RGBA")
         active = self._app().load_tray_icon()
         paused = self._app(enabled=False).load_tray_icon()
         failed = self._app(enabled=False, capture_error=OSError("hook")).load_tray_icon()
 
-        self.assertEqual(self._pixels(shipped), self._pixels(active), "on is the shipped icon")
+        self.assertEqual(self._pixels(shipped), self._pixels(active), "on uses the shipped small mark")
         hashes = {self._pixels(image) for image in (active, paused, failed)}
         self.assertEqual(3, len(hashes))
         for image in (paused, failed):
@@ -514,9 +514,9 @@ class TrayStateTests(unittest.TestCase):
 
         colors = {rgba for _, rgba in app.load_tray_icon().getcolors(64 * 64)}
 
-        # Navy tile, cream cursor, copper trigger: the colors of sniptype-icon-small.svg.
+        # Ink tile, off-white cursor, amber trigger: the colors of the small SVG.
         self.assertTrue(
-            {(38, 60, 86, 255), (242, 239, 233, 255), (230, 160, 90, 255)} <= colors
+            {(10, 10, 10, 255), (245, 245, 245, 255), (254, 154, 0, 255)} <= colors
         )
 
     def test_a_failed_capture_is_down_even_if_the_flag_says_enabled(self):
