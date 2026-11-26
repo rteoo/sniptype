@@ -366,6 +366,7 @@ const EN_US: Record<string, string> = {
   "Seções": "Sections",
   "Siga o tema do Windows ou escolha um fixo.": "Follow the Windows theme or choose a fixed one.",
   "Sistema": "System",
+  "Snippets": "Snippets",
   "Snippets dinâmicos": "Dynamic snippets",
   "Sublinhado": "Underline",
   "Substituir tudo": "Replace all",
