@@ -536,12 +536,19 @@ class ManagerBridge:
             if stale:
                 return stale
         if existing is not None and trigger != original and "replace" not in confirmed:
+            message = _("O snippet {name} já existe. Salvar troca o texto dele pelo que está no "
+                        "editor.").format(name=trigger)
+            metadata_changes = (
+                (groupId, _("A seleção de grupo do rascunho também será aplicada.")),
+                (favorite, _("A marcação de favorito do rascunho também será aplicada.")),
+                (fields, _("O formulário do rascunho também substituirá o formulário salvo.")),
+            )
+            details = " ".join(detail for value, detail in metadata_changes if value is not manager_actions.KEEP)
             return {
                 "status": "confirm",
                 "check": "replace",
                 "title": _("Substituir snippet"),
-                "message": _("O snippet {name} já existe. Salvar troca o texto dele pelo que está no "
-                             "editor.").format(name=trigger),
+                "message": f"{message}\n\n{details}" if details else message,
                 "action": _("Substituir"),
             }
         if groupId is not manager_actions.KEEP and groupId is not None:

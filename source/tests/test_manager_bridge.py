@@ -428,9 +428,41 @@ class OrganizeBridgeTests(unittest.TestCase):
         group = self.new_group(prefix="work-")
         self.result("snippet.save", trigger="reply", text="Original", groupId=group, favorite=True)
         original = self.metadata()["items"]["static"]["reply"]
-        self.assertEqual("replace", self.result("snippet.save", trigger="reply", text="First attempt")["check"])
+        answer = self.result("snippet.save", trigger="reply", text="First attempt")
+        self.assertEqual("replace", answer["check"])
+        self.assertNotIn("rascunho", answer["message"])
         self.result("snippet.save", trigger="reply", text="Replacement", confirmed=["replace"])
         self.assertEqual(original, self.metadata()["items"]["static"]["reply"])
+
+    def test_overwriting_a_snippet_discloses_supplied_metadata_before_writing(self):
+        old_group = self.new_group(label="Anterior")
+        new_group = self.new_group(label="Atual")
+        original = {"trigger": "reply", "text": "Hi %%recipient%%", "groupId": old_group, "favorite": False,
+                    "fields": [{"name": "recipient", "type": "text", "default": "team"}]}
+        self.result("snippet.save", **original)
+        before = on_disk(self.app)
+        fields = [{"name": "recipient", "type": "text", "default": "friend"}]
+        draft = {"trigger": "reply", "text": "Hello %%recipient%%", "groupId": new_group, "favorite": True,
+                 "fields": fields}
+        changes = {"groupId": "seleção de grupo", "favorite": "marcação de favorito",
+                   "fields": "substituirá o formulário salvo"}
+        for key, detail in changes.items():
+            with self.subTest(key=key):
+                answer = self.result("snippet.save", trigger=draft["trigger"], text=draft["text"], **{key: draft[key]})
+                self.assertEqual("replace", answer["check"])
+                self.assertIn(detail, answer["message"])
+                for other in set(changes.values()) - {detail}:
+                    self.assertNotIn(other, answer["message"])
+        answer = self.result("snippet.save", **draft)
+        self.assertEqual("replace", answer["check"])
+        for detail in changes.values():
+            self.assertIn(detail, answer["message"])
+        self.assertEqual(before, on_disk(self.app))
+
+        self.assertEqual("saved", self.result("snippet.save", confirmed=["replace"], **draft)["status"])
+        item = self.metadata()["items"]["static"]["reply"]
+        self.assertEqual((new_group, True, fields), (item["group_id"], item["favorite"], item["form"]["fields"]))
+        self.assertEqual(draft["text"], on_disk(self.app)["reply"])
 
     def test_future_metadata_allows_text_only_saves(self):
         metadata = {"kind": "sniptype_metadata", "schema_version": 99, "items": {"newMeaning": "unknown"}}
