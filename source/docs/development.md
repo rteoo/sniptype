@@ -35,6 +35,9 @@ installer identity, so they must not run simultaneously.
 Do not promote a beta to stable until the supported-OS test matrix and packaged
 desktop smoke tests pass. The app docstring owns `Version:` and `Channel:`;
 `installer/sniptype.iss` mirrors them as `MyAppVersion` and `MyAppChannel`.
+For a numbered beta, add its full `Tag:` line to the app docstring, such as
+`Tag: v1.5.0-beta.2`. The sidebar uses that tag, and stable builds display
+`v` followed by the declared version.
 
 ## Windows package
 

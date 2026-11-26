@@ -5,6 +5,7 @@ Tk.  It returns the value stored under ``__sniptype__.groups[group_id]``;
 callers own the surrounding library save and group identity.
 """
 
+import re
 import threading
 import tkinter as tk
 
@@ -41,6 +42,62 @@ class GroupDefinitionError(ValueError):
     def __init__(self, message, field=None):
         super().__init__(message)
         self.field = field
+
+
+def _emoji_base(char):
+    code = ord(char)
+    return (0x1F000 <= code <= 0x1FAFF or 0x2600 <= code <= 0x27BF
+            or 0x2194 <= code <= 0x2199 or 0x23E9 <= code <= 0x23FA
+            or 0x2B05 <= code <= 0x2B07
+            or code in (0x00A9, 0x00AE, 0x203C, 0x2049, 0x2122, 0x2139,
+                        0x21A9, 0x21AA, 0x231A, 0x231B, 0x2328, 0x23CF,
+                        0x24C2, 0x25AA, 0x25AB, 0x25B6, 0x25C0, 0x25FB,
+                        0x25FC, 0x25FD, 0x25FE, 0x2934, 0x2935, 0x2B1B,
+                        0x2B1C, 0x2B50, 0x2B55,
+                        0x3030, 0x303D, 0x3297, 0x3299))
+
+
+def _single_emoji(value):
+    # Structural validation, not a Unicode emoji-version database: accept one
+    # bounded sequence including flags, keycaps, modifiers, and ZWJ families.
+    if not isinstance(value, str) or not 1 <= len(value) <= 32:
+        return False
+    codes = [ord(char) for char in value]
+    if len(codes) == 2 and all(0x1F1E6 <= code <= 0x1F1FF for code in codes):
+        return True
+    if value[0] in "#*0123456789":
+        return codes[1:] in ([0x20E3], [0xFE0F, 0x20E3])
+    if codes[0] == 0x1F3F4 and codes[-1] == 0xE007F:
+        return len(codes) > 2 and all(0xE0061 <= code <= 0xE007A for code in codes[1:-1])
+    index = 0
+    while index < len(codes):
+        code = codes[index]
+        if not _emoji_base(value[index]) or 0x1F1E6 <= code <= 0x1F1FF or 0x1F3FB <= code <= 0x1F3FF:
+            return False
+        index += 1
+        if index < len(codes) and codes[index] == 0xFE0F:
+            index += 1
+        if index < len(codes) and 0x1F3FB <= codes[index] <= 0x1F3FF:
+            index += 1
+        if index == len(codes):
+            return True
+        if codes[index] != 0x200D or index + 1 == len(codes):
+            return False
+        index += 1
+    return False
+
+
+def normalize_group_icon(icon):
+    """Return a safe icon or None for absent or malformed stored metadata."""
+    if not isinstance(icon, dict) or set(icon) != {"kind", "value"}:
+        return None
+    kind, value = icon["kind"], icon["value"]
+    if (kind == "lucide" and isinstance(value, str) and len(value) <= 64
+            and re.fullmatch(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*", value)):
+        return {"kind": kind, "value": value}
+    if kind == "emoji" and _single_emoji(value):
+        return {"kind": kind, "value": value}
+    return None
 
 
 def _choice_token(value, labels, valid):
@@ -103,7 +160,7 @@ def build_group_definition(values):
         raise GroupDefinitionError(_("Modo de aplicativo inválido."), "application_mode")
 
     executables = normalize_executable_lines(values.get("executables", ""))
-    return {
+    definition = {
         "label": label.strip(),
         "notes": notes,
         "prefix": prefix,
@@ -114,6 +171,12 @@ def build_group_definition(values):
             "executables": list(executables),
         },
     }
+    if "icon" in values:
+        icon = values["icon"]
+        definition["icon"] = normalize_group_icon(icon)
+        if icon is not None and definition["icon"] is None:
+            raise GroupDefinitionError(_("Ícone do grupo inválido."), "icon")
+    return definition
 
 
 class GroupDialogController:
@@ -129,6 +192,7 @@ class GroupDialogController:
             "terminator": normalized.terminator,
             "application_mode": normalized.applications.mode,
             "executables": "\n".join(normalized.applications.executables),
+            "icon": normalize_group_icon(group.get("icon")) if isinstance(group, dict) else None,
         }
         self.controls = controls or {}
         self.result = None

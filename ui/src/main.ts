@@ -24,8 +24,9 @@ import {
 } from "./bridge";
 import { attachCompletion, type Candidate } from "./completion";
 import { h, icon } from "./dom";
+import { createGroupIconPicker, groupIcon } from "./group-icon-picker";
 import { setLanguage, t } from "./i18n";
-import { fold, listSections, type Item, type ListGrouping, type ListOrder } from "./list-view";
+import { fold, itemType, listSections, type Item, type ListGrouping, type ListOrder, type SectionTitle } from "./list-view";
 import { createRichEditor, type RichEditor, type Span, type Style } from "./richtext";
 import { chip, describeToken, libraryFrom, type TokenLibrary, withChips } from "./tokens";
 
@@ -104,6 +105,11 @@ const state = {
   types: [] as MappingType[],
   type: "_cpf_numbers",
   groups: [] as Group[],
+  groupItems: new Map<string, Library["items"]>(),
+  groupView: {
+    query: "", status: "all", prefix: "all", order: "name",
+    grouping: "none" as "none" | "type", collapsed: new Set<string>(),
+  },
   groupsReadOnly: false,
   groupsReceipt: null as Receipt | null,
   // A group filter of "" includes every group; UNGROUPED shows texts in none.
@@ -146,6 +152,7 @@ async function loadTokenLibrary(): Promise<void> {
   }
   textEditor?.refresh();
   if (activeKind()) renderList();
+  else if (state.page === "grupos") renderGroups();
 }
 
 const sources: Record<Kind, Source> = {
@@ -344,12 +351,16 @@ function fieldControl(field: FormField, describedBy: string): Control {
  */
 function formDialog(options: {
   title: string; message?: string; fields: FormField[]; action: string; danger?: boolean; confirmWord?: string;
+  customField?: { id: string; element: HTMLElement };
   submit: (values: Values) => Promise<Problem>;
 }): Promise<boolean> {
   return new Promise((resolve) => {
     const controls = new Map<string, Control>();
     const rows = new Map<string, HTMLElement>();
     const errors = new Map<string, HTMLElement>();
+    const custom = options.customField;
+    const customError = custom ? h("span", { class: "error", role: "alert" }) : null;
+    if (custom && customError) errors.set(custom.id, customError);
     const submitButton = h("button", {
       type: "submit", class: options.danger ? "danger-fill" : "primary", disabled: !!options.confirmWord,
     }, options.action);
@@ -377,6 +388,7 @@ function formDialog(options: {
           if (problem) {
             controls.get(problem.field)?.setAttribute("aria-invalid", "true");
             controls.get(problem.field)?.focus();
+            if (custom?.id === problem.field) custom.element.querySelector<HTMLElement>("summary, button")?.focus();
             return;
           }
           done = true;
@@ -385,6 +397,7 @@ function formDialog(options: {
       },
       h("h2", { id: "dialog-title" }, options.title),
       options.message ? h("p", {}, options.message) : null,
+      custom ? h("div", {}, custom.element, customError) : null,
       ...options.fields.map((field) => {
         const error = h("span", { id: `dialog-${field.id}-error`, class: "error", role: "alert" });
         const hint = field.hint ? h("span", { class: "hint", id: `dialog-${field.id}-hint` }, field.hint) : null;
@@ -505,12 +518,25 @@ async function refreshTypes(): Promise<void> {
 }
 
 async function refreshGroups(): Promise<void> {
-  const answer = await request<Groups>("groups.list");
+  const [answer, library] = await Promise.all([
+    request<Groups>("groups.list"),
+    state.page === "grupos" ? request<Library>("library.list", { filter: "all" }) : null,
+  ]);
   state.groups = answer.groups;
   state.groupsReadOnly = answer.readOnly;
   // A group deleted elsewhere must not keep narrowing the list to nothing.
   if (state.view.group && state.view.group !== UNGROUPED && !state.groups.some((group) => group.id === state.view.group)) {
     state.view.group = "";
+  }
+  if (library) {
+    const itemsByGroup = new Map<string, Library["items"]>();
+    for (const item of library.items) {
+      if (!item.groupId) continue;
+      const members = itemsByGroup.get(item.groupId);
+      if (members) members.push(item);
+      else itemsByGroup.set(item.groupId, [item]);
+    }
+    state.groupItems = itemsByGroup;
   }
   if (state.page === "grupos") renderGroups();
 }
@@ -904,6 +930,7 @@ async function groupDialog(id: string | null): Promise<void> {
     return;
   }
   const values = form.values;
+  const picker = createGroupIconPicker(values.icon);
   let saved: { id: string; label: string } | null = null;
   await formDialog({
     title: id ? t("Editar grupo") : t("Novo grupo"),
@@ -920,10 +947,12 @@ async function groupDialog(id: string | null): Promise<void> {
       { id: "notes", label: t("Notas"), kind: "textarea", value: values.notes },
     ],
     action: t("Salvar"),
+    customField: { id: "icon", element: picker.element },
     submit: async (current) => {
       let answer: GroupSaveAnswer;
       try {
-        answer = await request<GroupSaveAnswer>("group.save", { id, values: current });
+        // Omit icon when only other fields changed so the bridge preserves the stored value.
+        answer = await request<GroupSaveAnswer>("group.save", { id, values: { ...current, icon: picker.changedValue() } });
       } catch (error) {
         return { field: "label", message: errorText(error) };
       }
@@ -1147,7 +1176,8 @@ function renderShell(page: HTMLElement): HTMLElement {
       h("button", { type: "button", title: t("Notificações"), "aria-label": t("Notificações"),
         onclick: () => void showNotifications() }, icon("bell"), h("span", { class: "label" }, t("Notificações"))),
       navButton("settings", "settings", t("Configurações")),
-      h("p", { class: "version" }, state.info ? `${state.info.version} · ${state.info.channel}` : ""),
+      h("p", { class: "version" }, state.info?.releaseTag ??
+        (state.info?.version ? `v${state.info.version}${state.info.channel === "beta" ? "-beta" : ""}` : "")),
     ));
   const more = h("button", { type: "button", "aria-haspopup": "dialog", "aria-label": t("Mais seções"),
     "aria-expanded": "false", class: ["textos", "grupos", "dinamicos"].includes(state.page) ? "" : "current-section",
@@ -1222,6 +1252,34 @@ async function showPage(page: Page): Promise<void> {
 
 function groupsPage(): HTMLElement {
   refs.receipt = h("div", { class: "receipt", role: "status", "aria-live": "polite" });
+  const view = state.groupView;
+  const searchLabel = t("Buscar por grupo ou prefixo");
+  const search = h("input", {
+    type: "search", class: "field", value: view.query, placeholder: searchLabel,
+    "aria-label": searchLabel, "aria-controls": "groups-list", autocomplete: "off",
+    oninput: () => { view.query = search.value; renderGroups(); },
+    onkeydown: (event: KeyboardEvent) => {
+      if (event.key === "Escape" && search.value) {
+        event.preventDefault();
+        search.value = view.query = "";
+        renderGroups();
+      }
+    },
+  });
+  refs.search = search;
+  const select = <K extends "status" | "prefix" | "order" | "grouping">(
+    key: K, label: string, choices: [typeof view[K], string][],
+  ) =>
+    h("label", { class: "list-control" }, h("span", {}, label), h("select", {
+      class: "field", "aria-label": label, "aria-controls": "groups-list",
+      onchange: (event: Event) => {
+        const choice = choices[(event.target as HTMLSelectElement).selectedIndex];
+        if (choice) {
+          view[key] = choice[0];
+          renderGroups();
+        }
+      },
+    }, ...choices.map(([value, text]) => h("option", { value, selected: value === view[key] }, text))));
   return h("div", { class: "secondary-page groups-page" },
     h("header", { class: "secondary-header" },
       h("h1", { id: "groups-title", tabindex: -1 }, t("Grupos")),
@@ -1230,8 +1288,30 @@ function groupsPage(): HTMLElement {
     ),
     refs.receipt,
     h("p", { id: "groups-readonly", class: "muted", role: "status" }, readOnlyMessage()),
+    h("div", { class: "groups-toolbar" },
+      h("div", { class: "search groups-search" }, icon("search"), search),
+      select("status", t("Exibir"), [["all", t("Todos")], ["active", t("Ativos")], ["disabled", t("Desativados")]]),
+      select("prefix", t("Prefixo do trigger"), [
+        ["all", t("Todos")], ["with", t("Com prefixo")], ["without", t("Sem prefixo")],
+      ]),
+      select("order", t("Ordenar por"), [
+        ["name", t("Grupo (A–Z)")], ["name-desc", t("Grupo (Z–A)")],
+        ["prefix", t("Prefixo (A–Z)")], ["prefix-desc", t("Prefixo (Z–A)")],
+        ["count", t("Mais textos")],
+      ]),
+      select("grouping", t("Agrupar por"), [["none", t("Sem agrupamento")], ["type", t("Tipo")]]),
+    ),
+    h("p", { id: "groups-count", class: "groups-count muted", role: "status" }),
     h("div", { id: "groups-list" }),
   );
+}
+
+async function openGroupSnippet(groupId: string, trigger: string): Promise<void> {
+  state.view.filter = "all";
+  state.view.group = groupId;
+  state.collections.textos.query = "";
+  await showPage("textos");
+  await openItem("textos", trigger);
 }
 
 function renderGroups(): void {
@@ -1243,12 +1323,75 @@ function renderGroups(): void {
   note.hidden = !state.groupsReadOnly;
   const active = document.activeElement;
   const previous = active instanceof HTMLButtonElement && host.contains(active) ? active.dataset : null;
-  const rows = state.groups.map((group, index) => {
+  const view = state.groupView;
+  const query = fold(view.query.trim());
+  const language = state.info?.language ?? "pt-BR";
+  const collator = new Intl.Collator(language, { sensitivity: "base", numeric: true });
+  const byName = (a: Group, b: Group) => collator.compare(a.label, b.label);
+  const order = (a: Group, b: Group) => {
+    if (view.order === "count") return b.count - a.count || byName(a, b);
+    if (view.order === "name-desc") return byName(b, a);
+    if (view.order.startsWith("prefix")) {
+      const emptyLast = Number(!a.prefix) - Number(!b.prefix);
+      const byPrefix = collator.compare(a.prefix, b.prefix);
+      return emptyLast || (view.order === "prefix-desc" ? -byPrefix : byPrefix) || byName(a, b);
+    }
+    return byName(a, b);
+  };
+  const visible = state.groups.filter((group) =>
+    (view.status === "all" || group.enabled === (view.status === "active")) &&
+    (view.prefix === "all" || Boolean(group.prefix) === (view.prefix === "with")) &&
+    (!query || fold(group.label).includes(query) || fold(group.prefix).includes(query))).sort(order);
+  document.getElementById("groups-count")!.textContent =
+    visible.length === 1 ? t("1 grupo") : t("{count} grupos", { count: visible.length });
+  const rows = visible.map((group, index) => {
     const headingId = `group-name-${index}`;
-    const viewId = `group-view-${index}`;
-    return h("li", { class: "group-card" },
-      h("div", { class: "group-identity" },
-        h("div", { class: "group-name" }, icon("groups"), h("h2", { id: headingId }, group.label)),
+    const summaryId = `group-summary-${index}`;
+    const panelId = `group-texts-${index}`;
+    const expanded = !view.collapsed.has(group.id);
+    const items = (state.groupItems.get(group.id) ?? []).map((snippet) =>
+      ({ ...snippet, name: snippet.trigger, group: null }));
+    const sections = listSections(items, "", { order: "trigger", grouping: view.grouping, language });
+    const panel = h("div", { id: panelId, class: "group-members", hidden: !expanded },
+      ...(items.length ? sections.map((section) => {
+        const members = h("ul", {}, ...section.items.map((item) => {
+          const typeLabel = section.title ? null : itemSectionLabel({ kind: itemType(item) });
+          return h("li", {}, h("button", {
+            type: "button", class: "item group-member", "data-group": group.id, "data-action": "snippet",
+            "data-trigger": item.name, "aria-label": itemLabel(item, typeLabel),
+            onclick: () => void openGroupSnippet(group.id, item.name),
+          }, ...itemContents(item, false, typeLabel)));
+        }));
+        if (!section.title) return members;
+        return h("div", { class: "group-type-section" },
+          h("h3", { class: "item-group-heading" },
+            h("span", {}, itemSectionLabel(section.title)), h("span", {}, String(section.items.length))),
+          members);
+      }) : [h("p", { class: "group-members-empty muted" }, t("Nenhum texto neste grupo."))]));
+    const toggle = h("button", {
+      type: "button", class: "group-toggle", "aria-labelledby": headingId, "aria-controls": panelId,
+      "aria-describedby": summaryId,
+      "aria-expanded": String(expanded), "data-group": group.id, "data-action": "toggle",
+      onclick: () => {
+        panel.hidden = !panel.hidden;
+        toggle.setAttribute("aria-expanded", String(!panel.hidden));
+        if (panel.hidden) view.collapsed.add(group.id);
+        else view.collapsed.delete(group.id);
+      },
+    }, icon("chevron-down", "tp-i group-chevron"),
+    h("span", { class: "group-icon", "aria-hidden": "true" }, groupIcon(group.icon)),
+    h("span", { class: "group-copy" },
+      h("span", { class: "group-name", id: headingId }, group.label),
+      h("span", { class: "group-summary", id: summaryId },
+        h("span", {}, group.count === 1 ? t("1 texto") : t("{count} textos", { count: group.count })),
+        h("span", { class: `group-state${group.enabled ? " on" : ""}` },
+          group.enabled ? t("Grupo ativo") : t("Grupo desativado")),
+        group.prefix ? h("code", { class: "group-prefix", title: t("Prefixo do trigger") },
+          h("span", { class: "sr-only" }, t("Prefixo do trigger") + " "), group.prefix) : null,
+      )));
+    return h("li", { class: "group-row" },
+      h("h2", { class: "group-heading" }, toggle),
+      h("div", { class: "group-actions" },
         menuButton(t("Ações"), () => [
           { label: t("Editar grupo…"), run: () => void groupDialog(group.id) },
           { label: t("Excluir grupo"), danger: true, run: () => void deleteGroup(group.id) },
@@ -1257,31 +1400,15 @@ function renderGroups(): void {
           "data-group": group.id, "data-action": "menu", disabled: state.groupsReadOnly,
         }),
       ),
-      h("div", { class: "group-summary" },
-        h("span", { class: `group-state${group.enabled ? " on" : ""}` },
-          group.enabled ? t("Grupo ativo") : t("Grupo desativado")),
-        h("span", {}, group.count === 1 ? t("1 texto") : t("{count} textos", { count: group.count })),
-        group.prefix ? h("p", { class: "group-prefix" }, t("Prefixo do trigger"), " ", h("code", {}, group.prefix)) : null,
-      ),
-      h("div", { class: "group-actions" },
-        h("button", {
-          id: viewId, type: "button", class: "el-button", "aria-labelledby": `${viewId} ${headingId}`,
-          "data-group": group.id, "data-action": "view", onclick: () => {
-            state.view.filter = "all";
-            state.view.group = group.id;
-            state.collections.textos.query = "";
-            state.collections.textos.detailOpen = false;
-            void showPage("textos");
-          },
-        }, t("Ver textos")),
-      ),
+      panel,
     );
   });
-  host.replaceChildren(rows.length ? h("ul", { class: "group-cards" }, ...rows)
-    : h("p", { class: "empty-list" }, t("Nenhum grupo.")));
+  host.replaceChildren(rows.length ? h("ul", { class: "group-list" }, ...rows)
+    : h("p", { class: "empty-list" }, state.groups.length ? t("Nenhum grupo encontrado.") : t("Nenhum grupo.")));
   if (previous) {
     const replacement = [...host.querySelectorAll("button")].find((control) =>
-      control.dataset.group === previous.group && control.dataset.action === previous.action && !control.disabled);
+      control.dataset.group === previous.group && control.dataset.action === previous.action &&
+      control.dataset.trigger === previous.trigger && !control.disabled);
     (replacement ?? document.getElementById("groups-title"))?.focus();
   }
 }
@@ -1669,37 +1796,18 @@ function renderList(): void {
   const focusedItem = items.find((item) => item.name === focusedName);
   // One Tab stop for the whole list: the focused row, then the editor's row, then the first.
   const tabStop = focusedItem?.name ?? items.find((item) => item.name === current)?.name ?? items[0].name;
-  const sectionLabels = {
-    ungrouped: t("Sem grupo"), favorite: t("Favoritos"), other: t("Sem favorito"),
-    plain: t("Texto simples"), rich: t("Texto formatado"), form: t("Com formulário"), keys: t("Com teclas"),
-  };
   // ceiling: renders every row; virtualize if libraries beyond ~5k snippets feel slow.
   const row = (item: Item) => h("button", {
     type: "button", class: "item", role: "option", "data-name": item.name,
     "aria-selected": item.name === current ? "true" : "false", tabindex: item.name === tabStop ? "0" : "-1",
     "aria-label": itemLabel(item),
     onclick: () => void openItem(kind, item.name),
-  },
-  h("span", { class: "trigger" }, item.effectiveTrigger === item.name
-    ? item.name : `${item.name} → ${item.effectiveTrigger}`),
-  h("span", { class: "badges" },
-    item.favorite ? icon("favorite") : null,
-    item.rich ? h("span", { class: "el-badge" }, t("formatado")) : null,
-    item.form ? h("span", { class: "el-badge" }, t("Formulário")) : null,
-    item.keys ? h("span", { class: "el-badge", title: t("Pressiona Enter ou Tab ao expandir.") },
-      icon("bi-keyboard"), t("teclas")) : null,
-    item.shadowed ? h("span", { class: "el-badge", title: t("Um snippet dinâmico usa este trigger e tem prioridade.") },
-      t("sombreado")) : null,
-    item.group && state.view.grouping !== "group"
-      ? h("span", { class: "el-badge", title: item.group }, item.group) : null,
-    item.enabled === false ? h("span", { class: "el-badge" }, t("desativado")) : null,
-  ),
-  h("span", { class: "preview" }, ...(item.preview ? withChips(item.preview, tokenLibrary) : ["—"])));
+  }, ...itemContents(item, state.view.grouping !== "group"));
 
   host.replaceChildren(...sections.flatMap<HTMLElement>(({ title, items }) => {
     const rows = items.map(row);
     if (!title) return rows;
-    const label = title.kind === "group" ? title.label ?? t("Grupo") : sectionLabels[title.kind];
+    const label = itemSectionLabel(title);
     return [h("div", { class: "item-group", role: "group", "aria-label": label },
       h("div", { class: "item-group-heading", "aria-hidden": "true" }, h("span", {}, label), h("span", {}, String(items.length))),
       ...rows)];
@@ -1708,15 +1816,49 @@ function renderList(): void {
   else host.querySelector<HTMLElement>(".item[aria-selected=true]")?.scrollIntoView({ block: "nearest" });
 }
 
-/** What a screen reader says for a row: its trigger, its badges in words, then its text. */
-function itemLabel(item: Item): string {
-  const trigger = item.effectiveTrigger === item.name ? item.name : `${item.name} → ${item.effectiveTrigger}`;
+function itemSectionLabel(title: SectionTitle): string {
+  if (title.kind === "group") return title.label ?? t("Grupo");
+  return {
+    ungrouped: t("Sem grupo"), favorite: t("Favoritos"), other: t("Sem favorito"),
+    plain: t("Texto simples"), rich: t("Texto formatado"), form: t("Com formulário"), keys: t("Com teclas"),
+  }[title.kind];
+}
+
+/** Groups supply their displayed type label, or null when a heading names the type. */
+function itemContents(item: Item, showGroup: boolean, typeLabel?: string | null): HTMLElement[] {
+  const typeBadges = typeLabel === undefined ? [
+    item.rich ? h("span", { class: "el-badge" }, t("formatado")) : null,
+    item.form ? h("span", { class: "el-badge" }, t("Formulário")) : null,
+    item.keys ? h("span", { class: "el-badge", title: t("Pressiona Enter ou Tab ao expandir.") },
+      icon("bi-keyboard"), t("teclas")) : null,
+  ] : [typeLabel ? h("span", { class: "el-badge" }, typeLabel) : null];
   return [
-    trigger,
-    item.favorite ? t("favorito") : "",
+    h("span", { class: "trigger" }, item.effectiveTrigger === item.name
+      ? item.name : `${item.name} → ${item.effectiveTrigger}`),
+    h("span", { class: "badges" },
+      item.favorite ? icon("favorite") : null,
+      ...typeBadges,
+      item.shadowed ? h("span", { class: "el-badge", title: t("Um snippet dinâmico usa este trigger e tem prioridade.") },
+        t("sombreado")) : null,
+      item.group && showGroup ? h("span", { class: "el-badge", title: item.group }, item.group) : null,
+      item.enabled === false ? h("span", { class: "el-badge" }, t("desativado")) : null,
+    ),
+    h("span", { class: "preview" }, ...(item.preview ? withChips(item.preview, tokenLibrary) : ["—"])),
+  ];
+}
+
+/** What a screen reader says for a row: its trigger, its badges in words, then its text. */
+function itemLabel(item: Item, typeLabel?: string | null): string {
+  const trigger = item.effectiveTrigger === item.name ? item.name : `${item.name} → ${item.effectiveTrigger}`;
+  const typeLabels = typeLabel === undefined ? [
     item.rich ? t("formatado") : "",
     item.form ? t("Com formulário") : "",
     item.keys ? t("teclas") : "",
+  ] : [typeLabel];
+  return [
+    trigger,
+    item.favorite ? t("favorito") : "",
+    ...typeLabels,
     item.shadowed ? t("sombreado") : "",
     item.group ?? "",
     item.enabled === false ? t("desativado") : "",
@@ -2973,7 +3115,7 @@ document.addEventListener("keydown", (event) => {
     void escapeEditor(kind);
     return;
   }
-  if (state.page === "dinamicos" && ctrl && event.key.toLowerCase() === "f") {
+  if ((state.page === "dinamicos" || state.page === "grupos") && ctrl && event.key.toLowerCase() === "f") {
     event.preventDefault();
     refs.search?.focus();
     refs.search?.select();

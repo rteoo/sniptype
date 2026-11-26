@@ -651,11 +651,22 @@ class AppVersionFormattingTests(unittest.TestCase):
     def test_running_build_is_the_1_6_0_stable_candidate(self):
         self.assertEqual(tx.APP_VERSION, "1.6.0")
         self.assertEqual(tx.RELEASE_CHANNEL, "stable")
+        self.assertEqual(tx.APP_RELEASE_TAG, "v1.6.0")
         self.assertEqual(tx.APP_DISPLAY_NAME, "SnipType v1.6.0")
 
     def test_older_source_without_a_channel_is_treated_as_stable(self):
         with mock.patch.object(tx, "__doc__", "Version: 9.8.7"):
-            self.assertEqual(tx._read_release_metadata(), ("9.8.7", "stable"))
+            self.assertEqual(tx._read_release_metadata(), ("9.8.7", "stable", "v9.8.7"))
+
+    def test_beta_uses_the_declared_tag_and_keeps_an_older_build_readable(self):
+        beta = "Version: 1.5.0\nChannel: beta"
+        with mock.patch.object(tx, "__doc__", f"{beta}\nTag: v1.5.0-beta.2"):
+            self.assertEqual(tx._read_release_metadata(), ("1.5.0", "beta", "v1.5.0-beta.2"))
+        with mock.patch.object(tx, "__doc__", beta):
+            self.assertEqual(tx._read_release_metadata(), ("1.5.0", "beta", "v1.5.0-beta"))
+        with mock.patch.object(tx, "__doc__", f"{beta}\nTag: v1.5.1-beta.2"):
+            with self.assertRaisesRegex(ValueError, "Release tag does not match"):
+                tx._read_release_metadata()
 
     def test_unknown_release_channel_fails_loudly(self):
         with mock.patch.object(tx, "__doc__", "Version: 9.8.7\nChannel: nightly"):

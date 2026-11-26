@@ -58,6 +58,7 @@ from group_dialog import (
     GroupDefinitionError,
     GroupDialogController,
     build_group_definition,
+    normalize_group_icon,
 )
 from group_policy import get_static_item_metadata, normalize_group
 from i18n import N_, _
@@ -174,10 +175,11 @@ class BridgeError(Exception):
 class ManagerBridge:
     """Answer manager requests against a live ``Sniptype``. GUI thread only."""
 
-    def __init__(self, app, *, version, channel):
+    def __init__(self, app, *, version, channel, release_tag=None):
         self.app = app
         self.version = version
         self.channel = channel
+        self.release_tag = release_tag
         self._undo = {}
         self._undo_ids = itertools.count(1)
         self.methods = {
@@ -266,6 +268,7 @@ class ManagerBridge:
         return {
             "version": self.version,
             "channel": self.channel,
+            "releaseTag": self.release_tag,
             "language": i18n.language(),
             "languages": dict(i18n.LANGUAGES),
             "appearance": ui_theme.normalize_preference(app.settings.get("appearance")),
@@ -757,6 +760,7 @@ class ManagerBridge:
             listed.append({
                 "id": str(group_id), "label": policy.label or _("Sem nome"), "prefix": policy.prefix,
                 "enabled": policy.enabled, "count": len(static_members),
+                "icon": normalize_group_icon(definition.get("icon")) if isinstance(definition, dict) else None,
             })
         return {"readOnly": bool(getattr(metadata, "read_only", False)), "groups": listed}
 

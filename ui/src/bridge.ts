@@ -3,6 +3,7 @@
 // arrive as the `bridge` event (one JSON line read from stdin).
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import type { GroupIcon } from "./group-icon-picker";
 import type { ListGrouping, ListOrder } from "./list-view";
 
 export interface Issue {
@@ -16,6 +17,7 @@ export type ExpansionState = "ok" | "paused" | "down";
 export interface AppInfo {
   version: string;
   channel: string;
+  releaseTag?: string | null;
   language: string;
   languages: Record<string, string>;
   appearance: "system" | "light" | "dark";
@@ -99,13 +101,14 @@ export type CopyAnswer = { status: "duplicated"; trigger: string } | { status: "
 export type RenameAnswer =
   | { status: "renamed"; trigger: string } | { status: "invalid"; message: string } | Confirmation;
 
-export interface Group { id: string; label: string; prefix: string; enabled: boolean; count: number }
+export interface Group { id: string; label: string; prefix: string; enabled: boolean; count: number; icon?: GroupIcon | null }
 export interface Groups { readOnly: boolean; groups: Group[] }
 
 export interface Choice { value: string; label: string }
 export interface GroupValues {
   label: string; notes: string; prefix: string; enabled: boolean;
   terminator: string; application_mode: string; executables: string;
+  icon?: GroupIcon | null;
 }
 export interface GroupForm {
   values: GroupValues; terminators: Choice[]; applicationModes: Choice[]; windowsNote: string;
