@@ -16,7 +16,7 @@
         "title": "SnipType",
         "width": 1120,
         "height": 720,
-        "minWidth": 720,
+        "minWidth": 320,
         "minHeight": 480,
         "center": true,
         "visible": false

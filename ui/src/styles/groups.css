@@ -1,28 +1,63 @@
-.groups-page > header {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 0;
-  max-width: 760px;
+.groups-page > #groups-readonly {
+  margin-block-end: 1rem;
+  padding: .75rem 1rem;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-surface);
 }
 
 .group-cards {
+  display: grid;
+  gap: .875rem;
   list-style: none;
   margin: 0;
   padding: 0;
 }
 
-.group-card h2 { overflow-wrap: anywhere; }
-.group-summary { display: flex; flex-wrap: wrap; gap: 4px 14px; }
-.group-card .group-actions { flex-wrap: wrap; gap: 6px; }
-#groups-readonly { margin-bottom: 8px; }
+.group-card {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  gap: .75rem;
+  min-width: 0;
+  padding: clamp(.875rem, 2vw, 1.25rem);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-xl);
+  background: var(--color-bg-surface);
+}
 
-@media (max-width: 780px) {
-  .group-card .group-actions {
-    grid-column: 1 / -1;
-    grid-row: auto;
-    margin-top: 6px;
-  }
+.group-identity { display: flex; justify-content: space-between; align-items: start; gap: .625rem; }
+.group-name { display: flex; min-width: 0; align-items: start; gap: .625rem; padding-block: .65rem; }
+.group-identity h2 { font: 600 1.125rem / 1.35 var(--font-display); overflow-wrap: anywhere; }
+.group-name > .tp-i { margin-block-start: .2rem; color: var(--color-text-muted); }
+.group-menu-button { padding-inline: .625rem; color: var(--color-text-muted); }
+.group-menu-button > .tp-i { width: .875rem; height: .875rem; }
+.group-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: start;
+  align-items: center;
+  gap: .375rem .75rem;
+  color: var(--color-text-muted);
+  font-size: .875rem;
+}
+.group-state {
+  padding: .22rem .55rem;
+  border-radius: 999px;
+  background: var(--color-neutral-bg);
+  color: var(--color-neutral-fg);
+  font-weight: 600;
+}
+.group-state.on { background: var(--color-success-bg); color: var(--color-success-fg); }
+.group-prefix { flex-basis: 100%; overflow-wrap: anywhere; }
+.group-prefix code { color: var(--color-text-primary); }
+.group-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .375rem;
+  padding-block-start: .75rem;
+  border-block-start: 1px solid var(--color-border-subtle);
+}
+
+@container secondary-page (min-width: 43rem) {
+  .group-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
