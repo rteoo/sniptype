@@ -19,7 +19,13 @@ their original numbers.
 | 3.2.0, 3.2.1 | 0.9.0, 0.9.1 | 5.2.0-beta.1 | 1.0.0-beta.1 |
 | 3.3.0-beta, 3.3.0 | 0.10.0-beta.1, 0.10.0 | 5.2.0 | 1.0.0 |
 
-## [1.6.0] — Unreleased
+## [1.6.1] — 2026-11-26
+
+- Refresh the SnipType app and tray icons with the Teô ink and amber palette.
+- Match Dynamic snippet typography to the main snippet list.
+- Rename the Texts page to Snippets in navigation and the page heading.
+
+## [1.6.0] — 2026-11-26
 
 - Existing mappings become grouped snippets on upgrade. SnipType backs up the
   prior library and keeps the legacy editor available for mappings that would
