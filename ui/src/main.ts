@@ -951,7 +951,8 @@ async function groupDialog(id: string | null): Promise<void> {
     submit: async (current) => {
       let answer: GroupSaveAnswer;
       try {
-        answer = await request<GroupSaveAnswer>("group.save", { id, values: { ...current, icon: picker.value() } });
+        // Omit icon when only other fields changed so the bridge preserves the stored value.
+        answer = await request<GroupSaveAnswer>("group.save", { id, values: { ...current, icon: picker.changedValue() } });
       } catch (error) {
         return { field: "label", message: errorText(error) };
       }

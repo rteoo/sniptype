@@ -69,8 +69,11 @@ function isEmoji(value: string): boolean {
   return /^(?:\p{Extended_Pictographic}\uFE0F?(?:\p{Emoji_Modifier})?(?:\u200D\p{Extended_Pictographic}\uFE0F?(?:\p{Emoji_Modifier})?)*|\p{Regional_Indicator}{2}|[0-9#*]\uFE0F?\u20E3|\u{1F3F4}[\u{E0061}-\u{E007A}]+\u{E007F})$/u.test(value);
 }
 
-export function createGroupIconPicker(initial: GroupIcon | null | undefined): { element: HTMLElement; value: () => GroupIcon | null } {
+export function createGroupIconPicker(initial: GroupIcon | null | undefined): {
+  element: HTMLElement; changedValue: () => GroupIcon | null | undefined;
+} {
   let selected: GroupIcon | null = initial ? { ...initial } : null;
+  let changed = false;
   let limit = 60;
   const current = h("span", { class: "group-icon-picker-current" });
   const summary = h("summary", {}, current, h("span", {}, t("Escolher ícone")), icon("chevron-down", "tp-i group-icon-picker-chevron"));
@@ -91,6 +94,7 @@ export function createGroupIconPicker(initial: GroupIcon | null | undefined): { 
   }
   function choose(value: GroupIcon | null): void {
     selected = value;
+    changed = true;
     refreshCurrent();
     details.open = false;
     summary.focus();
@@ -163,5 +167,5 @@ export function createGroupIconPicker(initial: GroupIcon | null | undefined): { 
     }
   });
   refreshCurrent();
-  return { element: details, value: () => selected ? { ...selected } : null };
+  return { element: details, changedValue: () => changed ? selected : undefined };
 }

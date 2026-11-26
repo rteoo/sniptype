@@ -520,9 +520,14 @@ class OrganizeBridgeTests(unittest.TestCase):
 
     def test_malformed_stored_group_icon_is_hidden_from_manager(self):
         group = self.new_group()
-        self.app.library_metadata["groups"][group]["icon"] = {"kind": "emoji", "value": "x"}
+        raw_icon = {"kind": "emoji", "value": "x"}
+        self.app.library_metadata["groups"][group]["icon"] = raw_icon
         self.assertIsNone(self.result("group.form", id=group)["values"]["icon"])
         self.assertIsNone(next(g for g in self.result("groups.list")["groups"] if g["id"] == group)["icon"])
+        self.assertEqual("saved", self.result("group.save", id=group, values={"label": "Renamed"})["status"])
+        self.assertEqual(raw_icon, self.metadata()["groups"][group]["icon"])
+        self.assertEqual("saved", self.result("group.save", id=group, values={"label": "Renamed", "icon": None})["status"])
+        self.assertIsNone(self.metadata()["groups"][group]["icon"])
 
     def test_group_prefix_that_collides_is_refused_on_the_prefix_field(self):
         group = self.new_group()
