@@ -12,7 +12,7 @@ from mapping_migration import group_legacy_mappings
 from rich_text_support import build_rich_text_payload
 from sync_export import build_bundle
 from test_manager_runtime import make_real_app
-from trigger_index import find_direct_candidate
+from trigger_index import compile_trigger_index, find_direct_candidate, find_dynamic_trigger
 
 
 def manager(app):
@@ -72,6 +72,18 @@ class MappingMigrationTests(unittest.TestCase):
         self.assertEqual("New address", app.snippets["mailteam"])
         self.assertEqual(1, len(manager(app).groups_list()["groups"]))
 
+    def test_import_merge_preserves_a_distinct_static_trigger_and_legacy_mapping(self):
+        app = make_real_app(self, {"cpfexample": "Existing text"})
+        incoming = {"_cpf_numbers": {"example": "Imported mapping"}}
+        document, error = app.read_import_document(incoming)
+        self.assertIsNone(error)
+        self.assertEqual({"new": 1, "removed": 0, "overwritten": 0}, app.import_change_counts(document)["merge"])
+        self.assertEqual({"new": 0, "removed": 0, "overwritten": 1}, app.import_change_counts(document)["replace"])
+        self.assertEqual((True, None), app.apply_import(document, "merge"))
+        saved, _ = split_library_document(json.loads(Path(app.snippets_file).read_bytes()))
+        self.assertEqual({"cpfexample": "Existing text", **incoming}, saved)
+        self.assertTrue(manager(app).app_info()["legacyMappings"])
+
     def test_backup_or_write_failure_leaves_legacy_library_usable(self):
         original = {"_cpf_numbers": {"example": "Test ID"}}
         for target in ("create_backup", "write_json_atomic"):
@@ -109,3 +121,34 @@ class MappingMigrationTests(unittest.TestCase):
         self.assertEqual("Existing winner", grouped["lcity"])
         self.assertEqual(original["_long_codes"], grouped["_long_codes"])
         self.assertNotIn("malcity", grouped)
+
+    def test_an_unreachable_legacy_trigger_does_not_become_a_direct_trigger(self):
+        original = {"_test_codes": {"__prefix__": "q", "sequel": "Unreachable", "team": "Reachable"}}
+        self.assertEqual((None, None), find_dynamic_trigger(original, "qsequel", compile_trigger_index(original, ())))
+        snippets, metadata = split_library_document(original)
+        self.assertIs(snippets, group_legacy_mappings(snippets, metadata)[0])
+
+    def test_shorter_suffix_never_steals_a_retained_longer_mapping(self):
+        original = {
+            "_long_codes": {"__prefix__": "ma", "lcity": "Existing winner", "blocked": "Legacy value"},
+            "_short_codes": {"__prefix__": "l", "city": "Short suffix"},
+            "mablocked": "Direct value",
+            "_safe_codes": {"__prefix__": "x", "team": "Independent mapping"},
+        }
+        winner = ("malcity", "Existing winner")
+        self.assertEqual(winner, find_dynamic_trigger(original, "malcity", compile_trigger_index(original, ())))
+        grouped, metadata = group_legacy_mappings(*split_library_document(original))
+        self.assertEqual("Independent mapping", grouped["xteam"])
+        index = compile_trigger_index(grouped, (), metadata)
+        self.assertIsNone(find_direct_candidate("malcity", index))
+        self.assertEqual(winner, find_dynamic_trigger(grouped, "malcity", index))
+
+    def test_conversion_keeps_the_prefix_that_selects_a_retained_mapping(self):
+        original = {
+            "_first_codes": {"__prefix__": "b", "aabb": "Retained mapping", "bbb": "Unreachable"},
+            "_helper_codes": {"__prefix__": "ba", "aaa": "Independent value"},
+        }
+        winner = ("baabb", "Retained mapping")
+        self.assertEqual(winner, find_dynamic_trigger(original, "baabb", compile_trigger_index(original, ())))
+        snippets, metadata = split_library_document(original)
+        self.assertIs(snippets, group_legacy_mappings(snippets, metadata)[0])

@@ -1,4 +1,4 @@
-/* Teo DS 3.0.1 web roles mapped onto the existing manager components.
+/* Teô DS 3.2.0 web roles mapped onto the existing manager components.
    Keep state and native window behavior in the existing Tauri implementation. */
 [data-platform=windows] {
   --native-bg: var(--color-bg-canvas);
@@ -32,13 +32,54 @@
   --windows-row-height: 48px;
 }
 body { font-variant-numeric: tabular-nums; }
-.app { grid-template-columns: var(--app-sidebar-w) minmax(0, 1fr); }
-.navigation { border-right: 1px solid var(--app-nav-divider); }
-.navigation button { justify-content: flex-start; color: var(--app-nav-text); }
+.app { grid-template-columns: var(--app-sidebar-w) minmax(0, 1fr); height: 100dvh; }
+.navigation {
+  gap: 0; padding: 16px 12px 12px; overflow-y: auto; overscroll-behavior: contain;
+  border-right: 1px solid var(--app-nav-divider); background: var(--app-nav-bg);
+}
+.brand { gap: 10px; padding: 4px 8px; margin-bottom: 24px; }
+.brand img { flex: none; }
+.brand > span { font: 650 1.25rem/1.15 var(--font-display); letter-spacing: -.035em; }
+.navigation button { justify-content: flex-start; color: var(--app-nav-text); min-height: 44px; }
+.navigation .switcher-launch {
+  width: 100%; gap: 8px; padding-inline: 12px; margin-bottom: 18px;
+  border: 1px solid var(--color-border-control); border-radius: var(--radius-lg);
+  color: var(--app-nav-muted); background: var(--color-bg-canvas);
+}
+.switcher-launch kbd {
+  margin-inline-start: auto; font: 500 .6875rem/1.5 var(--native-font);
+  border: 1px solid var(--app-nav-divider); border-radius: var(--radius-sm); padding-inline: 4px;
+}
+.nav-pages, .nav-footer { display: grid; gap: 3px; }
+.nav-pages > button, .nav-footer > button { padding-inline: 13px; width: 100%; border-radius: var(--radius-lg); }
+.nav-pages .tp-i, .nav-footer > button .tp-i { width: 18px; height: 18px; }
+.nav-footer { margin-top: auto; padding-top: 24px; }
+.navigation .version { padding: 8px 13px 0; font-size: .72rem; color: var(--app-nav-muted); }
 .navigation button:hover { background: var(--app-nav-hover); }
 .navigation button[aria-current=page] {
-  background: var(--app-nav-active-bg); color: var(--app-nav-active-text);
+  background: var(--app-nav-active-bg); color: var(--app-nav-active-text); font-weight: 600;
 }
+.navigation button[aria-current=page]::before { left: 0; height: 14px; width: 2px; }
+.navigation .expansion {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 0;
+  margin: 0 0 8px; padding: 0 3px 0 11px; border: 1px solid var(--app-nav-divider);
+  border-radius: var(--radius-xl); background: var(--color-bg-canvas);
+}
+.expansion .state { padding: 0; gap: 7px; font-size: .8125rem; font-weight: 550; color: var(--color-text-primary); }
+.expansion .dot { box-shadow: 0 0 0 3px var(--color-success-bg); }
+.expansion .paused .dot, .expansion .down .dot { box-shadow: none; }
+.navigation .expansion .el-button {
+  min-width: 44px; padding: 0; justify-content: center; background: transparent; border: 0;
+}
+.navigation .expansion .el-button:hover { background: var(--app-nav-hover); }
+.expansion .last-used {
+  grid-column: 1 / -1; border-top: 1px solid var(--app-nav-divider); border-radius: 0;
+  margin-inline-end: 8px; padding: 4px 0; gap: 6px; font-size: .75rem; color: var(--app-nav-muted);
+}
+.expansion .last-used:disabled { opacity: 1; }
+.expansion .last-used .label { text-overflow: ellipsis; overflow: hidden; white-space: nowrap; }
+.expansion button .tp-i { height: 16px; width: 16px; }
+.navigation .drawer-close, .mobile-tabs { display: none; }
 .page { border: 0; border-radius: 0; }
 h1 { font: var(--type-page-title); }
 h2 { font: var(--type-section-title); }
@@ -83,11 +124,41 @@ th { font-weight: 700; }
 tbody tr:nth-child(even) { background: var(--table-band); }
 tbody th, tbody td:first-child { font-weight: 600; }
 table.backups th { color: var(--color-text-primary); }
-@media (max-width: 860px) {
-  .app { grid-template-columns: 56px minmax(0, 1fr); }
-  .navigation { padding-inline: 4px; }
-  .navigation button { justify-content: center; }
-  .brand { padding-inline: 8px; }
+@media (min-width: 701px) and (max-width: 960px) {
+  .app { grid-template-columns: 64px minmax(0, 1fr); }
+  .navigation { align-items: stretch; padding: 12px 6px; }
+  .navigation .label, .brand > span, .navigation .version, .switcher-launch kbd { display: none; }
+  .navigation button, .navigation .switcher-launch { justify-content: center; padding-inline: 0; }
+  .brand { padding-inline: 0; justify-content: center; margin-bottom: 16px; }
+  .navigation .expansion { display: flex; flex-direction: column; padding: 4px 0; }
+  .navigation .expansion .state { margin-block: 8px 0; }
+  .navigation .expansion .last-used { margin: 0; width: 44px; }
+}
+@media (max-width: 700px) {
+  .app { grid-template-columns: minmax(0,1fr); grid-template-rows: minmax(0,1fr) auto; }
+  .app > .navigation { display: none; }
+  .mobile-tabs {
+    display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); padding: 4px 6px max(4px, env(safe-area-inset-bottom));
+    gap: 2px; border-top: 1px solid var(--app-nav-divider); background: var(--app-nav-bg);
+  }
+  .mobile-tabs button {
+    flex-direction: column; min-width: 0; gap: 3px; padding: 4px 2px; min-height: 48px;
+    font-size: .75rem; color: var(--app-nav-muted); border-radius: var(--radius-lg);
+  }
+  .mobile-tabs button[aria-current=page], .mobile-tabs .current-section {
+    background: var(--app-nav-active-bg); color: var(--app-nav-active-text); font-weight: 600;
+  }
+  .mobile-tabs .tp-i { width: 18px; height: 18px; }
+  dialog.shell-drawer {
+    width: min(25rem, 100vw); max-width: 100%; max-height: 94dvh; padding: 0; margin: auto auto 0;
+    border-radius: var(--radius-2xl) var(--radius-2xl) 0 0; color: var(--color-text-primary);
+  }
+  .shell-drawer .navigation { border: 0; padding: 14px 16px; }
+  .shell-drawer .navigation button { justify-content: flex-start; }
+  .shell-drawer .label, .shell-drawer .brand span { display: inline; }
+  .shell-drawer .brand { margin-bottom: 12px; }
+  .shell-drawer .drawer-close { display: flex; margin-left: auto; min-width: 44px; justify-content: center; }
+  .shell-drawer .nav-footer { padding-top: 12px; }
 }
 @media (max-width: 600px) {
   .textos { display: flex; flex-direction: column; overflow: auto; }

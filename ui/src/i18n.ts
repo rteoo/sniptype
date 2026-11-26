@@ -3,6 +3,9 @@
 // bridge arrive already translated by the Python catalog.
 
 const EN_US: Record<string, string> = {
+  "Mais": "More",
+  "Mais ações": "More actions",
+  "Mais seções": "More sections",
   "Grupo desativado": "Group disabled",
   "1 texto": "1 text",
   "{count} textos": "{count} texts",
@@ -69,6 +72,7 @@ const EN_US: Record<string, string> = {
   "Ativar": "Activate",
   "Avisos": "Notices",
   "Ações": "Actions",
+  "Ações do grupo {name}": "Actions for group {name}",
   "Backup criado às {time}": "Backup created at {time}",
   "Backup restaurado às {time} · {name}": "Backup restored at {time} · {name}",
   "Backup: {taken}\n{changes}\n\nA biblioteca atual é trocada por este backup. Antes, ela é salva em um novo backup.":
@@ -219,11 +223,13 @@ const EN_US: Record<string, string> = {
   "Nenhum campo. Use Adicionar.": "No fields. Use Add.",
   "Nenhum erro registrado.": "No errors recorded.",
   "Nenhum item corresponde à busca.": "No items match the search.",
+  "Nenhum item selecionado": "No item selected",
   "Nenhum snippet dinâmico encontrado.": "No dynamic snippets found.",
   "Nenhum texto ainda. Use Novo para criar o primeiro, ou importe uma biblioteca.":
     "No texts yet. Use New to create the first one, or import a library.",
   "Nenhum texto encontrado. Ctrl+N cria um com este trigger.": "No text found. Ctrl+N creates one with this trigger.",
   "Nenhum texto nesta visualização.": "No texts in this view.",
+  "Nenhum texto selecionado": "No text selected",
   "Nenhuma notificação registrada ainda.": "No notifications yet.",
   "No momento da expansão": "At expansion time",
   "Nome": "Name",
@@ -299,6 +305,7 @@ const EN_US: Record<string, string> = {
   "Restaurar o backup {index} de {count}: {when}": "Restore backup {index} of {count}: {when}",
   "Resultados": "Results",
   "Retomar expansão": "Resume expansion",
+  "Retomar edição": "Resume editing",
   "Rótulo": "Label",
   "Sábado": "Saturday",
   "sábado": "Saturday",
@@ -390,6 +397,8 @@ const EN_US: Record<string, string> = {
   "{total} itens": "{total} items",
   "{total} textos": "{total} texts",
   "{trigger} ativo": "{trigger} on",
+  "Visualização": "List view",
+  "Voltar à lista": "Back to list",
   "Últimas notificações": "Recent notifications",
 };
 

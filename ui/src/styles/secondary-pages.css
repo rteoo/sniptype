@@ -1,0 +1,186 @@
+/* Teô DS 3.2 workspace, settings, and table roles for the manager's secondary pages. */
+.secondary-page {
+  container: secondary-page / inline-size;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: clamp(1rem, 3vw, 2.5rem) clamp(.75rem, 3vw, 2.5rem) 3rem;
+  background: var(--app-canvas, var(--color-bg-canvas));
+}
+.secondary-page > * { max-width: 68rem; margin-inline: auto; }
+.secondary-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: .875rem 1.5rem;
+  margin-block-end: 1.25rem;
+  padding-block-end: 1.125rem;
+  border-block-end: 1px solid var(--color-border-subtle);
+}
+.secondary-header h1 { font: 600 1.875rem / 1.15 var(--font-display); overflow-wrap: anywhere; }
+.secondary-header p { max-width: 63ch; margin-block-start: .5rem; font-size: .9375rem; }
+.secondary-page .receipt:empty { min-height: 0; padding: 0; }
+.secondary-page .receipt:not(:empty) { flex-wrap: wrap; margin-block: .5rem; }
+.secondary-page :is(button, input.field, select.field) { min-height: 44px; }
+.secondary-page button { max-width: 100%; overflow-wrap: anywhere; }
+.secondary-page .empty-list {
+  padding: 1rem;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-xl);
+  background: var(--color-bg-surface);
+}
+
+.dynamic-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1rem; }
+.dynamic-toolbar .search { flex: 1 1 19rem; min-width: 0; margin: 0; }
+.dynamic-sections { display: grid; gap: 1.25rem; margin-block-start: 1rem; }
+.dynamic-section { display: grid; gap: .5rem; min-width: 0; }
+.dynamic-section h2 { font: 600 1.125rem / 1.35 var(--font-display); }
+.dynamic-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-xl);
+  background: var(--color-bg-surface);
+}
+.dynamic-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: .5rem .875rem;
+  padding: .625rem .875rem;
+}
+.dynamic-row + .dynamic-row { border-block-start: 1px solid var(--color-border-subtle); }
+.dynamic-toggle, .setting-toggle { justify-content: center; width: 48px; min-height: 44px; padding: 0; }
+.dynamic-identity { display: grid; gap: .2rem; overflow-wrap: anywhere; }
+.dynamic-identity .trigger { font-size: .9375rem; font-weight: 600; }
+.dynamic-identity p { font-size: .875rem; }
+
+.backup-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
+.backups-page > .backup-path {
+  display: block;
+  margin-block: .625rem;
+  color: var(--color-text-muted);
+  font-size: .8125rem;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.backup-list { display: grid; gap: .5rem; margin-block-start: 1.25rem; }
+.backup-table {
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-xl);
+  background: var(--color-bg-surface);
+  overflow: hidden;
+}
+.backup-table :is(th, td) { padding: .625rem .875rem; overflow-wrap: anywhere; }
+.backup-table tbody tr + tr { border-block-start: 1px solid var(--color-border-subtle); }
+.backup-table th { text-align: left; font-size: .875rem; }
+.backup-table :is(.num, .action) { text-align: end; }
+.backup-table .action { width: 1%; }
+.backup-facts { display: none; font-size: .8125rem; font-weight: 400; }
+.backup-facts dt { color: var(--color-text-muted); }
+.backup-facts dd { margin: 0; }
+
+.settings-sections { display: grid; }
+.settings-entry {
+  display: grid;
+  align-items: start;
+  gap: 1rem 1.75rem;
+  min-width: 0;
+  padding-block: 1.25rem;
+  border-block-end: 1px solid var(--color-border-subtle);
+}
+.settings-entry:first-child { padding-block-start: .25rem; }
+.settings-copy { display: grid; gap: .35rem; }
+.settings-copy h2 { font: 600 1.125rem / 1.35 var(--font-display); }
+.settings-copy p { max-width: 52ch; font-size: .875rem; }
+.settings-fields { display: grid; justify-items: start; align-content: start; gap: .625rem; min-width: 0; }
+.settings-fields > select { width: min(100%, 18rem); }
+[data-platform=windows] .settings-fields .el-segment {
+  width: min(100%, 25rem);
+  max-width: 100%;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-xl);
+  background: var(--color-bg-raised);
+}
+.settings-fields .el-segment label { flex: 1 1 auto; min-width: max-content; max-width: 100%; }
+.settings-fields .el-segment span {
+  min-height: 44px;
+  padding-inline: .6rem;
+  border-radius: var(--radius-lg);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.settings-fields .settings-status { font-size: .875rem; color: var(--color-success-fg); }
+.settings-fields .settings-status.error { color: var(--color-danger-fg); }
+.settings-fields .data-rows, .settings-fields .hotkey-rows { width: 100%; margin: 0; gap: 0; }
+.settings-fields :is(.data-row, .hotkey-row) {
+  padding-block: .5rem;
+  border-block-end: 1px solid var(--color-border-subtle);
+}
+.settings-fields :is(.data-row, .hotkey-row):first-child { padding-block-start: 0; }
+.settings-fields :is(.data-row, .hotkey-row):last-child { border-block-end: 0; }
+.settings-fields :is(.data-row, .hotkey-row) > span:first-child { font-weight: 600; }
+.settings-fields .hotkey-row { grid-template-columns: minmax(0, 1fr) minmax(0, 12rem) auto; }
+.settings-fields .hotkey-row > .field { width: 100%; min-width: 0; }
+.settings-fields .data-row { grid-template-columns: minmax(0, 8rem) minmax(0, 1fr) auto; }
+.settings-fields .data-row .transfer.failed {
+  color: var(--color-danger-fg);
+  background: var(--color-danger-bg);
+  border-radius: var(--radius-md);
+}
+
+@container secondary-page (min-width: 43rem) {
+  .settings-entry { grid-template-columns: minmax(0, 1fr) minmax(0, 1.7fr); }
+}
+@container secondary-page (max-width: 34rem) {
+  .secondary-header h1 { font-size: 1.5rem; }
+  .backup-table :is(th, td) { padding: .625rem; }
+  .backup-table .num { display: none; }
+  .backup-facts { display: flex; flex-wrap: wrap; gap: .375rem .625rem; margin: .375rem 0 0; }
+}
+@container secondary-page (max-width: 27rem) {
+  .dynamic-row { grid-template-columns: auto minmax(0, 1fr); }
+  .dynamic-row > button { grid-column: 2; justify-self: start; }
+  .settings-fields :is(.data-row, .hotkey-row) { grid-template-columns: minmax(0, 1fr); justify-items: start; }
+  .settings-fields .data-row .transfer { grid-column: 1; }
+}
+
+/* Shared native-dialog elements retain their browser focus and Escape behavior. */
+dialog {
+  max-inline-size: calc(100% - 1.5rem);
+  max-block-size: calc(100dvh - 1.5rem);
+  overflow: auto;
+  padding: clamp(1rem, 4vw, 1.625rem);
+  background: var(--color-bg-surface);
+  border-color: var(--color-border-subtle);
+}
+dialog > :is(form, div) { min-width: 0; }
+dialog > form { max-height: none; overflow: visible; }
+dialog h2 { margin-block-end: .5rem; font: 600 1.25rem / 1.3 var(--font-display); }
+dialog :is(h2, p, code, .hint, .error, .field-list button) { overflow-wrap: anywhere; }
+dialog > :is(menu, form > menu) {
+  flex-wrap: wrap;
+  gap: .5rem;
+  margin-block-start: 1.125rem;
+  padding-block-start: .875rem;
+  border-block-start: 1px solid var(--color-border-subtle);
+}
+dialog :is(menu button, .dialog-field .field, .field-list button, .field-actions .el-button) { min-height: 44px; }
+dialog menu button { max-width: 100%; overflow-wrap: anywhere; }
+dialog menu button:not(.primary, .danger-fill) { background: var(--color-action-secondary-bg); }
+dialog menu button:not(.primary, .danger-fill):hover { background: var(--color-action-secondary-hover); }
+dialog .dialog-field > span:first-child { font-weight: 600; }
+dialog .dialog-field > .field { width: 100%; min-width: 0; }
+dialog .dialog-field .el-choice { min-height: 44px; }
+
+@media (max-width: 440px) {
+  dialog > :is(menu, form > menu) { justify-content: stretch; }
+  dialog menu button { flex: 1 1 6rem; }
+}
+@media (forced-colors: active) {
+  [data-platform=windows] .settings-fields .el-segment input:checked + span { border-color: Highlight; }
+  .group-state { border: 1px solid currentColor; }
+}

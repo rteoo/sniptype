@@ -5,7 +5,9 @@ import "./styles/teo/windows-elements.css";
 import "./styles/teo/theme.css";
 import "./styles/app.css";
 import "./styles/manager-theme.css";
+import "./styles/library-workspace.css";
 import "./styles/groups.css";
+import "./styles/secondary-pages.css";
 
 import { availableMonitors, getCurrentWindow, PhysicalPosition, PhysicalSize } from "@tauri-apps/api/window";
 
@@ -65,7 +67,9 @@ interface Draft {
 
 interface Receipt { text: string; undo?: () => Promise<void> }
 
-interface Collection { items: Item[]; total: number; query: string; draft: Draft | null; receipt: Receipt | null }
+interface Collection {
+  items: Item[]; total: number; query: string; draft: Draft | null; receipt: Receipt | null; detailOpen: boolean;
+}
 
 type Saved = { status: "saved"; name: string; revision: string };
 
@@ -90,7 +94,8 @@ const appWindow = getCurrentWindow();
 const lightScheme = matchMedia("(prefers-color-scheme: light)");
 const root = document.getElementById("app")!;
 
-const blank = (): Collection => ({ items: [], total: 0, query: "", draft: null, receipt: null });
+const compactLibrary = matchMedia("(max-width: 700px)");
+const blank = (): Collection => ({ items: [], total: 0, query: "", draft: null, receipt: null, detailOpen: false });
 
 const state = {
   info: null as AppInfo | null,
@@ -122,6 +127,8 @@ const refs = {
   receipt: null as HTMLElement | null,
   search: null as HTMLInputElement | null,
   viewBar: null as HTMLElement | null,
+  viewSummary: null as HTMLElement | null,
+  resumeDraft: null as HTMLButtonElement | null,
   meta: null as HTMLElement | null,
 };
 
@@ -240,8 +247,29 @@ function errorText(error: unknown): string {
 
 interface DialogButton { id: string; label: string; tone?: "primary" | "danger" }
 
+function keepModalTabFocus(event: KeyboardEvent): void {
+  if (event.key !== "Tab" || event.defaultPrevented || !(event.currentTarget instanceof HTMLDialogElement)) return;
+  const dialog = event.currentTarget;
+  const stops = [...dialog.querySelectorAll<HTMLElement>(
+    "button, input, select, textarea, a[href], summary, [tabindex], [contenteditable=true]",
+  )].filter((element) => element.tabIndex >= 0 && !element.matches(":disabled")
+    && element.getClientRects().length > 0 && getComputedStyle(element).visibility === "visible");
+  if (!stops.length) {
+    event.preventDefault();
+    return;
+  }
+  const first = stops[0];
+  const last = stops[stops.length - 1];
+  // Chromium may move focus into browser chrome before returning to the modal.
+  if (document.activeElement === (event.shiftKey ? first : last)) {
+    event.preventDefault();
+    (event.shiftKey ? last : first).focus();
+  }
+}
+
 function openDialog(dialog: HTMLDialogElement, focus: HTMLElement | null): void {
   const returnFocus = document.activeElement as HTMLElement | null;
+  dialog.addEventListener("keydown", keepModalTabFocus);
   dialog.addEventListener("close", () => {
     dialog.remove();
     returnFocus?.focus();
@@ -390,14 +418,15 @@ function formDialog(options: {
  * icon-only). `entries` is read each time it opens, so it reflects the view.
  */
 function menuButton(label: string,
-  entries: () => { label: string; icon?: string; disabled?: boolean; run: () => void }[],
+  entries: () => { label: string; icon?: string; disabled?: boolean; danger?: boolean; shortcut?: string; run: () => void }[],
   attrs: Record<string, unknown> = {}, leading?: string): HTMLElement {
   const menu = h("div", { class: "menu", popover: "auto", role: "menu", "aria-label": label });
   const button = h("button", {
     type: "button", class: "el-button", "aria-haspopup": "menu", "aria-expanded": "false", ...attrs,
     onclick: () => {
       menu.replaceChildren(...entries().map((entry) => h("button", {
-        type: "button", role: "menuitem", disabled: entry.disabled,
+        type: "button", role: "menuitem", disabled: entry.disabled, class: entry.danger ? "danger" : undefined,
+        title: entry.shortcut,
         onclick: () => {
           menu.hidePopover();
           // What the entry opens returns focus here when it closes.
@@ -409,6 +438,11 @@ function menuButton(label: string,
       menu.style.top = `${box.bottom + 4}px`;
       menu.style.left = `${box.left}px`;
       menu.showPopover();
+      const { clientWidth, clientHeight } = document.documentElement;
+      menu.style.left = `${Math.max(8, Math.min(box.left, clientWidth - menu.offsetWidth - 8))}px`;
+      if (box.bottom + menu.offsetHeight + 12 > clientHeight) {
+        menu.style.top = `${Math.max(8, box.top - menu.offsetHeight - 4)}px`;
+      }
       menu.querySelector<HTMLElement>("button:not([disabled])")?.focus();
     },
   }, leading ? icon(leading) : null, label, icon("chevron-down"));
@@ -615,7 +649,10 @@ async function resolveDraft(kind: Kind): Promise<boolean> {
 async function openItem(kind: Kind, name: string): Promise<void> {
   const collection = state.collections[kind];
   const type = kind === "mapeamentos" ? state.type : null;
-  if (collection.draft?.original === name && collection.draft.type === type) return;
+  if (collection.draft?.original === name && collection.draft.type === type) {
+    if (compactLibrary.matches && !collection.detailOpen) openCollectionDetail(kind);
+    return;
+  }
   if (!(await resolveDraft(kind))) return;
   let entry: Entry;
   try {
@@ -628,7 +665,7 @@ async function openItem(kind: Kind, name: string): Promise<void> {
   }
   collection.draft = draftFrom(entry, type);
   renderList();
-  renderDetail();
+  openCollectionDetail(kind);
 }
 
 async function newItem(kind: Kind): Promise<void> {
@@ -640,6 +677,7 @@ async function newItem(kind: Kind): Promise<void> {
     collection.draft.initialGroupId = collection.draft.groupId = state.view.group;
   }
   renderList();
+  collection.detailOpen = true;
   renderDetail();
   document.getElementById(prefill ? "text" : "name")?.focus();
 }
@@ -771,6 +809,7 @@ async function duplicateCurrent(kind: Kind): Promise<void> {
     // A mapping copy is a new draft of the same type, saved under the identifier given to it, form included.
     collection.draft = { ...newDraft(source.type, "", source.savedText, JSON.parse(source.savedSpans)),
       formFrom: source.original };
+    collection.detailOpen = true;
     renderList();
     renderDetail();
     document.getElementById("name")?.focus();
@@ -848,6 +887,7 @@ async function renameCurrent(): Promise<void> {
 
 async function setView(change: Partial<typeof state.view>): Promise<void> {
   Object.assign(state.view, change);
+  renderViewSummary();
   if (change.order !== undefined || change.grouping !== undefined) scheduleWindowSave();
   if (change.filter !== undefined || change.group !== undefined) await refreshList("textos");
   else if (change.order === "used") await refreshCollectionRows("textos");
@@ -1013,13 +1053,18 @@ async function deleteType(): Promise<void> {
 }
 
 async function setSetting(card: string, key: string, value: unknown): Promise<void> {
+  const previousLanguage = state.info?.language;
   try {
     state.info = await request<AppInfo>("settings.set", { key, value });
+    setLanguage(state.info.language);
+    if (state.info.language !== previousLanguage) {
+      state.cardStatus = {};
+      state.settingsReceipt = "";
+    }
     state.cardStatus[card] = { text: t("Salvo."), error: false };
   } catch (error) {
     state.cardStatus[card] = { text: errorText(error), error: true };
   }
-  setLanguage(state.info!.language);
   applyAppearance();
   renderAll();
 }
@@ -1063,36 +1108,77 @@ function renderReceipt(): void {
 // ---------------------------------------------------------------------------
 // Rendering
 
+const compactShell = matchMedia("(max-width: 700px)");
+compactShell.addEventListener("change", () => document.querySelector<HTMLDialogElement>(".shell-drawer[open]")?.close());
+const productIcon = new URL("../../assets/icon.svg", import.meta.url).href;
+
+function renderShell(page: HTMLElement): HTMLElement {
+  const drawer = h("dialog", { class: "shell-drawer", "aria-label": t("Seções") });
+  drawer.addEventListener("keydown", keepModalTabFocus);
+  const navButton = (destination: Page, iconId: string, label: string) => h("button", {
+    type: "button",
+    "aria-current": state.page === destination ? "page" : undefined,
+    "aria-label": label, title: label,
+    onclick: () => {
+      if (drawer.open) drawer.close();
+      void showPage(destination);
+    },
+  }, icon(iconId), h("span", { class: "label" }, label));
+  const navigation = h("nav", { class: "navigation", "aria-label": t("Seções") },
+    h("div", { class: "brand" }, h("img", { src: productIcon, alt: "", width: 36, height: 36 }),
+      h("span", {}, "SnipType"),
+      h("button", { type: "button", class: "drawer-close", "aria-label": t("Fechar"), title: t("Fechar"),
+        onclick: () => drawer.close() }, icon("close"))),
+    h("button", { type: "button", class: "switcher-launch", title: t("Pesquisar snippets") + " (Ctrl+K)",
+      "aria-label": t("Pesquisar snippets"), onclick: () => {
+        if (drawer.open) drawer.close();
+        showSwitcher();
+      } },
+      icon("search"), h("span", { class: "label" }, t("Buscar")), h("kbd", {}, "Ctrl K")),
+    h("div", { class: "nav-pages" },
+      navButton("textos", "library", t("Textos")),
+      navButton("grupos", "groups", t("Grupos")),
+      navButton("dinamicos", "dynamic", t("Dinâmicos")),
+      navButton("backups", "backup", t("Backups")),
+      state.info?.legacyMappings ? navButton("mapeamentos", "mapping", t("Mapeamentos antigos")) : null,
+    ),
+    h("div", { class: "nav-footer" },
+      refs.status = h("div", { class: "expansion", role: "group", "aria-label": t("Expansão") }),
+      h("button", { type: "button", title: t("Notificações"), "aria-label": t("Notificações"),
+        onclick: () => void showNotifications() }, icon("bell"), h("span", { class: "label" }, t("Notificações"))),
+      navButton("settings", "settings", t("Configurações")),
+      h("p", { class: "version" }, state.info ? `${state.info.version} · ${state.info.channel}` : ""),
+    ));
+  const more = h("button", { type: "button", "aria-haspopup": "dialog", "aria-label": t("Mais seções"),
+    "aria-expanded": "false", class: ["textos", "grupos", "dinamicos"].includes(state.page) ? "" : "current-section",
+    onclick: () => {
+      drawer.append(navigation);
+      drawer.showModal();
+      more.setAttribute("aria-expanded", "true");
+      navigation.querySelector<HTMLElement>("[aria-current=page]")?.focus();
+    },
+  }, icon("more"), t("Mais"));
+  const tabs = h("nav", { class: "mobile-tabs", "aria-label": t("Seções") },
+    navButton("textos", "library", t("Textos")), navButton("grupos", "groups", t("Grupos")),
+    navButton("dinamicos", "dynamic", t("Dinâmicos")), more);
+  const shell = h("div", { class: "app" }, navigation, page, tabs, drawer);
+  drawer.addEventListener("close", () => {
+    shell.prepend(navigation);
+    more.setAttribute("aria-expanded", "false");
+  });
+  drawer.addEventListener("click", (event) => { if (event.target === drawer) drawer.close(); });
+  return shell;
+}
+
 function renderAll(): void {
   document.documentElement.lang = state.info?.language ?? "pt-BR";
-  const navButton = (page: Page, iconId: string, label: string) => h("button", {
-    type: "button",
-    "aria-current": state.page === page ? "page" : "false",
-    title: label,
-    onclick: () => showPage(page),
-  }, icon(iconId), h("span", { class: "label" }, label));
-
   refs.infobar = h("div", { class: "infobar", role: "region", "aria-label": t("Avisos") });
   const kind = activeKind();
   const page = h("main", { class: "page" }, refs.infobar,
     kind ? collectionPage(kind) : state.page === "grupos" ? groupsPage()
       : state.page === "dinamicos" ? dynamicsPage()
       : state.page === "backups" ? backupsPage() : settingsPage());
-
-  root.replaceChildren(h("div", { class: "app" },
-    h("nav", { class: "navigation", "aria-label": t("Seções") },
-      h("div", { class: "brand" }, icon("document"), h("span", {}, "SnipType")),
-      navButton("textos", "library", t("Textos")),
-      navButton("grupos", "groups", t("Grupos")),
-      navButton("dinamicos", "dynamic", t("Dinâmicos")),
-      navButton("backups", "backup", t("Backups")),
-      state.info?.legacyMappings ? navButton("mapeamentos", "mapping", t("Mapeamentos antigos")) : null,
-      refs.status = h("div", { class: "expansion", role: "group", "aria-label": t("Expansão") }),
-      navButton("settings", "settings", t("Configurações")),
-      h("p", { class: "version" }, state.info ? `${state.info.version} · ${state.info.channel}` : ""),
-    ),
-    page,
-  ));
+  root.replaceChildren(renderShell(page));
   renderInfobar();
   renderStatus();
   if (kind) {
@@ -1119,7 +1205,8 @@ async function showPage(page: Page): Promise<void> {
   scheduleWindowSave();
   renderAll();
   if (isKind(page)) {
-    refs.search?.focus();
+    const detailVisible = compactLibrary.matches && refs.detail?.parentElement?.dataset.pane === "detail";
+    (detailVisible ? document.getElementById("library-editor-title") : refs.search)?.focus();
     await refreshList(page).catch((error) => console.error("refresh failed", error));
     await reconcileDraft(page).catch((error) => console.error("reconcile failed", error));
   } else if (page === "grupos") {
@@ -1135,8 +1222,8 @@ async function showPage(page: Page): Promise<void> {
 
 function groupsPage(): HTMLElement {
   refs.receipt = h("div", { class: "receipt", role: "status", "aria-live": "polite" });
-  return h("div", { class: "settings-page groups-page" },
-    h("header", {},
+  return h("div", { class: "secondary-page groups-page" },
+    h("header", { class: "secondary-header" },
       h("h1", { id: "groups-title", tabindex: -1 }, t("Grupos")),
       h("button", { id: "groups-add", type: "button", class: "primary",
         onclick: () => void groupDialog(null) }, icon("plus"), t("Novo grupo…")),
@@ -1158,32 +1245,39 @@ function renderGroups(): void {
   const previous = active instanceof HTMLButtonElement && host.contains(active) ? active.dataset : null;
   const rows = state.groups.map((group, index) => {
     const headingId = `group-name-${index}`;
-    const button = (action: string, label: string, run: () => void, disabled = false) => {
-      const id = `group-${action}-${index}`;
-      return h("button", { id, type: "button", class: "el-button", disabled,
-        "aria-labelledby": `${id} ${headingId}`, "data-group": group.id, "data-action": action, onclick: run,
-      }, label);
-    };
-    return h("li", { class: "card group-card" },
-      h("h2", { id: headingId }, group.label),
-      h("p", { class: "group-summary" },
-        h("span", {}, group.enabled ? t("Grupo ativo") : t("Grupo desativado")),
-        h("span", {}, group.count === 1 ? t("1 texto") : t("{count} textos", { count: group.count })),
-        group.prefix ? h("span", {}, t("Prefixo do trigger"), " ", h("code", {}, group.prefix)) : null,
-      ),
-      h("div", { class: "control group-actions" },
-        button("view", t("Ver textos"), () => {
-          state.view.filter = "all";
-          state.view.group = group.id;
-          state.collections.textos.query = "";
-          void showPage("textos");
+    const viewId = `group-view-${index}`;
+    return h("li", { class: "group-card" },
+      h("div", { class: "group-identity" },
+        h("div", { class: "group-name" }, icon("groups"), h("h2", { id: headingId }, group.label)),
+        menuButton(t("Ações"), () => [
+          { label: t("Editar grupo…"), run: () => void groupDialog(group.id) },
+          { label: t("Excluir grupo"), danger: true, run: () => void deleteGroup(group.id) },
+        ], {
+          class: "group-menu-button", "aria-label": t("Ações do grupo {name}", { name: group.label }),
+          "data-group": group.id, "data-action": "menu", disabled: state.groupsReadOnly,
         }),
-        button("edit", t("Editar grupo…"), () => void groupDialog(group.id), state.groupsReadOnly),
-        button("delete", t("Excluir grupo"), () => void deleteGroup(group.id), state.groupsReadOnly),
+      ),
+      h("div", { class: "group-summary" },
+        h("span", { class: `group-state${group.enabled ? " on" : ""}` },
+          group.enabled ? t("Grupo ativo") : t("Grupo desativado")),
+        h("span", {}, group.count === 1 ? t("1 texto") : t("{count} textos", { count: group.count })),
+        group.prefix ? h("p", { class: "group-prefix" }, t("Prefixo do trigger"), " ", h("code", {}, group.prefix)) : null,
+      ),
+      h("div", { class: "group-actions" },
+        h("button", {
+          id: viewId, type: "button", class: "el-button", "aria-labelledby": `${viewId} ${headingId}`,
+          "data-group": group.id, "data-action": "view", onclick: () => {
+            state.view.filter = "all";
+            state.view.group = group.id;
+            state.collections.textos.query = "";
+            state.collections.textos.detailOpen = false;
+            void showPage("textos");
+          },
+        }, t("Ver textos")),
       ),
     );
   });
-  host.replaceChildren(rows.length ? h("ul", { class: "cards group-cards" }, ...rows)
+  host.replaceChildren(rows.length ? h("ul", { class: "group-cards" }, ...rows)
     : h("p", { class: "empty-list" }, t("Nenhum grupo.")));
   if (previous) {
     const replacement = [...host.querySelectorAll("button")].find((control) =>
@@ -1217,29 +1311,34 @@ function renderStatus(): void {
   const info = state.info;
   if (!host || !info) return;
   const { state: expansion, label } = info.expansion;
+  const focused = host.contains(document.activeElement) ? document.activeElement : null;
   const toggleLabel = expansion === "paused" ? t("Retomar expansão") : t("Pausar expansão");
   // The narrow rail hides every .label: the buttons keep their names in title and aria-label.
   const toggle = expansion === "down"
     ? h("button", { type: "button", class: "el-button", disabled: true, title: t("Reinicie o SnipType"),
-      "aria-label": t("Reinicie o SnipType") }, icon("pause"), h("span", { class: "label" }, t("Reinicie o SnipType")))
+      "aria-label": t("Reinicie o SnipType") }, icon("pause"))
     : h("button", { type: "button", class: "el-button", title: toggleLabel, "aria-label": toggleLabel,
       onclick: () => void toggleExpansion() },
-      icon(expansion === "paused" ? "play" : "pause"), h("span", { class: "label" }, toggleLabel));
+      icon(expansion === "paused" ? "play" : "pause"));
   host.replaceChildren(
-    h("p", { class: `state ${expansion}`, role: "status" }, h("span", { class: "dot", "aria-hidden": "true" }),
+    h("p", { class: `state ${expansion}`, role: "status", title: label, "aria-label": label },
+      h("span", { class: "dot", "aria-hidden": "true" }),
       h("span", { class: "label" }, label)),
     toggle,
-    h("p", { class: "last label" }, info.lastExpansion),
     h("button", {
-      type: "button", class: "el-button", disabled: !info.canEditLast,
-      title: t("Editar último"), "aria-label": t("Editar último"),
-      onclick: () => void request("app.editLast").catch((error) => alertError(t("Editar último"), error)),
-    }, icon("document"), h("span", { class: "label" }, t("Editar último"))),
-    h("button", {
-      type: "button", class: "el-button", title: t("Notificações"), "aria-label": t("Notificações"),
-      onclick: () => void showNotifications(),
-    }, icon("bell"), h("span", { class: "label" }, t("Notificações"))),
+      type: "button", class: "last-used", disabled: !info.canEditLast,
+      title: info.canEditLast ? t("Editar último") + " · " + info.lastExpansion : info.lastExpansion,
+      "aria-label": t("Editar último") + " · " + info.lastExpansion,
+      onclick: () => {
+        host.closest<HTMLDialogElement>("dialog[open]")?.close();
+        void request("app.editLast").catch((error) => alertError(t("Editar último"), error));
+      },
+    }, icon("document"), h("span", { class: "label" }, info.lastExpansion)),
   );
+  if (focused) {
+    host.querySelector<HTMLElement>(focused.classList.contains("last-used") ? ".last-used" : ".el-button")
+      ?.focus({ preventScroll: true });
+  }
 }
 
 /** Notificações: what the app has said, newest first; errors are marked by word as well as color. */
@@ -1337,6 +1436,23 @@ async function dismissIssue(id: string): Promise<void> {
 
 const typeBar = { host: null as HTMLElement | null };
 
+function openCollectionDetail(kind: Kind): void {
+  state.collections[kind].detailOpen = true;
+  if (state.page !== kind) return;
+  renderDetail();
+  if (compactLibrary.matches) document.getElementById("library-editor-title")?.focus();
+}
+
+function showCollectionList(kind: Kind, focusSearch = false): void {
+  const collection = state.collections[kind];
+  collection.detailOpen = false;
+  const workspace = refs.detail?.parentElement;
+  if (workspace) workspace.dataset.pane = "list";
+  const selected = refs.items?.querySelector<HTMLElement>(".item[aria-selected=true]");
+  (focusSearch ? refs.search : selected ?? refs.search)?.focus();
+  if (focusSearch) refs.search?.select();
+}
+
 function collectionPage(kind: Kind): HTMLElement {
   const collection = state.collections[kind];
   const textos = kind === "textos";
@@ -1365,18 +1481,33 @@ function collectionPage(kind: Kind): HTMLElement {
   refs.detail = h("section", { class: "detail", "aria-label": t("Editor") });
   typeBar.host = textos ? null : h("div", { class: "type-bar" });
   refs.viewBar = textos ? h("div", { class: "list-controls" }) : null;
+  refs.viewSummary = textos ? h("span", { class: "list-view-current" }) : null;
+  refs.resumeDraft = h("button", { type: "button", class: "el-button library-resume", hidden: true,
+    onclick: () => openCollectionDetail(kind) }, t("Retomar edição"));
+  const viewToggle = h("summary", { class: "list-view-toggle" },
+    icon("settings"), h("span", { class: "list-view-label" }, t("Visualização")), refs.viewSummary, icon("chevron-down"));
+  const view = refs.viewBar ? h("details", {
+    class: "list-view", onkeydown: (event: KeyboardEvent) => {
+      const details = event.currentTarget as HTMLDetailsElement;
+      if (event.key !== "Escape" || !details.open) return;
+      event.stopPropagation();
+      event.preventDefault();
+      details.open = false;
+      viewToggle.focus();
+    },
+  }, viewToggle, refs.viewBar) : null;
 
-  return h("div", { class: "textos" },
+  return h("div", { class: "textos library-workspace", "data-pane": "list" },
     h("section", { class: textos ? "collection text-collection" : "collection", "aria-labelledby": "collection-title" },
-      h("div", { class: "heading" },
+      h("header", { class: "heading" },
         h("h1", { id: "collection-title" }, title),
-        h("button", { type: "button", class: "primary", title: "Ctrl+N", onclick: () => void newItem(kind) },
+        h("button", { type: "button", class: "el-button library-new", title: "Ctrl+N", onclick: () => void newItem(kind) },
           icon("plus"), textos ? t("Novo") : t("Novo item")),
       ),
       typeBar.host,
       h("div", { class: "search" }, icon("search"), refs.search),
-      refs.viewBar,
-      h("p", { class: "list-caption" }, h("span", {}, textos ? t("Trigger") : t("Identificador")), refs.count),
+      view,
+      h("div", { class: "list-caption" }, refs.count, refs.resumeDraft),
       refs.items,
       refs.receipt,
     ),
@@ -1437,6 +1568,20 @@ function renderViewBar(): void {
     ]),
   );
   if (focused) host.querySelector<HTMLElement>(`select[name="${focused}"]`)?.focus({ preventScroll: true });
+  renderViewSummary();
+}
+
+function renderViewSummary(): void {
+  const summary = refs.viewSummary;
+  if (!summary) return;
+  const keys = ["order"];
+  if (state.view.grouping !== "none") keys.push("grouping");
+  if (state.view.filter !== "all") keys.push("filter");
+  if (state.view.group) keys.push("group");
+  const text = keys.map((key) => refs.viewBar?.querySelector<HTMLSelectElement>(`select[name="${key}"]`)
+    ?.selectedOptions[0]?.text).filter(Boolean).join(" · ");
+  summary.textContent = text;
+  summary.title = text;
 }
 
 function collectionSections(kind: Kind): ReturnType<typeof listSections> {
@@ -1475,6 +1620,7 @@ async function revealCurrent(kind: Kind): Promise<void> {
   if (refs.search) refs.search.value = "";
   if (kind === "textos" && viewActive()) await setView({ filter: "all", group: "" });
   else renderList();
+  if (compactLibrary.matches) showCollectionList(kind);
   const item = [...(refs.items?.querySelectorAll<HTMLElement>(".item") ?? [])].find((element) => element.dataset.name === name);
   item?.scrollIntoView({ block: "nearest" });
   item?.focus();
@@ -1605,6 +1751,7 @@ function updateSaveState(): void {
   const dirty = isDirty(kind);
   const draft = state.collections[kind].draft;
   if (refs.saveButton) refs.saveButton.disabled = !dirty;
+  if (refs.resumeDraft) refs.resumeDraft.hidden = !draft || (kind === "mapeamentos" && draft.type !== state.type);
   if (refs.saveState) {
     refs.saveState.textContent = dirty ? t("Alterações não salvas") : draft?.original ? t("Salvo") : "";
     refs.saveState.classList.toggle("dirty", dirty);
@@ -1643,12 +1790,13 @@ function formatBar(editor: RichEditor, hint: HTMLElement): HTMLElement {
       },
     }, icon(symbol))),
     h("button", {
-      type: "button", class: "el-button", onmousedown: keep,
+      type: "button", class: "el-button", title: t("Limpar formatação"), "aria-label": t("Limpar formatação"),
+      onmousedown: keep,
       onclick: () => {
         editor.clear();
         editor.focus();
       },
-    }, icon("bi-eraser"), t("Limpar formatação")),
+    }, icon("bi-eraser")),
   );
 }
 
@@ -1913,25 +2061,32 @@ function renderDetail(): void {
   const collection = state.collections[kind];
   // A Mapeamentos draft stays with its own type; another type shows no editor.
   const draft = collection.draft && (textos || collection.draft.type === state.type) ? collection.draft : null;
+  const workspace = host.parentElement!;
+  const hadDetail = workspace.dataset.pane === "detail";
+  const saveHadFocus = document.activeElement === refs.saveButton;
+  workspace.dataset.pane = collection.detailOpen && draft ? "detail" : "list";
+  workspace.classList.toggle("has-draft", !!draft);
   refs.effective = null;
   if (!draft) {
     refs.saveButton = null;
     refs.saveState = null;
     refs.hiddenNote = null;
-    host.replaceChildren(h("div", { class: "blank" },
-      icon(textos ? "document" : "mapping"),
+    refs.meta = null;
+    textEditor = null;
+    host.replaceChildren(h("div", { class: "blank library-empty" },
+      h("span", { class: "library-empty-icon" }, icon(textos ? "document" : "mapping")),
+      h("h2", {}, textos ? t("Nenhum texto selecionado") : t("Nenhum item selecionado")),
       h("p", {}, textos ? t("Selecione um texto na lista ou crie um novo.")
         : t("Selecione um item na lista ou crie um novo.")),
-      h("button", { type: "button", class: "primary", onclick: () => void newItem(kind) }, icon("plus"),
-        textos ? t("Novo") : t("Novo item")),
     ));
     updateSaveState();
+    if (hadDetail && compactLibrary.matches) showCollectionList(kind);
     return;
   }
 
   refs.saveButton = h("button", {
-    type: "button", class: "primary", title: "Ctrl+S", onclick: () => void save(kind),
-  }, icon("check"), t("Salvar"));
+    type: "button", class: "el-button primary library-save", title: "Ctrl+S", onclick: () => void save(kind),
+  }, t("Salvar"));
   refs.saveState = h("span", { class: "state", role: "status" });
   refs.effective = h("span", { class: "hint", id: "name-hint", "aria-live": "polite" });
   const onInput = (field: "name") => (event: Event) => {
@@ -1959,23 +2114,24 @@ function renderDetail(): void {
     },
   });
   textEditor = editor;
+  const actions = draft.original ? menuButton(t("Mais ações"), () => [
+    { label: t("Duplicar"), shortcut: "Ctrl+D", run: () => void duplicateCurrent(kind) },
+    ...(textos ? [{ label: t("Renomear"), shortcut: "F2", run: () => void renameCurrent() }] : []),
+    { label: t("Excluir"), shortcut: "Delete", danger: true, run: () => void deleteCurrent(kind) },
+  ]) : null;
   host.replaceChildren(
-    h("div", { class: "commands" },
-      refs.saveButton,
-      draft.original ? h("button", { type: "button", title: "Ctrl+D", onclick: () => void duplicateCurrent(kind) },
-        t("Duplicar")) : null,
-      draft.original && textos ? h("button", { type: "button", title: "F2", onclick: () => void renameCurrent() },
-        t("Renomear")) : null,
-      h("button", { type: "button", onclick: () => void showPreview(kind) }, t("Prévia")),
-      draft.original ? h("button", { type: "button", class: "danger", title: "Delete", onclick: () => void deleteCurrent(kind) },
-        t("Excluir")) : null,
-      refs.saveState,
-    ),
-    refs.hiddenNote = h("div", { class: "hidden-note", role: "status", hidden: true }),
-    h("div", { class: "editor" },
-      h("h2", {}, heading),
-      refs.meta,
-      h("label", {},
+    h("div", { class: "editor library-editor" },
+      h("button", { type: "button", class: "el-button library-back", onclick: () => showCollectionList(kind) },
+        icon("back"), t("Voltar à lista")),
+      h("header", { class: "editor-header" },
+        h("div", { class: "editor-heading" },
+          h("h2", { id: "library-editor-title", tabindex: -1 }, heading), refs.saveState),
+        h("div", { class: "editor-actions" },
+          h("button", { type: "button", class: "el-button editor-preview", onclick: () => void showPreview(kind) }, t("Prévia")),
+          actions, refs.saveButton),
+      ),
+      refs.hiddenNote = h("div", { class: "hidden-note", role: "status", hidden: true }),
+      h("label", { class: "editor-trigger" },
         h("span", { id: "name-label" }, textos ? t("Trigger") : t("Identificador")),
         h("input", {
           id: "name", class: "field", value: draft.name, autocomplete: "off",
@@ -1984,10 +2140,12 @@ function renderDetail(): void {
         }),
         refs.effective,
       ),
-      h("div", { class: "grow text-field" },
+      refs.meta,
+      h("div", { class: "text-field" },
         h("span", { class: "field-label", id: "text-label" }, textos ? t("Texto") : t("Valor")),
-        h("div", { class: "editor-tools" }, formatBar(editor, formatHint), insertMenu(editor, exclude)),
-        editor.element,
+        h("div", { class: "editor-sheet" },
+          h("div", { class: "editor-tools" }, formatBar(editor, formatHint), insertMenu(editor, exclude)),
+          editor.element),
         attachCompletion(editor, () => completionCandidates(exclude), (name) => describeToken(name, tokenLibrary)),
         h("span", { class: "hint", id: "text-hint" }, textos ? t("Digite %% para inserir uma variável, ou use Inserir.")
           : t("O texto que entra no lugar do trigger."), " ", formatHint),
@@ -1997,6 +2155,7 @@ function renderDetail(): void {
   renderMeta();
   updateSaveState();
   renderHiddenNote();
+  if (saveHadFocus) (refs.saveButton.disabled ? document.getElementById("library-editor-title") : refs.saveButton)?.focus();
 }
 
 /** Redraw organization controls without disturbing the text editor's selection. */
@@ -2005,12 +2164,14 @@ function renderMeta(): void {
   const kind = activeKind();
   const draft = kind ? state.collections[kind].draft : null;
   if (!host || !kind || !draft) return;
+  const active = document.activeElement;
+  const focused = active instanceof HTMLElement && host.contains(active) ? active.dataset.meta : undefined;
   const locked = state.groupsReadOnly;
   const title = locked ? readOnlyMessage() : undefined;
   const group = kind === "textos" ? h("label", { class: "inline" },
     h("span", {}, t("Grupo")),
     h("select", {
-      class: "field", disabled: locked, title,
+      class: "field", "data-meta": "group", disabled: locked, title,
       onchange: (event: Event) => void setGroup((event.target as HTMLSelectElement).value),
     },
     h("option", { value: "", selected: !draft.groupId }, t("Sem grupo")),
@@ -2018,11 +2179,12 @@ function renderMeta(): void {
       option.label))),
   ) : null;
   host.replaceChildren(...(group ? [group] : []), h("button", {
-    type: "button", class: "el-button", "aria-pressed": String(draft.favorite), disabled: locked, title,
+    type: "button", class: "el-button", "data-meta": "favorite", "aria-pressed": String(draft.favorite), disabled: locked, title,
     onclick: () => void setFavorite(kind, !draft.favorite),
   }, icon("favorite"), t("Favorito")), h("button", {
-    type: "button", class: "el-button", onclick: () => void editForm(kind),
+    type: "button", class: "el-button", "data-meta": "form", onclick: () => void editForm(kind),
   }, t("Formulário…")));
+  if (focused) host.querySelector<HTMLElement>(`[data-meta="${focused}"]`)?.focus({ preventScroll: true });
   updateSaveState();
 }
 
@@ -2347,10 +2509,10 @@ function dynamicsPage(): HTMLElement {
     },
   });
   dynamicsRefs.list = h("div", { class: "dynamic-sections" });
-  dynamicsRefs.count = h("span", { class: "muted" });
+  dynamicsRefs.count = h("span", { class: "muted", role: "status" });
   dynamicsRefs.receipt = h("div", { class: "receipt", role: "status", "aria-live": "polite" });
-  return h("div", { class: "settings-page" },
-    h("header", {},
+  return h("div", { class: "secondary-page dynamics-page" },
+    h("header", { class: "secondary-header" },
       h("h1", {}, t("Snippets dinâmicos")),
       h("p", { class: "muted" }, t("Triggers que montam o texto na hora: datas, indicadores, cotações e links do WhatsApp.")),
     ),
@@ -2375,25 +2537,25 @@ function renderDynamics(): void {
     shown += items.length;
     if (!items.length) return null;
     const headingId = `dynamic-${section.id}`;
-    return h("section", { class: "cards", "aria-labelledby": headingId },
-      h("h2", { id: headingId, class: "section-title" }, section.label),
-      ...items.map((item) => h("div", { class: `card dynamic${item.enabled ? "" : " off"}` },
-        h("label", { class: "el-choice" },
+    return h("section", { class: "dynamic-section", "aria-labelledby": headingId },
+      h("h2", { id: headingId }, section.label),
+      h("ul", { class: "dynamic-list" }, ...items.map((item) => h("li", { class: "dynamic-row" },
+        h("label", { class: "el-choice dynamic-toggle" },
           h("input", {
             type: "checkbox", role: "switch", class: "el-switch", checked: item.enabled,
             "aria-label": t("{trigger} ativo", { trigger: item.trigger }),
             onchange: (event: Event) => void setDynamicEnabled(item.key, item.trigger,
               (event.target as HTMLInputElement).checked),
           })),
-        h("div", { class: "stack" },
+        h("div", { class: "dynamic-identity" },
           h("code", { class: "trigger" }, item.key === item.trigger ? item.trigger : `${item.key} → ${item.trigger}`),
-          h("span", { class: "muted" }, item.description)),
+          h("p", { class: "muted" }, item.description)),
         h("button", {
           type: "button", class: "el-button", "aria-label": t("Renomear {trigger}", { trigger: item.trigger }),
           onclick: () => void renameDynamic(item.key, item.trigger),
         },
           t("Renomear")),
-      )));
+      ))));
   });
   dynamicsRefs.count!.textContent = t("{shown} de {total}", { shown, total });
   dynamicsRefs.receipt!.textContent = state.dynamics.receipt;
@@ -2586,19 +2748,21 @@ function sizeText(bytes: number): string {
 function backupsPage(): HTMLElement {
   backupsRefs.list = h("div", { class: "backup-list" });
   backupsRefs.receipt = h("div", { class: "receipt", role: "status", "aria-live": "polite" });
-  return h("div", { class: "settings-page" },
-    h("header", {},
-      h("h1", {}, t("Backups da biblioteca")),
-      h("p", { class: "muted" }, t("Cada alteração guarda a versão anterior aqui; os 30 backups mais recentes ficam guardados.")),
-      h("code", { class: "path" }, state.info?.dataDir ?? ""),
+  return h("div", { class: "secondary-page backups-page" },
+    h("header", { class: "secondary-header" },
+      h("div", {},
+        h("h1", {}, t("Backups da biblioteca")),
+        h("p", { class: "muted" }, t("Cada alteração guarda a versão anterior aqui; os 30 backups mais recentes ficam guardados.")),
+      ),
+      h("button", { type: "button", class: "primary", onclick: () => void createBackup() }, icon("plus"), t("Criar backup")),
     ),
     h("div", { class: "backup-actions" },
-      h("button", { type: "button", class: "primary", onclick: () => void createBackup() }, icon("plus"), t("Criar backup")),
       h("button", { type: "button", class: "el-button", onclick: () => void exportLibrary() }, t("Exportar…")),
       h("button", { type: "button", class: "el-button", onclick: () => importLibrary() }, t("Importar…")),
       h("button", { type: "button", class: "el-button", onclick: () => void request("app.openDataFolder") },
         t("Abrir pasta")),
     ),
+    h("code", { class: "backup-path" }, state.info?.dataDir ?? ""),
     backupsRefs.receipt,
     backupsRefs.list,
   );
@@ -2614,37 +2778,38 @@ function renderBackups(): void {
     return;
   }
   const count = (value: number | null) => value === null ? t("inválido") : String(value);
+  const headings = [t("Textos"), t("Listas"), t("Tamanho")];
   host.replaceChildren(
     h("p", { class: "muted" }, t("{count} backups disponíveis", { count: items.length })),
-    h("table", { class: "backups", "aria-label": t("Backups da biblioteca") },
+    h("div", { class: "backup-table" }, h("table", { class: "backups", "aria-label": t("Backups da biblioteca") },
       h("thead", {}, h("tr", {},
-        h("th", { scope: "col" }, t("Quando")), h("th", { scope: "col", class: "num" }, t("Textos")),
-        h("th", { scope: "col", class: "num" }, t("Listas")), h("th", { scope: "col", class: "num" }, t("Tamanho")),
+        h("th", { scope: "col" }, t("Quando")),
+        ...headings.map((label) => h("th", { scope: "col", class: "num" }, label)),
         h("th", { scope: "col" }, h("span", { class: "sr-only" }, t("Ações"))))),
-      h("tbody", {}, ...items.map((backup, index) => h("tr", {},
-        h("td", {}, backup.when, backup.empty ? h("span", { class: "muted" }, ` · ${t("0 itens")}`) : null),
-        h("td", { class: "num" }, count(backup.texts)),
-        h("td", { class: "num" }, count(backup.lists)),
-        h("td", { class: "num" }, sizeText(backup.size)),
-        h("td", { class: "action" }, h("button", {
-          type: "button", class: "el-button", disabled: backup.texts === null,
-          // Two backups can share a minute, so the position keeps every button's name apart.
-          "aria-label": t("Restaurar o backup {index} de {count}: {when}", {
-            index: index + 1, count: items.length, when: backup.when,
-          }),
-          onclick: () => void restoreBackup(backup.name),
-        }, t("Restaurar"))),
-      ))),
-    ),
+      h("tbody", {}, ...items.map((backup, index) => {
+        const facts = [count(backup.texts), count(backup.lists), sizeText(backup.size)];
+        return h("tr", {},
+          h("td", {}, backup.when, backup.empty ? h("span", { class: "muted" }, ` · ${t("0 itens")}`) : null,
+            h("dl", { class: "backup-facts" }, ...facts.map((fact, column) =>
+              h("div", {}, h("dt", {}, headings[column]), h("dd", {}, fact)))),
+          ),
+          ...facts.map((fact) => h("td", { class: "num" }, fact)),
+          h("td", { class: "action" }, h("button", {
+            type: "button", class: "el-button", disabled: backup.texts === null,
+            // Two backups can share a minute, so the position keeps every button's name apart.
+            "aria-label": t("Restaurar o backup {index} de {count}: {when}", {
+              index: index + 1, count: items.length, when: backup.when,
+            }),
+            onclick: () => void restoreBackup(backup.name),
+          }, t("Restaurar"))),
+        );
+      })),
+    )),
   );
 }
 
 function settingsPage(): HTMLElement {
   const info = state.info!;
-  const status = (card: string) => {
-    const entry = state.cardStatus[card];
-    return entry ? h("span", { class: `status${entry.error ? " error" : ""}`, role: "status" }, entry.text) : null;
-  };
   const segment = (card: string, key: string, current: string, choices: [string, string][]) =>
     h("div", { class: "el-segment", role: "radiogroup", "aria-labelledby": `card-${card}` },
       ...choices.map(([value, label]) => h("label", {},
@@ -2653,47 +2818,50 @@ function settingsPage(): HTMLElement {
           onchange: () => void setSetting(card, key, value),
         }),
         h("span", {}, label))));
-  const card = (id: string, title: string, body: string | Node, ...control: (Node | null)[]) =>
-    h("section", { class: "card", "aria-labelledby": `card-${id}` },
-      h("h2", { id: `card-${id}` }, title), h("p", {}, body), h("div", { class: "control" }, ...control));
+  const setting = (id: string, title: string, description: string, ...controls: Node[]) => {
+    const entry = state.cardStatus[id];
+    return h("section", { class: "settings-entry", "aria-labelledby": `card-${id}` },
+      h("div", { class: "settings-copy" },
+        h("h2", { id: `card-${id}` }, title),
+        h("p", { id: id === "hotkeys" ? "hotkeys-hint" : undefined, class: "muted" }, description),
+      ),
+      h("div", { class: "settings-fields" }, ...controls,
+        entry ? h("p", { class: `settings-status${entry.error ? " error" : ""}`, role: "status" }, entry.text) : null),
+    );
+  };
 
-  return h("div", { class: "settings-page" },
-    h("header", {},
-      h("h1", {}, t("Configurações")),
-      h("p", { id: "settings-receipt", class: "receipt", role: "status", "aria-live": "polite" }, state.settingsReceipt),
-      h("p", { class: "muted" }, t("Ajuste a aparência, a expansão e os dados do SnipType.")),
+  return h("div", { class: "secondary-page preferences-page" },
+    h("header", { class: "secondary-header" },
+      h("div", {},
+        h("h1", {}, t("Configurações")),
+        h("p", { class: "muted" }, t("Ajuste a aparência, a expansão e os dados do SnipType.")),
+      ),
     ),
-    h("div", { class: "cards" },
-      card("language", t("Idioma"), t("Idioma da interface. O texto dos snippets não muda."),
-        status("language"),
+    h("p", { id: "settings-receipt", class: "receipt", role: "status", "aria-live": "polite" }, state.settingsReceipt),
+    h("div", { class: "settings-sections" },
+      setting("language", t("Idioma"), t("Idioma da interface. O texto dos snippets não muda."),
         h("select", {
           class: "field", "aria-labelledby": "card-language",
           onchange: (event: Event) => void setSetting("language", "language", (event.target as HTMLSelectElement).value),
         }, ...Object.entries(info.languages).map(([code, name]) =>
           h("option", { value: code, selected: code === info.language }, name)))),
-      card("appearance", t("Aparência"), t("Siga o tema do Windows ou escolha um fixo."),
-        status("appearance"),
+      setting("appearance", t("Aparência"), t("Siga o tema do Windows ou escolha um fixo."),
         segment("appearance", "appearance", info.appearance,
           [["system", t("Sistema")], ["light", t("Claro")], ["dark", t("Escuro")]])),
-      card("density", t("Densidade"), t("Espaço dos controles e das linhas."),
-        status("density"),
+      setting("density", t("Densidade"), t("Espaço dos controles e das linhas."),
         segment("density", "density", info.density,
           [["compact", t("Compacta")], ["comfortable", t("Confortável")], ["touch", t("Toque")]])),
-      card("expansion", t("Modo terminador"),
+      setting("expansion", t("Modo terminador"),
         t("Expande só depois de um espaço ou pontuação, que continua no texto. Enter não conta."),
-        status("expansion"),
-        h("label", { class: "el-choice" },
+        h("label", { class: "el-choice setting-toggle" },
           h("input", {
             type: "checkbox", role: "switch", class: "el-switch", checked: info.terminatorMode,
             "aria-labelledby": "card-expansion",
             onchange: (event: Event) => void setSetting("expansion", "terminatorMode",
               (event.target as HTMLInputElement).checked),
           }))),
-      h("section", { class: "card hotkeys", "aria-labelledby": "card-hotkeys" },
-        h("h2", { id: "card-hotkeys" }, t("Atalhos de teclado")),
-        h("p", { id: "hotkeys-hint" },
-          t("Clique em um campo e pressione a combinação, como Ctrl+Shift+M. Backspace desativa o atalho.")),
-        status("hotkeys"),
+      setting("hotkeys", t("Atalhos de teclado"),
+        t("Clique em um campo e pressione a combinação, como Ctrl+Shift+M. Backspace desativa o atalho."),
         h("div", { class: "hotkey-rows" }, ...info.hotkeys.map((hotkey) => h("div", { class: "hotkey-row" },
           h("span", {}, hotkey.label),
           hotkeyField(hotkey.action, hotkey.label, hotkey.display),
@@ -2701,10 +2869,7 @@ function settingsPage(): HTMLElement {
             type: "button", class: "el-button", disabled: !hotkey.binding,
             onclick: () => void saveHotkey(hotkey.action, null),
           }, t("Desativar")))))),
-      h("section", { class: "card data", "aria-labelledby": "card-data" },
-        h("h2", { id: "card-data" }, t("Dados")),
-        h("p", {}, t("Biblioteca, backups e logs ficam nesta pasta.")),
-        status("data"),
+      setting("data", t("Dados"), t("Biblioteca, backups e logs ficam nesta pasta."),
         h("div", { class: "data-rows" },
           h("div", { class: "data-row" },
             h("span", {}, t("Pasta de dados")), h("code", {}, info.dataDir),
@@ -2712,9 +2877,8 @@ function settingsPage(): HTMLElement {
               t("Copiar"))),
           ...info.transfers.map(transferRow)),
         h("p", { class: "muted" }, t("A cópia espelho e o pacote de sincronização são definidos em settings.json.")),
-        h("div", { class: "control" },
-          h("button", { type: "button", class: "el-button", onclick: () => void request("app.openDataFolder") },
-            t("Abrir pasta")))),
+        h("button", { type: "button", class: "el-button", onclick: () => void request("app.openDataFolder") },
+          t("Abrir pasta"))),
     ),
   );
 }
@@ -2834,8 +2998,11 @@ document.addEventListener("keydown", (event) => {
     void newItem(kind);
   } else if (key === "f") {
     event.preventDefault();
-    refs.search?.focus();
-    refs.search?.select();
+    if (compactLibrary.matches) showCollectionList(kind, true);
+    else {
+      refs.search?.focus();
+      refs.search?.select();
+    }
   }
 });
 
