@@ -186,6 +186,7 @@ const EN_US: Record<string, string> = {
   "Listas": "Lists",
   "Manter rascunho": "Keep draft",
   "Mapeamentos": "Mappings",
+  "Mapeamentos antigos": "Legacy mappings",
   "Mensagem": "Message",
   "Mesclar": "Merge",
   "Modo de aplicativo": "App mode",

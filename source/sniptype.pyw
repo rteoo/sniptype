@@ -66,6 +66,7 @@ from library_metadata import (
     split_library_document,
     static_item_metadata,
 )
+from mapping_migration import group_legacy_mappings, has_legacy_mappings
 from trigger_index import (
     ExpansionTarget,
     compile_trigger_index,
@@ -671,7 +672,11 @@ class Sniptype:
             document = self.get_default_snippets()
             self.save_snippets(document)
 
+        dynamic_snippets = self.get_dynamic_snippets()
         static_snippets, metadata = split_library_document(document)
+        grouped, grouped_metadata = group_legacy_mappings(static_snippets, metadata, dynamic_snippets)
+        if grouped is not static_snippets and self.save_snippets(grouped, grouped_metadata, preserved={}):
+            static_snippets, metadata = grouped, grouped_metadata
         self.library_metadata = normalize_metadata(
             metadata,
             self._metadata_available_items(static_snippets),
@@ -695,9 +700,6 @@ class Sniptype:
                 cooldown_seconds=60,
             )
         self.logger.info(f"✓ Snippets carregados do arquivo: {len(static_snippets)} snippets")
-
-        # Add dynamic snippets
-        dynamic_snippets = self.get_dynamic_snippets()
 
         # Merge: JSON snippets + dynamic ones (dynamic take priority)
         all_snippets = merge_snippets(static_snippets, dynamic_snippets)
@@ -806,14 +808,15 @@ class Sniptype:
         except OSError as e:
             self.logger.warning(f"Falha ao criar backup de inicialização: {e}")
 
-    def save_snippets(self, snippets: dict, metadata=None) -> bool:
+    def save_snippets(self, snippets: dict, metadata=None, *, preserved=None) -> bool:
         """Save static snippets to disk, backing up the previous copy first.
 
         Returns True on success, False on failure. A rotating backup of the
         pre-write file is taken before the atomic replace so no save can lose an
         earlier state.
         """
-        saveable = build_saveable_snippets(snippets, self.shadowed_static_snippets)
+        shadows = self.shadowed_static_snippets if preserved is None else preserved
+        saveable = build_saveable_snippets(snippets, shadows)
         metadata_source = self.library_metadata if metadata is None else metadata
         normalized_metadata = normalize_metadata(
             metadata_source,
@@ -906,8 +909,6 @@ class Sniptype:
             self.logger.warning("Bundle de sincronização ignorado: snippets.json com formato inválido.")
             self._record_sync({**failure, "error": _("snippets.json com formato inválido")})
             return
-        static_snippets, _metadata = split_library_document(document)
-
         try:
             registry = load_registry(
                 self.resolve_resource_path("dynamic_snippets.json"),
@@ -915,7 +916,7 @@ class Sniptype:
                 logger=self.logger,
             )
             outcome = export_bundle_outcome(
-                static_snippets,
+                document,
                 registry,
                 export_dir,
                 os.path.join(self.data_dir, SYNC_STATE_FILENAME),
@@ -1025,7 +1026,7 @@ class Sniptype:
         return summaries
 
     def _read_backup(self, backup_path):
-        """Load and check a backup: ``(snippets, None)`` or ``(None, error_message)``."""
+        """Load and validate the library a backup restores, including legacy groups."""
         try:
             data = validate_static_snippets(load_json_file(backup_path))
         except Exception as e:
@@ -1033,7 +1034,10 @@ class Sniptype:
         if data is None:
             return None, _("Backup inválido: formato inesperado.")
 
-        restored_snippets, restored_metadata = split_library_document(data)
+        snippets, metadata = split_library_document(data)
+        restored_snippets, restored_metadata = group_legacy_mappings(
+            snippets, metadata, self._active_dynamic_triggers(),
+        )
         restored_metadata = normalize_metadata(
             restored_metadata,
             self._metadata_available_items(restored_snippets),
@@ -1044,7 +1048,8 @@ class Sniptype:
         )
         if collision_error:
             return None, _("Backup inválido: {error}").format(error=collision_error)
-        return restored_snippets, None
+        converted = build_library_document(restored_snippets, restored_metadata) if restored_snippets is not snippets else None
+        return (restored_snippets, converted), None
 
     def _saved_library(self):
         """The static library as it is on disk: no callables, shadowed statics kept."""
@@ -1059,21 +1064,25 @@ class Sniptype:
         restored, error = self._read_backup(backup_path)
         if error:
             return None, error
-        return library_change_counts(self._saved_library(), restored), None
+        return library_change_counts(self._saved_library(), restored[0]), None
 
     def restore_backup(self, backup_path):
         """Replace the live library with a backup (current file backed up first).
 
         Returns (ok, error_message).
         """
-        _restored, error = self._read_backup(backup_path)
+        restored, error = self._read_backup(backup_path)
         if error:
             return False, error
 
         if not self._backup_current_library():
             return False, _("Falha ao criar backup de segurança; restauração cancelada.")
         try:
-            shutil.copyfile(backup_path, self.snippets_file)
+            _snippets, converted = restored
+            if converted is None:
+                shutil.copyfile(backup_path, self.snippets_file)
+            else:
+                write_json_atomic(self.snippets_file, converted)
         except OSError as e:
             return False, _("Falha ao restaurar: {error}").format(error=e)
 
@@ -1109,7 +1118,11 @@ class Sniptype:
         data = validate_static_snippets(data)
         if data is None:
             return None, _("Arquivo inválido: o JSON precisa ser um objeto.")
-        return split_library_document(data), None
+        snippets, metadata = split_library_document(data)
+        return group_legacy_mappings(snippets, metadata, self._active_dynamic_triggers()), None
+
+    def _active_dynamic_triggers(self):
+        return (key for key, value in self.snippets.items() if callable(value))
 
     def _imported_snippets(self, imported_snippets, mode):
         """The static library an import in ``mode`` leaves, before metadata."""
@@ -3072,7 +3085,7 @@ class Sniptype:
         if geometry_intersects_monitors(geometry, self._manager_monitors(window)):
             window.geometry(manager_geometry_for_tk(geometry))
         page = self._manager_pages.get(view.get("page"))
-        if page is not None:
+        if page is not None and self._manager_notebook.tab(page, "state") != "hidden":
             self._manager_notebook.select(page)
         for name, state in view.get("pages", {}).items():
             callbacks = self._manager_views.get(name)
@@ -3352,7 +3365,11 @@ class Sniptype:
                      bg=sidebar_bg, fg=ui.text_muted, font=ui.caption_font(),
                      wraplength=ui.px(190), justify=tk.LEFT, anchor="w").pack(fill=tk.X)
             self._refresh_edit_last()
-            help_text = _("Ctrl+1–5: seções · Ctrl+F: busca\nCtrl+K: alternar · Ctrl+/: teclado")
+            def shortcut_help(legacy_visible):
+                return _("Ctrl+1–{count}: seções · Ctrl+F: busca\n"
+                         "Ctrl+K: alternar · Ctrl+/: teclado").format(count=5 if legacy_visible else 4)
+
+            help_text = shortcut_help(has_legacy_mappings(self.snippets))
             help_font = tkfont.Font(root=root, font=ui.caption_font())
             # Enlarged sidebar help must reserve its complete two-line width;
             # otherwise the fixed-height shell compresses its wrapped lines.
@@ -3405,7 +3422,8 @@ class Sniptype:
                 "dynamic": tab_builtin, "backups": tab_backups, "settings": tab_settings,
             }
 
-            nav_items = self._build_manager_nav(ui, nav, notebook)
+            nav_items, nav_rows = self._build_manager_nav(ui, nav, notebook)
+            legacy_nav = nav_rows[str(tab_dynamic)]
 
             def tab_counter(tab, label):
                 def set_count(count):
@@ -3425,18 +3443,39 @@ class Sniptype:
             self._manager_views = {}
             self._create_static_snippets_tab(
                 tab_static, root, set_count=tab_counter(tab_static, _("Textos")))
-            self._create_dynamic_mappings_tab(
-                tab_dynamic, root, set_count=tab_counter(tab_dynamic, _("Mapeamentos")))
+
+            def sync_legacy_page():
+                visible = has_legacy_mappings(self.snippets)
+                hidden = notebook.tab(tab_dynamic, "state") == "hidden"
+                if visible:
+                    if "mapping" not in self._manager_views:
+                        self._create_dynamic_mappings_tab(
+                            tab_dynamic, root, set_count=tab_counter(tab_dynamic, _("Mapeamentos")))
+                    if hidden:
+                        notebook.add(tab_dynamic)
+                        legacy_nav.pack(fill=tk.X, before=nav_rows[str(tab_builtin)])
+                elif not hidden:
+                    notebook.hide(tab_dynamic)
+                    legacy_nav.pack_forget()
+                shortcut_label.configure(text=shortcut_help(visible))
+
+            sync_legacy_page()
+            self._register_manager_refresher(sync_legacy_page)
             self._create_dynamic_snippets_tab(tab_builtin, root)
             self._create_backups_tab(tab_backups, root)
             self._create_settings_tab(tab_settings, root)
             self._refresh_manager_health()
 
-            tabs = notebook.tabs()
-            for index, tab_id in enumerate(tabs, 1):
+            def select_section(index):
+                tabs = [tab for tab in notebook.tabs() if notebook.tab(tab, "state") != "hidden"]
+                if index < len(tabs):
+                    notebook.select(tabs[index])
+                    return "break"
+
+            for index in range(5):
                 root.bind(
-                    f"<Control-Key-{index}>",
-                    lambda _event, selected=tab_id: (notebook.select(selected), "break")[1],
+                    f"<Control-Key-{index + 1}>",
+                    lambda _event, section=index: select_section(section),
                 )
 
             def focus_search(_event):
@@ -4313,12 +4352,16 @@ class Sniptype:
     def _build_manager_nav(cls, ui, nav, notebook):
         """One sidebar entry per notebook page, in tab order, tracking selection.
 
-        Returns ``{tab_id: button}`` so page counts can relabel them.
+        Returns the page buttons and their rows so the legacy page can hide.
         """
         items = {}
+        rows = {}
         for tab_id, icon in zip(notebook.tabs(), cls.MANAGER_PAGE_ICONS):
+            row = tk.Frame(nav, bg=nav.cget("bg"))
+            row.pack(fill=tk.X)
+            rows[tab_id] = row
             items[str(tab_id)] = ui_widgets.nav_item(
-                nav, notebook.tab(tab_id, "text"),
+                row, notebook.tab(tab_id, "text"),
                 lambda target=tab_id: notebook.select(target),
                 icon=icon, ui=ui,
             )
@@ -4330,7 +4373,7 @@ class Sniptype:
 
         notebook.bind("<<NotebookTabChanged>>", highlight, add="+")
         highlight()
-        return items
+        return items, rows
 
     def _configure_manager_styles(self, root):
         ui = ui_theme.theme()
@@ -4673,20 +4716,20 @@ class Sniptype:
         ) == ui_widgets.PRIMARY:
             revert()
 
-    @staticmethod
-    def _show_manager_keyboard_map(root):
+    def _show_manager_keyboard_map(self, root):
         ui_widgets.alert(
             root, _("Teclado do gerenciador"),
             _("Ctrl+N — Novo com a busca\nCtrl+S — Salvar\nCtrl+D — Duplicar item salvo\n"
               "F2 — Renomear texto / focar identificador\nDelete — Excluir na lista (Desfazer disponível)\n"
               "Esc — Limpar busca / descartar rascunho com confirmação\n"
               "Ctrl+K — Alternar snippet\nCtrl+E — Editar último\nCtrl+F — Buscar\n"
-              "Ctrl+1–5 — Seções\n↓ / Enter na busca — Focar lista\n"
+              "Ctrl+1–{count} — Seções\n↓ / Enter na busca — Focar lista\n"
               "Tab / Shift+Tab — Próximo / anterior\nCtrl+Tab — Inserir tabulação\n"
               "Ctrl+Shift+R — Referência\nCtrl+Shift+V — Área de transferência\n"
               "Ctrl+Shift+F — Campo de formulário\nCtrl+Shift+X — Limpar formato\n"
               "Ctrl+B / I / U — Negrito / itálico / sublinhado\n"
-              "Ctrl+Shift+C / S — Código / tachado"), tone="info",
+              "Ctrl+Shift+C / S — Código / tachado").format(count=5 if has_legacy_mappings(self.snippets) else 4),
+            tone="info",
         )
 
     def _show_manager_switcher(self, root):

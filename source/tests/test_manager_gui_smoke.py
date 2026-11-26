@@ -527,17 +527,21 @@ class ManagerGuiSmokeTests(unittest.TestCase):
             # The app icon sits beside the title.
             self.assertTrue(str(brand.cget("image")))
             self.assertEqual(str(brand.cget("compound")), "left")
-            titles = [notebook.tab(tab_id, "text") for tab_id in notebook.tabs()]
+            visible_tabs = [tab for tab in notebook.tabs() if notebook.tab(tab, "state") != "hidden"]
+            titles = [notebook.tab(tab_id, "text") for tab_id in visible_tabs]
             nav = [
                 widget for widget in _descendants(window)
-                if isinstance(widget, BUTTONS) and widget.cget("text") in titles
+                if isinstance(widget, BUTTONS) and widget.winfo_ismapped() and widget.cget("text") in titles
             ]
             # One button per page, in tab order, carrying the page counts.
             self.assertEqual([button.cget("text") for button in nav], titles)
             self.assertEqual(titles[0], "Textos (1)")
+            self.assertEqual(4, len(titles), "a regular library has no legacy mappings page")
+            self.app._restore_manager_view(window, {"page": "mapping"})
+            self.assertEqual(notebook.select(), visible_tabs[0])
             nav[1].invoke()
             window.update()
-            self.assertEqual(notebook.select(), notebook.tabs()[1])
+            self.assertEqual(notebook.select(), visible_tabs[1])
             self.assertTrue(nav[1].instate(["selected"]))
             self.assertFalse(nav[0].instate(["selected"]))
 
@@ -551,7 +555,7 @@ class ManagerGuiSmokeTests(unittest.TestCase):
             window.focus_force()
             window.update()
             notebook = self.app._manager_notebook
-            tabs = notebook.tabs()
+            tabs = [tab for tab in notebook.tabs() if notebook.tab(tab, "state") != "hidden"]
 
             for index in (2, 1):
                 window.event_generate(f"<Control-Key-{index}>")
@@ -2177,7 +2181,7 @@ class ManagerGuiSmokeTests(unittest.TestCase):
             self.app._build_manager_window(root)
             window = self.app.manager_window
             window.update()
-            self.app._restore_manager_view(window, {"page": "mapping", "pages": {
+            self.app._restore_manager_view(window, {"page": "dynamic", "pages": {
                 "static": {"query": "xhi", "selection": "xhi", "row_focus": "xhi",
                            "target": {"kind": "static", "key": "xhi"}}}})
             window.update()
@@ -2191,7 +2195,7 @@ class ManagerGuiSmokeTests(unittest.TestCase):
             window.update()
             self.assertIs(window, self.app.manager_window)
             after = self.app._capture_manager_view(window)
-            self.assertEqual("mapping", after["page"])
+            self.assertEqual("dynamic", after["page"])
             self.assertEqual(before["pages"]["static"]["query"], after["pages"]["static"]["query"])
             self.assertEqual("xhi", after["pages"]["static"]["selection"])
             self.assertEqual(before["pages"]["static"]["target"], after["pages"]["static"]["target"])
@@ -3772,15 +3776,15 @@ class WorkPreservationTests(unittest.TestCase):
                             [t for t in self._shown(tab) if t.startswith("O tema do Windows")])
             _press(text, "<Control-s>")
             first.update()
-            notebook.select(notebook.tabs()[1])
+            notebook.select(self.app._manager_pages["dynamic"])
             self.app._check_system_appearance(first)
             rebuilt = self.app.manager_window
             rebuilt.update()
-            rebuilt_notebook = self.app._manager_notebook
+            rebuilt_view = self.app._capture_manager_view(rebuilt)
             seen["rebuilt"] = (
                 rebuilt is not first, first.winfo_exists(), rebuilt.theme_kind,
                 ttk.Style(rebuilt).theme_use(),
-                rebuilt_notebook.index(rebuilt_notebook.select()),
+                rebuilt_view["page"],
             )
             seen["expected_theme"] = ui_widgets.theme_name(tx.ui_theme.theme())
             seen["is_light"] = not tx.ui_theme.theme().is_dark
@@ -3794,7 +3798,7 @@ class WorkPreservationTests(unittest.TestCase):
                     "for salvo ou descartado."]),
             seen["held"])
         self.assertTrue(seen["is_light"])
-        self.assertEqual((True, False, "windows", seen["expected_theme"], 1), seen["rebuilt"])
+        self.assertEqual((True, False, "windows", seen["expected_theme"], "dynamic"), seen["rebuilt"])
         self.assertEqual("Olá, tudo bem?!", self._on_disk()["xola"])
 
 

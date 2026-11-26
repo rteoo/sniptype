@@ -439,18 +439,27 @@ function menuButton(label: string,
 // Data
 
 async function refreshInfo(): Promise<void> {
+  const legacyMappings = state.info?.legacyMappings;
   state.info = await request<AppInfo>("app.info");
   setLanguage(state.info.language);
   applyAppearance();
+  if (refs.infobar && legacyMappings !== state.info.legacyMappings) {
+    if (state.page === "mapeamentos" && !state.info.legacyMappings) {
+      await showPage("textos");
+    } else {
+      renderAll();
+    }
+    return;
+  }
   renderInfobar();
   renderStatus();
 }
 
 /** Read the app again and the page on screen: the library or the app's state changed behind this window. */
 async function refreshVisible(): Promise<void> {
+  await refreshInfo();
   const kind = activeKind();
   const page = state.page;
-  await refreshInfo();
   if (kind) {
     await refreshList(kind);
     await reconcileDraft(kind);
@@ -975,6 +984,7 @@ async function deleteType(): Promise<void> {
   await refreshList("mapeamentos");
   renderDetail();
   showReceipt("mapeamentos", { text: t("Tipo excluído às {time} · {name}", { time: clock(), name: type.label }) });
+  await refreshInfo();
 }
 
 async function setSetting(card: string, key: string, value: unknown): Promise<void> {
@@ -1042,7 +1052,7 @@ function renderAll(): void {
     h("nav", { class: "navigation", "aria-label": t("Seções") },
       h("div", { class: "brand" }, icon("document"), h("span", {}, "SnipType")),
       navButton("textos", "library", t("Textos")),
-      navButton("mapeamentos", "mapping", t("Mapeamentos")),
+      state.info?.legacyMappings ? navButton("mapeamentos", "mapping", t("Mapeamentos antigos")) : null,
       navButton("dinamicos", "dynamic", t("Dinâmicos")),
       navButton("backups", "backup", t("Backups")),
       refs.status = h("div", { class: "expansion", role: "group", "aria-label": t("Expansão") }),
@@ -1067,6 +1077,7 @@ function renderAll(): void {
 }
 
 async function showPage(page: Page): Promise<void> {
+  if (page === "mapeamentos" && !state.info?.legacyMappings) return;
   if (page === state.page) return;
   // Each editor keeps its draft while another page shows.
   state.page = page;
@@ -1250,7 +1261,7 @@ function collectionPage(kind: Kind): HTMLElement {
       }
     },
   });
-  const title = textos ? t("Textos") : t("Mapeamentos");
+  const title = textos ? t("Textos") : t("Mapeamentos antigos");
   refs.items = h("div", { class: "items", role: "listbox", "aria-label": title, onkeydown: onListKey });
   refs.count = h("span");
   refs.receipt = h("div", { class: "receipt", role: "status", "aria-live": "polite" });
@@ -2633,7 +2644,7 @@ document.addEventListener("keydown", (event) => {
   const kind = activeKind();
   // Keys every page answers: the switcher, Editar último, the sections, the shortcut sheet.
   if (ctrl && !event.altKey && !event.shiftKey) {
-    const page = PAGES[Number(event.key) - 1];
+    const page = availablePages()[Number(event.key) - 1];
     if (/^[1-5]$/.test(event.key) && page) {
       event.preventDefault();
       void showPage(page);
@@ -2825,7 +2836,7 @@ const shortcuts = (): [string, string][] => [
   ["Ctrl+K", t("Alternar snippet")],
   ["Ctrl+E", t("Editar último")],
   ["Ctrl+F", t("Buscar")],
-  ["Ctrl+1–5", t("Seções")],
+  [`Ctrl+1–${availablePages().length}`, t("Seções")],
   ["↓ / Enter", t("Na busca: focar a lista")],
   ["Ctrl+B / I / U", t("Negrito / itálico / sublinhado")],
   ["Ctrl+/", t("Esta lista")],
@@ -2864,6 +2875,10 @@ async function escapeEditor(kind: Kind): Promise<void> {
 }
 
 const PAGES: Page[] = ["textos", "mapeamentos", "dinamicos", "backups", "settings"];
+
+function availablePages(): Page[] {
+  return state.info?.legacyMappings ? PAGES : PAGES.filter((page) => page !== "mapeamentos");
+}
 
 async function onAppEvent({ event: name, text }: AppEvent): Promise<void> {
   if (name === "focus") {
@@ -2944,7 +2959,6 @@ async function main(): Promise<void> {
   try {
     await refreshInfo();
     await refreshList("textos");
-    await refreshTypes();
   } catch (error) {
     root.replaceChildren(h("div", { class: "fatal", role: "alert" },
       h("h1", {}, t("O SnipType não respondeu")),

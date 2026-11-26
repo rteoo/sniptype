@@ -32,7 +32,7 @@ class BridgeTests(unittest.TestCase):
             "sig": "Best,\nTeo",
             "fancy": build_rich_text_payload("Bold text", [{"tag": "bold", "start": 0, "end": 4}]),
             "_codes": {"__prefix__": "c", "city": "Goiânia"},
-        })
+        }, migrate_mappings=False)
         self.bridge = ManagerBridge(self.app, version="9.9.9", channel="beta")
 
     def call(self, method, **params):
@@ -187,20 +187,17 @@ class VariablesBridgeTests(unittest.TestCase):
     def test_lists_every_resolvable_name_with_a_one_line_detail(self):
         variables = self.result("variables.list")
         snippets = {item["name"]: item["detail"] for item in variables["snippets"]}
-        self.assertEqual({"hello": "Hello there", "sig": "Best, Teo"}, snippets)
-        self.assertEqual(["cpffulano"], [item["name"] for item in variables["mappings"]])
-        self.assertIn("123.456.789-00", variables["mappings"][0]["detail"])
+        self.assertEqual({"hello": "Hello there", "sig": "Best, Teo", "cpffulano": "123.456.789-00"}, snippets)
+        self.assertEqual([], variables["mappings"])
         dynamics = {item["name"] for item in variables["dynamics"]}
         self.assertTrue(dynamics)
         self.assertTrue(all(callable(self.app.snippets[name]) for name in dynamics))
 
     def test_rows_say_which_snippets_press_keys(self):
         self.result("snippet.save", trigger="login", text="user%%_tab%%pass%%_enter%%")
-        self.result("mapping.save", type="_cpf_numbers", name="tabbed", text="1%%_tab%%2")
+        self.result("snippet.save", trigger="cpftabbed", text="1%%_tab%%2")
         library = {item["trigger"]: item["keys"] for item in self.result("library.list")["items"]}
-        self.assertEqual({"hello": False, "sig": False, "login": True}, library)
-        mappings = {item["name"]: item["keys"] for item in self.result("mapping.list", type="_cpf_numbers")}
-        self.assertEqual({"fulano": False, "tabbed": True}, mappings)
+        self.assertEqual({"hello": False, "sig": False, "login": True, "cpffulano": False, "cpftabbed": True}, library)
 
     def test_a_name_the_resolver_would_not_reach_is_left_out(self):
         dynamic = self.result("variables.list")["dynamics"][0]["name"]
@@ -217,7 +214,7 @@ class MappingBridgeTests(unittest.TestCase):
                 "styled": build_rich_text_payload("Bold id", [{"tag": "bold", "start": 0, "end": 4}]),
             },
             "_email_codes": {"__prefix__": "mail", "work": "work@example.com"},
-        })
+        }, migrate_mappings=False)
         self.bridge = ManagerBridge(self.app, version="9.9.9", channel="beta")
 
     call, result, error = BridgeTests.call, BridgeTests.result, BridgeTests.error
@@ -334,7 +331,7 @@ class OrganizeBridgeTests(unittest.TestCase):
             "sig": "Best,\nTeo",
             "fancy": build_rich_text_payload("Bold text", [{"tag": "bold", "start": 0, "end": 4}]),
             "_cpf_numbers": {"fulano": "123.456.789-00"},
-        })
+        }, migrate_mappings=False)
         self.bridge = ManagerBridge(self.app, version="9.9.9", channel="beta")
 
     call, result, error = BridgeTests.call, BridgeTests.result, BridgeTests.error
@@ -534,7 +531,7 @@ class BackupBridgeTests(unittest.TestCase):
         listed = {backup["name"]: backup for backup in self.result("backups.list")}
         self.assertEqual(before + 1, len(listed))
         created = listed[name]
-        self.assertEqual((1, 1, False), (created["texts"], created["lists"], created["empty"]))
+        self.assertEqual((2, 0, False), (created["texts"], created["lists"], created["empty"]))
         self.assertTrue(created["when"])
 
     def test_preview_and_restore_bring_the_backup_back(self):
@@ -567,7 +564,7 @@ class BackupBridgeTests(unittest.TestCase):
         self.result("library.import", text=text, mode="merge")
         disk = on_disk(self.app)
         self.assertEqual(("Replaced", "New one"), (disk["hello"], disk["fresh"]))
-        self.assertIn("_cpf_numbers", disk)
+        self.assertEqual("123.456.789-00", disk["cpffulano"])
         self.result("library.import", text=json.dumps({"only": "This"}), mode="replace")
         self.assertEqual({"only"}, {key for key in on_disk(self.app) if key != "__sniptype__"})
 
@@ -588,7 +585,7 @@ class FormBridgeTests(unittest.TestCase):
             "letter": "Dear %%name%%, see you %%when%%.",
             "sig": "Best, %%hello%%",
             "_email_codes": {"__prefix__": "mail", "work": "Hi %%who%%"},
-        })
+        }, migrate_mappings=False)
         self.bridge = ManagerBridge(self.app, version="9.9.9", channel="beta")
 
     call, result, error = BridgeTests.call, BridgeTests.result, BridgeTests.error
@@ -712,7 +709,8 @@ class StaleDraftTests(unittest.TestCase):
     """A draft opened before the library changed never overwrites the newer value unasked."""
 
     def setUp(self):
-        self.app = make_real_app(self, {"hello": "Hello there", "_codes": {"__prefix__": "c", "city": "Goiânia"}})
+        self.app = make_real_app(self, {"hello": "Hello there", "_codes": {"__prefix__": "c", "city": "Goiânia"}},
+                                 migrate_mappings=False)
         self.bridge = ManagerBridge(self.app, version="9.9.9", channel="stable")
 
     def result(self, method, **params):

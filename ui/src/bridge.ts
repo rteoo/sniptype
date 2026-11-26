@@ -20,6 +20,7 @@ export interface AppInfo {
   appearance: "system" | "light" | "dark";
   density: "compact" | "comfortable" | "touch";
   terminatorMode: boolean;
+  legacyMappings: boolean;
   dataDir: string;
   expansion: { state: ExpansionState; label: string };
   lastExpansion: string;

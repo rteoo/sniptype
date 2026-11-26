@@ -63,6 +63,7 @@ from group_policy import normalize_group
 from i18n import N_, _
 from backup_support import backup_time
 from library_metadata import MetadataReadOnlyError, mapping_item_metadata, static_item_metadata
+from mapping_migration import has_legacy_mappings
 from manager_actions import TriggerCollisionError
 from manager_view_support import (
     FILTER_ALL,
@@ -269,6 +270,7 @@ class ManagerBridge:
             "density": app.settings.get("density") if app.settings.get("density") in DENSITY_CHOICES
             else "compact",
             "terminatorMode": bool(app.terminator_mode),
+            "legacyMappings": has_legacy_mappings(app.snippets),
             "dataDir": str(app.data_dir),
             "expansion": {"state": state, "label": health_support.expansion_label(state)},
             "lastExpansion": app._last_expansion_text(),
