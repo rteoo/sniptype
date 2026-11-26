@@ -41,6 +41,7 @@ EN_US = {
     "Executáveis devem ser informados, um por linha.": "Enter executables one per line.",
     "Executável inválido na linha {line}.": "Invalid executable on line {line}.",
     "Configuração do grupo inválida.": "Invalid group settings.",
+    "Ícone do grupo inválido.": "Invalid group icon.",
     "O nome do grupo é obrigatório.": "The group name is required.",
     "Notas e prefixo devem ser texto.": "Notes and prefix must be text.",
     "O prefixo não pode conter espaços.": "The prefix cannot contain spaces.",

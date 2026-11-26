@@ -255,26 +255,30 @@ from tkinter import ttk, filedialog, font as tkfont
 
 
 def _read_release_metadata():
-    """Read the app version and release channel from this module's docstring.
-
-    Derived rather than duplicated: the docstring and installer metadata are
-    the two hand-maintained places today, and more constants would be more places
-    to forget. The version remains nullable because the sync bundle's
-    ``generator.version`` permits that; an absent channel is treated as stable so
-    builds from older source trees keep their historical display.
-    """
+    """Read the base version, channel, and display tag from the build metadata."""
     metadata = {}
     for line in (__doc__ or "").splitlines():
         key, separator, value = line.partition(":")
-        if separator and key in {"Version", "Channel"}:
+        if separator and key in {"Version", "Channel", "Tag"}:
             metadata[key.lower()] = value.strip() or None
     channel = metadata.get("channel") or "stable"
     if channel not in {"stable", "beta"}:
         raise ValueError(f"Unsupported release channel: {channel}")
-    return metadata.get("version"), channel
+    version = metadata.get("version")
+    base_tag = f"v{version}" if version else None
+    if channel == "beta" and base_tag:
+        base_tag += "-beta"
+    tag = metadata.get("tag")
+    if tag and tag != base_tag:
+        prefix = f"{base_tag}."
+        number = tag.removeprefix(prefix)
+        if not (base_tag and channel == "beta" and tag.startswith(prefix)
+                and number.isascii() and number.isdecimal() and not number.startswith("0")):
+            raise ValueError(f"Release tag does not match version and channel: {tag}")
+    return version, channel, tag or base_tag
 
 
-APP_VERSION, RELEASE_CHANNEL = _read_release_metadata()
+APP_VERSION, RELEASE_CHANNEL, APP_RELEASE_TAG = _read_release_metadata()
 PRODUCT_NAME = APP_NAME
 
 
@@ -2988,7 +2992,7 @@ class Sniptype:
             if executable is None:
                 self.logger.info("Tauri manager not built here; opening the classic manager.")
                 return False
-            bridge = ManagerBridge(self, version=APP_VERSION, channel=RELEASE_CHANNEL)
+            bridge = ManagerBridge(self, version=APP_VERSION, channel=RELEASE_CHANNEL, release_tag=APP_RELEASE_TAG)
             try:
                 self._manager_process = ManagerProcess(
                     self, executable, bridge, log_path=os.path.join(self.logs_dir, "manager-ui.log"))
@@ -3413,7 +3417,7 @@ class Sniptype:
             shortcut_label.pack(fill=tk.X, padx=(ui.space_sm, 0), pady=(ui.space_md, 0))
             ui_widgets.wrap_label(shortcut_label)
             tk.Label(
-                footer, text=f"v{APP_VERSION}", font=ui.caption_font(),  # i18n: not ui
+                footer, text=APP_RELEASE_TAG or "", font=ui.caption_font(),  # i18n: not ui
                 bg=sidebar_bg, fg=ui.text_muted, anchor="w",
             ).pack(fill=tk.X, padx=(ui.space_sm, 0), pady=(ui.space_xs, 0))
 

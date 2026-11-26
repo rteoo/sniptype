@@ -25,8 +25,9 @@ export interface ListView {
   language: string;
 }
 
-type SectionKind = "group" | "ungrouped" | "favorite" | "other" | "plain" | "rich" | "form" | "keys";
-interface SectionTitle { kind: SectionKind; label?: string }
+type ItemType = "plain" | "rich" | "form" | "keys";
+type SectionKind = "group" | "ungrouped" | "favorite" | "other" | ItemType;
+export interface SectionTitle { kind: SectionKind; label?: string }
 interface Section { title: SectionTitle | null; items: Item[] }
 
 export function fold(text: string): string {
@@ -43,12 +44,16 @@ function compareRecent(a: number | null | undefined, b: number | null | undefine
   return b - a;
 }
 
-function sectionKind(item: Item, grouping: ListGrouping): SectionKind {
-  if (grouping === "group") return item.groupId ? "group" : "ungrouped";
-  if (grouping === "favorite") return item.favorite ? "favorite" : "other";
+export function itemType(item: Item): ItemType {
   if (item.form) return "form";
   if (item.keys) return "keys";
   return item.rich ? "rich" : "plain";
+}
+
+function sectionKind(item: Item, grouping: ListGrouping): SectionKind {
+  if (grouping === "group") return item.groupId ? "group" : "ungrouped";
+  if (grouping === "favorite") return item.favorite ? "favorite" : "other";
+  return itemType(item);
 }
 
 /** A single ordered projection backs both the visible list and keyboard search. */

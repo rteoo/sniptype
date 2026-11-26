@@ -33,7 +33,7 @@ class BridgeTests(unittest.TestCase):
             "fancy": build_rich_text_payload("Bold text", [{"tag": "bold", "start": 0, "end": 4}]),
             "_codes": {"__prefix__": "c", "city": "Goiânia"},
         }, migrate_mappings=False)
-        self.bridge = ManagerBridge(self.app, version="9.9.9", channel="beta")
+        self.bridge = ManagerBridge(self.app, version="9.9.9", channel="beta", release_tag="v9.9.9-beta.2")
 
     def call(self, method, **params):
         return self.bridge.handle({"id": 7, "method": method, "params": params})
@@ -85,6 +85,7 @@ class BridgeTests(unittest.TestCase):
     def test_info_reports_version_language_and_settings(self):
         info = self.result("app.info")
         self.assertEqual(("9.9.9", "beta", "pt-BR"), (info["version"], info["channel"], info["language"]))
+        self.assertEqual("v9.9.9-beta.2", info["releaseTag"])
         self.assertIn(info["appearance"], ("system", "light", "dark"))
         self.assertEqual("compact", info["density"])
         self.assertFalse(info["terminatorMode"])
@@ -377,7 +378,7 @@ class OrganizeBridgeTests(unittest.TestCase):
 
     def test_group_create_assign_filter_and_prefix(self):
         group = self.new_group(prefix="w")
-        self.assertEqual([{"id": group, "label": "Trabalho", "prefix": "w", "enabled": True, "count": 0}],
+        self.assertEqual([{"id": group, "label": "Trabalho", "prefix": "w", "enabled": True, "count": 0, "icon": None}],
                          self.result("groups.list")["groups"])
         self.result("snippet.setGroup", trigger="hello", group=group)
         self.assertEqual(group, self.metadata()["items"]["static"]["hello"]["group_id"])
@@ -502,6 +503,26 @@ class OrganizeBridgeTests(unittest.TestCase):
         stored = self.metadata()["groups"][answer["id"]]
         self.assertEqual({"mode": "allow", "executables": ["code.exe"]}, stored["applications"])
         self.assertEqual("Apps", self.result("group.form", id=answer["id"])["values"]["label"])
+
+    def test_group_icons_round_trip_and_omission_preserves_them(self):
+        self.assertIsNone(self.result("group.form")["values"]["icon"])
+        icon = {"kind": "emoji", "value": "👩🏽‍💻"}
+        group = self.result("group.save", values={"label": "Work", "icon": icon})["id"]
+        self.assertEqual(icon, self.result("group.form", id=group)["values"]["icon"])
+        self.assertEqual(icon, next(g for g in self.result("groups.list")["groups"] if g["id"] == group)["icon"])
+        self.result("group.save", id=group, values={"label": "Renamed"})
+        self.assertEqual(icon, self.metadata()["groups"][group]["icon"])
+        invalid = self.result("group.save", id=group, values={"label": "Renamed", "icon": {"kind": "emoji", "value": "abc"}})
+        self.assertEqual(("invalid", "icon"), (invalid["status"], invalid["field"]))
+        self.assertEqual(icon, self.metadata()["groups"][group]["icon"])
+        self.result("group.save", id=group, values={"label": "Renamed", "icon": None})
+        self.assertIsNone(self.result("group.form", id=group)["values"]["icon"])
+
+    def test_malformed_stored_group_icon_is_hidden_from_manager(self):
+        group = self.new_group()
+        self.app.library_metadata["groups"][group]["icon"] = {"kind": "emoji", "value": "x"}
+        self.assertIsNone(self.result("group.form", id=group)["values"]["icon"])
+        self.assertIsNone(next(g for g in self.result("groups.list")["groups"] if g["id"] == group)["icon"])
 
     def test_group_prefix_that_collides_is_refused_on_the_prefix_field(self):
         group = self.new_group()

@@ -310,7 +310,7 @@ class LibraryMetadataTests(unittest.TestCase):
         self.assertEqual({}, dict(legacy))
 
     def test_merge_reuses_identical_group_and_imported_item_wins(self):
-        group = {"label": "Work", "prefix": "w"}
+        group = {"label": "Work", "prefix": "w", "icon": {"kind": "emoji", "value": "📁"}}
         existing = {
             "kind": "sniptype_metadata", "schema_version": 1,
             "groups": {"g": group},

@@ -149,9 +149,9 @@ dl.shortcuts dd { margin: 0; }
 .item .trigger { font-family: var(--app-font-trigger); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .item .preview { grid-column: 1 / -1; font-size: var(--native-type-caption); color: var(--native-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .item .badges { display: flex; gap: 4px; align-items: center; }
-.text-collection .item { grid-template-columns: minmax(0, 1fr) fit-content(65%); }
-.text-collection .badges { flex-wrap: wrap; justify-content: flex-end; min-width: 0; }
-.text-collection .badges .el-badge { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+:is(.text-collection, .group-members) .item { grid-template-columns: minmax(0, 1fr) fit-content(65%); }
+:is(.text-collection, .group-members) .badges { flex-wrap: wrap; justify-content: flex-end; min-width: 0; }
+:is(.text-collection, .group-members) .badges .el-badge { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .item .badges .tp-i { width: 14px; height: 14px; color: var(--color-link); }
 .el-badge { font-size: 11px; padding: 1px 6px; white-space: nowrap; }
 .empty-list { padding: 24px 8px; color: var(--native-muted); display: grid; gap: 12px; justify-items: start; }
