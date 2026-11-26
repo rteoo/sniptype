@@ -1123,23 +1123,38 @@ class Sniptype:
         data = validate_static_snippets(data)
         if data is None:
             return None, _("Arquivo inválido: o JSON precisa ser um objeto.")
-        snippets, metadata = split_library_document(data)
-        return group_legacy_mappings(snippets, metadata, self._active_dynamic_triggers()), None
+        return split_library_document(data), None
 
     def _active_dynamic_triggers(self):
         return (key for key, value in self.snippets.items() if callable(value))
 
-    def _imported_snippets(self, imported_snippets, mode):
-        """The static library an import in ``mode`` leaves, before metadata."""
-        if mode == "merge":
-            return {**self._saved_library(), **imported_snippets}
-        return imported_snippets
+    def _project_import(self, current, document, mode):
+        """Project content and metadata together for both import preview and apply."""
+        imported, metadata = document
+        if mode != "merge":
+            snippets, metadata = group_legacy_mappings(imported, metadata, self._active_dynamic_triggers())
+            return snippets, metadata, None
+
+        snippets = {**current, **imported}
+        try:
+            metadata = merge_metadata(
+                self.library_metadata, metadata,
+                {"mode": "merge", "imported_items": self._imported_metadata_winners(imported)},
+            )
+        except ValueError as e:
+            # Replacement can still use the data from a newer library version.
+            return snippets, None, _("Falha ao importar metadados: {error}").format(error=e)
+
+        snippets, metadata = group_legacy_mappings(
+            snippets, metadata, self._active_dynamic_triggers(), merge_import=imported,
+        )
+        return snippets, metadata, None
 
     def import_change_counts(self, document):
         """``{mode: counts}`` for both import modes of a :meth:`read_import_source` document."""
         current = self._saved_library()
         return {
-            mode: library_change_counts(current, self._imported_snippets(document[0], mode))
+            mode: library_change_counts(current, self._project_import(current, document, mode)[0])
             for mode in ("merge", "replace")
         }
 
@@ -1156,22 +1171,9 @@ class Sniptype:
 
     def apply_import(self, document, mode):
         """Apply a :meth:`read_import_source` document; see :meth:`import_library`."""
-        imported_snippets, imported_metadata = document
-        merged = self._imported_snippets(imported_snippets, mode)
-        if mode == "merge":
-            try:
-                merged_metadata = merge_metadata(
-                    self.library_metadata,
-                    imported_metadata,
-                    {
-                        "mode": "merge",
-                        "imported_items": self._imported_metadata_winners(imported_snippets),
-                    },
-                )
-            except ValueError as e:
-                return False, _("Falha ao importar metadados: {error}").format(error=e)
-        else:
-            merged_metadata = imported_metadata
+        merged, merged_metadata, error = self._project_import(self._saved_library(), document, mode)
+        if error:
+            return False, error
 
         merged_metadata = normalize_metadata(
             merged_metadata,
